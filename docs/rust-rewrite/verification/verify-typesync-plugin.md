@@ -1,0 +1,5 @@
+All my independent verification confirms and adds precision: rmcp targets spec **2025-11-25**, supports stdio + Streamable HTTP for both client and server. The native-plugin danger is confirmed (unwinding across C FFI = UB, no sandbox, ABI instability). I have thorough primary-source coverage. Now let me wait for the four background agents to return their deeper findings for cross-checking, then synthesize.
+
+Let me check whether any agents have completed by monitoring their output files' existence isn't allowed — I'll just wait for notifications. Let me use a short monitor to detect completion of all four task output files being finalized.
+
+I'll wait for the agent completion notifications rather than poll. Let me verify one more thing that's decision-critical while waiting: whether ts-rs/specta actually respect `#[serde(skip)]` and the separate-DTO fail-closed pattern, and extism hot-reload.
