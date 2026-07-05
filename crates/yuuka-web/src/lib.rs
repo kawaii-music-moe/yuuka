@@ -10,6 +10,7 @@
 
 pub mod auth;
 pub mod config;
+pub mod csrf;
 pub mod error;
 pub mod routes;
 pub mod state;
@@ -19,18 +20,27 @@ pub use config::WebConfig;
 pub use error::ApiError;
 pub use state::AppState;
 
+use axum::extract::DefaultBodyLimit;
 use axum::http::header::{HeaderValue, X_CONTENT_TYPE_OPTIONS, X_FRAME_OPTIONS};
 use axum::routing::get;
 use axum::Router;
 use tower_http::set_header::SetResponseHeaderLayer;
 
-/// アプリのルータを構築する（Phase 1 増分1 は `/api/me` のみ）。
+/// リクエストボディ上限（Node `MAX_BODY_BYTES` = 10MB・超過は 413）。
+pub const MAX_BODY_BYTES: usize = 10 * 1024 * 1024;
+
+/// 全ルートに共通のミドルウェア（CSRF・body 上限・セキュリティヘッダ）を積む。
 ///
-/// 全 API 応答に Node 互換のセキュリティヘッダ（`X-Content-Type-Options: nosniff` /
-/// `X-Frame-Options: DENY`）を付与する。
-pub fn build_router(state: AppState) -> Router {
-    Router::new()
-        .route("/api/me", get(routes::me))
+/// ドメインルート（T1）はこのレイヤ群の下にマージされる。全 API 応答に Node 互換の
+/// `X-Content-Type-Options: nosniff` / `X-Frame-Options: SAMEORIGIN` を付与し、
+/// 状態変更 × Cookie 認証には CSRF ガードを適用する。
+pub fn apply_common_layers<S>(router: Router<S>) -> Router<S>
+where
+    S: Clone + Send + Sync + 'static,
+{
+    router
+        .layer(axum::middleware::from_fn(csrf::csrf_guard))
+        .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
         .layer(SetResponseHeaderLayer::overriding(
             X_CONTENT_TYPE_OPTIONS,
             HeaderValue::from_static("nosniff"),
@@ -40,7 +50,11 @@ pub fn build_router(state: AppState) -> Router {
             // Node の API 応答は SAMEORIGIN（同一オリジンの iframe は許可）。parity 維持。
             HeaderValue::from_static("SAMEORIGIN"),
         ))
-        .with_state(state)
+}
+
+/// アプリのルータを構築する（Phase 1 増分2 時点は `/api/me` + 共通レイヤ）。
+pub fn build_router(state: AppState) -> Router {
+    apply_common_layers(Router::new().route("/api/me", get(routes::me))).with_state(state)
 }
 
 #[cfg(test)]
@@ -180,6 +194,90 @@ mod tests {
             .await
             .expect("response");
         assert_eq!(accepted.status(), StatusCode::OK);
+    }
+
+    fn csrf_app() -> Router {
+        // state 不要（csrf_guard は状態を使わない）。POST ルートで CSRF を検証する。
+        super::apply_common_layers(
+            Router::new().route("/x", axum::routing::post(|| async { "ok" })),
+        )
+    }
+
+    async fn csrf_status(headers: &[(&str, &str)]) -> StatusCode {
+        let mut builder = Request::builder().method("POST").uri("/x");
+        for (k, v) in headers {
+            builder = builder.header(*k, *v);
+        }
+        csrf_app()
+            .oneshot(builder.body(Body::empty()).expect("request"))
+            .await
+            .expect("response")
+            .status()
+    }
+
+    #[tokio::test]
+    async fn csrf_blocks_cross_site_cookie_post() {
+        // Cookie 認証 × POST × cross-site → 403。
+        assert_eq!(
+            csrf_status(&[
+                ("cookie", "__Host-yuuka-session=t"),
+                ("sec-fetch-site", "cross-site"),
+            ])
+            .await,
+            StatusCode::FORBIDDEN
+        );
+    }
+
+    #[tokio::test]
+    async fn csrf_allows_same_origin_and_missing_and_bearer() {
+        // same-origin は許可。
+        assert_eq!(
+            csrf_status(&[
+                ("cookie", "__Host-yuuka-session=t"),
+                ("sec-fetch-site", "same-origin"),
+            ])
+            .await,
+            StatusCode::OK
+        );
+        // Origin/Referer/Sec-Fetch-Site 欠落は SameSite=Lax に委ね許可。
+        assert_eq!(
+            csrf_status(&[("cookie", "__Host-yuuka-session=t")]).await,
+            StatusCode::OK
+        );
+        // Origin hostname 不一致 → 403。
+        assert_eq!(
+            csrf_status(&[
+                ("cookie", "__Host-yuuka-session=t"),
+                ("host", "yuuka.example"),
+                ("origin", "https://evil.example"),
+            ])
+            .await,
+            StatusCode::FORBIDDEN
+        );
+        // Origin hostname 一致 → 許可。
+        assert_eq!(
+            csrf_status(&[
+                ("cookie", "__Host-yuuka-session=t"),
+                ("host", "yuuka.example"),
+                ("origin", "https://yuuka.example"),
+            ])
+            .await,
+            StatusCode::OK
+        );
+        // Bearer のみ（非 ambient）は cross-site でも対象外 → 許可。
+        assert_eq!(
+            csrf_status(&[
+                ("authorization", "Bearer tok"),
+                ("sec-fetch-site", "cross-site"),
+            ])
+            .await,
+            StatusCode::OK
+        );
+        // Cookie 無し（webhook 等）は対象外 → 許可。
+        assert_eq!(
+            csrf_status(&[("sec-fetch-site", "cross-site")]).await,
+            StatusCode::OK
+        );
     }
 
     #[tokio::test]
