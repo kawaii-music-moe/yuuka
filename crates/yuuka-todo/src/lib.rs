@@ -128,12 +128,59 @@ mod tests {
             .unwrap()
             .expect("completed row");
         assert_eq!(done.status, "done");
-        assert_eq!(done.progress, 100);
+        // Node parity: complete は progress を変更しない（作成時の 0 のまま）。
+        assert_eq!(done.progress, 0);
 
         assert!(repo.delete(&scope("u"), created.id).await.unwrap());
         assert!(repo.list(&scope("u")).await.unwrap().is_empty());
         // 二重削除は false。
         assert!(!repo.delete(&scope("u"), created.id).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn parent_id_outside_scope_is_demoted() {
+        let db = seed_db();
+        let repo = TodoRepo::new(&db);
+        let parent = repo
+            .add(&scope("userA"), new_todo("parent", vec![]))
+            .await
+            .unwrap();
+
+        // 別ユーザーが userA の todo を親に指定 → NULL に降格（クロススコープ参照を防ぐ）。
+        let cross = repo
+            .add(
+                &scope("userB"),
+                NewTodo {
+                    title: "child".to_owned(),
+                    description: None,
+                    due_date: None,
+                    start_date: None,
+                    priority: None,
+                    tags: vec![],
+                    parent_id: Some(parent.id),
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(cross.parent_id, None);
+
+        // 同一スコープの親は保持。
+        let sibling = repo
+            .add(
+                &scope("userA"),
+                NewTodo {
+                    title: "sibling".to_owned(),
+                    description: None,
+                    due_date: None,
+                    start_date: None,
+                    priority: None,
+                    tags: vec![],
+                    parent_id: Some(parent.id),
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(sibling.parent_id, Some(parent.id));
     }
 
     struct FakeAuth {

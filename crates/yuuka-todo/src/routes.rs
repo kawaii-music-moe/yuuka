@@ -1,16 +1,20 @@
 //! todo ルートハンドラ（`/api/tasks*`・全て auth:user）。
 //!
 //! 認可は [`AuthenticatedUser`] extractor で型強制、DB は `State<Db>` サブステートで取得、
-//! `bot_id` は `?botId=` クエリ（既定 `system_default`）から。`UserScope` を束ねて repo に渡す。
-//! 本ルータは [`crate::routes`] を通じ supervisor 側で共通レイヤ（CSRF/body 上限）配下にマージされる。
+//! スコープは **共通の [`resolve_scope`]**（`?botId=` を bot アクセス認可つきで解決・
+//! 未アクセスは system_default にフォールバック）で束ねて repo に渡す。
+//! 本ルータは supervisor 側で共通レイヤ（CSRF/body 上限）配下にマージされる。
+//!
+//! 方針（全ドメイン共通）: mutation の該当無は **404**（Node は complete/delete で 200 を
+//! 返すが、Rust はより厳密に 404。golden test 段階で最終確定する）。
 
 use axum::extract::{Query, State};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Deserialize;
-use yuuka_core::{BotId, UserId, UserScope, WebError};
+use yuuka_core::WebError;
 use yuuka_types::Envelope;
-use yuuka_web::{ApiError, AppState, AuthenticatedUser, Db};
+use yuuka_web::{resolve_scope, ApiError, AppState, AuthenticatedUser, Db};
 
 use crate::dto::{DeletedData, NewTodo, TaskData, TaskListData};
 use crate::repo::TodoRepo;
@@ -35,21 +39,13 @@ pub fn routes() -> Router<AppState> {
         .route("/api/tasks/delete", post(delete))
 }
 
-fn scope_of(user: &AuthenticatedUser, q: &BotQuery) -> UserScope {
-    let uid = UserId::new(user.0.discord_id.clone());
-    let bid = q
-        .bot_id
-        .clone()
-        .map_or_else(BotId::system_default, BotId::new);
-    UserScope::new(uid, bid)
-}
-
 async fn list(
     user: AuthenticatedUser,
     State(db): State<Db>,
     Query(q): Query<BotQuery>,
 ) -> Result<Json<Envelope<TaskListData>>, ApiError> {
-    let tasks = TodoRepo::new(&db).list(&scope_of(&user, &q)).await?;
+    let scope = resolve_scope(&user.0, &db, q.bot_id.as_deref()).await?;
+    let tasks = TodoRepo::new(&db).list(&scope).await?;
     Ok(Json(Envelope::ok(TaskListData { tasks })))
 }
 
@@ -62,7 +58,8 @@ async fn add(
     if input.title.trim().is_empty() {
         return Err(ApiError(WebError::Validation("title is required".to_owned())));
     }
-    let task = TodoRepo::new(&db).add(&scope_of(&user, &q), input).await?;
+    let scope = resolve_scope(&user.0, &db, q.bot_id.as_deref()).await?;
+    let task = TodoRepo::new(&db).add(&scope, input).await?;
     Ok(Json(Envelope::ok(TaskData { task })))
 }
 
@@ -72,11 +69,8 @@ async fn complete(
     Query(q): Query<BotQuery>,
     Json(input): Json<IdInput>,
 ) -> Result<Json<Envelope<TaskData>>, ApiError> {
-    // 注: Node の completeTodo は該当無でも 200。ここでは 404 を返す（より厳密）。golden test 時に要判断。
-    match TodoRepo::new(&db)
-        .complete(&scope_of(&user, &q), input.id)
-        .await?
-    {
+    let scope = resolve_scope(&user.0, &db, q.bot_id.as_deref()).await?;
+    match TodoRepo::new(&db).complete(&scope, input.id).await? {
         Some(task) => Ok(Json(Envelope::ok(TaskData { task }))),
         None => Err(ApiError(WebError::NotFound)),
     }
@@ -88,10 +82,8 @@ async fn delete(
     Query(q): Query<BotQuery>,
     Json(input): Json<IdInput>,
 ) -> Result<Json<Envelope<DeletedData>>, ApiError> {
-    if TodoRepo::new(&db)
-        .delete(&scope_of(&user, &q), input.id)
-        .await?
-    {
+    let scope = resolve_scope(&user.0, &db, q.bot_id.as_deref()).await?;
+    if TodoRepo::new(&db).delete(&scope, input.id).await? {
         Ok(Json(Envelope::ok(DeletedData {
             deleted_id: input.id,
         })))

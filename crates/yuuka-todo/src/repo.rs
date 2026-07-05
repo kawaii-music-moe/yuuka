@@ -4,7 +4,7 @@
 //! 「user_id/bot_id 無しクエリ」を型で不能化する。読みは [`ReadPool`]、書きは
 //! [`WriterHandle`]（BEGIN IMMEDIATE）へ送る。
 
-use rusqlite::{params, Row};
+use rusqlite::{params, OptionalExtension, Row};
 use yuuka_core::scope::ScopedRepo;
 use yuuka_core::{DbError, UserScope};
 use yuuka_db::{map_sqlite, ReadPool, WriterHandle};
@@ -94,11 +94,26 @@ impl<'a> TodoRepo<'a> {
             .transaction(move |tx| {
                 let tags_json =
                     serde_json::to_string(&input.tags).unwrap_or_else(|_| "[]".to_owned());
+                // parent_id はスコープ内に実在する場合のみ採用（Node normalizeParentId）。
+                // 後付け列 parent_id は FK が効かないため、他スコープ/不在 id はここで NULL に降格し
+                // クロススコープ参照を防ぐ。
+                let parent_id = match input.parent_id {
+                    Some(pid) => tx
+                        .query_row(
+                            "SELECT id FROM todos WHERE id = ?1 AND user_id = ?2 AND bot_id = ?3",
+                            params![pid, uid, bid],
+                            |row| row.get::<_, i64>(0),
+                        )
+                        .optional()
+                        .map_err(map_sqlite)?,
+                    None => None,
+                };
                 tx.execute(
                     "INSERT INTO todos \
                        (user_id, bot_id, title, description, due_date, start_date, priority, tags, \
                         parent_id, created_at, updated_at) \
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, datetime('now'), datetime('now'))",
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, \
+                             datetime('now', 'localtime'), datetime('now', 'localtime'))",
                     params![
                         uid,
                         bid,
@@ -108,7 +123,7 @@ impl<'a> TodoRepo<'a> {
                         input.start_date,
                         input.priority,
                         tags_json,
-                        input.parent_id,
+                        parent_id,
                     ],
                 )
                 .map_err(map_sqlite)?;
@@ -129,10 +144,11 @@ impl<'a> TodoRepo<'a> {
         let changed = self
             .writer
             .transaction(move |tx| {
+                // Node completeTodo は status/updated_at のみ更新し progress は不変。
                 let n = tx
                     .execute(
-                        "UPDATE todos SET status = 'done', progress = 100, \
-                         updated_at = datetime('now') \
+                        "UPDATE todos SET status = 'done', \
+                         updated_at = datetime('now', 'localtime') \
                          WHERE id = ?1 AND user_id = ?2 AND bot_id = ?3",
                         params![id, uid, bid],
                     )
