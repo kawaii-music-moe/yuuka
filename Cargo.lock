@@ -1420,6 +1420,14 @@ checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
 name = "xtask"
 version = "0.1.0"
 dependencies = [
+ "yuuka-credential",
+ "yuuka-finance",
+ "yuuka-persona",
+ "yuuka-personal",
+ "yuuka-playbook",
+ "yuuka-reminder",
+ "yuuka-schedule",
+ "yuuka-timeline",
  "yuuka-todo",
  "yuuka-types",
 ]
@@ -1439,6 +1447,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "yuuka-credential"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tower",
+ "ts-rs",
+ "yuuka-core",
+ "yuuka-db",
+ "yuuka-types",
+ "yuuka-web",
+]
+
+[[package]]
 name = "yuuka-db"
 version = "0.1.0"
 dependencies = [
@@ -1454,8 +1481,122 @@ name = "yuuka-discord"
 version = "0.1.0"
 
 [[package]]
+name = "yuuka-finance"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tower",
+ "ts-rs",
+ "yuuka-core",
+ "yuuka-db",
+ "yuuka-types",
+ "yuuka-web",
+]
+
+[[package]]
 name = "yuuka-gemini"
 version = "0.1.0"
+
+[[package]]
+name = "yuuka-persona"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tower",
+ "ts-rs",
+ "yuuka-core",
+ "yuuka-db",
+ "yuuka-types",
+ "yuuka-web",
+]
+
+[[package]]
+name = "yuuka-personal"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tower",
+ "ts-rs",
+ "yuuka-core",
+ "yuuka-db",
+ "yuuka-types",
+ "yuuka-web",
+]
+
+[[package]]
+name = "yuuka-playbook"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tower",
+ "ts-rs",
+ "yuuka-core",
+ "yuuka-db",
+ "yuuka-types",
+ "yuuka-web",
+]
+
+[[package]]
+name = "yuuka-reminder"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tower",
+ "ts-rs",
+ "yuuka-core",
+ "yuuka-db",
+ "yuuka-types",
+ "yuuka-web",
+]
+
+[[package]]
+name = "yuuka-schedule"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tower",
+ "ts-rs",
+ "yuuka-core",
+ "yuuka-db",
+ "yuuka-types",
+ "yuuka-web",
+]
 
 [[package]]
 name = "yuuka-services"
@@ -1472,7 +1613,34 @@ dependencies = [
  "tokio",
  "tower",
  "yuuka-core",
+ "yuuka-credential",
+ "yuuka-finance",
+ "yuuka-persona",
+ "yuuka-personal",
+ "yuuka-playbook",
+ "yuuka-reminder",
+ "yuuka-schedule",
+ "yuuka-timeline",
  "yuuka-todo",
+ "yuuka-types",
+ "yuuka-web",
+]
+
+[[package]]
+name = "yuuka-timeline"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tower",
+ "ts-rs",
+ "yuuka-core",
+ "yuuka-db",
  "yuuka-types",
  "yuuka-web",
 ]

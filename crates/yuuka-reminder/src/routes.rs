@@ -1,0 +1,112 @@
+//! reminder ルートハンドラ（`/api/reminders*`・全て auth:user）。
+//!
+//! 認可は [`AuthenticatedUser`] extractor で型強制、DB は `State<Db>` サブステートで取得、
+//! スコープは **共通の [`resolve_scope`]**（`?botId=` を bot アクセス認可つきで解決・
+//! 未アクセスは system_default にフォールバック）で束ねて repo に渡す。
+//! 本ルータは supervisor 側で共通レイヤ（CSRF/body 上限）配下にマージされる。
+//!
+//! 方針: mutation の該当無は **404**（Node は cancel で 404/409 を区別するが、Rust は
+//! 一律 404。cron 検証・過去日時補正・既定送信先解決は deferred）。
+
+use axum::extract::{Query, State};
+use axum::routing::{get, post};
+use axum::{Json, Router};
+use serde::Deserialize;
+use yuuka_core::WebError;
+use yuuka_types::Envelope;
+use yuuka_web::{resolve_scope, ApiError, AppState, AuthenticatedUser, Db};
+
+use crate::dto::{NewReminder, ReminderData, ReminderListData};
+use crate::repo::ReminderRepo;
+
+#[derive(Debug, Deserialize)]
+struct ListQuery {
+    #[serde(default, rename = "botId")]
+    bot_id: Option<String>,
+    /// `all=1` / `all=true` で送信済み・キャンセル済みも含める。
+    #[serde(default)]
+    all: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct BotQuery {
+    #[serde(default, rename = "botId")]
+    bot_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ReminderIdInput {
+    reminder_id: i64,
+}
+
+/// reminder ドメインのルータ（`AppState` 上でマージされる）。
+pub fn routes() -> Router<AppState> {
+    Router::new()
+        .route("/api/reminders", get(list))
+        .route("/api/reminders/add", post(add))
+        .route("/api/reminders/cancel", post(cancel))
+        .route("/api/reminders/delete", post(delete))
+}
+
+async fn list(
+    user: AuthenticatedUser,
+    State(db): State<Db>,
+    Query(q): Query<ListQuery>,
+) -> Result<Json<Envelope<ReminderListData>>, ApiError> {
+    let include_all = matches!(q.all.as_deref(), Some("1") | Some("true"));
+    let scope = resolve_scope(&user.0, &db, q.bot_id.as_deref()).await?;
+    let reminders = ReminderRepo::new(&db).list(&scope, include_all).await?;
+    Ok(Json(Envelope::ok(ReminderListData { reminders })))
+}
+
+async fn add(
+    user: AuthenticatedUser,
+    State(db): State<Db>,
+    Query(q): Query<BotQuery>,
+    Json(input): Json<NewReminder>,
+) -> Result<Json<Envelope<ReminderData>>, ApiError> {
+    if input.message.trim().is_empty() {
+        return Err(ApiError(WebError::Validation(
+            "message is required".to_owned(),
+        )));
+    }
+    if input.trigger_at.trim().is_empty() {
+        return Err(ApiError(WebError::Validation(
+            "trigger_at is required".to_owned(),
+        )));
+    }
+    let scope = resolve_scope(&user.0, &db, q.bot_id.as_deref()).await?;
+    let reminder = ReminderRepo::new(&db).add(&scope, input).await?;
+    Ok(Json(Envelope::ok(ReminderData { reminder })))
+}
+
+async fn cancel(
+    user: AuthenticatedUser,
+    State(db): State<Db>,
+    Query(q): Query<BotQuery>,
+    Json(input): Json<ReminderIdInput>,
+) -> Result<Json<Envelope<ReminderData>>, ApiError> {
+    let scope = resolve_scope(&user.0, &db, q.bot_id.as_deref()).await?;
+    match ReminderRepo::new(&db).cancel(&scope, input.reminder_id).await? {
+        Some(reminder) => Ok(Json(Envelope::ok(ReminderData { reminder }))),
+        None => Err(ApiError(WebError::NotFound)),
+    }
+}
+
+async fn delete(
+    user: AuthenticatedUser,
+    State(db): State<Db>,
+    Query(q): Query<BotQuery>,
+    Json(input): Json<ReminderIdInput>,
+) -> Result<Json<Envelope<ReminderData>>, ApiError> {
+    let scope = resolve_scope(&user.0, &db, q.bot_id.as_deref()).await?;
+    // 削除前の行を返す（Node に delete route は無いが CRUD 完備・{success, reminder}）。
+    let Some(reminder) = ReminderRepo::new(&db).get(&scope, input.reminder_id).await? else {
+        return Err(ApiError(WebError::NotFound));
+    };
+    if ReminderRepo::new(&db).delete(&scope, input.reminder_id).await? {
+        Ok(Json(Envelope::ok(ReminderData { reminder })))
+    } else {
+        Err(ApiError(WebError::NotFound))
+    }
+}

@@ -5,12 +5,24 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
-description = "yuuka reminder ドメイン（T1 fan-out・参照実装は yuuka-todo）— Phase 1 skeleton"
+description = "yuuka reminder ドメイン（Repo + DTO + route）— T1 fan-out・参照実装は yuuka-todo"
 
 [dependencies]
+yuuka-core.workspace = true
+yuuka-db.workspace = true
+yuuka-types.workspace = true
 yuuka-web.workspace = true
 axum.workspace = true
+rusqlite.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 ts-rs.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+tower = { workspace = true, features = ["util"] }
+async-trait.workspace = true
+tempfile = "3"
 
 [lints]
 workspace = true
