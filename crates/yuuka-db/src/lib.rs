@@ -27,7 +27,9 @@ use yuuka_core::DbError;
 /// `SQLITE_BUSY`/`SQLITE_LOCKED` は [`DbError::Busy`]（アプリ層 backon リトライ対象・
 /// Phase 1）へ、その他は [`DbError::Operation`] へ。driver 型を core に持ち込まない
 /// ため、`#[from]` ではなくここで明示変換する（§4.3）。
-pub(crate) fn map_sqlite(e: rusqlite::Error) -> DbError {
+///
+/// 下流のドメイン repo（yuuka-todo 等）が read/write クロージャ内で使えるよう `pub`。
+pub fn map_sqlite(e: rusqlite::Error) -> DbError {
     use rusqlite::ErrorCode;
     if let rusqlite::Error::SqliteFailure(inner, _) = &e {
         if matches!(inner.code, ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked) {

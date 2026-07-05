@@ -1,29 +1,28 @@
 [package]
-name = "yuuka-supervisor"
+name = "yuuka-todo"
 version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
-description = "yuuka エントリポイント兼監督（JoinSet supervisor・bin: yuuka）— Phase 0 stub"
-
-[[bin]]
-name = "yuuka"
-path = "src/main.rs"
+description = "yuuka todo ドメイン（Repo + DTO + route）— T1 参照実装"
 
 [dependencies]
 yuuka-core.workspace = true
+yuuka-db.workspace = true
+yuuka-types.workspace = true
 yuuka-web.workspace = true
-yuuka-todo.workspace = true
 axum.workspace = true
+rusqlite.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+ts-rs.workspace = true
 
 [dev-dependencies]
 tokio.workspace = true
 tower = { workspace = true, features = ["util"] }
 async-trait.workspace = true
 tempfile = "3"
-rusqlite = { workspace = true }
-yuuka-types.workspace = true
 
 [lints]
 workspace = true

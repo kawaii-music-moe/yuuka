@@ -18,7 +18,7 @@ pub mod state;
 pub use auth::{AdminUser, AuthBackend, AuthenticatedUser, OptionalUser};
 pub use config::WebConfig;
 pub use error::ApiError;
-pub use state::AppState;
+pub use state::{AppState, Db};
 
 use axum::extract::DefaultBodyLimit;
 use axum::http::header::{HeaderValue, X_CONTENT_TYPE_OPTIONS, X_FRAME_OPTIONS};
@@ -52,14 +52,23 @@ where
         ))
 }
 
+/// フレームワーク自身のルート（認証・ヘルス等。ドメインルートは含まない）。
+///
+/// supervisor はこれに各ドメインの `routes()` を `merge` し、[`apply_common_layers`] を
+/// 被せてから `with_state` する。
+pub fn framework_routes() -> Router<AppState> {
+    Router::new().route("/api/me", get(routes::me))
+}
+
 /// アプリのルータを構築する（Phase 1 増分2 時点は `/api/me` + 共通レイヤ）。
 pub fn build_router(state: AppState) -> Router {
-    apply_common_layers(Router::new().route("/api/me", get(routes::me))).with_state(state)
+    apply_common_layers(framework_routes()).with_state(state)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{AdminUser, AppState, AuthBackend, WebConfig};
+    use super::{AdminUser, AppState, AuthBackend, Db, WebConfig};
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::Arc;
 
     use async_trait::async_trait;
@@ -70,6 +79,19 @@ mod tests {
     use tower::ServiceExt;
     use yuuka_core::AuthError;
     use yuuka_types::{Role, SessionUser};
+
+    static TEST_DB_SEQ: AtomicU64 = AtomicU64::new(0);
+
+    /// テスト用の一時 DB を用意する（本番の open は CREATE しないため先に seed する）。
+    fn test_db() -> Db {
+        let seq = TEST_DB_SEQ.fetch_add(1, Ordering::Relaxed);
+        let path =
+            std::env::temp_dir().join(format!("yuuka_web_test_{}_{seq}.sqlite", std::process::id()));
+        {
+            rusqlite::Connection::open(&path).expect("seed db");
+        }
+        Db::open(&path).expect("open db")
+    }
 
     /// テスト用のインメモリ認証バックエンド（Cookie トークン一致で固定ユーザーを返す）。
     struct FakeAuth {
@@ -104,7 +126,7 @@ mod tests {
             terms_url: "https://example.test/terms".to_owned(),
             ..WebConfig::default()
         };
-        super::build_router(AppState::new(auth, config))
+        super::build_router(AppState::new(auth, config, test_db()))
     }
 
     async fn body_json(resp: Response) -> serde_json::Value {
@@ -166,7 +188,7 @@ mod tests {
             https: true,
             ..WebConfig::default()
         };
-        let app = super::build_router(AppState::new(auth, config));
+        let app = super::build_router(AppState::new(auth, config, test_db()));
 
         // 非 __Host- cookie → 拒否（401）。
         let rejected = app
@@ -287,7 +309,7 @@ mod tests {
             cookie_token: "good-token".to_owned(),
             user: session_user(Role::User),
         });
-        let state = AppState::new(auth, WebConfig::default());
+        let state = AppState::new(auth, WebConfig::default(), test_db());
         let app = Router::new()
             .route("/admin", axum::routing::get(|_: AdminUser| async { "ok" }))
             .with_state(state);

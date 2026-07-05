@@ -17,6 +17,7 @@ members = [
     "crates/yuuka-tools",
     "crates/yuuka-services",
     "crates/yuuka-supervisor",
+    "crates/yuuka-todo",
     "xtask",
 ]
 exclude = [
@@ -91,3 +92,5 @@ serde_yaml               = "0.9"
 yuuka-core  = { path = "crates/yuuka-core" }
 yuuka-db    = { path = "crates/yuuka-db" }
 yuuka-types = { path = "crates/yuuka-types" }
+yuuka-web   = { path = "crates/yuuka-web" }
+yuuka-todo  = { path = "crates/yuuka-todo" }

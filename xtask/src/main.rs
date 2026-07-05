@@ -52,7 +52,7 @@ fn run_gen_types(check: bool) -> Result<(), String> {
         // 一時ディレクトリへ再生成し、コミット済みと内容比較（git 非依存）。
         let tmp = std::env::temp_dir().join("yuuka_gen_types_check");
         let _ = std::fs::remove_dir_all(&tmp);
-        yuuka_types::export_all(&tmp).map_err(|e| e.to_string())?;
+        export_all_domains(&tmp)?;
         let fresh = read_dir_map(&tmp.join("generated"));
         let committed = read_dir_map(&api_dir.join("generated"));
         let _ = std::fs::remove_dir_all(&tmp);
@@ -63,13 +63,21 @@ fn run_gen_types(check: bool) -> Result<(), String> {
         }
         Ok(())
     } else {
-        yuuka_types::export_all(&api_dir).map_err(|e| e.to_string())?;
+        export_all_domains(&api_dir)?;
         println!(
             "generated ts bindings under {}",
             api_dir.join("generated").display()
         );
         Ok(())
     }
+}
+
+/// foundation（yuuka-types）と各ドメインクレートの wire DTO をまとめて生成する。
+/// 新ドメインを追加したらここに1行足す（T1 fan-out はこの集約点を Phase 0 的に先行配線する）。
+fn export_all_domains(base: &Path) -> Result<(), String> {
+    yuuka_types::export_all(base).map_err(|e| e.to_string())?;
+    yuuka_todo::export_bindings(base).map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 /// ディレクトリ直下のファイル名→内容のマップ（内容比較用）。

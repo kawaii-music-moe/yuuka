@@ -1420,6 +1420,7 @@ checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
 name = "xtask"
 version = "0.1.0"
 dependencies = [
+ "yuuka-todo",
  "yuuka-types",
 ]
 
@@ -1463,6 +1464,37 @@ version = "0.1.0"
 [[package]]
 name = "yuuka-supervisor"
 version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "rusqlite",
+ "tempfile",
+ "tokio",
+ "tower",
+ "yuuka-core",
+ "yuuka-todo",
+ "yuuka-types",
+ "yuuka-web",
+]
+
+[[package]]
+name = "yuuka-todo"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tower",
+ "ts-rs",
+ "yuuka-core",
+ "yuuka-db",
+ "yuuka-types",
+ "yuuka-web",
+]
 
 [[package]]
 name = "yuuka-tools"
@@ -1484,11 +1516,14 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "axum",
+ "rusqlite",
  "serde_json",
+ "tempfile",
  "tokio",
  "tower",
  "tower-http",
  "yuuka-core",
+ "yuuka-db",
  "yuuka-types",
 ]
 

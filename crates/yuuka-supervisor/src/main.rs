@@ -5,6 +5,9 @@
 //! ここではまだ常駐せず、契約が凍結されたことを示すだけの stub。
 
 fn main() {
-    // Phase 0: web/discord/services を JoinSet で束ねる監督ループはまだ無い。
-    eprintln!("yuuka: supervisor stub (Phase 0). foundation contracts frozen; daemon not yet implemented.");
+    // Phase 1: アプリ組立は `yuuka_supervisor::build_app`（web + todo + 共通レイヤ）。
+    // config 読込・AuthBackend 実装・axum::serve・JoinSet 監督は後続増分で配線する。
+    eprintln!(
+        "yuuka: supervisor (Phase 1). app assembly available (build_app); config/serve/supervision not yet wired."
+    );
 }

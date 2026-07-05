@@ -9,7 +9,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde_json::json;
-use yuuka_core::{AuthError, WebError};
+use yuuka_core::{AuthError, DbError, WebError};
 
 /// yuuka-web が所有する HTTP エラー応答型。
 #[derive(Debug)]
@@ -27,6 +27,19 @@ impl IntoResponse for ApiError {
 impl From<WebError> for ApiError {
     fn from(e: WebError) -> Self {
         Self(e)
+    }
+}
+
+impl From<DbError> for ApiError {
+    fn from(e: DbError) -> Self {
+        // 内部詳細（SQL/パス等）は client_message で丸める。BUSY は一時的な上流障害
+        // 相当（502）、それ以外は 500。ドメインハンドラは `?` で DbError を写像できる。
+        let web = if e.is_busy() {
+            WebError::Upstream
+        } else {
+            WebError::Internal
+        };
+        Self(web)
     }
 }
 

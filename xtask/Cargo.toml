@@ -9,6 +9,7 @@ description = "yuuka 開発補助タスク（ts-rs 型生成 gen-types・ドリ�
 
 [dependencies]
 yuuka-types.workspace = true
+yuuka-todo.workspace = true
 
 [lints]
 workspace = true
