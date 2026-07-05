@@ -2,5 +2,7 @@
 
 /**
  * ユーザーロール。生成 TS では `"user" | "admin"` のユニオンになる。
+ *
+ * `Deserialize` も導出（Redis セッション値 `{"role":"user"|"admin"}` の読取に使う）。
  */
 export type Role = "user" | "admin";

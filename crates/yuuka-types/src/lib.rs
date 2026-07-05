@@ -10,7 +10,7 @@
 pub mod dto;
 pub mod envelope;
 
-pub use dto::{BotSummary, Role, SessionUser};
+pub use dto::{BotSummary, MeData, Role, SessionUser};
 pub use envelope::Envelope;
 
 use std::path::Path;
@@ -34,6 +34,7 @@ pub fn export_all(base_dir: &Path) -> Result<(), ts_rs::ExportError> {
     <Role as TS>::export_all(&cfg)?;
     <SessionUser as TS>::export_all(&cfg)?;
     <BotSummary as TS>::export_all(&cfg)?;
+    <MeData as TS>::export_all(&cfg)?;
     <Envelope<SessionUser> as TS>::export_all(&cfg)?;
     Ok(())
 }
@@ -162,7 +163,7 @@ mod tests {
         export_all(&dir).expect("export bindings");
 
         let gen = dir.join("generated");
-        for name in ["Role.ts", "SessionUser.ts", "BotSummary.ts", "Envelope.ts"] {
+        for name in ["Role.ts", "SessionUser.ts", "BotSummary.ts", "MeData.ts", "Envelope.ts"] {
             assert!(gen.join(name).exists(), "missing generated file: {name}");
         }
         // SessionUser は camelCase 生成（discordId）であること。

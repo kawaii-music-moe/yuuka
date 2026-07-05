@@ -5,7 +5,19 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
-description = "yuuka web 層（axum ルート/認可 extractor/静的配信/WS）— Phase 0 stub"
+description = "yuuka web 層（axum ルート/認可 extractor/静的配信/WS）"
+
+[dependencies]
+yuuka-core.workspace = true
+yuuka-types.workspace = true
+axum.workspace = true
+tower-http.workspace = true
+serde_json.workspace = true
+async-trait.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+tower = { workspace = true, features = ["util"] }
 
 [lints]
 workspace = true
