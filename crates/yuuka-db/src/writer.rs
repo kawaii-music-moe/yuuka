@@ -29,7 +29,8 @@ impl WriterHandle {
     /// # Errors
     /// コネクション open（PRAGMA 含む）やスレッド生成に失敗した場合 [`DbError`]。
     pub fn spawn(path: PathBuf) -> Result<Self, DbError> {
-        let mut conn = open_conn(&path)?;
+        // writer は READ_WRITE で開く（CREATE 無し＝DB は Node が作成済み前提・§11.4）。
+        let mut conn = open_conn(&path, false)?;
         let (tx, mut rx) = mpsc::channel::<WriteJob>(256);
         std::thread::Builder::new()
             .name("yuuka-db-writer".to_owned())

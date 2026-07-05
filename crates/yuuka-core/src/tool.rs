@@ -123,13 +123,21 @@ impl ToolName {
 
     /// provider 種別の namespace 接頭辞を付けて構築する。
     /// 例: Native → `native:contacts_save` / MCP → `mcp7:list_items`。
-    /// 許可外文字は `_` へサニタイズしてから検査する。
+    /// **接頭辞・ツール名の双方**を許可外文字 `_` へサニタイズしてから検査する
+    /// （`:` は名前空間区切り専用なので各セグメントには含めない）。
     ///
     /// # Errors
     /// サニタイズ後も長さ/文字集合制約を満たさない場合 [`ToolError::InvalidToolName`]。
     pub fn namespaced(prefix: &str, raw: &str) -> Result<Self, ToolError> {
-        let sanitized: String = raw
-            .chars()
+        let prefix = Self::sanitize_segment(prefix);
+        let raw = Self::sanitize_segment(raw);
+        Self::checked(format!("{prefix}:{raw}"))
+    }
+
+    /// 名前空間セグメント（接頭辞 or ツール名）を許可文字集合へサニタイズする。
+    /// `:` は含めない（区切り専用）ので `_` へ落とす。
+    fn sanitize_segment(s: &str) -> String {
+        s.chars()
             .map(|c| {
                 if c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-') {
                     c
@@ -137,17 +145,18 @@ impl ToolName {
                     '_'
                 }
             })
-            .collect();
-        Self::checked(format!("{prefix}:{sanitized}"))
+            .collect()
     }
 
     /// 完全修飾名を直接検査して構築する。
     ///
     /// # Errors
-    /// 長さ（1..=128）または文字集合（`[a-zA-Z0-9_:.-]`）に反する場合
+    /// 長さ（1..=128 **文字**）または文字集合（`[a-zA-Z0-9_:.-]`）に反する場合
     /// [`ToolError::InvalidToolName`]。
     pub fn checked(name: String) -> Result<Self, ToolError> {
-        let len_ok = (1..=Self::MAX_LEN).contains(&name.len());
+        // Gemini 制約は「128 文字」。charset は ASCII 限定なので実質 byte 数と一致するが、
+        // 意図を明示するため文字数で判定する。
+        let len_ok = (1..=Self::MAX_LEN).contains(&name.chars().count());
         let charset_ok = name
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | ':' | '.' | '-'));

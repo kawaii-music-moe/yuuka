@@ -33,10 +33,14 @@ impl UserScope {
 }
 
 /// スコープ束縛リポジトリの基底契約。ドメイン別 repo（Todo/Finance/…）は Phase 1 で
-/// このトレイトを土台に `&UserScope` を取るメソッドを実装する。
+/// このトレイトを土台に実装する。
 ///
-/// ここでは「全 repo が UserScope を要求する」不変条件を型で凍結する。
-/// `async fn in trait`（RPITIT・Rust 1.96 stable）を使い `#[async_trait]` 不要。
+/// **分離キーの型強制は各ドメイン repo の「メソッド署名」で行う**: すべての通常クエリ
+/// メソッドが第一引数に `&UserScope` を取ることで「user_id 無しクエリ」を型で不能化する
+/// （基底トレイトは宣言していないメソッドの署名までは強制できないため、これは Phase 1 の
+/// 各 repo が守る規約であり、本トレイトはその規約のマーカー＋実行時フックを提供する）。
+/// 横断（全ユーザー跨ぎ）アクセスは通常経路から隔離され、[`CronScan`] ＋ [`CrossUserAccess`]
+/// 証憑でのみ到達できる。`async fn in trait`（RPITIT・Rust 1.96 stable）を使い `#[async_trait]` 不要。
 pub trait ScopedRepo: Send + Sync {
     /// この repo が期待する分離スコープが妥当か（欠落なら `UserScopeMissing`）を検査する。
     /// 既定実装は「scope が存在すれば妥当」。ドメイン repo は必要に応じて上書きする。
@@ -48,7 +52,28 @@ pub trait ScopedRepo: Send + Sync {
     }
 }
 
+/// 横断（全ユーザー跨ぎ）アクセスの証憑トークン。cron/バッチのブートストラップでのみ
+/// 構築でき、通常のリクエスト経路（`UserScope` 由来）では作れない。
+///
+/// [`CronScan`] のメソッド（Phase 1 で追加）はこれを引数に取ることで、「横断アクセスは
+/// ここでしか起きない」ことを型で可視化し **grep 可能**にする（通常 repo に紛れ込まない）。
+/// 構築点は `for_scheduled_task` の呼び出し箇所に限定され、監査で追跡できる。
+#[derive(Debug, Clone, Copy)]
+pub struct CrossUserAccess {
+    _private: (),
+}
+
+impl CrossUserAccess {
+    /// cron/バッチのスケジュール実行起点でのみ構築する（横断アクセスの明示的な起点）。
+    #[must_use]
+    pub fn for_scheduled_task() -> Self {
+        Self { _private: () }
+    }
+}
+
 /// 横断スキャン契約（全ユーザー跨ぎ）。通常 repo から**隔離**し、cron/バッチ専用にする。
 ///
-/// これにより「うっかり全ユーザーを読むクエリ」が通常のデータアクセス経路に紛れ込まない。
+/// Phase 1 で追加する各メソッドは必ず [`CrossUserAccess`] 証憑を引数に取ること
+/// （`UserScope` 経路から誤って呼べない＝「うっかり全ユーザーを読むクエリ」が通常の
+/// データアクセス経路に紛れ込まない）。
 pub trait CronScan: Send + Sync {}

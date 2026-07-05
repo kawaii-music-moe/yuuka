@@ -26,7 +26,7 @@ pub use tool::{
 
 #[cfg(test)]
 mod tests {
-    use super::error::{AppError, ConfigError, Fatality, WebError};
+    use super::error::{AppError, ConfigError, DbError, Fatality, WebError};
     use super::ids::{BotId, UserId};
     use super::tool::ToolName;
 
@@ -53,14 +53,33 @@ mod tests {
     }
 
     #[test]
-    fn only_config_error_is_fatal() {
+    fn fatality_classification_is_variant_specific() {
         let cfg: AppError = ConfigError::MissingSecret { name: "gemini" }.into();
         assert_eq!(cfg.fatality(), Fatality::Fatal);
         assert!(cfg.is_fatal());
 
+        // DB は variant 別: Migration=Fatal（起動時 fail-fast）/ WriterGone=Permanent / Busy=Transient。
+        // 一律 Transient だと起動時 schema 不一致が無限バックオフ再起動になる回帰を防ぐ。
+        let mig: AppError = DbError::Migration {
+            expected: "17".to_owned(),
+            found: "16".to_owned(),
+        }
+        .into();
+        assert_eq!(mig.fatality(), Fatality::Fatal);
+        assert!(mig.is_fatal());
+
+        let gone: AppError = DbError::WriterGone.into();
+        assert_eq!(gone.fatality(), Fatality::Permanent);
+        assert!(!gone.is_transient());
+
+        let busy: AppError = DbError::Busy.into();
+        assert_eq!(busy.fatality(), Fatality::Transient);
+        assert!(busy.is_transient());
+
         let web: AppError = WebError::NotFound.into();
         assert_eq!(web.fatality(), Fatality::Permanent);
         assert!(!web.is_fatal());
+        assert!(!web.is_transient());
     }
 
     #[test]

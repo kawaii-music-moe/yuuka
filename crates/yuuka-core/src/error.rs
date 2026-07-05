@@ -69,6 +69,32 @@ impl DbError {
     pub fn is_busy(&self) -> bool {
         matches!(self, DbError::Busy)
     }
+
+    /// supervisor 分類（§5.7）。**DB エラーは一律 Transient にしてはならない**:
+    /// `Migration`（schema_version 不一致）は起動時 fail-fast＝`Fatal`、`WriterGone`
+    /// （writer actor 消失）は再起動で直らない恒久障害＝`Permanent`、`Busy`/`Operation`
+    /// のみ一過性＝`Transient`。DbError は `#[non_exhaustive]` だが core 内なので網羅
+    /// match（`_ =>` 不要）でバリアント追加漏れをコンパイルエラー化できる。
+    #[must_use]
+    pub fn fatality(&self) -> Fatality {
+        match self {
+            DbError::Migration { .. } => Fatality::Fatal,
+            DbError::WriterGone => Fatality::Permanent,
+            DbError::Busy | DbError::Operation(_) => Fatality::Transient,
+        }
+    }
+}
+
+impl RepoError {
+    /// supervisor 分類。`Db` は内側 [`DbError::fatality`] へ委譲し、`NotFound`/
+    /// `UserScopeMissing`（要求・ロジック不備）は `Permanent`（再起動で直らない）。
+    #[must_use]
+    pub fn fatality(&self) -> Fatality {
+        match self {
+            RepoError::Db(e) => e.fatality(),
+            RepoError::NotFound { .. } | RepoError::UserScopeMissing => Fatality::Permanent,
+        }
+    }
 }
 
 /// リポジトリ層（データアクセス）。`DbError` の意味付け、`NotFound`、スコープ欠落。
@@ -152,6 +178,12 @@ pub enum DiscordError {
 ///
 /// 設計上 `PluginError` と同義（本プロジェクトは `ToolError` を第一名とする。§05）。
 /// `type PluginError = ToolError` のエイリアスを併設する。
+///
+/// **凍結の例外（意図的）**: 05-plugins-types.md §9.1 の `Mcp(#[from] McpError)` /
+/// `Wasm(#[from] WasmError)` 層境界バリアントは、下位クレート（yuuka-tools の
+/// McpProvider/WasmProvider）が未実装の Phase 0 では**あえて追加しない**。本 enum は
+/// `#[non_exhaustive]` なので、Phase 1 でこれらを追加しても下流ビルドは壊れない
+/// （＝「凍結後は触らない」原則の明示的な許可された拡張点）。
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum ToolError {
@@ -278,10 +310,18 @@ pub enum AppError {
 }
 
 impl AppError {
-    /// このエラーが起動時 fail-fast に相当するか（`ConfigError` のみ致命的・§5.6）。
+    /// このエラーが起動時 fail-fast に相当するか（`ConfigError` / `DbError::Migration`
+    /// 等の `Fatal`・§5.6）。
     #[must_use]
     pub fn is_fatal(&self) -> bool {
         matches!(self.fatality(), Fatality::Fatal)
+    }
+
+    /// 一過性障害か（supervisor が指数バックオフ再 spawn するのは `Transient` のみ・§5.2）。
+    /// `Permanent`（再起動で直らない）/`Fatal`（起動時致命）は再起動対象にしない。
+    #[must_use]
+    pub fn is_transient(&self) -> bool {
+        matches!(self.fatality(), Fatality::Transient)
     }
 
     /// supervisor 分類（§5.7）。**網羅 match（`_ =>` 禁止）**でバリアント追加漏れを検知。
@@ -290,9 +330,11 @@ impl AppError {
         match self {
             // 起動時 config/secret 不備のみ致命的。
             AppError::Config(_) => Fatality::Fatal,
-            // 一過性（BUSY 等）はバックオフ再起動対象。
-            AppError::Db(_) => Fatality::Transient,
-            AppError::Repo(_) => Fatality::Transient,
+            // DB/Repo は variant 別に委譲（Migration=Fatal, WriterGone=Permanent, Busy=Transient）。
+            // 一律 Transient にすると起動時 schema 不一致が無限バックオフ再起動になる。
+            AppError::Db(e) => e.fatality(),
+            AppError::Repo(e) => e.fatality(),
+            // 外部依存の一過性障害はバックオフ再起動対象。
             AppError::Gemini(_) => Fatality::Transient,
             AppError::Discord(_) => Fatality::Transient,
             AppError::Ipc(_) => Fatality::Transient,
