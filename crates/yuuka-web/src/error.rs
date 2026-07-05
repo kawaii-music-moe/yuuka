@@ -37,6 +37,8 @@ impl From<AuthError> for ApiError {
         let web = match e {
             AuthError::SessionInvalid | AuthError::TokenMalformed => WebError::Unauthorized,
             AuthError::Forbidden => WebError::Forbidden,
+            // ストア到達不能は 502（未認証 401 と区別し、劣化縮退/監視に載せる）。
+            AuthError::Backend => WebError::Upstream,
             _ => WebError::Unauthorized,
         };
         Self(web)

@@ -36,21 +36,34 @@ const COOKIE_HOST: &str = "__Host-yuuka-session";
 const COOKIE_DEV: &str = "yuuka-session";
 
 /// `Cookie` ヘッダから指定名の値を取り出す。
+///
+/// Node `parseCookies`(httpHelpers.ts:26-40) と一致させる: 同名が複数あれば**最後が勝つ**、
+/// 値は最初の `=` 以降すべて（`split_once` が担保）。トークンは base64url で予約文字を
+/// 含まないため percent-decode は省略する（§11.3。将来 % を含む cookie を扱うなら要追加）。
 fn cookie_value<'a>(parts: &'a Parts, name: &str) -> Option<&'a str> {
     let raw = parts.headers.get(COOKIE)?.to_str().ok()?;
     raw.split(';')
         .filter_map(|kv| kv.split_once('='))
         .map(|(k, v)| (k.trim(), v.trim()))
-        .find(|(k, _)| *k == name)
+        .rfind(|(k, _)| *k == name)
         .map(|(_, v)| v)
 }
 
-/// `Authorization: Bearer <token>` を取り出す（`Bearer` は大小無視・既存正規表現に一致）。
+/// `Authorization: Bearer <token>` を取り出す。
+///
+/// 既存 Node の `/^Bearer\s+(.+)$/i` と一致させる: スキーム語 `Bearer` は**大小無視**、
+/// スキームとトークンの区切りは**1 個以上の空白**（スペース/タブ）。
 fn bearer_token(parts: &Parts) -> Option<&str> {
     let raw = parts.headers.get(AUTHORIZATION)?.to_str().ok()?;
-    let rest = raw
-        .strip_prefix("Bearer ")
-        .or_else(|| raw.strip_prefix("bearer "))?;
+    // 先頭 6 バイト = "Bearer"（ASCII 境界）。非 ASCII 先頭や 6 バイト未満は None。
+    let (scheme, rest) = raw.split_at_checked(6)?;
+    if !scheme.eq_ignore_ascii_case("bearer") {
+        return None;
+    }
+    // スキーム直後に空白が最低 1 個必要（`\s+`）。
+    if !rest.starts_with(char::is_whitespace) {
+        return None;
+    }
     let token = rest.trim();
     if token.is_empty() {
         None
@@ -61,8 +74,14 @@ fn bearer_token(parts: &Parts) -> Option<&str> {
 
 /// Cookie 優先 → Bearer の順でユーザーを解決する（未認証は `Ok(None)`）。
 async fn resolve_user(parts: &Parts, state: &AppState) -> Result<Option<SessionUser>, AuthError> {
-    // HTTPS 本番は `__Host-` を優先し、無ければ開発名も試す。
-    let cookie_tok = cookie_value(parts, COOKIE_HOST).or_else(|| cookie_value(parts, COOKIE_DEV));
+    // 既存 Node(httpHelpers.ts:52-57) と一致: **HTTPS 本番は `__Host-` のみ受理**し、
+    // 開発時のみ非 prefix 名も許す（HTTPS で非 `__Host-` を受理すると `__Host-` の
+    // cookie 上書き防御が無効化＝セキュリティ後退になる）。
+    let cookie_tok = if state.config.https {
+        cookie_value(parts, COOKIE_HOST)
+    } else {
+        cookie_value(parts, COOKIE_HOST).or_else(|| cookie_value(parts, COOKIE_DEV))
+    };
     if let Some(tok) = cookie_tok {
         if let Some(user) = state.auth.session_user(tok).await? {
             return Ok(Some(user));

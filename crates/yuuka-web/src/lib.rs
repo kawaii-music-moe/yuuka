@@ -37,7 +37,8 @@ pub fn build_router(state: AppState) -> Router {
         ))
         .layer(SetResponseHeaderLayer::overriding(
             X_FRAME_OPTIONS,
-            HeaderValue::from_static("DENY"),
+            // Node の API 応答は SAMEORIGIN（同一オリジンの iframe は許可）。parity 維持。
+            HeaderValue::from_static("SAMEORIGIN"),
         ))
         .with_state(state)
 }
@@ -86,7 +87,7 @@ mod tests {
             user: session_user(role),
         });
         let config = WebConfig {
-            terms_url: Some("https://example.test/terms".to_owned()),
+            terms_url: "https://example.test/terms".to_owned(),
             ..WebConfig::default()
         };
         super::build_router(AppState::new(auth, config))
@@ -138,6 +139,47 @@ mod tests {
         assert_eq!(j["user"]["discordId"], serde_json::json!("123"));
         assert_eq!(j["user"]["role"], serde_json::json!("user"));
         assert_eq!(j["termsUrl"], serde_json::json!("https://example.test/terms"));
+    }
+
+    #[tokio::test]
+    async fn https_prod_requires_host_prefixed_cookie() {
+        // HTTPS 本番（config.https=true）は `__Host-` のみ受理し、非 prefix cookie は拒否する。
+        let auth = Arc::new(FakeAuth {
+            cookie_token: "good-token".to_owned(),
+            user: session_user(Role::User),
+        });
+        let config = WebConfig {
+            https: true,
+            ..WebConfig::default()
+        };
+        let app = super::build_router(AppState::new(auth, config));
+
+        // 非 __Host- cookie → 拒否（401）。
+        let rejected = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/me")
+                    .header("cookie", "yuuka-session=good-token")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(rejected.status(), StatusCode::UNAUTHORIZED);
+
+        // __Host- cookie → 受理（200）。
+        let accepted = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/me")
+                    .header("cookie", "__Host-yuuka-session=good-token")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(accepted.status(), StatusCode::OK);
     }
 
     #[tokio::test]

@@ -43,12 +43,10 @@ pub struct SessionUser {
 #[ts(export_to = "generated/")]
 pub struct MeData {
     pub user: SessionUser,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    #[ts(optional)]
-    pub privacy_policy_url: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    #[ts(optional)]
-    pub terms_url: Option<String>,
+    /// Node は `publicLegalUrls()` で既定 `""` を**常に emit**する（常在キー）。
+    /// wire parity のため `Option` ではなく `String`（未設定は空文字）。
+    pub privacy_policy_url: String,
+    pub terms_url: String,
 }
 
 /// Bot の要約ビュー（`botViewSchema` 相当の抜粋）。既存フロントは snake_case。

@@ -125,6 +125,11 @@ pub enum AuthError {
 
     #[error("forbidden: insufficient role")]
     Forbidden,
+
+    /// 認証ストア（Redis/SQLite）への到達不能。**未認証(401)ではなく回復可能な上流障害**
+    /// として区別し、502 化・監視/リトライ判断に使う（Redis 断を 401 に潰さない）。
+    #[error("auth backend unavailable")]
+    Backend,
 }
 
 /// 入力検証層。DTO 制約違反、範囲外、必須欠落。回復可能（400 化）。
