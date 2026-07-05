@@ -77,6 +77,14 @@ fn run_gen_types(check: bool) -> Result<(), String> {
 fn export_all_domains(base: &Path) -> Result<(), String> {
     yuuka_types::export_all(base).map_err(|e| e.to_string())?;
     yuuka_todo::export_bindings(base).map_err(|e| e.to_string())?;
+    yuuka_finance::export_bindings(base).map_err(|e| e.to_string())?;
+    yuuka_schedule::export_bindings(base).map_err(|e| e.to_string())?;
+    yuuka_timeline::export_bindings(base).map_err(|e| e.to_string())?;
+    yuuka_reminder::export_bindings(base).map_err(|e| e.to_string())?;
+    yuuka_personal::export_bindings(base).map_err(|e| e.to_string())?;
+    yuuka_credential::export_bindings(base).map_err(|e| e.to_string())?;
+    yuuka_playbook::export_bindings(base).map_err(|e| e.to_string())?;
+    yuuka_persona::export_bindings(base).map_err(|e| e.to_string())?;
     Ok(())
 }
 

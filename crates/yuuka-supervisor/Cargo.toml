@@ -15,6 +15,14 @@ path = "src/main.rs"
 yuuka-core.workspace = true
 yuuka-web.workspace = true
 yuuka-todo.workspace = true
+yuuka-finance.workspace = true
+yuuka-schedule.workspace = true
+yuuka-timeline.workspace = true
+yuuka-reminder.workspace = true
+yuuka-personal.workspace = true
+yuuka-credential.workspace = true
+yuuka-playbook.workspace = true
+yuuka-persona.workspace = true
 axum.workspace = true
 
 [dev-dependencies]

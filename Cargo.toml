@@ -18,6 +18,14 @@ members = [
     "crates/yuuka-services",
     "crates/yuuka-supervisor",
     "crates/yuuka-todo",
+    "crates/yuuka-finance",
+    "crates/yuuka-schedule",
+    "crates/yuuka-timeline",
+    "crates/yuuka-reminder",
+    "crates/yuuka-personal",
+    "crates/yuuka-credential",
+    "crates/yuuka-playbook",
+    "crates/yuuka-persona",
     "xtask",
 ]
 exclude = [
@@ -92,5 +100,13 @@ serde_yaml               = "0.9"
 yuuka-core  = { path = "crates/yuuka-core" }
 yuuka-db    = { path = "crates/yuuka-db" }
 yuuka-types = { path = "crates/yuuka-types" }
-yuuka-web   = { path = "crates/yuuka-web" }
-yuuka-todo  = { path = "crates/yuuka-todo" }
+yuuka-web        = { path = "crates/yuuka-web" }
+yuuka-todo       = { path = "crates/yuuka-todo" }
+yuuka-finance    = { path = "crates/yuuka-finance" }
+yuuka-schedule   = { path = "crates/yuuka-schedule" }
+yuuka-timeline   = { path = "crates/yuuka-timeline" }
+yuuka-reminder   = { path = "crates/yuuka-reminder" }
+yuuka-personal   = { path = "crates/yuuka-personal" }
+yuuka-credential = { path = "crates/yuuka-credential" }
+yuuka-playbook   = { path = "crates/yuuka-playbook" }
+yuuka-persona    = { path = "crates/yuuka-persona" }

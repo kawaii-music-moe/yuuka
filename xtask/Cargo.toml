@@ -10,6 +10,14 @@ description = "yuuka 開発補助タスク（ts-rs 型生成 gen-types・ドリ�
 [dependencies]
 yuuka-types.workspace = true
 yuuka-todo.workspace = true
+yuuka-finance.workspace = true
+yuuka-schedule.workspace = true
+yuuka-timeline.workspace = true
+yuuka-reminder.workspace = true
+yuuka-personal.workspace = true
+yuuka-credential.workspace = true
+yuuka-playbook.workspace = true
+yuuka-persona.workspace = true
 
 [lints]
 workspace = true

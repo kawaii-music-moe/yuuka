@@ -12,7 +12,16 @@ use yuuka_web::{apply_common_layers, framework_routes, AppState};
 ///
 /// 新ドメイン（finance/schedule/…）は `.merge(yuuka_xxx::routes())` を足す。
 pub fn build_app(state: AppState) -> Router {
-    let routes = framework_routes().merge(yuuka_todo::routes());
+    let routes = framework_routes()
+        .merge(yuuka_todo::routes())
+        .merge(yuuka_finance::routes())
+        .merge(yuuka_schedule::routes())
+        .merge(yuuka_timeline::routes())
+        .merge(yuuka_reminder::routes())
+        .merge(yuuka_personal::routes())
+        .merge(yuuka_credential::routes())
+        .merge(yuuka_playbook::routes())
+        .merge(yuuka_persona::routes());
     apply_common_layers(routes).with_state(state)
 }
 

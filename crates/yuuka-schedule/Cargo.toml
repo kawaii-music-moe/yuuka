@@ -1,0 +1,16 @@
+[package]
+name = "yuuka-schedule"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "yuuka schedule ドメイン（T1 fan-out・参照実装は yuuka-todo）— Phase 1 skeleton"
+
+[dependencies]
+yuuka-web.workspace = true
+axum.workspace = true
+ts-rs.workspace = true
+
+[lints]
+workspace = true
