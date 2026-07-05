@@ -1,0 +1,11 @@
+[package]
+name = "yuuka-services"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "yuuka 常駐サービス群（reminder/report/briefing/backup/… cron）— Phase 0 stub"
+
+[lints]
+workspace = true

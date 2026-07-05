@@ -1,0 +1,11 @@
+[package]
+name = "yuuka-discord"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "yuuka Discord 層（twilight マルチテナント bot）— Phase 0 stub"
+
+[lints]
+workspace = true

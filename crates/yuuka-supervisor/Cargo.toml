@@ -1,0 +1,15 @@
+[package]
+name = "yuuka-supervisor"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "yuuka エントリポイント兼監督（JoinSet supervisor・bin: yuuka）— Phase 0 stub"
+
+[[bin]]
+name = "yuuka"
+path = "src/main.rs"
+
+[lints]
+workspace = true

@@ -1,0 +1,30 @@
+# cargo-deny 設定。workspace ルート。
+# 絶対制約1: anyhow 等の握り潰しエラー crate を依存グラフ全体で禁止。
+# 検証: docs/rust-rewrite/verification/rpt-clippy-cargodeny.md（cargo-deny 0.19.9・deny エントリは `crate=` フィールド）
+
+[bans]
+multiple-versions = "warn"
+wildcards = "allow"
+
+deny = [
+    { crate = "anyhow",     reason = "banned: 具体エラー型(thiserror)のみ。動的握り潰し禁止（絶対制約1）" },
+    { crate = "eyre",       reason = "banned: 同上" },
+    { crate = "color-eyre", reason = "banned: eyre 派生。個別に列挙が必要" },
+    { crate = "backoff",    reason = "banned: RUSTSEC-2025-0012 で非メンテ。backon を使う" },
+]
+
+[advisories]
+# advisory DB を取得してセキュリティ勧告をチェック（ネットワーク要）。
+# bans だけ高速に回すなら CI で `cargo deny check bans`（ネットワーク不要）。
+yanked = "deny"
+
+[licenses]
+# foundation 依存のライセンス許可リスト。bans/advisories はクリーン必須、
+# licenses は foundation 依存で引っかかった分のみ最小拡張する（逸脱に記録）。
+allow = ["MIT", "Apache-2.0", "BSD-3-Clause", "ISC", "Unicode-3.0", "Zlib"]
+confidence-threshold = 0.9
+# 第一者（未公開・path）クレートはライセンス検査対象外にする。プロジェクト自体は MIT
+# かつ private（package.json）で、workspace メンバーは crates.io へ公開しない。
+private = { ignore = true }
+# 許可リストにあるが依存グラフに出現しないライセンスの警告を黙らせる。
+unused-allowed-license = "allow"

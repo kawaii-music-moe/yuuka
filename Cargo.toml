@@ -1,0 +1,93 @@
+# workspace ルート Cargo.toml。Phase 0（契約凍結）で新設。
+# 絶対制約1（anyhow等の握り潰し禁止）の機械強制。検証: docs/rust-rewrite/verification/rpt-clippy-cargodeny.md
+#
+# 逸脱#1（本タスク指示）: yuuka-synapse / yuuka-crawler はまだ members に入れない（daemon 吸収は最終 Phase H）。
+# また既存/独立の nested Cargo.toml（src/rust_synapse, src/rust_crawler, clients/desktop,
+# .claude/worktrees 配下のコピー）を本 workspace に取り込まないよう exclude する。
+
+[workspace]
+resolver = "2"
+members = [
+    "crates/yuuka-core",
+    "crates/yuuka-db",
+    "crates/yuuka-types",
+    "crates/yuuka-web",
+    "crates/yuuka-discord",
+    "crates/yuuka-gemini",
+    "crates/yuuka-tools",
+    "crates/yuuka-services",
+    "crates/yuuka-supervisor",
+    "xtask",
+]
+exclude = [
+    ".claude",
+    "src/rust_synapse",
+    "src/rust_crawler",
+    "clients/desktop",
+]
+
+[workspace.package]
+edition = "2021"            # オープン決定事項#4（2021 か 2024 か）: 既定 2021 を採用
+rust-version = "1.96"
+license = "MIT"            # プロジェクト方針（package.json）に一致。全メンバーが継承。
+publish = false           # 第一者クレートは crates.io へ公開しない。
+
+# ── 自己復帰の前提: パニックは unwind（abort にしない） ──
+# tokio がタスク境界でパニックを隔離できるのは unwind のときだけ。
+# 検証: docs/rust-rewrite/verification/rpt-resilience-tokio-backon-recloser.md §1
+[profile.release]
+panic = "unwind"
+[profile.dev]
+panic = "unwind"
+
+# ── 絶対制約1: 握り潰し系 lint を workspace 全体で deny ──
+# restriction グループは一括有効化禁止（相互矛盾を含むため個別列挙が必須）。
+# 各メンバー crate は [lints] workspace = true を必ず書くこと。
+[workspace.lints.clippy]
+unwrap_used        = "deny"
+expect_used        = "deny"
+panic              = "deny"
+todo               = "deny"
+unimplemented      = "deny"
+unreachable        = "deny"
+indexing_slicing   = "deny"
+panic_in_result_fn = "deny"
+
+# ── 共有依存（バージョンは 2026-07-01 実測。docs/rust-rewrite/00-decisions.md に整合） ──
+[workspace.dependencies]
+# foundation で実際に使う依存のみ features 展開。feature crate は Phase 0 では yuuka-core のみに依存する。
+tokio                    = { version = "1.52", features = ["full"] }
+thiserror                = "2.0.18"
+axum                     = { version = "0.8.9", features = ["ws", "macros"] }
+tower                    = "0.5"
+tower-http               = { version = "0.6", features = ["fs", "compression-br", "compression-gzip", "set-header"] }  # 0.7 は axum 0.8.9 未対応の恐れ→0.6 固定
+hyper                    = "1"
+rusqlite                 = { version = "0.40", features = ["bundled"] }         # bundled SQLite 3.53.2
+deadpool-sqlite          = "0.13"
+refinery                 = { version = "0.9", features = ["rusqlite"] }
+backon                   = "1.6"                                                # backoff は RUSTSEC-2025-0012 で禁止
+tokio-graceful-shutdown  = "0.19"
+recloser                 = "1.4"
+twilight-gateway         = "0.17"
+twilight-http            = "0.17"
+twilight-model           = "0.17"
+twilight-cache-inmemory  = "0.17"
+twilight-util            = "0.17"
+reqwest                  = { version = "0.13", features = ["json", "stream", "rustls-tls"] }
+eventsource-stream       = "0.2"
+serde                    = { version = "1", features = ["derive"] }
+serde_json               = "1"
+secrecy                  = "0.10"
+ts-rs                    = "12"                                                 # オープン決定#1: utoipa 5.5 + openapi-typescript 代替
+rmcp                     = { version = "2.0", features = ["client"] }
+extism                   = "1.30"
+redis                    = { version = "0.27", features = ["tokio-comp"] }      # or fred
+async-trait              = "0.1"
+tracing                  = "0.1"
+tracing-subscriber       = { version = "0.3", features = ["env-filter", "fmt"] }
+serde_yaml               = "0.9"
+
+# yuuka クレート間の内部依存（パス依存）
+yuuka-core  = { path = "crates/yuuka-core" }
+yuuka-db    = { path = "crates/yuuka-db" }
+yuuka-types = { path = "crates/yuuka-types" }

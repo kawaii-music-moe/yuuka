@@ -1,0 +1,11 @@
+[package]
+name = "yuuka-gemini"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "yuuka Gemini 薄ラッパ（reqwest・generateContent・function calling）— Phase 0 stub"
+
+[lints]
+workspace = true

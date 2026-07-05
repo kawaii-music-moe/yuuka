@@ -22,3 +22,6 @@ deploy/*/secret.key
 deploy/*/secret.key.new
 deploy/*/data/
 node_modules
+
+# Rust 移行ワークスペース（Phase 0〜）のビルド成果物
+/target

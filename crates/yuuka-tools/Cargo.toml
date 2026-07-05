@@ -1,0 +1,11 @@
+[package]
+name = "yuuka-tools"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "yuuka ツール/プラグイン基盤（ToolProvider レジストリ Native/MCP/WASM）— Phase 0 stub"
+
+[lints]
+workspace = true

@@ -1,0 +1,11 @@
+[package]
+name = "yuuka-web"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "yuuka web 層（axum ルート/認可 extractor/静的配信/WS）— Phase 0 stub"
+
+[lints]
+workspace = true
