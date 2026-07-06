@@ -1,50 +1,85 @@
 //! 型付き Config と厳密 load/validate（§6.8）。
 //!
-//! config.yaml → 型付き構造体へ厳密デシリアライズし、必須欠落・型不一致・不正値は
-//! **起動時に fail-fast**（`ConfigError`。§5.6 の唯一の致命ポイント）。
-//! 機密は本 struct に平文で持たず [`crate::secrets`] の `SecretString` で扱う。
+//! `config.yaml`（存在すれば）＋環境変数を **既存 Node `getSetting` と同一の優先順**
+//! （`yaml[KEY] ?? env[KEY] ?? default`・キーは **UPPERCASE**）で読み、型付き構造体へ
+//! 落とす。未知キー（`INVITE_CODES`/`GOOGLE_*`/`REMINDER_CRON` 等・bot/他系用）は
+//! **無視**する（web 起動に不要なため）。型不一致・不正値は起動時に fail-fast
+//! （`ConfigError`。§5.6 の唯一の致命ポイント）。機密は本 struct に平文で持たず
+//! [`crate::secrets`] の `SecretString` で扱う。
 
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 
-use serde::Deserialize;
+use serde_yaml::{Mapping, Value};
 
 use crate::error::ConfigError;
 
 /// 起動時に検証済みの型付き設定。以後サービスループへ不変で渡す。
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone)]
 pub struct Config {
     /// 公開ベース URL（`https://` なら Cookie ハードニング + HSTS を強制）。
-    #[serde(default)]
     pub base_url: Option<String>,
-    /// バインドホスト。
+    /// バインドホスト（`HOST`・既定 `127.0.0.1`）。
     pub host: IpAddr,
-    /// バインドポート。
+    /// バインドポート（`PORT`・既定 `3000`）。
     pub port: u16,
-    /// SQLite DB ファイルパス。
+    /// SQLite DB ファイルパス（`DB_PATH`・既定 `./data/yuuka.db`）。
     pub db_path: PathBuf,
-    /// セッション TTL（日）。
+    /// セッション TTL（日・`SESSION_TTL_DAYS`・既定 7）。
     pub session_ttl_days: u32,
-    /// XFF 信頼判定に使う信頼プロキシ。
-    #[serde(default)]
+    /// Redis 接続 URL（`REDIS_URL`・既定 `redis://127.0.0.1:6379`）。
+    pub redis_url: String,
+    /// XFF 信頼判定に使う信頼プロキシ（`TRUSTED_PROXIES`・カンマ/YAML 配列）。
     pub trusted_proxies: Vec<IpAddr>,
-    /// index.html へ差し込む google-site-verification 値。
-    #[serde(default)]
+    /// index.html へ差し込む google-site-verification 値（`GOOGLE_SITE_VERIFICATION`）。
     pub google_site_verification: Option<String>,
+    /// プライバシーポリシー URL（`PRIVACY_POLICY_URL`・`/api/me` で返す）。
+    pub privacy_policy_url: String,
+    /// 利用規約 URL（`TERMS_URL`・同上）。
+    pub terms_url: String,
 }
 
 impl Config {
-    /// config.yaml を読み込み、厳密検証して返す。**起動時のみ**呼ぶ（fail-fast）。
+    /// `config.yaml`（あれば）＋環境変数を読み、厳密検証して返す。**起動時のみ**呼ぶ。
+    ///
+    /// `path` が無ければ Node 同様に警告扱いで env/既定へフォールバックする（欠落は致命に
+    /// しない。壊れた YAML＝パース失敗のみ致命）。
     ///
     /// # Errors
-    /// ファイル欠落・パース失敗・値検証失敗で [`ConfigError`]。
+    /// YAML パース失敗・型不一致・不正値で [`ConfigError`]。
     pub fn load_and_validate(path: &Path) -> Result<Self, ConfigError> {
-        let raw = std::fs::read_to_string(path).map_err(|_| ConfigError::NotFound {
-            path: path.display().to_string(),
-        })?;
-        let cfg: Config =
-            serde_yaml::from_str(&raw).map_err(|source| ConfigError::Parse { source })?;
+        // config.yaml があれば mapping として読む（無ければ空＝env/既定のみ）。壊れた
+        // YAML はパース失敗＝致命（§5.6）。未知キーは Mapping なので自然に許容される。
+        let yaml: Mapping = match std::fs::read_to_string(path) {
+            Ok(raw) => serde_yaml::from_str(&raw).map_err(|source| ConfigError::Parse { source })?,
+            Err(_) => Mapping::new(),
+        };
+
+        // getSetting(KEY) = yaml[KEY] ?? env[KEY]（Node `config.ts` と同一優先順）。
+        let get = |key: &str| get_setting(&yaml, key);
+
+        let host = parse_field("HOST", &get("HOST").unwrap_or_else(|| "127.0.0.1".to_owned()))?;
+        let port = parse_field("PORT", &get("PORT").unwrap_or_else(|| "3000".to_owned()))?;
+        let db_path = PathBuf::from(get("DB_PATH").unwrap_or_else(|| "./data/yuuka.db".to_owned()));
+        let session_ttl_days = parse_field(
+            "SESSION_TTL_DAYS",
+            &get("SESSION_TTL_DAYS").unwrap_or_else(|| "7".to_owned()),
+        )?;
+        let redis_url = get("REDIS_URL").unwrap_or_else(|| "redis://127.0.0.1:6379".to_owned());
+        let trusted_proxies = parse_ip_list("TRUSTED_PROXIES", get("TRUSTED_PROXIES").as_deref())?;
+
+        let cfg = Self {
+            base_url: non_empty(get("BASE_URL")),
+            host,
+            port,
+            db_path,
+            session_ttl_days,
+            redis_url,
+            trusted_proxies,
+            google_site_verification: non_empty(get("GOOGLE_SITE_VERIFICATION")),
+            privacy_policy_url: get("PRIVACY_POLICY_URL").unwrap_or_default(),
+            terms_url: get("TERMS_URL").unwrap_or_default(),
+        };
         cfg.validate()?;
         Ok(cfg)
     }
@@ -74,6 +109,123 @@ impl Config {
     pub fn is_https_deployment(&self) -> bool {
         self.base_url
             .as_deref()
-            .is_some_and(|u| u.starts_with("https://"))
+            .is_some_and(|u| u.to_ascii_lowercase().starts_with("https://"))
+    }
+}
+
+/// `yaml[key] ?? env[key]`（Node `getSetting` と同一・yaml 優先）。空文字も値として扱う。
+fn get_setting(yaml: &Mapping, key: &str) -> Option<String> {
+    yaml_string(yaml, key).or_else(|| std::env::var(key).ok())
+}
+
+/// YAML マッピングからキーの値を文字列化して取り出す（配列は Node 同様カンマ結合）。
+fn yaml_string(yaml: &Mapping, key: &str) -> Option<String> {
+    match yaml.get(Value::from(key))? {
+        Value::String(s) => Some(s.clone()),
+        Value::Number(n) => Some(n.to_string()),
+        Value::Bool(b) => Some(b.to_string()),
+        // getSettingArray/getSetting は配列をカンマ結合する（config.ts）。
+        Value::Sequence(seq) => Some(
+            seq.iter()
+                .filter_map(|v| match v {
+                    Value::String(s) => Some(s.clone()),
+                    Value::Number(n) => Some(n.to_string()),
+                    Value::Bool(b) => Some(b.to_string()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join(","),
+        ),
+        _ => None,
+    }
+}
+
+/// 空文字を `None` に畳む（Node は "" を返すが、Rust は「未設定」を Option で表現）。
+fn non_empty(v: Option<String>) -> Option<String> {
+    v.filter(|s| !s.is_empty())
+}
+
+/// 単一値の型付きパース（失敗は [`ConfigError::InvalidValue`]）。
+fn parse_field<T: std::str::FromStr>(field: &'static str, raw: &str) -> Result<T, ConfigError> {
+    raw.trim().parse::<T>().map_err(|_| ConfigError::InvalidValue {
+        field,
+        reason: format!("could not parse value {raw:?}"),
+    })
+}
+
+/// カンマ区切りの IP リストをパースする（空・未設定は空 Vec・`getSettingArray` 相当）。
+fn parse_ip_list(field: &'static str, raw: Option<&str>) -> Result<Vec<IpAddr>, ConfigError> {
+    let Some(raw) = raw else {
+        return Ok(Vec::new());
+    };
+    raw.split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| {
+            s.parse::<IpAddr>().map_err(|_| ConfigError::InvalidValue {
+                field,
+                reason: format!("invalid IP {s:?}"),
+            })
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Config;
+    use std::io::Write;
+
+    fn write_yaml(body: &str) -> tempfile::NamedTempFile {
+        let mut f = tempfile::NamedTempFile::new().expect("tmp");
+        f.write_all(body.as_bytes()).expect("write");
+        f
+    }
+
+    #[test]
+    fn loads_real_uppercase_yaml_and_ignores_unknown_keys() {
+        // 実 config.yaml 形式（UPPERCASE・bot 用の未知キー混在）を読めること。
+        let f = write_yaml(
+            "DB_PATH: \"./data/yuuka.db\"\n\
+             REDIS_URL: \"redis://127.0.0.1:6379\"\n\
+             PORT: 7854\n\
+             HOST: \"0.0.0.0\"\n\
+             SESSION_TTL_DAYS: 14\n\
+             TERMS_URL: \"https://ex.test/terms\"\n\
+             REMINDER_CRON: \"* * * * *\"\n\
+             INVITE_CODES:\n  - \"a\"\n  - \"b\"\n\
+             GOOGLE_CLIENT_ID: \"xxx\"\n",
+        );
+        let cfg = Config::load_and_validate(f.path()).expect("load");
+        assert_eq!(cfg.port, 7854);
+        assert_eq!(cfg.host.to_string(), "0.0.0.0");
+        assert_eq!(cfg.session_ttl_days, 14);
+        assert_eq!(cfg.db_path.to_str().unwrap(), "./data/yuuka.db");
+        assert_eq!(cfg.redis_url, "redis://127.0.0.1:6379");
+        assert_eq!(cfg.terms_url, "https://ex.test/terms");
+        assert!(!cfg.is_https_deployment());
+    }
+
+    #[test]
+    fn missing_file_falls_back_to_defaults() {
+        // 欠落は致命にしない（env/既定へ）。パス不在でも既定で組み上がる。
+        let cfg = Config::load_and_validate(std::path::Path::new("/no/such/yuuka-config.yaml"))
+            .expect("defaults");
+        assert_eq!(cfg.port, 3000);
+        assert_eq!(cfg.host.to_string(), "127.0.0.1");
+        assert_eq!(cfg.session_ttl_days, 7);
+        assert_eq!(cfg.redis_url, "redis://127.0.0.1:6379");
+    }
+
+    #[test]
+    fn invalid_port_is_rejected() {
+        let f = write_yaml("PORT: \"not-a-number\"\n");
+        assert!(Config::load_and_validate(f.path()).is_err());
+    }
+
+    #[test]
+    fn https_base_url_flags_https_deployment() {
+        let f = write_yaml("BASE_URL: \"https://yuuka.example\"\n");
+        let cfg = Config::load_and_validate(f.path()).expect("load");
+        assert!(cfg.is_https_deployment());
     }
 }

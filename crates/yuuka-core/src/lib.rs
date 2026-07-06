@@ -13,6 +13,7 @@ pub mod telemetry;
 pub mod tool;
 
 // よく使う型を crate ルートへ再エクスポート（feature crate の import を短くする）。
+pub use config::Config;
 pub use error::{
     AppError, AuthError, ConfigError, DbError, DiscordError, Fatality, GeminiError, IpcError,
     PluginError, RepoError, Retryability, ToolError, ValidationError, WebError,

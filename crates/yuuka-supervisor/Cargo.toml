@@ -23,7 +23,11 @@ yuuka-personal.workspace = true
 yuuka-credential.workspace = true
 yuuka-playbook.workspace = true
 yuuka-persona.workspace = true
+yuuka-auth.workspace = true
 axum.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
 
 [dev-dependencies]
 tokio.workspace = true

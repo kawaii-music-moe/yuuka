@@ -12,3 +12,15 @@ pub struct WebConfig {
     /// HTTPS デプロイか（Cookie 名 `__Host-` の選択に使う・§11.3）。
     pub https: bool,
 }
+
+impl WebConfig {
+    /// 検証済みの [`yuuka_core::Config`] から web 実行時設定を導出する。
+    #[must_use]
+    pub fn from_core(cfg: &yuuka_core::Config) -> Self {
+        Self {
+            privacy_policy_url: cfg.privacy_policy_url.clone(),
+            terms_url: cfg.terms_url.clone(),
+            https: cfg.is_https_deployment(),
+        }
+    }
+}

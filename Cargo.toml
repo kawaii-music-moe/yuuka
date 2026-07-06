@@ -12,6 +12,7 @@ members = [
     "crates/yuuka-db",
     "crates/yuuka-types",
     "crates/yuuka-web",
+    "crates/yuuka-auth",
     "crates/yuuka-discord",
     "crates/yuuka-gemini",
     "crates/yuuka-tools",
@@ -90,7 +91,8 @@ secrecy                  = "0.10"
 ts-rs                    = "12"                                                 # オープン決定#1: utoipa 5.5 + openapi-typescript 代替
 rmcp                     = { version = "2.0", features = ["client"] }
 extism                   = "1.30"
-redis                    = { version = "0.27", features = ["tokio-comp"] }      # or fred
+redis                    = { version = "0.27", features = ["tokio-comp", "connection-manager"] }  # or fred（tokio-comp + 自動再接続）
+sha2                     = "0.10"                                               # セッション/デスクトップトークンの sha256hex
 async-trait              = "0.1"
 tracing                  = "0.1"
 tracing-subscriber       = { version = "0.3", features = ["env-filter", "fmt"] }
@@ -101,6 +103,7 @@ yuuka-core  = { path = "crates/yuuka-core" }
 yuuka-db    = { path = "crates/yuuka-db" }
 yuuka-types = { path = "crates/yuuka-types" }
 yuuka-web        = { path = "crates/yuuka-web" }
+yuuka-auth       = { path = "crates/yuuka-auth" }
 yuuka-todo       = { path = "crates/yuuka-todo" }
 yuuka-finance    = { path = "crates/yuuka-finance" }
 yuuka-schedule   = { path = "crates/yuuka-schedule" }

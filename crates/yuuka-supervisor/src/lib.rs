@@ -1,17 +1,21 @@
-//! yuuka-supervisor（lib）— アプリ組立とライフサイクル。
+//! yuuka-supervisor（lib+bin）— アプリ組立とライフサイクル。
 //!
-//! Phase 1: フレームワークルート（yuuka-web）と各ドメイン（T1）のルータを merge し、
-//! 共通レイヤ（CSRF/body 上限/セキュリティヘッダ）を被せて完成ルータを返す。
-//! config 読込・AuthBackend 実装・`axum::serve`・JoinSet 監督は後続増分で追加する。
-//! DAG: `supervisor → web, todo, …`（ドメインを束ねる最下流）。
+//! フレームワークルート（yuuka-web）と各ドメイン（T1）のルータを merge し、任意で SPA 静的
+//! 配信を載せ、共通レイヤ（CSRF/body 上限/セキュリティヘッダ）を被せて完成ルータを返す。
+//! bin（main.rs）が config 読込・実 AuthBackend（yuuka-auth）・`axum::serve`・graceful shutdown を
+//! 配線する。JoinSet による全サービス監督（bot/gemini/services）は後続増分。
+//! DAG: `supervisor → web, auth, todo, …`（ドメインを束ねる最下流）。
+
+use std::path::Path;
 
 use axum::Router;
-use yuuka_web::{apply_common_layers, framework_routes, AppState};
+use yuuka_web::{apply_common_layers, framework_routes, mount_static, AppState};
 
-/// 完成アプリのルータを組み立てる（フレームワーク + 全ドメイン + 共通レイヤ）。
+/// 完成アプリのルータを組み立てる（フレームワーク + 全ドメイン + 任意の静的配信 + 共通レイヤ）。
 ///
 /// 新ドメイン（finance/schedule/…）は `.merge(yuuka_xxx::routes())` を足す。
-pub fn build_app(state: AppState) -> Router {
+/// `dist_dir` を渡すと SPA（`dist/public`）を `fallback_service` として載せる（未指定は API のみ）。
+pub fn build_app(state: AppState, dist_dir: Option<&Path>) -> Router {
     let routes = framework_routes()
         .merge(yuuka_todo::routes())
         .merge(yuuka_finance::routes())
@@ -22,6 +26,10 @@ pub fn build_app(state: AppState) -> Router {
         .merge(yuuka_credential::routes())
         .merge(yuuka_playbook::routes())
         .merge(yuuka_persona::routes());
+    let routes = match dist_dir {
+        Some(dir) => mount_static(routes, dir),
+        None => routes,
+    };
     apply_common_layers(routes).with_state(state)
 }
 
@@ -74,7 +82,7 @@ mod tests {
     }
 
     fn app() -> Router {
-        super::build_app(AppState::new(Arc::new(FakeAuth), WebConfig::default(), test_db()))
+        super::build_app(AppState::new(Arc::new(FakeAuth), WebConfig::default(), test_db()), None)
     }
 
     #[tokio::test]
