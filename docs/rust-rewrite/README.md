@@ -45,6 +45,11 @@
 
 > `verification/verify-*.md`（小サイズ）は親エージェントの中間メモ。詳細は上記 `rpt-*.md` を参照。
 
+## 実装レビュー
+
+- [review-2026-07-06-phase1.md](review-2026-07-06-phase1.md) — Phase 0〜1 / T1 実装（16クレート・約9,250行）の精読レビュー。HIGH 3件（入力DTOのcamelCase欠落・CSP欠落・/api/tasks形状乖離）＋MED 12件、機械検査実測（clippy/test/deny 通過、fmt 差分あり）、推奨対応順つき。
+- [review-2026-07-06-fix-policy.md](review-2026-07-06-fix-policy.md) — 上記レビューの**修正方針（唯一の基準）**。7バッチの実施順・各所見の処置（対応／fail-closed＋deferred／却下）・検証戦略。確定事項: wire 契約は「入力camelCase・出力snake_case」の非対称（レビューの「出力DTOもcamelCase」は事実誤認と訂正）／移行期データ整合は fail-closed 優先で完全parityは deferred／応答形状は Node 厳密一致。
+
 ## 次のアクション（実装開始前）
 
 1. [00-decisions.md](00-decisions.md) 末尾および [PLAN.md §14](PLAN.md) の**オープンな決定事項5件**をユーザーが判断（ts-rs/utoipa, rusqlite/sqlx, generateContent/Interactions, edition, プラグイン初期スコープ）。
