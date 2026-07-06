@@ -176,7 +176,9 @@ fn validate(name: &str, prompt: &str) -> Result<(), DbError> {
     if name.trim().is_empty() {
         return Err(DbError::Operation("persona name is required".to_owned()));
     }
-    if prompt.chars().count() > PERSONA_MAX_LENGTH {
+    // Node `validatePersonaInput` は `prompt.length`（UTF-16 code unit 数）で判定するため、
+    // `encode_utf16().count()` で数える（`chars().count()` は非BMP文字を過小評価し過剰許容）。
+    if prompt.encode_utf16().count() > PERSONA_MAX_LENGTH {
         return Err(DbError::Operation(format!(
             "persona prompt exceeds {PERSONA_MAX_LENGTH} chars"
         )));

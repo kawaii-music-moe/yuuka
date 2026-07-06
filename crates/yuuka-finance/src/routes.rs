@@ -14,7 +14,7 @@ use axum::{Json, Router};
 use serde::Deserialize;
 use yuuka_core::WebError;
 use yuuka_types::Envelope;
-use yuuka_web::{resolve_scope, ApiError, AppState, AuthenticatedUser, Db};
+use yuuka_web::{resolve_scope, ApiError, AppState, AuthenticatedUser, Db, ScopedJson};
 
 use crate::dto::{ExpenseData, ExpenseListData, NewExpense};
 use crate::repo::ExpenseRepo;
@@ -45,8 +45,7 @@ async fn list(
 async fn add(
     user: AuthenticatedUser,
     State(db): State<Db>,
-    Query(q): Query<BotQuery>,
-    Json(input): Json<NewExpense>,
+    ScopedJson { bot_id, value: input }: ScopedJson<NewExpense>,
 ) -> Result<Json<Envelope<ExpenseData>>, ApiError> {
     // Node parity: amount と category は必須（amount は 0 も金額として不正扱い＝truthy 判定）。
     if input.amount == 0 || input.category.trim().is_empty() {
@@ -54,7 +53,7 @@ async fn add(
             "amount and category are required".to_owned(),
         )));
     }
-    let scope = resolve_scope(&user.0, &db, q.bot_id.as_deref()).await?;
+    let scope = resolve_scope(&user.0, &db, bot_id.as_deref()).await?;
     let expense = ExpenseRepo::new(&db).add(&scope, input).await?;
     Ok(Json(Envelope::ok(ExpenseData { expense })))
 }

@@ -1685,6 +1685,7 @@ dependencies = [
  "async-trait",
  "axum",
  "rusqlite",
+ "serde",
  "serde_json",
  "tempfile",
  "tokio",

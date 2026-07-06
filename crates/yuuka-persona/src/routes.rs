@@ -16,7 +16,7 @@ use axum::{Json, Router};
 use serde::Deserialize;
 use yuuka_core::WebError;
 use yuuka_types::Envelope;
-use yuuka_web::{resolve_scope, ApiError, AppState, AuthenticatedUser, Db};
+use yuuka_web::{resolve_scope, ApiError, AppState, AuthenticatedUser, Db, ScopedJson};
 
 use crate::dto::{
     Persona, PersonaData, PersonaDeletedData, PersonaListData, SavePersona, PERSONA_MAX_LENGTH,
@@ -60,18 +60,19 @@ async fn list(
 async fn save(
     user: AuthenticatedUser,
     State(db): State<Db>,
-    Query(q): Query<BotQuery>,
-    Json(input): Json<SavePersona>,
+    ScopedJson { bot_id, value: input }: ScopedJson<SavePersona>,
 ) -> Result<Json<Envelope<PersonaData>>, ApiError> {
     if input.name.trim().is_empty() {
         return Err(ApiError(WebError::Validation("name is required".to_owned())));
     }
-    if input.prompt.chars().count() > PERSONA_MAX_LENGTH {
+    // Node は `prompt.length`（UTF-16 code unit 数）で判定する。`chars().count()`
+    // だと非BMP文字（絵文字等）を過小評価し過剰許容になるため、UTF-16 単位で数える。
+    if input.prompt.encode_utf16().count() > PERSONA_MAX_LENGTH {
         return Err(ApiError(WebError::Validation(format!(
             "prompt exceeds {PERSONA_MAX_LENGTH} chars"
         ))));
     }
-    let scope = resolve_scope(&user.0, &db, q.bot_id.as_deref()).await?;
+    let scope = resolve_scope(&user.0, &db, bot_id.as_deref()).await?;
     let repo = PersonaRepo::new(&db);
     let persona: Persona = match input.id {
         Some(id) => match repo.update(&scope, id, input).await? {
@@ -86,10 +87,9 @@ async fn save(
 async fn delete(
     user: AuthenticatedUser,
     State(db): State<Db>,
-    Query(q): Query<BotQuery>,
-    Json(input): Json<IdInput>,
+    ScopedJson { bot_id, value: input }: ScopedJson<IdInput>,
 ) -> Result<Json<Envelope<PersonaDeletedData>>, ApiError> {
-    let scope = resolve_scope(&user.0, &db, q.bot_id.as_deref()).await?;
+    let scope = resolve_scope(&user.0, &db, bot_id.as_deref()).await?;
     if PersonaRepo::new(&db).delete(&scope, input.id).await? {
         Ok(Json(Envelope::ok(PersonaDeletedData {
             deleted_id: input.id,

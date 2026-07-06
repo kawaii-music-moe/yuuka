@@ -17,7 +17,7 @@ use axum::{Json, Router};
 use serde::Deserialize;
 use yuuka_core::WebError;
 use yuuka_types::Envelope;
-use yuuka_web::{resolve_scope, ApiError, AppState, AuthenticatedUser, Db};
+use yuuka_web::{resolve_scope, ApiError, AppState, AuthenticatedUser, Db, ScopedJson};
 
 use crate::dto::{NewTimelineRecord, TimelineDayData, TimelineDeletedData, TimelineRecordData};
 use crate::repo::TimelineRepo;
@@ -28,12 +28,6 @@ struct DayQuery {
     bot_id: Option<String>,
     #[serde(default)]
     date: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct BotQuery {
-    #[serde(default, rename = "botId")]
-    bot_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -55,10 +49,8 @@ async fn day(
     Query(q): Query<DayQuery>,
 ) -> Result<Json<Envelope<TimelineDayData>>, ApiError> {
     let scope = resolve_scope(&user.0, &db, q.bot_id.as_deref()).await?;
-    let date = match q.date {
-        Some(d) if !d.trim().is_empty() => d,
-        _ => return Err(ApiError(WebError::Validation("date is required".to_owned()))),
-    };
+    // Node 同様、date 未指定・空文字は本日（UTC）にフォールバックする（repo が SQL で畳む）。
+    let date = q.date.filter(|d| !d.trim().is_empty());
     let records = TimelineRepo::new(&db).list(&scope, date).await?;
     Ok(Json(Envelope::ok(TimelineDayData { records })))
 }
@@ -66,8 +58,7 @@ async fn day(
 async fn add(
     user: AuthenticatedUser,
     State(db): State<Db>,
-    Query(q): Query<BotQuery>,
-    Json(input): Json<NewTimelineRecord>,
+    ScopedJson { bot_id, value: input }: ScopedJson<NewTimelineRecord>,
 ) -> Result<Json<Envelope<TimelineRecordData>>, ApiError> {
     if input.date.trim().is_empty() {
         return Err(ApiError(WebError::Validation("date is required".to_owned())));
@@ -75,7 +66,7 @@ async fn add(
     if input.r#type.trim().is_empty() {
         return Err(ApiError(WebError::Validation("type is required".to_owned())));
     }
-    let scope = resolve_scope(&user.0, &db, q.bot_id.as_deref()).await?;
+    let scope = resolve_scope(&user.0, &db, bot_id.as_deref()).await?;
     let record = TimelineRepo::new(&db).add(&scope, input).await?;
     Ok(Json(Envelope::ok(TimelineRecordData { record })))
 }
@@ -83,10 +74,9 @@ async fn add(
 async fn delete(
     user: AuthenticatedUser,
     State(db): State<Db>,
-    Query(q): Query<BotQuery>,
-    Json(input): Json<IdInput>,
+    ScopedJson { bot_id, value: input }: ScopedJson<IdInput>,
 ) -> Result<Json<Envelope<TimelineDeletedData>>, ApiError> {
-    let scope = resolve_scope(&user.0, &db, q.bot_id.as_deref()).await?;
+    let scope = resolve_scope(&user.0, &db, bot_id.as_deref()).await?;
     if TimelineRepo::new(&db).delete(&scope, input.id).await? {
         Ok(Json(Envelope::ok(TimelineDeletedData {
             deleted_id: input.id,

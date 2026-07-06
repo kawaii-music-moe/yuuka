@@ -20,7 +20,7 @@ use axum::{Json, Router};
 use serde::Deserialize;
 use yuuka_core::WebError;
 use yuuka_types::Envelope;
-use yuuka_web::{resolve_scope, ApiError, AppState, AuthenticatedUser, Db};
+use yuuka_web::{resolve_scope, ApiError, AppState, AuthenticatedUser, Db, ScopedJson};
 
 use crate::dto::{Credential, CredentialDeletedData, CredentialListData, DeleteCredential};
 use crate::repo::CredentialRepo;
@@ -51,15 +51,14 @@ async fn list(
 async fn delete(
     user: AuthenticatedUser,
     State(db): State<Db>,
-    Query(q): Query<BotQuery>,
-    Json(input): Json<DeleteCredential>,
+    ScopedJson { bot_id, value: input }: ScopedJson<DeleteCredential>,
 ) -> Result<Json<Envelope<CredentialDeletedData>>, ApiError> {
     if input.service_name.trim().is_empty() {
         return Err(ApiError(WebError::Validation(
             "serviceName is required".to_owned(),
         )));
     }
-    let scope = resolve_scope(&user.0, &db, q.bot_id.as_deref()).await?;
+    let scope = resolve_scope(&user.0, &db, bot_id.as_deref()).await?;
     if CredentialRepo::new(&db)
         .delete(&scope, &input.service_name)
         .await?

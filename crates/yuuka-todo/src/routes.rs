@@ -14,7 +14,7 @@ use axum::{Json, Router};
 use serde::Deserialize;
 use yuuka_core::WebError;
 use yuuka_types::Envelope;
-use yuuka_web::{resolve_scope, ApiError, AppState, AuthenticatedUser, Db};
+use yuuka_web::{resolve_scope, ApiError, AppState, AuthenticatedUser, Db, ScopedJson};
 
 use crate::dto::{DeletedData, NewTodo, TaskData, TaskListData};
 use crate::repo::TodoRepo;
@@ -52,13 +52,12 @@ async fn list(
 async fn add(
     user: AuthenticatedUser,
     State(db): State<Db>,
-    Query(q): Query<BotQuery>,
-    Json(input): Json<NewTodo>,
+    ScopedJson { bot_id, value: input }: ScopedJson<NewTodo>,
 ) -> Result<Json<Envelope<TaskData>>, ApiError> {
     if input.title.trim().is_empty() {
         return Err(ApiError(WebError::Validation("title is required".to_owned())));
     }
-    let scope = resolve_scope(&user.0, &db, q.bot_id.as_deref()).await?;
+    let scope = resolve_scope(&user.0, &db, bot_id.as_deref()).await?;
     let task = TodoRepo::new(&db).add(&scope, input).await?;
     Ok(Json(Envelope::ok(TaskData { task })))
 }
@@ -66,10 +65,9 @@ async fn add(
 async fn complete(
     user: AuthenticatedUser,
     State(db): State<Db>,
-    Query(q): Query<BotQuery>,
-    Json(input): Json<IdInput>,
+    ScopedJson { bot_id, value: input }: ScopedJson<IdInput>,
 ) -> Result<Json<Envelope<TaskData>>, ApiError> {
-    let scope = resolve_scope(&user.0, &db, q.bot_id.as_deref()).await?;
+    let scope = resolve_scope(&user.0, &db, bot_id.as_deref()).await?;
     match TodoRepo::new(&db).complete(&scope, input.id).await? {
         Some(task) => Ok(Json(Envelope::ok(TaskData { task }))),
         None => Err(ApiError(WebError::NotFound)),
@@ -79,10 +77,9 @@ async fn complete(
 async fn delete(
     user: AuthenticatedUser,
     State(db): State<Db>,
-    Query(q): Query<BotQuery>,
-    Json(input): Json<IdInput>,
+    ScopedJson { bot_id, value: input }: ScopedJson<IdInput>,
 ) -> Result<Json<Envelope<DeletedData>>, ApiError> {
-    let scope = resolve_scope(&user.0, &db, q.bot_id.as_deref()).await?;
+    let scope = resolve_scope(&user.0, &db, bot_id.as_deref()).await?;
     if TodoRepo::new(&db).delete(&scope, input.id).await? {
         Ok(Json(Envelope::ok(DeletedData {
             deleted_id: input.id,

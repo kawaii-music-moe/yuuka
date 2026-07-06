@@ -110,7 +110,7 @@ mod tests {
             .unwrap();
 
         let listed = repo
-            .list(&scope("userA"), "2026-07-06".to_owned())
+            .list(&scope("userA"), Some("2026-07-06".to_owned()))
             .await
             .unwrap();
         assert_eq!(listed.len(), 1);
@@ -120,14 +120,14 @@ mod tests {
 
         // 別日には出ない（date フィルタ）。
         assert!(repo
-            .list(&scope("userA"), "2026-07-07".to_owned())
+            .list(&scope("userA"), Some("2026-07-07".to_owned()))
             .await
             .unwrap()
             .is_empty());
 
         // 別ユーザーには見えない（分離キーを型で強制）。
         assert!(repo
-            .list(&scope("userB"), "2026-07-06".to_owned())
+            .list(&scope("userB"), Some("2026-07-06".to_owned()))
             .await
             .unwrap()
             .is_empty());
@@ -154,7 +154,7 @@ mod tests {
 
         assert!(repo.delete(&scope("u"), created.id).await.unwrap());
         assert!(repo
-            .list(&scope("u"), "2026-07-06".to_owned())
+            .list(&scope("u"), Some("2026-07-06".to_owned()))
             .await
             .unwrap()
             .is_empty());
@@ -239,6 +239,27 @@ mod tests {
         // 内部列は露出しない（構造的フェイルクローズ）。
         assert!(j["records"][0]["user_id"].is_null());
         assert!(j["records"][0]["bot_id"].is_null());
+    }
+
+    #[tokio::test]
+    async fn day_without_date_falls_back_to_today() {
+        // date 未指定は 400 ではなく本日にフォールバックして 200（Node parity）。
+        let resp = app()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/timeline/day")
+                    .header("cookie", "__Host-yuuka-session=good")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let j: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(j["success"], serde_json::json!(true));
     }
 
     #[tokio::test]

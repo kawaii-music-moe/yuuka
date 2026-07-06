@@ -14,7 +14,7 @@ use axum::{Json, Router};
 use serde::Deserialize;
 use yuuka_core::WebError;
 use yuuka_types::Envelope;
-use yuuka_web::{resolve_scope, ApiError, AppState, AuthenticatedUser, Db};
+use yuuka_web::{resolve_scope, ApiError, AppState, AuthenticatedUser, Db, ScopedJson};
 
 use crate::dto::{NewPlaybook, PlaybookData, PlaybookDeletedData, PlaybookListData};
 use crate::repo::PlaybookRepo;
@@ -25,12 +25,6 @@ struct ListQuery {
     bot_id: Option<String>,
     #[serde(default)]
     query: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct BotQuery {
-    #[serde(default, rename = "botId")]
-    bot_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -59,8 +53,7 @@ async fn list(
 async fn save(
     user: AuthenticatedUser,
     State(db): State<Db>,
-    Query(q): Query<BotQuery>,
-    Json(input): Json<NewPlaybook>,
+    ScopedJson { bot_id, value: input }: ScopedJson<NewPlaybook>,
 ) -> Result<Json<Envelope<PlaybookData>>, ApiError> {
     if input.name.trim().is_empty()
         || input.title.trim().is_empty()
@@ -70,7 +63,7 @@ async fn save(
             "name, title, and steps are required".to_owned(),
         )));
     }
-    let scope = resolve_scope(&user.0, &db, q.bot_id.as_deref()).await?;
+    let scope = resolve_scope(&user.0, &db, bot_id.as_deref()).await?;
     let playbook = PlaybookRepo::new(&db).save(&scope, input).await?;
     Ok(Json(Envelope::ok(PlaybookData { playbook })))
 }
@@ -78,13 +71,12 @@ async fn save(
 async fn delete(
     user: AuthenticatedUser,
     State(db): State<Db>,
-    Query(q): Query<BotQuery>,
-    Json(input): Json<NameInput>,
+    ScopedJson { bot_id, value: input }: ScopedJson<NameInput>,
 ) -> Result<Json<Envelope<PlaybookDeletedData>>, ApiError> {
     if input.name.trim().is_empty() {
         return Err(ApiError(WebError::Validation("name is required".to_owned())));
     }
-    let scope = resolve_scope(&user.0, &db, q.bot_id.as_deref()).await?;
+    let scope = resolve_scope(&user.0, &db, bot_id.as_deref()).await?;
     if PlaybookRepo::new(&db).delete(&scope, input.name.clone()).await? {
         Ok(Json(Envelope::ok(PlaybookDeletedData {
             deleted_name: input.name,

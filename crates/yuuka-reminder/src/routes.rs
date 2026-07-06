@@ -14,7 +14,7 @@ use axum::{Json, Router};
 use serde::Deserialize;
 use yuuka_core::WebError;
 use yuuka_types::Envelope;
-use yuuka_web::{resolve_scope, ApiError, AppState, AuthenticatedUser, Db};
+use yuuka_web::{resolve_scope, ApiError, AppState, AuthenticatedUser, Db, ScopedJson};
 
 use crate::dto::{NewReminder, ReminderData, ReminderListData};
 use crate::repo::ReminderRepo;
@@ -26,12 +26,6 @@ struct ListQuery {
     /// `all=1` / `all=true` で送信済み・キャンセル済みも含める。
     #[serde(default)]
     all: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct BotQuery {
-    #[serde(default, rename = "botId")]
-    bot_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -62,8 +56,7 @@ async fn list(
 async fn add(
     user: AuthenticatedUser,
     State(db): State<Db>,
-    Query(q): Query<BotQuery>,
-    Json(input): Json<NewReminder>,
+    ScopedJson { bot_id, value: input }: ScopedJson<NewReminder>,
 ) -> Result<Json<Envelope<ReminderData>>, ApiError> {
     if input.message.trim().is_empty() {
         return Err(ApiError(WebError::Validation(
@@ -75,7 +68,7 @@ async fn add(
             "trigger_at is required".to_owned(),
         )));
     }
-    let scope = resolve_scope(&user.0, &db, q.bot_id.as_deref()).await?;
+    let scope = resolve_scope(&user.0, &db, bot_id.as_deref()).await?;
     let reminder = ReminderRepo::new(&db).add(&scope, input).await?;
     Ok(Json(Envelope::ok(ReminderData { reminder })))
 }
@@ -83,10 +76,9 @@ async fn add(
 async fn cancel(
     user: AuthenticatedUser,
     State(db): State<Db>,
-    Query(q): Query<BotQuery>,
-    Json(input): Json<ReminderIdInput>,
+    ScopedJson { bot_id, value: input }: ScopedJson<ReminderIdInput>,
 ) -> Result<Json<Envelope<ReminderData>>, ApiError> {
-    let scope = resolve_scope(&user.0, &db, q.bot_id.as_deref()).await?;
+    let scope = resolve_scope(&user.0, &db, bot_id.as_deref()).await?;
     match ReminderRepo::new(&db).cancel(&scope, input.reminder_id).await? {
         Some(reminder) => Ok(Json(Envelope::ok(ReminderData { reminder }))),
         None => Err(ApiError(WebError::NotFound)),
@@ -96,10 +88,9 @@ async fn cancel(
 async fn delete(
     user: AuthenticatedUser,
     State(db): State<Db>,
-    Query(q): Query<BotQuery>,
-    Json(input): Json<ReminderIdInput>,
+    ScopedJson { bot_id, value: input }: ScopedJson<ReminderIdInput>,
 ) -> Result<Json<Envelope<ReminderData>>, ApiError> {
-    let scope = resolve_scope(&user.0, &db, q.bot_id.as_deref()).await?;
+    let scope = resolve_scope(&user.0, &db, bot_id.as_deref()).await?;
     // 削除前の行を返す（Node に delete route は無いが CRUD 完備・{success, reminder}）。
     let Some(reminder) = ReminderRepo::new(&db).get(&scope, input.reminder_id).await? else {
         return Err(ApiError(WebError::NotFound));

@@ -36,15 +36,22 @@ impl<'a> TimelineRepo<'a> {
 
     /// スコープ内・指定日の全記録を `recorded_at` 昇順で返す（Node `listTimelineRecords`）。
     ///
+    /// `date` が `None`（未指定）なら **本日（UTC）** に畳む（Node の
+    /// `date ?? new Date().toISOString().slice(0,10)` と一致。SQLite `date('now')` は UTC）。
+    ///
     /// # Errors
     /// クエリ失敗時 [`DbError`]。
-    pub async fn list(&self, scope: &UserScope, date: String) -> Result<Vec<TimelineRecord>, DbError> {
+    pub async fn list(
+        &self,
+        scope: &UserScope,
+        date: Option<String>,
+    ) -> Result<Vec<TimelineRecord>, DbError> {
         let (uid, bid) = scope_keys(scope);
         self.read
             .read(move |conn| {
                 let sql = format!(
                     "SELECT {RECORD_COLUMNS} FROM timeline_records \
-                     WHERE user_id = ?1 AND bot_id = ?2 AND date = ?3 \
+                     WHERE user_id = ?1 AND bot_id = ?2 AND date = COALESCE(?3, date('now')) \
                      ORDER BY recorded_at ASC, id ASC"
                 );
                 let mut stmt = conn.prepare(&sql).map_err(map_sqlite)?;
@@ -86,7 +93,8 @@ impl<'a> TimelineRepo<'a> {
 
     /// 記録を作成し、作成後の行を返す（Node `addTimelineRecord`）。
     ///
-    /// `recorded_at` は未指定なら `datetime('now','localtime')`（Node は ISO now 相当）。
+    /// `recorded_at` は未指定なら `datetime('now')`（**UTC**。Node は `new Date().toISOString()`
+    /// ＝ UTC で入れるため localtime にすると +9h ずれる。`created_at` は Node 同様 localtime）。
     ///
     /// # Errors
     /// 挿入失敗・作成後の取得失敗時 [`DbError`]。
@@ -105,7 +113,7 @@ impl<'a> TimelineRepo<'a> {
                         todo_id, expense_id, amount, expense_category, media_path, media_type, \
                         location, created_at) \
                      VALUES (?1, ?2, ?3, \
-                             COALESCE(?4, datetime('now', 'localtime')), \
+                             COALESCE(?4, datetime('now')), \
                              ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, \
                              datetime('now', 'localtime'))",
                     params![

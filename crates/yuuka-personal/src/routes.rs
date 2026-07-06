@@ -17,7 +17,7 @@ use axum::{Json, Router};
 use serde::Deserialize;
 use yuuka_core::WebError;
 use yuuka_types::Envelope;
-use yuuka_web::{resolve_scope, ApiError, AppState, AuthenticatedUser, Db};
+use yuuka_web::{resolve_scope, ApiError, AppState, AuthenticatedUser, Db, ScopedJson};
 
 use crate::dto::{ContactData, ContactDeletedData, ContactListData, NewContact};
 use crate::repo::ContactRepo;
@@ -58,8 +58,7 @@ async fn list(
 async fn save(
     user: AuthenticatedUser,
     State(db): State<Db>,
-    Query(q): Query<BotQuery>,
-    Json(mut input): Json<NewContact>,
+    ScopedJson { bot_id, value: mut input }: ScopedJson<NewContact>,
 ) -> Result<Json<Envelope<ContactData>>, ApiError> {
     // 氏名は必須（空白のみは不可）。前後空白は Node 同様に除去する。
     input.name = input.name.trim().to_owned();
@@ -79,7 +78,7 @@ async fn save(
     input.contact_info = normalize_optional(input.contact_info);
     input.notes = normalize_optional(input.notes);
 
-    let scope = resolve_scope(&user.0, &db, q.bot_id.as_deref()).await?;
+    let scope = resolve_scope(&user.0, &db, bot_id.as_deref()).await?;
     let repo = ContactRepo::new(&db);
 
     let contact = match input.id {
@@ -95,10 +94,9 @@ async fn save(
 async fn delete(
     user: AuthenticatedUser,
     State(db): State<Db>,
-    Query(q): Query<BotQuery>,
-    Json(input): Json<IdInput>,
+    ScopedJson { bot_id, value: input }: ScopedJson<IdInput>,
 ) -> Result<Json<Envelope<ContactDeletedData>>, ApiError> {
-    let scope = resolve_scope(&user.0, &db, q.bot_id.as_deref()).await?;
+    let scope = resolve_scope(&user.0, &db, bot_id.as_deref()).await?;
     if ContactRepo::new(&db).delete(&scope, input.id).await? {
         Ok(Json(Envelope::ok(ContactDeletedData {
             deleted_id: input.id,

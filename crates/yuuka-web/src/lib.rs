@@ -12,6 +12,7 @@ pub mod auth;
 pub mod config;
 pub mod csrf;
 pub mod error;
+pub mod extract;
 pub mod routes;
 pub mod scope;
 pub mod state;
@@ -19,6 +20,7 @@ pub mod state;
 pub use auth::{AdminUser, AuthBackend, AuthenticatedUser, OptionalUser};
 pub use config::WebConfig;
 pub use error::ApiError;
+pub use extract::ScopedJson;
 pub use scope::{has_bot_access, resolve_scope};
 pub use state::{AppState, Db};
 

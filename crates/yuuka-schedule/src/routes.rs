@@ -14,7 +14,7 @@ use axum::{Json, Router};
 use serde::Deserialize;
 use yuuka_core::WebError;
 use yuuka_types::Envelope;
-use yuuka_web::{resolve_scope, ApiError, AppState, AuthenticatedUser, Db};
+use yuuka_web::{resolve_scope, ApiError, AppState, AuthenticatedUser, Db, ScopedJson};
 
 use crate::dto::{NewSchedule, ScheduleData, ScheduleDeletedData, ScheduleListData};
 use crate::repo::ScheduleRepo;
@@ -28,12 +28,6 @@ struct ListQuery {
     bot_id: Option<String>,
     #[serde(default)]
     days: Option<i64>,
-}
-
-#[derive(Debug, Deserialize)]
-struct BotQuery {
-    #[serde(default, rename = "botId")]
-    bot_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -63,8 +57,7 @@ async fn list(
 async fn add(
     user: AuthenticatedUser,
     State(db): State<Db>,
-    Query(q): Query<BotQuery>,
-    Json(input): Json<NewSchedule>,
+    ScopedJson { bot_id, value: input }: ScopedJson<NewSchedule>,
 ) -> Result<Json<Envelope<ScheduleData>>, ApiError> {
     if input.title.trim().is_empty() {
         return Err(ApiError(WebError::Validation(
@@ -76,7 +69,7 @@ async fn add(
             "startAt is required".to_owned(),
         )));
     }
-    let scope = resolve_scope(&user.0, &db, q.bot_id.as_deref()).await?;
+    let scope = resolve_scope(&user.0, &db, bot_id.as_deref()).await?;
     let schedule = ScheduleRepo::new(&db).add(&scope, input).await?;
     Ok(Json(Envelope::ok(ScheduleData { schedule })))
 }
@@ -84,10 +77,9 @@ async fn add(
 async fn delete(
     user: AuthenticatedUser,
     State(db): State<Db>,
-    Query(q): Query<BotQuery>,
-    Json(input): Json<IdInput>,
+    ScopedJson { bot_id, value: input }: ScopedJson<IdInput>,
 ) -> Result<Json<Envelope<ScheduleDeletedData>>, ApiError> {
-    let scope = resolve_scope(&user.0, &db, q.bot_id.as_deref()).await?;
+    let scope = resolve_scope(&user.0, &db, bot_id.as_deref()).await?;
     if ScheduleRepo::new(&db).delete(&scope, input.id).await? {
         Ok(Json(Envelope::ok(ScheduleDeletedData {
             deleted_id: input.id,
