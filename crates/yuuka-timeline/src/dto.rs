@@ -40,9 +40,21 @@ pub struct TimelineRecord {
 
 /// タイムライン記録の作成リクエスト（`POST /api/timeline/record` の body）。
 ///
-/// 参照スコープ = プレーン記録（memo/media/location 等）。`type=expense` の expenses 二重登録・
-/// `type=task_done` の todos.complete 連携は deferred（cross-domain 副作用のため T1 コアから除外）。
+/// **wire 契約**: Node `timelineRoutes.ts` の record ハンドラは body を **camelCase**
+/// （`recordedAt`/`todoId`）で読む。`rename_all` 欠落時は無音で `None` に落ちるため camelCase を強制。
+/// **出力ビュー [`TimelineRecord`] は snake_case のまま**。
+///
+/// **内部列の非露出（M-8）**: `expense_id`/`expense_category`/`media_path`/`media_type` は
+/// **どのエンドポイントでも body から読まれないワイヤ非キー**（Node の record ハンドラは読まず、
+/// expense 二重登録・メディアアップロード経路がサーバ内部で設定する。特に expense フローの body
+/// キーは `category` であって `expenseCategory` ではない）。入力 DTO から除去し、直接指定を
+/// 素通し INSERT しない。
+///
+/// 参照スコープ = プレーン記録（memo/task_done/location 等）。`amount` は Node が body から読む
+/// （`Number(b.amount)`）ため残置する。**`type=expense` の expenses 二重登録・`amount` 必須検証・
+/// `category` キー処理は deferred（Batch 6 / M-8）**。`type=task_done` の todos.complete 連携も deferred。
 #[derive(Debug, Clone, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
 #[ts(export_to = "generated/")]
 pub struct NewTimelineRecord {
     pub date: String,
@@ -56,15 +68,7 @@ pub struct NewTimelineRecord {
     #[serde(default)]
     pub todo_id: Option<i64>,
     #[serde(default)]
-    pub expense_id: Option<i64>,
-    #[serde(default)]
     pub amount: Option<f64>,
-    #[serde(default)]
-    pub expense_category: Option<String>,
-    #[serde(default)]
-    pub media_path: Option<String>,
-    #[serde(default)]
-    pub media_type: Option<String>,
     #[serde(default)]
     pub location: Option<String>,
 }

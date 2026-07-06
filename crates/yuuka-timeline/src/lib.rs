@@ -92,11 +92,7 @@ mod tests {
             title: Some(title.to_owned()),
             content: None,
             todo_id: None,
-            expense_id: None,
             amount: None,
-            expense_category: None,
-            media_path: None,
-            media_type: None,
             location: None,
         }
     }
@@ -274,5 +270,65 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    /// wire 契約の直接凍結: 入力 DTO は camelCase（`recordedAt`/`todoId`）を受理し、snake_case は
+    /// 拾わない。内部列（`expenseId`/`mediaPath`/`mediaType`/`expenseCategory`）は DTO に存在せず、
+    /// 送っても無視する（M-8: 素通し INSERT を防ぐ・Node と同じく 400 にはしない）。
+    #[test]
+    fn new_timeline_record_wire_contract() {
+        let camel: NewTimelineRecord = serde_json::from_str(
+            r#"{"date":"2026-07-06","type":"memo","recordedAt":"2026-07-06 09:00:00","todoId":123,"content":"x"}"#,
+        )
+        .unwrap();
+        assert_eq!(camel.recorded_at.as_deref(), Some("2026-07-06 09:00:00"));
+        assert_eq!(camel.todo_id, Some(123));
+
+        // snake_case は camelCase 契約では拾われない。
+        let snake: NewTimelineRecord = serde_json::from_str(
+            r#"{"date":"2026-07-06","type":"memo","recorded_at":"2026-07-06 09:00:00"}"#,
+        )
+        .unwrap();
+        assert_eq!(snake.recorded_at, None);
+
+        // 内部列を送っても DTO に存在しないため無視される（デシリアライズは成功）。
+        let ignored: NewTimelineRecord = serde_json::from_str(
+            r#"{"date":"2026-07-06","type":"memo","expenseId":9,"mediaPath":"/etc/passwd","mediaType":"video","expenseCategory":"food"}"#,
+        )
+        .unwrap();
+        assert_eq!(ignored.date, "2026-07-06");
+
+        // `amount` は Node が body から読むため受理する。
+        let expense: NewTimelineRecord =
+            serde_json::from_str(r#"{"date":"2026-07-06","type":"expense","amount":1500}"#).unwrap();
+        assert_eq!(expense.amount, Some(1500.0));
+    }
+
+    /// M-8 回帰: クライアントが内部列を送り込んでも INSERT されない（NULL のまま）。
+    #[tokio::test]
+    async fn route_record_ignores_internal_columns() {
+        let app = app();
+        let add = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/timeline/record")
+                    .header("cookie", "__Host-yuuka-session=good")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"date":"2026-07-06","type":"memo","title":"t","mediaPath":"/etc/passwd","mediaType":"video","expenseId":99,"expenseCategory":"x"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(add.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(add.into_body(), usize::MAX).await.unwrap();
+        let j: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        // 内部列はクライアント設定不可 → NULL のまま。
+        assert!(j["record"]["media_path"].is_null());
+        assert!(j["record"]["media_type"].is_null());
+        assert!(j["record"]["expense_id"].is_null());
+        assert!(j["record"]["expense_category"].is_null());
     }
 }

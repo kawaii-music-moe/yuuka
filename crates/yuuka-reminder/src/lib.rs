@@ -246,4 +246,26 @@ mod tests {
             .unwrap();
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
+
+    /// wire 契約ロック（**非対称の例外**）: reminder の入力は例外的に **snake_case**。
+    /// Node は `ctx.body.trigger_at` / `ctx.body.repeat_rule` を読み、フロントも snake_case を送る。
+    /// `NewReminder` に `#[serde(rename_all = "camelCase")]` を付けると契約が壊れるため、誤って
+    /// 付けた場合にこのテストが落ちて検知する（H-1 の一律 camelCase 化に対する回帰ガード）。
+    #[test]
+    fn new_reminder_wire_contract_is_snake_case() {
+        let snake: NewReminder = serde_json::from_str(
+            r#"{"message":"m","trigger_at":"2026-07-06 12:00:00","repeat_rule":"0 9 * * 1","target_type":"dm","target_id":"123"}"#,
+        )
+        .unwrap();
+        assert_eq!(snake.trigger_at, "2026-07-06 12:00:00");
+        assert_eq!(snake.repeat_rule.as_deref(), Some("0 9 * * 1"));
+        assert_eq!(snake.target_type.as_deref(), Some("dm"));
+        assert_eq!(snake.target_id.as_deref(), Some("123"));
+
+        // camelCase を付けてしまうと snake_case の任意フィールドが拾われなくなる。
+        // 現契約（snake_case）では camelCase キーは無視される。
+        let camel: NewReminder =
+            serde_json::from_str(r#"{"message":"m","trigger_at":"t","repeatRule":"x"}"#).unwrap();
+        assert_eq!(camel.repeat_rule, None);
+    }
 }

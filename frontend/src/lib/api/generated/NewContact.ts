@@ -4,5 +4,10 @@
  * 連絡先の作成／更新リクエスト（`POST /api/contacts/save` の body）。
  *
  * `id` があれば更新、無ければ新規作成（Node `personalRoutes` の `contacts/save` に一致）。
+ *
+ * **wire 契約**: 既存フロント／Node は `contactInfo` を **camelCase** で送る（Node `personalRoutes`
+ * の `body.contactInfo`）。`rename_all` 欠落時は無音で `None` に落ち、**update は全列上書きのため
+ * 既存 `contact_info` を NULL で消去**する（H-1）。入力 DTO に camelCase を強制して防ぐ。
+ * **出力ビュー [`Contact`] は snake_case のまま**。
  */
-export type NewContact = { id: bigint | null, name: string, birthday: string | null, relationship: string | null, contact_info: string | null, notes: string | null, tags: Array<string>, };
+export type NewContact = { id: bigint | null, name: string, birthday: string | null, relationship: string | null, contactInfo: string | null, notes: string | null, tags: Array<string>, };

@@ -107,14 +107,15 @@ impl<'a> TimelineRepo<'a> {
         let id = self
             .writer
             .transaction(move |tx| {
+                // 内部列 expense_id / expense_category / media_path / media_type は INSERT 対象外
+                // （列省略でデフォルト NULL）。クライアントからは設定不可（dto の M-8 注記）。
                 tx.execute(
                     "INSERT INTO timeline_records \
                        (user_id, bot_id, date, recorded_at, type, title, content, \
-                        todo_id, expense_id, amount, expense_category, media_path, media_type, \
-                        location, created_at) \
+                        todo_id, amount, location, created_at) \
                      VALUES (?1, ?2, ?3, \
                              COALESCE(?4, datetime('now')), \
-                             ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, \
+                             ?5, ?6, ?7, ?8, ?9, ?10, \
                              datetime('now', 'localtime'))",
                     params![
                         uid,
@@ -125,11 +126,7 @@ impl<'a> TimelineRepo<'a> {
                         input.title,
                         input.content,
                         input.todo_id,
-                        input.expense_id,
                         input.amount,
-                        input.expense_category,
-                        input.media_path,
-                        input.media_type,
                         input.location,
                     ],
                 )

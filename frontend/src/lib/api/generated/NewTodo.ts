@@ -2,5 +2,16 @@
 
 /**
  * todo 作成リクエスト（`POST /api/tasks/add` の body）。
+ *
+ * **wire 契約**: 既存フロント／Node は body を **camelCase**（`dueDate`/`startDate`/`parentId`）で
+ * 送る（[`taskApi.ts`] `add`、Node `todoRoutes.ts` の `body.dueDate` 等）。`rename_all` 欠落時は
+ * これらが `#[serde(default)]` で無音で `None` に落ちるため、入力 DTO に camelCase を強制する。
+ * **出力ビュー [`Todo`] は snake_case のまま**（フロント受信型と一致）。
  */
-export type NewTodo = { title: string, description: string | null, due_date: string | null, start_date: string | null, priority: string | null, tags: Array<string>, parent_id: bigint | null, };
+export type NewTodo = { title: string, description: string | null, dueDate: string | null, startDate: string | null, 
+/**
+ * 優先度。旧 UI 互換で **数値 `0`/`1`/`2` も文字列 `"low"`/`"medium"`/`"high"` も受理**し、
+ * `"high"`/`"medium"`/`"low"` へ正規化する（Node `normalizePriority` と厳密一致・不正値と
+ * `""`/`null` は `None`＝未設定として扱い 400 にしない）。
+ */
+priority: string | null, tags: Array<string>, parentId: bigint | null, };

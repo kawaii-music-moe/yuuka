@@ -261,4 +261,67 @@ mod tests {
             .unwrap();
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
+
+    /// H-1 回帰: フロント／Node は **camelCase**（`dueDate`/`startDate`）を送り、旧 UI は
+    /// **数値優先度**（`2`）を送る。どちらも無音で落とさず永続化することを凍結する。
+    #[tokio::test]
+    async fn route_add_accepts_camelcase_and_numeric_priority() {
+        let app = app();
+        let add = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/tasks/add")
+                    .header("cookie", "__Host-yuuka-session=good")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"title":"camel","dueDate":"2026-07-08","startDate":"2026-07-07","priority":2}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(add.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(add.into_body(), usize::MAX).await.unwrap();
+        let j: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        // camelCase が `#[serde(default)]` で None に落ちず永続化される。
+        assert_eq!(j["task"]["due_date"], serde_json::json!("2026-07-08"));
+        assert_eq!(j["task"]["start_date"], serde_json::json!("2026-07-07"));
+        // 数値 2 → "high"（Node normalizePriority と一致）。
+        assert_eq!(j["task"]["priority"], serde_json::json!("high"));
+    }
+
+    /// wire 契約の直接凍結: 入力 DTO は camelCase を受理し、snake_case は拾わない。
+    /// `priority` は数値 0/1/2・文字列・不正値を Node `normalizePriority` と同一規則で正規化する。
+    #[test]
+    fn newtodo_wire_contract_is_camelcase_in() {
+        // camelCase を受理する。
+        let camel: NewTodo = serde_json::from_str(
+            r#"{"title":"t","dueDate":"2026-07-08","startDate":"2026-07-07","parentId":42}"#,
+        )
+        .unwrap();
+        assert_eq!(camel.due_date.as_deref(), Some("2026-07-08"));
+        assert_eq!(camel.start_date.as_deref(), Some("2026-07-07"));
+        assert_eq!(camel.parent_id, Some(42));
+
+        // snake_case は camelCase 契約では拾われない（フロントは camelCase のみ送る）。
+        let snake: NewTodo =
+            serde_json::from_str(r#"{"title":"t","due_date":"2026-07-08"}"#).unwrap();
+        assert_eq!(snake.due_date, None);
+
+        // priority の正規化（Node normalizePriority 厳密一致・不正値は None で 400 にしない）。
+        let priority = |body: &str| serde_json::from_str::<NewTodo>(body).unwrap().priority;
+        assert_eq!(priority(r#"{"title":"t","priority":2}"#).as_deref(), Some("high"));
+        assert_eq!(priority(r#"{"title":"t","priority":1}"#).as_deref(), Some("medium"));
+        assert_eq!(priority(r#"{"title":"t","priority":0}"#).as_deref(), Some("low"));
+        assert_eq!(
+            priority(r#"{"title":"t","priority":"high"}"#).as_deref(),
+            Some("high")
+        );
+        assert_eq!(priority(r#"{"title":"t","priority":""}"#), None);
+        assert_eq!(priority(r#"{"title":"t","priority":"bogus"}"#), None);
+        assert_eq!(priority(r#"{"title":"t","priority":null}"#), None);
+        assert_eq!(priority(r#"{"title":"t","priority":9}"#), None);
+        assert_eq!(priority(r#"{"title":"t"}"#), None);
+    }
 }

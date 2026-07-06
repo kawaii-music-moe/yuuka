@@ -282,4 +282,76 @@ mod tests {
             .unwrap();
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
+
+    /// wire 契約の直接凍結: `contactInfo` は camelCase で受理し、snake_case は拾わない。
+    #[test]
+    fn new_contact_wire_contract_camelcase() {
+        let camel: NewContact =
+            serde_json::from_str(r#"{"name":"Zoe","contactInfo":"zoe@example.com"}"#).unwrap();
+        assert_eq!(camel.contact_info.as_deref(), Some("zoe@example.com"));
+
+        // snake_case は拾われない（これが update 時の NULL 消去の原因だった）。
+        let snake: NewContact =
+            serde_json::from_str(r#"{"name":"Zoe","contact_info":"zoe@example.com"}"#).unwrap();
+        assert_eq!(snake.contact_info, None);
+    }
+
+    /// H-1 回帰: update は全列上書きのため、camelCase 欠落だと `contactInfo` が NULL で消去された。
+    /// camelCase 受理により、同値を送る update で連絡先情報が保持されることを凍結する。
+    #[tokio::test]
+    async fn route_save_update_preserves_contact_info() {
+        let app = app();
+        // 新規作成（contactInfo つき）。
+        let create = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/contacts/save")
+                    .header("cookie", "__Host-yuuka-session=good")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"name":"Frank","contactInfo":"frank@example.com"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(create.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(create.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let j: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(
+            j["contact"]["contact_info"],
+            serde_json::json!("frank@example.com")
+        );
+        let id = j["contact"]["id"].as_i64().expect("contact id");
+
+        // 同じ contactInfo を送って update → 保持される（NULL 消去しない）。
+        let update = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/contacts/save")
+                    .header("cookie", "__Host-yuuka-session=good")
+                    .header("content-type", "application/json")
+                    .body(Body::from(format!(
+                        r#"{{"id":{id},"name":"Frank R.","contactInfo":"frank@example.com"}}"#
+                    )))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(update.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(update.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let j: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(
+            j["contact"]["contact_info"],
+            serde_json::json!("frank@example.com")
+        );
+        assert_eq!(j["contact"]["name"], serde_json::json!("Frank R."));
+    }
 }
