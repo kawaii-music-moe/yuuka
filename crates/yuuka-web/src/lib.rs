@@ -27,7 +27,10 @@ pub use state::{AppState, Db};
 pub use static_files::mount_static;
 
 use axum::extract::DefaultBodyLimit;
-use axum::http::header::{HeaderValue, X_CONTENT_TYPE_OPTIONS, X_FRAME_OPTIONS};
+use axum::http::header::{
+    HeaderValue, CONTENT_SECURITY_POLICY, REFERRER_POLICY, STRICT_TRANSPORT_SECURITY,
+    X_CONTENT_TYPE_OPTIONS, X_FRAME_OPTIONS,
+};
 use axum::routing::get;
 use axum::Router;
 use tower_http::set_header::SetResponseHeaderLayer;
@@ -35,16 +38,30 @@ use tower_http::set_header::SetResponseHeaderLayer;
 /// リクエストボディ上限（Node `MAX_BODY_BYTES` = 10MB・超過は 413）。
 pub const MAX_BODY_BYTES: usize = 10 * 1024 * 1024;
 
+/// Content-Security-Policy（Node `server.ts` の `CSP` と一字一句一致・PLAN §6.6）。
+///
+/// `script-src` から `'unsafe-inline'` を除外した実効的 XSS 多層防御。`style-src` の
+/// `'unsafe-inline'` はテンプレート内 `style=` のため維持（Node 踏襲）。インライン JS を
+/// 足す場合は nonce/hash 方式へ移行すること。
+const CSP: &str = "default-src 'self'; script-src 'self' https://static.cloudflareinsights.com; \
+style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://fonts.gstatic.com; \
+font-src 'self' https://fonts.gstatic.com https://fonts.googleapis.com; \
+img-src 'self' data: https://assets-global.website-files.com https://cdn.discordapp.com; \
+connect-src 'self' https://cloudflareinsights.com; worker-src 'self'; frame-src 'self'; \
+frame-ancestors 'self';";
+
 /// 全ルートに共通のミドルウェア（CSRF・body 上限・セキュリティヘッダ）を積む。
 ///
 /// ドメインルート（T1）はこのレイヤ群の下にマージされる。全 API 応答に Node 互換の
 /// `X-Content-Type-Options: nosniff` / `X-Frame-Options: SAMEORIGIN` を付与し、
 /// 状態変更 × Cookie 認証には CSRF ガードを適用する。
-pub fn apply_common_layers<S>(router: Router<S>) -> Router<S>
+/// `https` が真（HTTPS 本番＝`config.baseUrl` が `https://`）の時のみ HSTS を付与する
+/// （Node `server.ts` の SSL ストリッピング対策・全応答へ `Strict-Transport-Security`）。
+pub fn apply_common_layers<S>(router: Router<S>, https: bool) -> Router<S>
 where
     S: Clone + Send + Sync + 'static,
 {
-    router
+    let router = router
         .layer(axum::middleware::from_fn(csrf::csrf_guard))
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
         .layer(SetResponseHeaderLayer::overriding(
@@ -56,6 +73,24 @@ where
             // Node の API 応答は SAMEORIGIN（同一オリジンの iframe は許可）。parity 維持。
             HeaderValue::from_static("SAMEORIGIN"),
         ))
+        // Node `SECURITY_HEADERS` の残り 2 件（H-2）。SPA を Rust が配信し始める前に必須。
+        .layer(SetResponseHeaderLayer::overriding(
+            REFERRER_POLICY,
+            HeaderValue::from_static("strict-origin-when-cross-origin"),
+        ))
+        .layer(SetResponseHeaderLayer::overriding(
+            CONTENT_SECURITY_POLICY,
+            HeaderValue::from_static(CSP),
+        ));
+    // HSTS: HTTPS 本番のみ。2 年・サブドメイン込み（preload は運用判断で含めない）。
+    if https {
+        router.layer(SetResponseHeaderLayer::overriding(
+            STRICT_TRANSPORT_SECURITY,
+            HeaderValue::from_static("max-age=63072000; includeSubDomains"),
+        ))
+    } else {
+        router
+    }
 }
 
 /// フレームワーク自身のルート（認証・ヘルス等。ドメインルートは含まない）。
@@ -68,7 +103,8 @@ pub fn framework_routes() -> Router<AppState> {
 
 /// アプリのルータを構築する（Phase 1 増分2 時点は `/api/me` + 共通レイヤ）。
 pub fn build_router(state: AppState) -> Router {
-    apply_common_layers(framework_routes()).with_state(state)
+    let https = state.config.https;
+    apply_common_layers(framework_routes(), https).with_state(state)
 }
 
 #[cfg(test)]
@@ -228,6 +264,7 @@ mod tests {
         // state 不要（csrf_guard は状態を使わない）。POST ルートで CSRF を検証する。
         super::apply_common_layers(
             Router::new().route("/x", axum::routing::post(|| async { "ok" })),
+            false,
         )
     }
 
@@ -330,5 +367,62 @@ mod tests {
             .await
             .expect("response");
         assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    fn header_app(https: bool) -> Router {
+        super::apply_common_layers(
+            Router::new().route("/x", axum::routing::get(|| async { "ok" })),
+            https,
+        )
+    }
+
+    async fn headers_of(app: Router) -> axum::http::HeaderMap {
+        app.oneshot(
+            Request::builder()
+                .uri("/x")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response")
+        .headers()
+        .clone()
+    }
+
+    #[tokio::test]
+    async fn security_headers_present_on_all_responses() {
+        // H-2: CSP / Referrer-Policy を nosniff / X-Frame と併せて全応答へ付与する。
+        let h = headers_of(header_app(false)).await;
+        assert_eq!(
+            h.get("content-security-policy").map(|v| v.as_bytes()),
+            Some(super::CSP.as_bytes())
+        );
+        // CSP は script-src から unsafe-inline を除外している（XSS 多層防御の核）。
+        assert!(super::CSP.contains("script-src 'self' https://static.cloudflareinsights.com;"));
+        assert!(!super::CSP.contains("script-src 'self' 'unsafe-inline'"));
+        assert_eq!(
+            h.get("referrer-policy").map(|v| v.as_bytes()),
+            Some(&b"strict-origin-when-cross-origin"[..])
+        );
+        assert_eq!(
+            h.get("x-content-type-options").map(|v| v.as_bytes()),
+            Some(&b"nosniff"[..])
+        );
+        assert_eq!(
+            h.get("x-frame-options").map(|v| v.as_bytes()),
+            Some(&b"SAMEORIGIN"[..])
+        );
+        // https=false（開発/移行期の非 TLS）では HSTS を付けない。
+        assert!(h.get("strict-transport-security").is_none());
+    }
+
+    #[tokio::test]
+    async fn hsts_only_on_https_deployment() {
+        // HSTS は HTTPS 本番（config.https=true）でのみ付与する（Node parity）。
+        let h = headers_of(header_app(true)).await;
+        assert_eq!(
+            h.get("strict-transport-security").map(|v| v.as_bytes()),
+            Some(&b"max-age=63072000; includeSubDomains"[..])
+        );
     }
 }

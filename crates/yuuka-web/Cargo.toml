@@ -12,12 +12,15 @@ yuuka-core.workspace = true
 yuuka-types.workspace = true
 yuuka-db.workspace = true
 axum.workspace = true
-tower.workspace = true
+# util: 静的配信フォールバック（service_fn / ServeDir.oneshot）。
+tower = { workspace = true, features = ["util"] }
 tower-http.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 async-trait.workspace = true
 rusqlite.workspace = true
+# fs: 静的配信の index.html / 404.html 読取（Node serveStaticFile の per-request 読取と一致）。
+tokio.workspace = true
 
 [dev-dependencies]
 tokio.workspace = true

@@ -30,7 +30,8 @@ pub fn build_app(state: AppState, dist_dir: Option<&Path>) -> Router {
         Some(dir) => mount_static(routes, dir),
         None => routes,
     };
-    apply_common_layers(routes).with_state(state)
+    let https = state.config.https;
+    apply_common_layers(routes, https).with_state(state)
 }
 
 #[cfg(test)]
