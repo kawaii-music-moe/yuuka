@@ -96,11 +96,42 @@ fn normalize_priority_str(s: &str) -> Option<String> {
     }
 }
 
+/// 親タスク＋サブタスク（ネスト）＋算出進捗（`GET /api/tasks` のツリー要素・H-3）。
+///
+/// Node `TodoWithSubtasks`（todoRepo.ts）と一致。**clean view 原則を継承**し内部列
+/// （`user_id`/`bot_id`/`linked_payment_id`/`due_reminded`）は持たない（Node は生 row で漏らすが
+/// Rust は構造的フェイルクローズ＝安全側の意図的差分）。`subtasks` は ORDER_CLAUSE 順で入れ子。
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export_to = "generated/")]
+pub struct TodoWithSubtasks {
+    pub id: i64,
+    pub title: String,
+    pub description: Option<String>,
+    pub due_date: Option<String>,
+    pub start_date: Option<String>,
+    pub priority: Option<String>,
+    pub tags: Vec<String>,
+    pub status: String,
+    pub progress: i64,
+    pub parent_id: Option<i64>,
+    pub repeat_rule: Option<String>,
+    pub repeat_until: Option<String>,
+    pub repeat_count: Option<i64>,
+    pub created_at: String,
+    pub updated_at: String,
+    /// 子タスク（再帰・深さ無制限）。
+    pub subtasks: Vec<TodoWithSubtasks>,
+    /// 算出進捗 0-100（葉の完了率をボトムアップ集計。子なしは `done?100:progress`）。
+    pub effective_progress: i64,
+}
+
 /// `GET /api/tasks` のペイロード（`Envelope<TaskListData>` = `{success, tasks}`）。
+///
+/// Node `listTodoTree` と一致し、**親タスクのみ**を `subtasks` ネスト付きで返す。
 #[derive(Debug, Clone, Serialize, TS)]
 #[ts(export_to = "generated/")]
 pub struct TaskListData {
-    pub tasks: Vec<Todo>,
+    pub tasks: Vec<TodoWithSubtasks>,
 }
 
 /// 単一 todo を返すペイロード（add/complete。`{success, task}`）。

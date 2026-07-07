@@ -20,9 +20,15 @@ use crate::dto::{DeletedData, NewTodo, TaskData, TaskListData};
 use crate::repo::TodoRepo;
 
 #[derive(Debug, Deserialize)]
-struct BotQuery {
+struct ListQuery {
     #[serde(default, rename = "botId")]
     bot_id: Option<String>,
+    /// `"pending"`（→open）/`"done"`/その他（既定 all）。
+    #[serde(default)]
+    status: Option<String>,
+    /// タグ絞り込み（空文字は無視）。
+    #[serde(default)]
+    tag: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -42,20 +48,32 @@ pub fn routes() -> Router<AppState> {
 async fn list(
     user: AuthenticatedUser,
     State(db): State<Db>,
-    Query(q): Query<BotQuery>,
+    Query(q): Query<ListQuery>,
 ) -> Result<Json<Envelope<TaskListData>>, ApiError> {
     let scope = resolve_scope(&user.0, &db, q.bot_id.as_deref()).await?;
-    let tasks = TodoRepo::new(&db).list(&scope).await?;
+    // Node: pending→open / done→done / それ以外（既定）→ all（絞り込みなし）。
+    let status = match q.status.as_deref() {
+        Some("pending") => Some("open".to_owned()),
+        Some("done") => Some("done".to_owned()),
+        _ => None,
+    };
+    let tag = q.tag.filter(|t| !t.is_empty());
+    let tasks = TodoRepo::new(&db).list_tree(&scope, status, tag).await?;
     Ok(Json(Envelope::ok(TaskListData { tasks })))
 }
 
 async fn add(
     user: AuthenticatedUser,
     State(db): State<Db>,
-    ScopedJson { bot_id, value: input }: ScopedJson<NewTodo>,
+    ScopedJson {
+        bot_id,
+        value: input,
+    }: ScopedJson<NewTodo>,
 ) -> Result<Json<Envelope<TaskData>>, ApiError> {
     if input.title.trim().is_empty() {
-        return Err(ApiError(WebError::Validation("title is required".to_owned())));
+        return Err(ApiError(WebError::Validation(
+            "title is required".to_owned(),
+        )));
     }
     let scope = resolve_scope(&user.0, &db, bot_id.as_deref()).await?;
     let task = TodoRepo::new(&db).add(&scope, input).await?;
@@ -65,7 +83,10 @@ async fn add(
 async fn complete(
     user: AuthenticatedUser,
     State(db): State<Db>,
-    ScopedJson { bot_id, value: input }: ScopedJson<IdInput>,
+    ScopedJson {
+        bot_id,
+        value: input,
+    }: ScopedJson<IdInput>,
 ) -> Result<Json<Envelope<TaskData>>, ApiError> {
     let scope = resolve_scope(&user.0, &db, bot_id.as_deref()).await?;
     match TodoRepo::new(&db).complete(&scope, input.id).await? {
@@ -77,7 +98,10 @@ async fn complete(
 async fn delete(
     user: AuthenticatedUser,
     State(db): State<Db>,
-    ScopedJson { bot_id, value: input }: ScopedJson<IdInput>,
+    ScopedJson {
+        bot_id,
+        value: input,
+    }: ScopedJson<IdInput>,
 ) -> Result<Json<Envelope<DeletedData>>, ApiError> {
     let scope = resolve_scope(&user.0, &db, bot_id.as_deref()).await?;
     if TodoRepo::new(&db).delete(&scope, input.id).await? {

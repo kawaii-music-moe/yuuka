@@ -24,6 +24,7 @@ use ts_rs::TS;
 pub fn export_bindings(base_dir: &Path) -> Result<(), ts_rs::ExportError> {
     let cfg = ts_rs::Config::new().with_out_dir(base_dir.to_path_buf());
     <dto::Todo as TS>::export_all(&cfg)?;
+    <dto::TodoWithSubtasks as TS>::export_all(&cfg)?;
     <dto::NewTodo as TS>::export_all(&cfg)?;
     <dto::TaskListData as TS>::export_all(&cfg)?;
     <dto::TaskData as TS>::export_all(&cfg)?;
@@ -73,8 +74,10 @@ mod tests {
 
     fn seed_db() -> Db {
         let seq = SEQ.fetch_add(1, Ordering::Relaxed);
-        let path = std::env::temp_dir()
-            .join(format!("yuuka_todo_test_{}_{seq}.sqlite", std::process::id()));
+        let path = std::env::temp_dir().join(format!(
+            "yuuka_todo_test_{}_{seq}.sqlite",
+            std::process::id()
+        ));
         {
             let conn = rusqlite::Connection::open(&path).expect("seed db");
             conn.execute_batch(TODOS_DDL).expect("create todos");
@@ -106,14 +109,18 @@ mod tests {
             .await
             .unwrap();
 
-        let listed = repo.list(&scope("userA")).await.unwrap();
+        let listed = repo.list_tree(&scope("userA"), None, None).await.unwrap();
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].title, "a-task");
         assert_eq!(listed[0].tags, vec!["x".to_owned()]);
         assert_eq!(listed[0].status, "open");
 
         // 別ユーザーには見えない（分離キーを型で強制）。
-        assert!(repo.list(&scope("userB")).await.unwrap().is_empty());
+        assert!(repo
+            .list_tree(&scope("userB"), None, None)
+            .await
+            .unwrap()
+            .is_empty());
     }
 
     #[tokio::test]
@@ -132,7 +139,11 @@ mod tests {
         assert_eq!(done.progress, 0);
 
         assert!(repo.delete(&scope("u"), created.id).await.unwrap());
-        assert!(repo.list(&scope("u")).await.unwrap().is_empty());
+        assert!(repo
+            .list_tree(&scope("u"), None, None)
+            .await
+            .unwrap()
+            .is_empty());
         // 二重削除は false。
         assert!(!repo.delete(&scope("u"), created.id).await.unwrap());
     }
@@ -238,7 +249,9 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(list.status(), StatusCode::OK);
-        let bytes = axum::body::to_bytes(list.into_body(), usize::MAX).await.unwrap();
+        let bytes = axum::body::to_bytes(list.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let j: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(j["success"], serde_json::json!(true));
         assert_eq!(j["tasks"][0]["title"], serde_json::json!("hello"));
@@ -282,7 +295,9 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(add.status(), StatusCode::OK);
-        let bytes = axum::body::to_bytes(add.into_body(), usize::MAX).await.unwrap();
+        let bytes = axum::body::to_bytes(add.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let j: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         // camelCase が `#[serde(default)]` で None に落ちず永続化される。
         assert_eq!(j["task"]["due_date"], serde_json::json!("2026-07-08"));
@@ -311,9 +326,18 @@ mod tests {
 
         // priority の正規化（Node normalizePriority 厳密一致・不正値は None で 400 にしない）。
         let priority = |body: &str| serde_json::from_str::<NewTodo>(body).unwrap().priority;
-        assert_eq!(priority(r#"{"title":"t","priority":2}"#).as_deref(), Some("high"));
-        assert_eq!(priority(r#"{"title":"t","priority":1}"#).as_deref(), Some("medium"));
-        assert_eq!(priority(r#"{"title":"t","priority":0}"#).as_deref(), Some("low"));
+        assert_eq!(
+            priority(r#"{"title":"t","priority":2}"#).as_deref(),
+            Some("high")
+        );
+        assert_eq!(
+            priority(r#"{"title":"t","priority":1}"#).as_deref(),
+            Some("medium")
+        );
+        assert_eq!(
+            priority(r#"{"title":"t","priority":0}"#).as_deref(),
+            Some("low")
+        );
         assert_eq!(
             priority(r#"{"title":"t","priority":"high"}"#).as_deref(),
             Some("high")
@@ -323,5 +347,196 @@ mod tests {
         assert_eq!(priority(r#"{"title":"t","priority":null}"#), None);
         assert_eq!(priority(r#"{"title":"t","priority":9}"#), None);
         assert_eq!(priority(r#"{"title":"t"}"#), None);
+    }
+
+    /// フィールド指定用の最小 `NewTodo`（テスト側で必要な列だけ後から差し替える）。
+    fn nt(title: &str) -> NewTodo {
+        NewTodo {
+            title: title.to_owned(),
+            description: None,
+            due_date: None,
+            start_date: None,
+            priority: None,
+            tags: vec![],
+            parent_id: None,
+        }
+    }
+
+    /// H-3: 親のみをルートに、サブタスクを `subtasks` へネストし、`effective_progress` を
+    /// 葉の完了率で算出する（子なしは done→100 / 未完→progress）。
+    #[tokio::test]
+    async fn list_tree_nests_subtasks_and_computes_progress() {
+        let db = seed_db();
+        let repo = TodoRepo::new(&db);
+        let sc = scope("u");
+        let parent = repo.add(&sc, nt("parent")).await.unwrap();
+        let mut ca = nt("child-a");
+        ca.parent_id = Some(parent.id);
+        let child_a = repo.add(&sc, ca).await.unwrap();
+        let mut cb = nt("child-b");
+        cb.parent_id = Some(parent.id);
+        repo.add(&sc, cb).await.unwrap();
+        // 葉 2 件のうち 1 件を完了 → 50%。
+        repo.complete(&sc, child_a.id).await.unwrap();
+
+        let tree = repo.list_tree(&sc, None, None).await.unwrap();
+        assert_eq!(tree.len(), 1, "親のみルート");
+        let root = &tree[0];
+        assert_eq!(root.id, parent.id);
+        assert_eq!(root.subtasks.len(), 2);
+        assert_eq!(root.effective_progress, 50);
+
+        let done_leaf = root
+            .subtasks
+            .iter()
+            .find(|t| t.id == child_a.id)
+            .expect("done leaf");
+        assert_eq!(done_leaf.status, "done");
+        assert_eq!(done_leaf.effective_progress, 100);
+        let open_leaf = root
+            .subtasks
+            .iter()
+            .find(|t| t.id != child_a.id)
+            .expect("open leaf");
+        assert_eq!(open_leaf.effective_progress, 0);
+    }
+
+    /// H-3: `status` フィルタは親に適用（pending→open / done / all）。
+    #[tokio::test]
+    async fn list_tree_status_filter() {
+        let db = seed_db();
+        let repo = TodoRepo::new(&db);
+        let sc = scope("u");
+        let open_root = repo.add(&sc, nt("open-root")).await.unwrap();
+        let done_root = repo.add(&sc, nt("done-root")).await.unwrap();
+        repo.complete(&sc, done_root.id).await.unwrap();
+
+        let open_only = repo
+            .list_tree(&sc, Some("open".to_owned()), None)
+            .await
+            .unwrap();
+        assert_eq!(open_only.len(), 1);
+        assert_eq!(open_only[0].id, open_root.id);
+
+        let done_only = repo
+            .list_tree(&sc, Some("done".to_owned()), None)
+            .await
+            .unwrap();
+        assert_eq!(done_only.len(), 1);
+        assert_eq!(done_only[0].id, done_root.id);
+
+        // None（=all）は両方。
+        assert_eq!(repo.list_tree(&sc, None, None).await.unwrap().len(), 2);
+    }
+
+    /// H-3: `tag` フィルタは json_each で照合し、該当タグを持つ親のみ返す。
+    #[tokio::test]
+    async fn list_tree_tag_filter() {
+        let db = seed_db();
+        let repo = TodoRepo::new(&db);
+        let sc = scope("u");
+        let mut work = nt("work-task");
+        work.tags = vec!["work".to_owned()];
+        let mut home = nt("home-task");
+        home.tags = vec!["home".to_owned()];
+        let w = repo.add(&sc, work).await.unwrap();
+        repo.add(&sc, home).await.unwrap();
+
+        let filtered = repo
+            .list_tree(&sc, None, Some("work".to_owned()))
+            .await
+            .unwrap();
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].id, w.id);
+    }
+
+    /// H-3: ORDER_CLAUSE = 優先度（high→medium→low→未設定）→ 期限 → 作成日時降順。
+    #[tokio::test]
+    async fn list_tree_sorts_by_priority() {
+        let db = seed_db();
+        let repo = TodoRepo::new(&db);
+        let sc = scope("u");
+        for (title, prio) in [
+            ("low-t", Some("low")),
+            ("high-t", Some("high")),
+            ("med-t", Some("medium")),
+            ("none-t", None),
+        ] {
+            let mut t = nt(title);
+            t.priority = prio.map(str::to_owned);
+            repo.add(&sc, t).await.unwrap();
+        }
+        let tree = repo.list_tree(&sc, None, None).await.unwrap();
+        let titles: Vec<&str> = tree.iter().map(|t| t.title.as_str()).collect();
+        assert_eq!(titles, vec!["high-t", "med-t", "low-t", "none-t"]);
+    }
+
+    /// H-3 E2E: `GET /api/tasks` がネストしたツリーを返し、内部列を露出しない。
+    #[tokio::test]
+    async fn route_tasks_returns_nested_tree_without_internal_columns() {
+        let app = app();
+        // 親を追加し id を取得。
+        let add_parent = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/tasks/add")
+                    .header("cookie", "__Host-yuuka-session=good")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"title":"P"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let bytes = axum::body::to_bytes(add_parent.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let j: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let pid = j["task"]["id"].as_i64().expect("parent id");
+
+        // サブタスクを親の下に追加。
+        let add_child = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/tasks/add")
+                    .header("cookie", "__Host-yuuka-session=good")
+                    .header("content-type", "application/json")
+                    .body(Body::from(format!(r#"{{"title":"C","parentId":{pid}}}"#)))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(add_child.status(), StatusCode::OK);
+
+        let list = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/tasks")
+                    .header("cookie", "__Host-yuuka-session=good")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(list.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(list.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let j: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        // 親のみルート、サブタスクはネスト。
+        assert_eq!(j["tasks"][0]["title"], serde_json::json!("P"));
+        assert_eq!(
+            j["tasks"][0]["subtasks"][0]["title"],
+            serde_json::json!("C")
+        );
+        assert!(j["tasks"][0]["effective_progress"].is_number());
+        // 内部列は露出しない（clean view の凍結）。
+        assert!(j["tasks"][0]["user_id"].is_null());
+        assert!(j["tasks"][0]["bot_id"].is_null());
+        assert!(j["tasks"][0]["linked_payment_id"].is_null());
+        assert!(j["tasks"][0]["subtasks"][0]["user_id"].is_null());
     }
 }
