@@ -46,6 +46,7 @@ Node 参照とフロントを実測した結果、契約は左右非対称:
 - レビューの「**出力（ビュー）DTO は各クレートとも camelCase 付与済み**」は**事実誤認**。実際は全ドメインの view DTO（`Todo`/`Schedule`/`TimelineRecord`/`Contact`）が **snake_case で、これは正しい**（フロントの受信型と一致）。**view DTO に camelCase を足してはならない**（足すとフロントが壊れる）。
 - 一方、レビュー H-1 の**結論（入力 DTO に camelCase が必要）は正しい**。現状 `NewSchedule` だけ `#[serde(rename_all = "camelCase")]` を持ち、`NewTodo`/`NewTimelineRecord`/`NewContact` 等が欠落 → camelCase の `dueDate` 等が `#[serde(default)]` で**無音で `None` に落ちる**。personal では update が全列上書きのため `contactInfo` 欠落が **既存連絡先を NULL で消去**する。
 - **修正の向き（確定）**: 入力（`New*` / update 入力）DTO にのみ `rename_all = "camelCase"` を付与。**出力 view DTO は snake_case のまま据え置く**。「input=camelCase / output=snake_case」を本移行の wire 契約不変条件として明文化し、回帰テストで両方向を凍結する。
+- **例外（Batch 1 実装時に判明・2026-07-07 追記）**: **reminder の入力は snake_case**。Node `reminderRoutes.ts` は `ctx.body.trigger_at`/`repeat_rule`/`target_type`/`target_id` を snake_case で読む（実測確認済み）。`NewReminder` には camelCase を付けず、`new_reminder_wire_contract_is_snake_case` ロックテストが誤 camelCase 化を検知する。不変条件は「**入力はドメインごとに Node の実キーに一致**（原則 camelCase、reminder のみ snake_case）」と読み替える。
 
 ### 2.2 出力の camelCase 混入は逆に是正対象（レビュー後の追検証で不一致が確定）
 
@@ -68,7 +69,7 @@ Node 参照とフロントを実測した結果、契約は左右非対称:
 
 レビュー推奨順に沿い、各バッチを 1 コミット（必要なら 2）にまとめる。**各バッチは「フロント接続を阻む前提」→「Web 層 parity」→「自己復帰根幹」→「移行期データ整合」→「LOW＋衛生」の依存順**。
 
-### Batch 1 — wire 契約パリティ（フロント接続の前提）【HIGH】
+### Batch 1 — wire 契約パリティ（フロント接続の前提）【HIGH】 ✅ 完了（`9c8688d`・レビュー承認: [review-2026-07-07-batch1.md](review-2026-07-07-batch1.md)）
 - **H-1**: 入力 DTO（`NewTodo`/todo update 入力・`NewTimelineRecord`・`NewContact`・その他 fan-out 入力）に `rename_all = "camelCase"` を付与。view DTO は snake_case 据え置き（2.1）。
 - **検証**: `NewSchedule` 由来の wire テストを横展開し、**camelCase body → 正しくデシリアライズ**＋**view 出力が snake_case のまま**を各ドメインで凍結する回帰テスト。
 - **完了条件**: `dueDate`/`startDate`/`parentId`/`recordedAt`/`todoId`/`contactInfo`/`remindBeforeMinutes` が全入力経路で受理され、既存フロント接続で NULL 消去が起きないことをテストで保証。
