@@ -37,7 +37,7 @@ pub struct Todo {
 /// 送る（[`taskApi.ts`] `add`、Node `todoRoutes.ts` の `body.dueDate` 等）。`rename_all` 欠落時は
 /// これらが `#[serde(default)]` で無音で `None` に落ちるため、入力 DTO に camelCase を強制する。
 /// **出力ビュー [`Todo`] は snake_case のまま**（フロント受信型と一致）。
-#[derive(Debug, Clone, Deserialize, TS)]
+#[derive(Debug, Clone, Default, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "generated/")]
 pub struct NewTodo {
@@ -57,6 +57,15 @@ pub struct NewTodo {
     pub tags: Vec<String>,
     #[serde(default)]
     pub parent_id: Option<i64>,
+    /// ルーチン（繰り返し）cron 式。tool `addTodo` の `repeat_rule` 経路で使う（HTTP add は送らない）。
+    #[serde(default)]
+    pub repeat_rule: Option<String>,
+    /// ルーチン終了日 `YYYY-MM-DD`。`repeat_rule` がある時のみ有効。
+    #[serde(default)]
+    pub repeat_until: Option<String>,
+    /// ルーチン実行回数（初回含む）。`repeat_rule` がある時のみ有効。
+    #[serde(default)]
+    pub repeat_count: Option<i64>,
 }
 
 /// `priority` を Node `normalizePriority`（todoRoutes.ts）と同一規則で正規化する。
@@ -74,6 +83,19 @@ where
         serde_json::Value::String(s) => normalize_priority_str(&s),
         _ => None,
     })
+}
+
+/// tool 引数（JSON 値）の優先度を Node `asOptionalPriority`/`normalizePriority` 規則で正規化する。
+///
+/// 数値 `0/1/2` → `"low"/"medium"/"high"`、文字列は既知 3 値のみ採用、他は `None`（未設定）。
+/// tool `addTodo`/`updateTodo` 経路（snake_case 引数）から使う公開ヘルパ。
+#[must_use]
+pub fn normalize_priority(value: &serde_json::Value) -> Option<String> {
+    match value {
+        serde_json::Value::Number(n) => n.as_i64().and_then(normalize_priority_num),
+        serde_json::Value::String(s) => normalize_priority_str(s),
+        _ => None,
+    }
 }
 
 /// 数値優先度（旧 UI: 0/1/2）を正規文字列へ。範囲外は `None`。

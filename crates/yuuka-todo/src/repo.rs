@@ -160,11 +160,20 @@ impl<'a> TodoRepo<'a> {
                         .map_err(map_sqlite)?,
                     None => None,
                 };
+                // ルーチン列は repeat_rule がある時のみ有効（Node addTodo と同じ・無ければ NULL）。
+                let (repeat_rule, repeat_until, repeat_count) = match &input.repeat_rule {
+                    Some(rule) => (
+                        Some(rule.clone()),
+                        input.repeat_until.clone(),
+                        input.repeat_count,
+                    ),
+                    None => (None, None, None),
+                };
                 tx.execute(
                     "INSERT INTO todos \
                        (user_id, bot_id, title, description, due_date, start_date, priority, tags, \
-                        parent_id, created_at, updated_at) \
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, \
+                        parent_id, repeat_rule, repeat_until, repeat_count, created_at, updated_at) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, \
                              datetime('now', 'localtime'), datetime('now', 'localtime'))",
                     params![
                         uid,
@@ -176,6 +185,9 @@ impl<'a> TodoRepo<'a> {
                         input.priority,
                         tags_json,
                         parent_id,
+                        repeat_rule,
+                        repeat_until,
+                        repeat_count,
                     ],
                 )
                 .map_err(map_sqlite)?;

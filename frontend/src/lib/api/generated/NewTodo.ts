@@ -14,4 +14,16 @@ export type NewTodo = { title: string, description: string | null, dueDate: stri
  * `"high"`/`"medium"`/`"low"` へ正規化する（Node `normalizePriority` と厳密一致・不正値と
  * `""`/`null` は `None`＝未設定として扱い 400 にしない）。
  */
-priority: string | null, tags: Array<string>, parentId: bigint | null, };
+priority: string | null, tags: Array<string>, parentId: bigint | null, 
+/**
+ * ルーチン（繰り返し）cron 式。tool `addTodo` の `repeat_rule` 経路で使う（HTTP add は送らない）。
+ */
+repeatRule: string | null, 
+/**
+ * ルーチン終了日 `YYYY-MM-DD`。`repeat_rule` がある時のみ有効。
+ */
+repeatUntil: string | null, 
+/**
+ * ルーチン実行回数（初回含む）。`repeat_rule` がある時のみ有効。
+ */
+repeatCount: bigint | null, };

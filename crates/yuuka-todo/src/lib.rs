@@ -10,8 +10,10 @@
 pub mod dto;
 pub mod repo;
 pub mod routes;
+pub mod tools;
 
 pub use routes::routes;
+pub use tools::tools;
 
 use std::path::Path;
 
@@ -91,12 +93,8 @@ mod tests {
     fn new_todo(title: &str, tags: Vec<String>) -> NewTodo {
         NewTodo {
             title: title.to_owned(),
-            description: None,
-            due_date: None,
-            start_date: None,
-            priority: None,
             tags,
-            parent_id: None,
+            ..Default::default()
         }
     }
 
@@ -162,12 +160,8 @@ mod tests {
                 &scope("userB"),
                 NewTodo {
                     title: "child".to_owned(),
-                    description: None,
-                    due_date: None,
-                    start_date: None,
-                    priority: None,
-                    tags: vec![],
                     parent_id: Some(parent.id),
+                    ..Default::default()
                 },
             )
             .await
@@ -180,12 +174,8 @@ mod tests {
                 &scope("userA"),
                 NewTodo {
                     title: "sibling".to_owned(),
-                    description: None,
-                    due_date: None,
-                    start_date: None,
-                    priority: None,
-                    tags: vec![],
                     parent_id: Some(parent.id),
+                    ..Default::default()
                 },
             )
             .await
@@ -352,12 +342,7 @@ mod tests {
     fn nt(title: &str) -> NewTodo {
         NewTodo {
             title: title.to_owned(),
-            description: None,
-            due_date: None,
-            start_date: None,
-            priority: None,
-            tags: vec![],
-            parent_id: None,
+            ..Default::default()
         }
     }
 
