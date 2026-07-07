@@ -14,8 +14,10 @@
 pub mod dto;
 pub mod repo;
 pub mod routes;
+pub mod tools;
 
 pub use routes::routes;
+pub use tools::tools;
 
 use std::path::Path;
 
