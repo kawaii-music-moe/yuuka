@@ -5,18 +5,18 @@
 //! 未アクセスは system_default にフォールバック）で束ねて repo に渡す。
 //! 本ルータは supervisor 側で共通レイヤ（CSRF/body 上限）配下にマージされる。
 //!
-//! 方針（全ドメイン共通）: mutation の該当無は **404**（Node は delete で 200 を返すが、
-//! Rust はより厳密に 404。golden test 段階で最終確定する）。
+//! 方針（M-12・全ドメイン共通）: delete の該当無は Node パリティで **200 `{success:false}`**
+//! を返す（404 にしない・`deletedId` は返さない）。
 
 use axum::extract::{Query, State};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Deserialize;
 use yuuka_core::WebError;
-use yuuka_types::Envelope;
+use yuuka_types::{EmptyData, Envelope};
 use yuuka_web::{resolve_scope, ApiError, AppState, AuthenticatedUser, Db, ScopedJson};
 
-use crate::dto::{NewSchedule, ScheduleData, ScheduleDeletedData, ScheduleListData};
+use crate::dto::{NewSchedule, ScheduleData, ScheduleListData};
 use crate::repo::ScheduleRepo;
 
 /// `GET /api/schedules` のクエリ既定日数（Node parity）。
@@ -78,13 +78,8 @@ async fn delete(
     user: AuthenticatedUser,
     State(db): State<Db>,
     ScopedJson { bot_id, value: input }: ScopedJson<IdInput>,
-) -> Result<Json<Envelope<ScheduleDeletedData>>, ApiError> {
+) -> Result<Json<Envelope<EmptyData>>, ApiError> {
     let scope = resolve_scope(&user.0, &db, bot_id.as_deref()).await?;
-    if ScheduleRepo::new(&db).delete(&scope, input.id).await? {
-        Ok(Json(Envelope::ok(ScheduleDeletedData {
-            deleted_id: input.id,
-        })))
-    } else {
-        Err(ApiError(WebError::NotFound))
-    }
+    let ok = ScheduleRepo::new(&db).delete(&scope, input.id).await?;
+    Ok(Json(Envelope::bare(ok)))
 }

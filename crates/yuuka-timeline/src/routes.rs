@@ -5,8 +5,8 @@
 //! 未アクセスは system_default にフォールバック）で束ねて repo に渡す。
 //! 本ルータは supervisor 側で共通レイヤ（CSRF/body 上限）配下にマージされる。
 //!
-//! 方針（全ドメイン共通）: mutation の該当無は **404**（Node は delete で 200 を返すが、
-//! Rust はより厳密に 404。golden test 段階で最終確定する）。
+//! 方針（M-12・全ドメイン共通）: delete の該当無は Node パリティで **200 `{success:false}`**
+//! を返す（404 にしない・`deletedId` は返さない）。
 //!
 //! T1 参照スコープ = `timeline_records` のコア CRUD（day list / add / delete）。
 //! day_plan_blocks・media 保存/配信・expense/task_done の cross-domain 副作用は deferred。
@@ -16,10 +16,10 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Deserialize;
 use yuuka_core::WebError;
-use yuuka_types::Envelope;
+use yuuka_types::{EmptyData, Envelope};
 use yuuka_web::{resolve_scope, ApiError, AppState, AuthenticatedUser, Db, ScopedJson};
 
-use crate::dto::{NewTimelineRecord, TimelineDayData, TimelineDeletedData, TimelineRecordData};
+use crate::dto::{NewTimelineRecord, TimelineDayData, TimelineRecordData};
 use crate::repo::TimelineRepo;
 
 #[derive(Debug, Deserialize)]
@@ -75,13 +75,8 @@ async fn delete(
     user: AuthenticatedUser,
     State(db): State<Db>,
     ScopedJson { bot_id, value: input }: ScopedJson<IdInput>,
-) -> Result<Json<Envelope<TimelineDeletedData>>, ApiError> {
+) -> Result<Json<Envelope<EmptyData>>, ApiError> {
     let scope = resolve_scope(&user.0, &db, bot_id.as_deref()).await?;
-    if TimelineRepo::new(&db).delete(&scope, input.id).await? {
-        Ok(Json(Envelope::ok(TimelineDeletedData {
-            deleted_id: input.id,
-        })))
-    } else {
-        Err(ApiError(WebError::NotFound))
-    }
+    let ok = TimelineRepo::new(&db).delete(&scope, input.id).await?;
+    Ok(Json(Envelope::bare(ok)))
 }

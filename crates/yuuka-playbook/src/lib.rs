@@ -27,7 +27,6 @@ pub fn export_bindings(base_dir: &Path) -> Result<(), ts_rs::ExportError> {
     <dto::NewPlaybook as TS>::export_all(&cfg)?;
     <dto::PlaybookListData as TS>::export_all(&cfg)?;
     <dto::PlaybookData as TS>::export_all(&cfg)?;
-    <dto::PlaybookDeletedData as TS>::export_all(&cfg)?;
     Ok(())
 }
 

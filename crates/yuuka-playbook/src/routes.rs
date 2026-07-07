@@ -13,10 +13,10 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Deserialize;
 use yuuka_core::WebError;
-use yuuka_types::Envelope;
+use yuuka_types::{EmptyData, Envelope};
 use yuuka_web::{resolve_scope, ApiError, AppState, AuthenticatedUser, Db, ScopedJson};
 
-use crate::dto::{NewPlaybook, PlaybookData, PlaybookDeletedData, PlaybookListData};
+use crate::dto::{NewPlaybook, PlaybookData, PlaybookListData};
 use crate::repo::PlaybookRepo;
 
 #[derive(Debug, Deserialize)]
@@ -72,16 +72,12 @@ async fn delete(
     user: AuthenticatedUser,
     State(db): State<Db>,
     ScopedJson { bot_id, value: input }: ScopedJson<NameInput>,
-) -> Result<Json<Envelope<PlaybookDeletedData>>, ApiError> {
+) -> Result<Json<Envelope<EmptyData>>, ApiError> {
     if input.name.trim().is_empty() {
         return Err(ApiError(WebError::Validation("name is required".to_owned())));
     }
     let scope = resolve_scope(&user.0, &db, bot_id.as_deref()).await?;
-    if PlaybookRepo::new(&db).delete(&scope, input.name.clone()).await? {
-        Ok(Json(Envelope::ok(PlaybookDeletedData {
-            deleted_name: input.name,
-        })))
-    } else {
-        Err(ApiError(WebError::NotFound))
-    }
+    // Node parity: `{success: <削除できたか>}`（削除した name は返さない・該当無も 200）。
+    let ok = PlaybookRepo::new(&db).delete(&scope, input.name).await?;
+    Ok(Json(Envelope::bare(ok)))
 }

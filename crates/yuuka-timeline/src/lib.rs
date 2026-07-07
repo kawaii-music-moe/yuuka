@@ -26,7 +26,6 @@ pub fn export_bindings(base_dir: &Path) -> Result<(), ts_rs::ExportError> {
     <dto::NewTimelineRecord as TS>::export_all(&cfg)?;
     <dto::TimelineDayData as TS>::export_all(&cfg)?;
     <dto::TimelineRecordData as TS>::export_all(&cfg)?;
-    <dto::TimelineDeletedData as TS>::export_all(&cfg)?;
     Ok(())
 }
 

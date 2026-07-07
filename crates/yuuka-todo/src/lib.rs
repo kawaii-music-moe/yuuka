@@ -28,7 +28,6 @@ pub fn export_bindings(base_dir: &Path) -> Result<(), ts_rs::ExportError> {
     <dto::NewTodo as TS>::export_all(&cfg)?;
     <dto::TaskListData as TS>::export_all(&cfg)?;
     <dto::TaskData as TS>::export_all(&cfg)?;
-    <dto::DeletedData as TS>::export_all(&cfg)?;
     Ok(())
 }
 
@@ -538,5 +537,99 @@ mod tests {
         assert!(j["tasks"][0]["bot_id"].is_null());
         assert!(j["tasks"][0]["linked_payment_id"].is_null());
         assert!(j["tasks"][0]["subtasks"][0]["user_id"].is_null());
+    }
+
+    /// M-12 golden: `POST /api/tasks/delete` は `200 {success:<bool>}` を返す。
+    /// 実在削除は `success:true`、該当無（二重削除）は **404 ではなく** `200 {success:false}`。
+    /// いずれも `deletedId`/`deleted_id` を返さない（`*DeletedData` 幽霊型の除去）。
+    #[tokio::test]
+    async fn route_delete_returns_bare_success_without_deleted_id() {
+        let app = app();
+        let add = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/tasks/add")
+                    .header("cookie", "__Host-yuuka-session=good")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"title":"to-delete"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let bytes = axum::body::to_bytes(add.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let j: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let id = j["task"]["id"].as_i64().expect("id");
+
+        let del = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/tasks/delete")
+                    .header("cookie", "__Host-yuuka-session=good")
+                    .header("content-type", "application/json")
+                    .body(Body::from(format!(r#"{{"id":{id}}}"#)))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(del.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(del.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let j: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(j["success"], serde_json::json!(true));
+        // deletedId は返さない（Node parity）。
+        assert!(j["deletedId"].is_null());
+        assert!(j["deleted_id"].is_null());
+
+        // 二重削除（該当無）は 404 ではなく 200 {success:false}。
+        let del2 = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/tasks/delete")
+                    .header("cookie", "__Host-yuuka-session=good")
+                    .header("content-type", "application/json")
+                    .body(Body::from(format!(r#"{{"id":{id}}}"#)))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(del2.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(del2.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let j: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(j["success"], serde_json::json!(false));
+    }
+
+    /// M-12 golden: `POST /api/tasks/complete` の該当無は **404 ではなく** `200 {success:false}`
+    /// （`task` キーは付かない・Node `{success:!!todo, task}` パリティ）。
+    #[tokio::test]
+    async fn route_complete_missing_returns_success_false() {
+        let resp = app()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/tasks/complete")
+                    .header("cookie", "__Host-yuuka-session=good")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"id":999999}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let j: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(j["success"], serde_json::json!(false));
+        assert!(j["task"].is_null());
     }
 }

@@ -141,3 +141,32 @@ pub struct TodoWithSubtasks {
 - Batch 2: [review-2026-07-07-batch2-plan.md](review-2026-07-07-batch2-plan.md)
 - Node 実装: [src/db/todoRepo.ts](../../src/db/todoRepo.ts)（tree/progress/order）、[src/server/routes/todoRoutes.ts](../../src/server/routes/todoRoutes.ts)（GET /api/tasks）、各 `*Routes.ts` の `sendJson`
 - 設計: [PLAN.md](PLAN.md) §6（Web/応答）
+
+---
+
+## 7. 実装結果（3b・2026-07-08）— 方針 §1.2/§2.2 からの差分と根拠
+
+実装着手時に Node 実体とフロント消費を再照合し、**§1.2/§2.2 の記述に事実誤りと過剰簡略化**が見つかった。
+共有フロント契約に直結するためユーザー確認（AskUserQuestion）を取り、**「ステータス意味論 parity」**方針で確定・実装した。
+
+**フロント消費の地上真実（実コード確認）**: mutation 呼び出しは全て `api.post<ApiResponse>`（`{success, message?}` のみ型付け）。
+`BotPersonas.svelte` 等は保存後に**リストを再 fetch**し、返り entity は読まず、`message` も `res.message ?? "既定文言"` と
+**フォールバック付き**。⇒ フロントは実質 **HTTP ステータス（success）しか見ておらず**、body 形状・message 文字列・entity 有無に頑健。
+
+- **§1.2 の persona save「`personas[]` リスト形状」は誤り**。Node `personaRoutes.ts` の save は実際には
+  更新→`{success, message}`／作成→`{success, persona, message}` の**単一**。リスト化は Node と乖離するため**実装せず**、
+  現状の `{success, persona}` を維持（フロントは再 fetch のため無影響）。§2.2(c)・§5 の persona-list 記述は撤回。
+- **§2.2(a)「一律 EmptyData bare」は不正確**。Node の delete は todo/schedule/timeline/credential が bare `{success}`、
+  contacts/persona/playbook は `message` 付き。方針確定に従い **全 delete を bare `{success:<bool>}`**（message 文字列は
+  移植しない）に統一。フロントは message フォールバックがあり無影響。**本当に効く差分＝not-found を 404→200** に是正。
+- **save 系（contacts/persona/playbook/schedule/finance/timeline）は変更せず** `{success, entity}` のまま。§1.2 が
+  「更新は message のみ／作成は entity」の非対称を挙げるが、フロントは entity 非依存のため status parity で十分。
+  playbook save の Node `result` 形状への寄せも見送り（同上・完成パスで再確認）。
+- **実装した M-12 の中身**: (a) 7 delete ルート（todo/schedule/timeline/personal/credential/playbook/persona）を
+  `Envelope::bare(ok)` 化＝`200 {success}`・該当無も 200・`deletedId` 非返却。(b) `*DeletedData` 8 struct＋export＋
+  generated 8 `.ts` を除去、`EmptyData`/`EmptyData.ts` を新設。(c) todo complete を Node `{success:!!todo, task}` に
+  （該当無 200 `{success:false}`・`task` キー無し）。(d) reminder cancel の **404（不在）/409（pending でない）** を実装
+  （`yuuka-core::WebError::Conflict`=409 を追加。`WebError` は `#[non_exhaustive]` でないため `status()`/`client_message()`
+  網羅 match を更新、`ApiError` は `.status()` 経由で 409 を写像）。reminder `delete`（Node 非存在ルート）は Batch 7 撤去予定のため据え置き。
+- **golden test**: todo delete-bare＋complete-missing、schedule delete-bare、reminder cancel 404/409、credential delete-missing→200 を追加/更新。
+- **ゲート**: `cargo test` 112 緑／`clippy -D warnings` 0／`gen-types --check` exit 0（drift 0）／`cargo deny` ok。

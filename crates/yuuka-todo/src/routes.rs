@@ -5,18 +5,19 @@
 //! 未アクセスは system_default にフォールバック）で束ねて repo に渡す。
 //! 本ルータは supervisor 側で共通レイヤ（CSRF/body 上限）配下にマージされる。
 //!
-//! 方針（全ドメイン共通）: mutation の該当無は **404**（Node は complete/delete で 200 を
-//! 返すが、Rust はより厳密に 404。golden test 段階で最終確定する）。
+//! 方針（M-12・全ドメイン共通）: mutation の該当無応答は Node パリティ。complete/delete は
+//! **200 `{success:<bool>}`** を返す（該当無でも 404 にしない・delete は `deletedId` を返さない）。
 
 use axum::extract::{Query, State};
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Deserialize;
 use yuuka_core::WebError;
-use yuuka_types::Envelope;
+use yuuka_types::{EmptyData, Envelope};
 use yuuka_web::{resolve_scope, ApiError, AppState, AuthenticatedUser, Db, ScopedJson};
 
-use crate::dto::{DeletedData, NewTodo, TaskData, TaskListData};
+use crate::dto::{NewTodo, TaskData, TaskListData};
 use crate::repo::TodoRepo;
 
 #[derive(Debug, Deserialize)]
@@ -87,12 +88,13 @@ async fn complete(
         bot_id,
         value: input,
     }: ScopedJson<IdInput>,
-) -> Result<Json<Envelope<TaskData>>, ApiError> {
+) -> Result<Response, ApiError> {
     let scope = resolve_scope(&user.0, &db, bot_id.as_deref()).await?;
-    match TodoRepo::new(&db).complete(&scope, input.id).await? {
-        Some(task) => Ok(Json(Envelope::ok(TaskData { task }))),
-        None => Err(ApiError(WebError::NotFound)),
-    }
+    // Node parity: 完了できれば `{success:true, task}`、該当無は 404 ではなく `200 {success:false}`。
+    Ok(match TodoRepo::new(&db).complete(&scope, input.id).await? {
+        Some(task) => Json(Envelope::ok(TaskData { task })).into_response(),
+        None => Json(Envelope::<EmptyData>::bare(false)).into_response(),
+    })
 }
 
 async fn delete(
@@ -102,13 +104,9 @@ async fn delete(
         bot_id,
         value: input,
     }: ScopedJson<IdInput>,
-) -> Result<Json<Envelope<DeletedData>>, ApiError> {
+) -> Result<Json<Envelope<EmptyData>>, ApiError> {
     let scope = resolve_scope(&user.0, &db, bot_id.as_deref()).await?;
-    if TodoRepo::new(&db).delete(&scope, input.id).await? {
-        Ok(Json(Envelope::ok(DeletedData {
-            deleted_id: input.id,
-        })))
-    } else {
-        Err(ApiError(WebError::NotFound))
-    }
+    // Node parity: `{success: <削除できたか>}`（`deletedId` は返さない・該当無も 200）。
+    let ok = TodoRepo::new(&db).delete(&scope, input.id).await?;
+    Ok(Json(Envelope::bare(ok)))
 }

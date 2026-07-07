@@ -144,8 +144,8 @@ impl<'a> ReminderRepo<'a> {
 
     /// リマインドをキャンセル（status=cancelled、`pending` のみ対象）し更新後の行を返す。
     ///
-    /// pending でない／存在しない場合は `None`（Node は 404/409 を区別するが、Rust は
-    /// mutation 該当無を一律 404 に集約する方針・golden test で最終確定）。
+    /// pending でない／存在しない場合は `None`。route 側は `None` のとき [`Self::get`] で
+    /// 実在を確かめ、Node パリティで **不在→404／実在するが pending でない→409** を区別する。
     ///
     /// # Errors
     /// 更新・取得失敗時 [`DbError`]。

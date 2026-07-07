@@ -7,8 +7,8 @@
 //!
 //! **機密ドメイン**: 返す DTO は暗号化列・鍵材料を持たない（[`crate::dto`] のクリーンビュー）。
 //!
-//! 方針（全ドメイン共通）: mutation の該当無は **404**（Node `delete` は `{success:false}` を
-//! 200 で返すが、Rust はより厳密に 404。golden test 段階で最終確定する）。
+//! 方針（M-12・全ドメイン共通）: delete の該当無は Node パリティで **200 `{success:false}`**
+//! を返す（404 にしない・削除した service_name は返さない）。
 //!
 //! **deferred（コア CRUD 外・後回し）**: `POST /api/credentials/register`（secretService の
 //! ユーザー鍵暗号化 Argon2id+AES-256-GCM が必要・本クレート外）、GET 一覧の
@@ -19,10 +19,10 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Deserialize;
 use yuuka_core::WebError;
-use yuuka_types::Envelope;
+use yuuka_types::{EmptyData, Envelope};
 use yuuka_web::{resolve_scope, ApiError, AppState, AuthenticatedUser, Db, ScopedJson};
 
-use crate::dto::{Credential, CredentialDeletedData, CredentialListData, DeleteCredential};
+use crate::dto::{Credential, CredentialListData, DeleteCredential};
 use crate::repo::CredentialRepo;
 
 #[derive(Debug, Deserialize)]
@@ -52,21 +52,15 @@ async fn delete(
     user: AuthenticatedUser,
     State(db): State<Db>,
     ScopedJson { bot_id, value: input }: ScopedJson<DeleteCredential>,
-) -> Result<Json<Envelope<CredentialDeletedData>>, ApiError> {
+) -> Result<Json<Envelope<EmptyData>>, ApiError> {
     if input.service_name.trim().is_empty() {
         return Err(ApiError(WebError::Validation(
             "serviceName is required".to_owned(),
         )));
     }
     let scope = resolve_scope(&user.0, &db, bot_id.as_deref()).await?;
-    if CredentialRepo::new(&db)
+    let ok = CredentialRepo::new(&db)
         .delete(&scope, &input.service_name)
-        .await?
-    {
-        Ok(Json(Envelope::ok(CredentialDeletedData {
-            deleted_service_name: input.service_name.trim().to_lowercase(),
-        })))
-    } else {
-        Err(ApiError(WebError::NotFound))
-    }
+        .await?;
+    Ok(Json(Envelope::bare(ok)))
 }

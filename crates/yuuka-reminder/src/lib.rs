@@ -8,7 +8,8 @@
 //! - repeat_rule の cron 式検証・過去日時の次回時刻補正
 //! - trigger_at の ISO/Date 正規化（現状は DB 形式文字列を受領）
 //! - 既定送信先解決（users.notify_target_*）・source/source_id の各機能連携
-//! - cancel 失敗の 404/409 区別（Rust は一律 404）
+//!
+//! cancel 失敗の **404（不在）/ 409（実在するが pending でない）** 区別は M-12 で実装済み。
 
 pub mod dto;
 pub mod repo;
@@ -267,5 +268,87 @@ mod tests {
         let camel: NewReminder =
             serde_json::from_str(r#"{"message":"m","trigger_at":"t","repeatRule":"x"}"#).unwrap();
         assert_eq!(camel.repeat_rule, None);
+    }
+
+    /// M-12 golden: `POST /api/reminders/cancel` は Node パリティで失敗理由を区別する。
+    /// 不在 → **404**、実在するが pending でない（キャンセル済み）→ **409**。
+    #[tokio::test]
+    async fn route_cancel_missing_is_404_and_nonpending_is_409() {
+        let app = app();
+
+        // 不在 ID → 404。
+        let missing = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/reminders/cancel")
+                    .header("cookie", "__Host-yuuka-session=good")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"reminder_id":999999}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+
+        // 追加 → id を取得。
+        let add = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/reminders/add")
+                    .header("cookie", "__Host-yuuka-session=good")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"message":"m","trigger_at":"2999-01-01 09:00:00"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let bytes = axum::body::to_bytes(add.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let j: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let id = j["reminder"]["id"].as_i64().expect("id");
+
+        // 1 回目キャンセル → 200 {success:true, reminder(status=cancelled)}。
+        let c1 = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/reminders/cancel")
+                    .header("cookie", "__Host-yuuka-session=good")
+                    .header("content-type", "application/json")
+                    .body(Body::from(format!(r#"{{"reminder_id":{id}}}"#)))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(c1.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(c1.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let j: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(j["success"], serde_json::json!(true));
+        assert_eq!(j["reminder"]["status"], serde_json::json!("cancelled"));
+
+        // 2 回目（実在するが pending でない）→ 409。
+        let c2 = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/reminders/cancel")
+                    .header("cookie", "__Host-yuuka-session=good")
+                    .header("content-type", "application/json")
+                    .body(Body::from(format!(r#"{{"reminder_id":{id}}}"#)))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(c2.status(), StatusCode::CONFLICT);
     }
 }

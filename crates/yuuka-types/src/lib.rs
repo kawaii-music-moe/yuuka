@@ -11,7 +11,7 @@ pub mod dto;
 pub mod envelope;
 
 pub use dto::{BotSummary, MeData, Role, SessionUser};
-pub use envelope::Envelope;
+pub use envelope::{EmptyData, Envelope};
 
 use std::path::Path;
 
@@ -36,6 +36,7 @@ pub fn export_all(base_dir: &Path) -> Result<(), ts_rs::ExportError> {
     <BotSummary as TS>::export_all(&cfg)?;
     <MeData as TS>::export_all(&cfg)?;
     <Envelope<SessionUser> as TS>::export_all(&cfg)?;
+    <EmptyData as TS>::export_all(&cfg)?;
     Ok(())
 }
 

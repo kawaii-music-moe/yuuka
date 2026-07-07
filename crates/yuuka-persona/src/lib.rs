@@ -28,7 +28,6 @@ pub fn export_bindings(base_dir: &Path) -> Result<(), ts_rs::ExportError> {
     <dto::SavePersona as TS>::export_all(&cfg)?;
     <dto::PersonaListData as TS>::export_all(&cfg)?;
     <dto::PersonaData as TS>::export_all(&cfg)?;
-    <dto::PersonaDeletedData as TS>::export_all(&cfg)?;
     Ok(())
 }
 

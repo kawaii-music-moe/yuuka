@@ -50,11 +50,3 @@ pub struct PlaybookListData {
 pub struct PlaybookData {
     pub playbook: Playbook,
 }
-
-/// 削除結果（`{success, deletedName}`）。
-#[derive(Debug, Clone, Serialize, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "generated/")]
-pub struct PlaybookDeletedData {
-    pub deleted_name: String,
-}

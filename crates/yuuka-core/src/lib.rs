@@ -37,6 +37,7 @@ mod tests {
         assert_eq!(WebError::Unauthorized.status(), 401);
         assert_eq!(WebError::Forbidden.status(), 403);
         assert_eq!(WebError::NotFound.status(), 404);
+        assert_eq!(WebError::Conflict.status(), 409);
         assert_eq!(WebError::Validation("bad".into()).status(), 400);
         assert_eq!(WebError::Upstream.status(), 502);
         assert_eq!(WebError::Internal.status(), 500);

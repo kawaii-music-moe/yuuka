@@ -37,11 +37,3 @@ pub struct CredentialListData {
 pub struct DeleteCredential {
     pub service_name: String,
 }
-
-/// 削除結果（`{success}` に加えて削除した service_name を返す）。
-#[derive(Debug, Clone, Serialize, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "generated/")]
-pub struct CredentialDeletedData {
-    pub deleted_service_name: String,
-}

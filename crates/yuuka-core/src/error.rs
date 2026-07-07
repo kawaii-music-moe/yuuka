@@ -244,6 +244,11 @@ pub enum WebError {
     Forbidden,
     #[error("not found")]
     NotFound,
+    /// 状態競合（409）。リソースは実在するが現在の状態では要求を実行できない
+    /// （例: 送信済み・キャンセル済みリマインドの再キャンセル）。not-found（404）と
+    /// 区別して返すために追加（Node の `sendJson(409, …)` パリティ）。
+    #[error("conflict")]
+    Conflict,
     #[error("invalid request: {0}")]
     Validation(String),
     #[error("upstream unavailable")]
@@ -264,6 +269,7 @@ impl WebError {
             WebError::Unauthorized => 401,
             WebError::Forbidden => 403,
             WebError::NotFound => 404,
+            WebError::Conflict => 409,
             WebError::Validation(_) => 400,
             WebError::Upstream => 502,
             WebError::Internal => 500,
@@ -278,6 +284,7 @@ impl WebError {
             WebError::Unauthorized => "unauthorized".to_owned(),
             WebError::Forbidden => "forbidden".to_owned(),
             WebError::NotFound => "not found".to_owned(),
+            WebError::Conflict => "conflict".to_owned(),
             WebError::Validation(m) => m.clone(),
             WebError::Upstream => "upstream unavailable".to_owned(),
             WebError::Internal => "internal".to_owned(),

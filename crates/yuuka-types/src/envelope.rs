@@ -28,6 +28,24 @@ where
     pub data: T,
 }
 
+/// 空ペイロード（`{ success }` のみを返す mutation 用）。Node の delete `{ success: <bool> }`
+/// に一致させる。`#[serde(flatten)]` で無へ畳まれるため追加フィールドを生まない。
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export_to = "generated/")]
+pub struct EmptyData {}
+
+impl Envelope<EmptyData> {
+    /// `{ success }` のみのエンベロープ（削除可否など・Node parity）。
+    #[must_use]
+    pub fn bare(success: bool) -> Self {
+        Self {
+            success,
+            message: None,
+            data: EmptyData {},
+        }
+    }
+}
+
 impl<T> Envelope<T>
 where
     T: TS,

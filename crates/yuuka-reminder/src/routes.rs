@@ -5,8 +5,8 @@
 //! 未アクセスは system_default にフォールバック）で束ねて repo に渡す。
 //! 本ルータは supervisor 側で共通レイヤ（CSRF/body 上限）配下にマージされる。
 //!
-//! 方針: mutation の該当無は **404**（Node は cancel で 404/409 を区別するが、Rust は
-//! 一律 404。cron 検証・過去日時補正・既定送信先解決は deferred）。
+//! 方針: cancel は Node パリティで **404（不在）/ 409（実在するが pending でない）** を区別する。
+//! cron 検証・過去日時補正・既定送信先解決は deferred。
 
 use axum::extract::{Query, State};
 use axum::routing::{get, post};
@@ -79,9 +79,15 @@ async fn cancel(
     ScopedJson { bot_id, value: input }: ScopedJson<ReminderIdInput>,
 ) -> Result<Json<Envelope<ReminderData>>, ApiError> {
     let scope = resolve_scope(&user.0, &db, bot_id.as_deref()).await?;
-    match ReminderRepo::new(&db).cancel(&scope, input.reminder_id).await? {
+    let repo = ReminderRepo::new(&db);
+    match repo.cancel(&scope, input.reminder_id).await? {
         Some(reminder) => Ok(Json(Envelope::ok(ReminderData { reminder }))),
-        None => Err(ApiError(WebError::NotFound)),
+        // Node parity: cancel 失敗の理由を区別する。実在するが pending でない
+        // （送信済み／キャンセル済み）→ 409、まったく存在しない → 404。
+        None => match repo.get(&scope, input.reminder_id).await? {
+            Some(_) => Err(ApiError(WebError::Conflict)),
+            None => Err(ApiError(WebError::NotFound)),
+        },
     }
 }
 

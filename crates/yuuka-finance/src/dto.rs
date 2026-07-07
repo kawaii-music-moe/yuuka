@@ -64,11 +64,3 @@ pub struct ExpenseListData {
 pub struct ExpenseData {
     pub expense: Expense,
 }
-
-/// 削除結果（`{success, deletedId}`）。
-#[derive(Debug, Clone, Serialize, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "generated/")]
-pub struct ExpenseDeletedData {
-    pub deleted_id: i64,
-}

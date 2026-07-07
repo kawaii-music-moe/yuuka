@@ -8,18 +8,19 @@
 //! 参照スコープ = コア CRUD（list/save=create+update/delete）。activate/publish/marketplace/
 //! import/recommended-persona/admin は deferred（`bot_active_personas`・`bots` 連携が必要）。
 //!
-//! 方針（全ドメイン共通）: mutation の該当無は **404**。
+//! 方針（M-12）: delete の該当無は Node パリティで **200 `{success:false}`**（404 にしない・
+//! `deletedId` は返さない）。save の該当無更新は Node 同様 404。
 
 use axum::extract::{Query, State};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Deserialize;
 use yuuka_core::WebError;
-use yuuka_types::Envelope;
+use yuuka_types::{EmptyData, Envelope};
 use yuuka_web::{resolve_scope, ApiError, AppState, AuthenticatedUser, Db, ScopedJson};
 
 use crate::dto::{
-    Persona, PersonaData, PersonaDeletedData, PersonaListData, SavePersona, PERSONA_MAX_LENGTH,
+    Persona, PersonaData, PersonaListData, SavePersona, PERSONA_MAX_LENGTH,
 };
 use crate::repo::PersonaRepo;
 
@@ -88,13 +89,8 @@ async fn delete(
     user: AuthenticatedUser,
     State(db): State<Db>,
     ScopedJson { bot_id, value: input }: ScopedJson<IdInput>,
-) -> Result<Json<Envelope<PersonaDeletedData>>, ApiError> {
+) -> Result<Json<Envelope<EmptyData>>, ApiError> {
     let scope = resolve_scope(&user.0, &db, bot_id.as_deref()).await?;
-    if PersonaRepo::new(&db).delete(&scope, input.id).await? {
-        Ok(Json(Envelope::ok(PersonaDeletedData {
-            deleted_id: input.id,
-        })))
-    } else {
-        Err(ApiError(WebError::NotFound))
-    }
+    let ok = PersonaRepo::new(&db).delete(&scope, input.id).await?;
+    Ok(Json(Envelope::bare(ok)))
 }

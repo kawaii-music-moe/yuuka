@@ -31,7 +31,6 @@ pub fn export_bindings(base_dir: &Path) -> Result<(), ts_rs::ExportError> {
     <dto::NewContact as TS>::export_all(&cfg)?;
     <dto::ContactListData as TS>::export_all(&cfg)?;
     <dto::ContactData as TS>::export_all(&cfg)?;
-    <dto::ContactDeletedData as TS>::export_all(&cfg)?;
     Ok(())
 }
 

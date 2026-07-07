@@ -25,7 +25,6 @@ pub fn export_bindings(base_dir: &Path) -> Result<(), ts_rs::ExportError> {
     <dto::NewSchedule as TS>::export_all(&cfg)?;
     <dto::ScheduleListData as TS>::export_all(&cfg)?;
     <dto::ScheduleData as TS>::export_all(&cfg)?;
-    <dto::ScheduleDeletedData as TS>::export_all(&cfg)?;
     Ok(())
 }
 
@@ -262,5 +261,75 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    /// M-12 golden: `POST /api/schedules/delete` は `200 {success:<bool>}`（`deletedId` 無し）。
+    /// 実在削除は `success:true`、該当無（二重削除）は **404 ではなく** `200 {success:false}`。
+    #[tokio::test]
+    async fn route_delete_returns_bare_success_without_deleted_id() {
+        let app = app();
+        let add = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/schedules/add")
+                    .header("cookie", "__Host-yuuka-session=good")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"title":"del-me","startAt":"2999-01-01 09:00:00"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(add.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(add.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let j: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let id = j["schedule"]["id"].as_i64().expect("id");
+
+        let del = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/schedules/delete")
+                    .header("cookie", "__Host-yuuka-session=good")
+                    .header("content-type", "application/json")
+                    .body(Body::from(format!(r#"{{"id":{id}}}"#)))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(del.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(del.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let j: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(j["success"], serde_json::json!(true));
+        assert!(j["deletedId"].is_null());
+        assert!(j["deleted_id"].is_null());
+
+        // 二重削除（該当無）→ 200 {success:false}（404 にしない）。
+        let del2 = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/schedules/delete")
+                    .header("cookie", "__Host-yuuka-session=good")
+                    .header("content-type", "application/json")
+                    .body(Body::from(format!(r#"{{"id":{id}}}"#)))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(del2.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(del2.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let j: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(j["success"], serde_json::json!(false));
     }
 }

@@ -89,11 +89,3 @@ pub struct TimelineDayData {
 pub struct TimelineRecordData {
     pub record: TimelineRecord,
 }
-
-/// 削除結果（`{success, deletedId}`）。
-#[derive(Debug, Clone, Serialize, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "generated/")]
-pub struct TimelineDeletedData {
-    pub deleted_id: i64,
-}

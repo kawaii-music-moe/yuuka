@@ -8,18 +8,18 @@
 //! 参照スコープ = 連絡先のコア CRUD（list / save〔add|update〕 / delete）。誕生日リマインド
 //! cron・部分一致検索・コンテキストノート・クリップボードは deferred（lib.rs 参照）。
 //!
-//! 方針（全ドメイン共通）: mutation の該当無は **404**（Node は delete で 200 を返すが、
-//! Rust はより厳密に 404。golden test 段階で最終確定する）。
+//! 方針（M-12・全ドメイン共通）: delete の該当無は Node パリティで **200 `{success:false}`**
+//! を返す（404 にしない・`deletedId` は返さない）。save の該当無更新は Node 同様 404。
 
 use axum::extract::{Query, State};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Deserialize;
 use yuuka_core::WebError;
-use yuuka_types::Envelope;
+use yuuka_types::{EmptyData, Envelope};
 use yuuka_web::{resolve_scope, ApiError, AppState, AuthenticatedUser, Db, ScopedJson};
 
-use crate::dto::{ContactData, ContactDeletedData, ContactListData, NewContact};
+use crate::dto::{ContactData, ContactListData, NewContact};
 use crate::repo::ContactRepo;
 
 #[derive(Debug, Deserialize)]
@@ -95,15 +95,10 @@ async fn delete(
     user: AuthenticatedUser,
     State(db): State<Db>,
     ScopedJson { bot_id, value: input }: ScopedJson<IdInput>,
-) -> Result<Json<Envelope<ContactDeletedData>>, ApiError> {
+) -> Result<Json<Envelope<EmptyData>>, ApiError> {
     let scope = resolve_scope(&user.0, &db, bot_id.as_deref()).await?;
-    if ContactRepo::new(&db).delete(&scope, input.id).await? {
-        Ok(Json(Envelope::ok(ContactDeletedData {
-            deleted_id: input.id,
-        })))
-    } else {
-        Err(ApiError(WebError::NotFound))
-    }
+    let ok = ContactRepo::new(&db).delete(&scope, input.id).await?;
+    Ok(Json(Envelope::bare(ok)))
 }
 
 /// 空／空白のみの文字列を `None` に、それ以外は trim して `Some` にする（Node の

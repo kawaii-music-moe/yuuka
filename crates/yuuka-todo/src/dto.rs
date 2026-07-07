@@ -140,11 +140,3 @@ pub struct TaskListData {
 pub struct TaskData {
     pub task: Todo,
 }
-
-/// 削除結果（`{success, deletedId}`）。
-#[derive(Debug, Clone, Serialize, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "generated/")]
-pub struct DeletedData {
-    pub deleted_id: i64,
-}

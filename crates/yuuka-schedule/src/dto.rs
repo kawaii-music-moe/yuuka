@@ -49,11 +49,3 @@ pub struct ScheduleListData {
 pub struct ScheduleData {
     pub schedule: Schedule,
 }
-
-/// 削除結果（`{success, deletedId}`）。
-#[derive(Debug, Clone, Serialize, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "generated/")]
-pub struct ScheduleDeletedData {
-    pub deleted_id: i64,
-}

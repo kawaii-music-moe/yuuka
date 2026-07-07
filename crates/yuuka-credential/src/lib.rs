@@ -34,7 +34,6 @@ pub fn export_bindings(base_dir: &Path) -> Result<(), ts_rs::ExportError> {
     <dto::Credential as TS>::export_all(&cfg)?;
     <dto::CredentialListData as TS>::export_all(&cfg)?;
     <dto::DeleteCredential as TS>::export_all(&cfg)?;
-    <dto::CredentialDeletedData as TS>::export_all(&cfg)?;
     Ok(())
 }
 
@@ -226,8 +225,10 @@ mod tests {
         assert!(j["credentials"].as_array().unwrap().is_empty());
     }
 
+    /// M-12 golden: 該当無の delete は **404 ではなく** `200 {success:false}`（Node parity・
+    /// `deletedServiceName` は返さない）。
     #[tokio::test]
-    async fn route_delete_missing_is_404() {
+    async fn route_delete_missing_is_bare_success_false() {
         let (db, _path) = seed_db_at();
         let app = app_with(db);
         let del = app
@@ -242,7 +243,14 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(del.status(), StatusCode::NOT_FOUND);
+        assert_eq!(del.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(del.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let j: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(j["success"], serde_json::json!(false));
+        assert!(j["deletedServiceName"].is_null());
+        assert!(j["deleted_service_name"].is_null());
     }
 
     #[tokio::test]

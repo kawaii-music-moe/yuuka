@@ -24,7 +24,6 @@ pub fn export_bindings(base_dir: &Path) -> Result<(), ts_rs::ExportError> {
     <dto::NewExpense as TS>::export_all(&cfg)?;
     <dto::ExpenseListData as TS>::export_all(&cfg)?;
     <dto::ExpenseData as TS>::export_all(&cfg)?;
-    <dto::ExpenseDeletedData as TS>::export_all(&cfg)?;
     Ok(())
 }
 

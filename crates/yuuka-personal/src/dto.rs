@@ -66,11 +66,3 @@ pub struct ContactListData {
 pub struct ContactData {
     pub contact: Contact,
 }
-
-/// 削除結果（`{success, deletedId}`）。
-#[derive(Debug, Clone, Serialize, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "generated/")]
-pub struct ContactDeletedData {
-    pub deleted_id: i64,
-}
