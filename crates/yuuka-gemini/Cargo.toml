@@ -5,7 +5,21 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
-description = "yuuka Gemini 薄ラッパ（reqwest・generateContent・function calling）— Phase 0 stub"
+description = "yuuka Gemini 薄ラッパ（reqwest・classic generateContent v1beta・function calling loop）"
+
+[dependencies]
+yuuka-core = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+secrecy = { workspace = true }
+backon = { workspace = true }
+async-trait = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
 
 [lints]
 workspace = true

@@ -144,6 +144,12 @@ pub enum ValidationError {
 }
 
 /// Gemini 薄ラッパ層。429/`RetryInfo`、5xx、パース失敗、safety block。
+///
+/// **Phase 2 拡張（§8.2.3）**: `#[non_exhaustive]` の許可された拡張点として、
+/// yuuka-gemini 実装時に `ServerError`/`Transport`/`Timeout`/`KeyUnavailable`/
+/// `MaxIterations` を追加した。`Transport` は文字列化して保持し **core に reqwest 依存を
+/// 持ち込まない**（DbError::Operation(String) と同じ「driver 依存を core に入れない」方針）。
+/// 全 variant とも回復可能（`AppError::Gemini(_) => Transient`）。
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum GeminiError {
@@ -152,8 +158,13 @@ pub enum GeminiError {
     #[error("rate limited (retry after {retry_after:?})")]
     RateLimited { retry_after: Option<Duration> },
 
+    /// 非リトライ対象のクライアントエラー（4xx。429 は `RateLimited` で別扱い）。
     #[error("gemini returned status {status}")]
     Status { status: u16 },
+
+    /// 一時的サーバ障害（500/502/503/504）。リトライ対象（現行 `isServerError`）。
+    #[error("gemini server error (status {status})")]
+    ServerError { status: u16 },
 
     #[error("response decode failed")]
     Decode {
@@ -161,8 +172,47 @@ pub enum GeminiError {
         source: serde_json::Error,
     },
 
+    /// reqwest トランスポート層エラー（接続断・TLS 等）。文字列化して保持（core は reqwest 非依存）。
+    #[error("gemini http transport error: {0}")]
+    Transport(String),
+
+    #[error("gemini request timed out")]
+    Timeout,
+
     #[error("content blocked by safety filter")]
     SafetyBlocked,
+
+    /// ユーザー/Bot の API キー未設定・復号不能。
+    #[error("api key missing or undecryptable for {scope}")]
+    KeyUnavailable { scope: String },
+
+    /// function calling ループが最大反復回数（既定 10）を超過した。
+    #[error("max function-calling iterations exceeded")]
+    MaxIterations,
+}
+
+impl GeminiError {
+    /// リトライ対象の一過性障害か（`RateLimited`/`ServerError`/`Timeout`/`Transport`）。
+    /// 現行 `isRateLimitError`/`isServerError` の判定を型で表現する。
+    #[must_use]
+    pub fn is_retryable(&self) -> bool {
+        matches!(
+            self,
+            GeminiError::RateLimited { .. }
+                | GeminiError::ServerError { .. }
+                | GeminiError::Timeout
+                | GeminiError::Transport(_)
+        )
+    }
+
+    /// RetryInfo 由来の待機時間（あれば）。retry ループが最優先で尊重する。
+    #[must_use]
+    pub fn retry_after(&self) -> Option<Duration> {
+        match self {
+            GeminiError::RateLimited { retry_after } => *retry_after,
+            _ => None,
+        }
+    }
 }
 
 /// Discord 層（twilight）。ゲートウェイ断、HTTP 4xx/5xx、レート制限。

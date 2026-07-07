@@ -83,7 +83,7 @@ twilight-http            = "0.17"
 twilight-model           = "0.17"
 twilight-cache-inmemory  = "0.17"
 twilight-util            = "0.17"
-reqwest                  = { version = "0.13", features = ["json", "stream", "rustls-tls"] }
+reqwest                  = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls", "http2", "charset"] }  # 0.13 は存在しない（最新 0.12.x）。native-tls を避け rustls 固定
 eventsource-stream       = "0.2"
 serde                    = { version = "1", features = ["derive"] }
 serde_json               = "1"
