@@ -11,6 +11,10 @@ use std::path::Path;
 use axum::Router;
 use yuuka_web::{apply_common_layers, framework_routes, mount_static, AppState};
 
+pub mod supervisor;
+
+pub use supervisor::{RestartPolicy, ServiceError, ShutdownToken, SupervisedService, Supervisor};
+
 /// 完成アプリのルータを組み立てる（フレームワーク + 全ドメイン + 任意の静的配信 + 共通レイヤ）。
 ///
 /// 新ドメイン（finance/schedule/…）は `.merge(yuuka_xxx::routes())` を足す。

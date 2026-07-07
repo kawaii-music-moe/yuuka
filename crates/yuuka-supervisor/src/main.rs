@@ -1,20 +1,22 @@
-//! yuuka-supervisor（bin `yuuka`）— 起動シーケンスと HTTP 配信。
+//! yuuka-supervisor（bin `yuuka`）— 起動シーケンスと監督。
 //!
 //! 起動: telemetry 初期化 → `config.yaml`+env 読込（**欠落型不一致は fail-fast**）→ 既存 SQLite
 //! を開く → Redis セッション接続（不可でも縮退で継続）→ 実 [`CompositeAuth`] 構築 →
-//! ルータ組立（API + SPA 静的配信 + 共通レイヤ）→ `axum::serve` を graceful shutdown 付きで駆動。
+//! web サービスを [`Supervisor`] 配下へ登録 → JoinSet 監督ループを graceful shutdown 付きで駆動。
 //!
-//! 未配線（後続増分）: bot/gemini/services を含む JoinSet 全体監督・指数バックオフ再 spawn。
-//! 現状は web サービス単体を常駐させる（Node の web と同居可能＝strangler 移行）。
+//! web は **supervised task**（panic 隔離＋指数バックオフ再起動・絶対制約2）として動く。
+//! bot/gemini/services は Phase 3/4 で `Supervisor::service` に追加していく（同一監督下）。
+//! Node の web と同居可能＝strangler 移行。
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
 
+use async_trait::async_trait;
 use yuuka_auth::{CompositeAuth, SessionStore};
 use yuuka_core::Config;
-use yuuka_supervisor::build_app;
+use yuuka_supervisor::{build_app, ServiceError, ShutdownToken, SupervisedService, Supervisor};
 use yuuka_web::{AppState, Db, WebConfig};
 
 /// 設定ファイルの既定パス（cwd 相対・Node と同じ `config.yaml`）。
@@ -35,7 +37,7 @@ async fn main() -> ExitCode {
     }
 }
 
-/// 起動シーケンス本体（失敗は文字列化して呼び出し元で fail-fast）。
+/// 起動シーケンス本体（起動時 config/DB 不備のみ fail-fast・§5.6/§5.7）。
 async fn run() -> Result<(), String> {
     // 1) config.yaml + 環境変数（欠落は既定へ・壊れた YAML/不正値は致命）。
     let cfg = Config::load_and_validate(Path::new(CONFIG_PATH))
@@ -52,26 +54,56 @@ async fn run() -> Result<(), String> {
     let web_config = WebConfig::from_core(&cfg);
     let state = AppState::new(auth, web_config, db);
 
-    // 5) ルータ（API + SPA。dist/public があれば静的配信を載せる）。
+    // 5) 静的配信元（dist/public があれば SPA を載せる）。
     let dist = PathBuf::from(DIST_DIR);
-    let dist_ref = dist.is_dir().then_some(dist.as_path());
-    if dist_ref.is_none() {
+    let dist_dir = dist.is_dir().then_some(dist);
+    if dist_dir.is_none() {
         tracing::warn!(dir = DIST_DIR, "SPA ディレクトリが無いため静的配信を無効化（API のみ）");
     }
-    let app = build_app(state, dist_ref);
 
-    // 6) bind + serve（graceful shutdown 付き）。
+    // 6) web を supervised task として登録し、JoinSet 監督ループを駆動する。
+    //    ここから先は「落ちない」— web の panic/一過性障害は隔離＋指数バックオフ再起動される。
     let addr = SocketAddr::new(cfg.host, cfg.port);
-    let listener = tokio::net::TcpListener::bind(addr)
-        .await
-        .map_err(|e| format!("bind {addr}: {e}"))?;
-    tracing::info!(%addr, "yuuka web serving");
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await
-        .map_err(|e| format!("serve: {e}"))?;
-    tracing::info!("yuuka web stopped");
+    let web = Arc::new(WebService {
+        state,
+        addr,
+        dist_dir,
+    });
+    tracing::info!(%addr, "yuuka supervisor 起動（web を監督下に配置）");
+    Supervisor::new().service(web).run(shutdown_signal()).await;
+    tracing::info!("yuuka supervisor stopped");
     Ok(())
+}
+
+/// web サーバを [`SupervisedService`] 化する（絶対制約2: panic 隔離＋バックオフ再起動）。
+///
+/// `run` は毎回ルータを組み立て直して bind→serve する。bind/serve 失敗は
+/// `ServiceError::Transient`（supervisor が再起動）、shutdown での正常停止は Ok(())（再起動しない）。
+struct WebService {
+    state: AppState,
+    addr: SocketAddr,
+    dist_dir: Option<PathBuf>,
+}
+
+#[async_trait]
+impl SupervisedService for WebService {
+    fn name(&self) -> String {
+        "web".to_owned()
+    }
+
+    async fn run(&self, mut shutdown: ShutdownToken) -> Result<(), ServiceError> {
+        let app = build_app(self.state.clone(), self.dist_dir.as_deref());
+        let listener = tokio::net::TcpListener::bind(self.addr)
+            .await
+            .map_err(|e| ServiceError::transient(format!("bind {}: {e}", self.addr)))?;
+        tracing::info!(addr = %self.addr, "yuuka web serving");
+        axum::serve(listener, app)
+            .with_graceful_shutdown(async move { shutdown.cancelled().await })
+            .await
+            .map_err(|e| ServiceError::transient(format!("serve: {e}")))?;
+        tracing::info!("yuuka web stopped");
+        Ok(())
+    }
 }
 
 /// telemetry（tracing）初期化。`RUST_LOG` で制御、既定は info。
