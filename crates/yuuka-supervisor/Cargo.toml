@@ -24,6 +24,8 @@ yuuka-credential.workspace = true
 yuuka-playbook.workspace = true
 yuuka-persona.workspace = true
 yuuka-auth.workspace = true
+yuuka-tools.workspace = true
+yuuka-gemini.workspace = true
 axum.workspace = true
 tokio.workspace = true
 tracing.workspace = true
@@ -37,6 +39,7 @@ tokio.workspace = true
 tower = { workspace = true, features = ["util"] }
 tempfile = "3"
 rusqlite = { workspace = true }
+serde_json.workspace = true
 yuuka-types.workspace = true
 
 [lints]

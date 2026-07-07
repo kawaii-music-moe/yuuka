@@ -12,8 +12,10 @@ use axum::Router;
 use yuuka_web::{apply_common_layers, framework_routes, mount_static, AppState};
 
 pub mod supervisor;
+pub mod tool_registry;
 
 pub use supervisor::{RestartPolicy, ServiceError, ShutdownToken, SupervisedService, Supervisor};
+pub use tool_registry::{build_native_provider, build_tool_registry};
 
 /// 完成アプリのルータを組み立てる（フレームワーク + 全ドメイン + 任意の静的配信 + 共通レイヤ）。
 ///

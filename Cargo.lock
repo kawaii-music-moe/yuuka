@@ -2515,8 +2515,11 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "axum",
+ "backon",
  "rusqlite",
+ "serde_json",
  "tempfile",
+ "thiserror",
  "tokio",
  "tower",
  "tracing",
@@ -2525,6 +2528,7 @@ dependencies = [
  "yuuka-core",
  "yuuka-credential",
  "yuuka-finance",
+ "yuuka-gemini",
  "yuuka-persona",
  "yuuka-personal",
  "yuuka-playbook",
@@ -2532,6 +2536,7 @@ dependencies = [
  "yuuka-schedule",
  "yuuka-timeline",
  "yuuka-todo",
+ "yuuka-tools",
  "yuuka-types",
  "yuuka-web",
 ]
@@ -2577,6 +2582,13 @@ dependencies = [
 [[package]]
 name = "yuuka-tools"
 version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "yuuka-core",
+]
 
 [[package]]
 name = "yuuka-types"
