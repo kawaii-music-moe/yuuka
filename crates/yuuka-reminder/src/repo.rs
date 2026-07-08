@@ -3,7 +3,7 @@
 //! 全クエリは `WHERE user_id = ? AND bot_id = ?` を必須にし、`&UserScope` を取ることで
 //! 「user_id/bot_id 無しクエリ」を型で不能化する。読みは [`ReadPool`]、書きは
 //! [`WriterHandle`]（BEGIN IMMEDIATE）へ送る。cron 用の全件走査（listDuePending /
-//! markSent / rescheduleRepeat）は deferred（リマインドエンジン移植時に別 API で追加）。
+//! markSent / rescheduleRepeat）は [`crate::cron`]（`CrossUserAccess` 証憑必須）へ隔離した。
 
 use rusqlite::{params, Row};
 use yuuka_core::scope::ScopedRepo;
@@ -19,8 +19,8 @@ const REMINDER_COLUMNS: &str = "id, message, trigger_at, repeat_rule, target_typ
 
 /// reminder リポジトリ（DB ハンドルを借用する軽量ラッパ・per-request 構築）。
 pub struct ReminderRepo<'a> {
-    read: &'a ReadPool,
-    writer: &'a WriterHandle,
+    pub(crate) read: &'a ReadPool,
+    pub(crate) writer: &'a WriterHandle,
 }
 
 impl ScopedRepo for ReminderRepo<'_> {}

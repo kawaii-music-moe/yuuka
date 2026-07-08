@@ -35,8 +35,8 @@ const ORDER_CLAUSE: &str = " ORDER BY \
 
 /// todo リポジトリ（DB ハンドルを借用する軽量ラッパ・per-request 構築）。
 pub struct TodoRepo<'a> {
-    read: &'a ReadPool,
-    writer: &'a WriterHandle,
+    pub(crate) read: &'a ReadPool,
+    pub(crate) writer: &'a WriterHandle,
 }
 
 impl ScopedRepo for TodoRepo<'_> {}

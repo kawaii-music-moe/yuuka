@@ -4,9 +4,12 @@
 //! 本クレートを雛形に per-domain クレートで並行実装する。凍結契約（core/types）は変更しない。
 //! DAG: `todo → web, db, types, core`。ルータは supervisor が共通レイヤ配下にマージする。
 //!
-//! Phase 1 参照スコープ = コア CRUD（list/add/complete/delete）。recurrence・finance 連携・
-//! gantt/someday・progress log・優先度2段・15 tool function・subtree 削除は todo 完成パスで追加。
+//! Phase 1 参照スコープ = コア CRUD（list/add/complete/delete）。cron 側のルーチン繰り越し・期限
+//! 通知の全件走査（listOverdueRoutines/advanceRoutine/endRoutine/listOpenDueWithin/markDueReminded）は
+//! Phase 4 で [`cron`] に追加済み。recurrence の登録 UI・finance 連携・gantt/someday・progress log・
+//! 優先度2段・15 tool function・subtree 削除は todo 完成パスで追加。
 
+pub mod cron;
 pub mod dto;
 pub mod repo;
 pub mod routes;

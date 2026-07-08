@@ -12,10 +12,12 @@ use axum::Router;
 use yuuka_web::{apply_common_layers, framework_routes, mount_static, AppState};
 
 pub mod discord;
+pub mod services;
 pub mod supervisor;
 pub mod tool_registry;
 
 pub use discord::DiscordTenantService;
+pub use services::{build_supervised_services, CronSupervised};
 pub use supervisor::{RestartPolicy, ServiceError, ShutdownToken, SupervisedService, Supervisor};
 pub use tool_registry::{build_native_provider, build_tool_registry};
 

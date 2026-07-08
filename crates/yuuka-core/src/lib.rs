@@ -19,7 +19,7 @@ pub use error::{
     PluginError, RepoError, Retryability, ToolError, ValidationError, WebError,
 };
 pub use ids::{BotId, GuildId, UserId};
-pub use scope::{CronScan, ScopedRepo, UserScope};
+pub use scope::{CronScan, CrossUserAccess, ScopedRepo, UserScope};
 pub use tool::{
     CapabilitySet, FunctionDeclaration, ResponsePart, Tool, ToolContext, ToolName, ToolOutcome,
     ToolProvider,

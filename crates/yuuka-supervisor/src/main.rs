@@ -16,7 +16,10 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use yuuka_auth::{CompositeAuth, SessionStore};
 use yuuka_core::Config;
-use yuuka_supervisor::{build_app, ServiceError, ShutdownToken, SupervisedService, Supervisor};
+use yuuka_services::{MetricsRegistry, NullNotifier, ServiceContext};
+use yuuka_supervisor::{
+    build_app, build_supervised_services, ServiceError, ShutdownToken, SupervisedService, Supervisor,
+};
 use yuuka_web::{AppState, Db, WebConfig};
 
 /// 設定ファイルの既定パス（cwd 相対・Node と同じ `config.yaml`）。
@@ -52,7 +55,7 @@ async fn run() -> Result<(), String> {
     // 4) 実 AuthBackend（Cookie=Redis / Bearer=SQLite）。
     let auth = Arc::new(CompositeAuth::new(db.clone(), sessions, cfg.session_ttl_days));
     let web_config = WebConfig::from_core(&cfg);
-    let state = AppState::new(auth, web_config, db);
+    let state = AppState::new(auth, web_config, db.clone());
 
     // 5) 静的配信元（dist/public があれば SPA を載せる）。
     let dist = PathBuf::from(DIST_DIR);
@@ -69,10 +72,45 @@ async fn run() -> Result<(), String> {
         addr,
         dist_dir,
     });
+    let mut supervisor = Supervisor::new().service(web);
+
+    // 7) cron 常駐サービス群（Phase 4）。**strangler カットオーバー用の env ゲート**で制御する:
+    //    移行期は Node が cron を所有し Rust は read-only（二重 writer 回避が絶対条件・R-1）。
+    //    Node cron を停止したら `YUUKA_RUST_CRON=1` で Rust cron を起動する（reminder は起動時
+    //    即時実行で取りこぼしを復帰・§10）。通知先 Discord は未配線のため縮退（NullNotifier）で
+    //    始まり、リマインド等は配信可能になるまで pending のまま保持される。
+    if rust_cron_enabled() {
+        let service_ctx = ServiceContext::new(
+            db,
+            Arc::new(NullNotifier),
+            Arc::new(MetricsRegistry::new()),
+        );
+        let cron = build_supervised_services(&service_ctx);
+        tracing::warn!(
+            count = cron.len(),
+            "YUUKA_RUST_CRON 有効: Rust cron 常駐サービスを監督下に配置（Node cron が停止済みであること）"
+        );
+        for svc in cron {
+            supervisor = supervisor.service(svc);
+        }
+    } else {
+        tracing::info!(
+            "Rust cron は無効（既定・Node が cron を所有）。有効化は YUUKA_RUST_CRON=1（Node cron 停止後）"
+        );
+    }
+
     tracing::info!(%addr, "yuuka supervisor 起動（web を監督下に配置）");
-    Supervisor::new().service(web).run(shutdown_signal()).await;
+    supervisor.run(shutdown_signal()).await;
     tracing::info!("yuuka supervisor stopped");
     Ok(())
+}
+
+/// Rust cron 常駐サービスを起動するか（strangler カットオーバーの env ゲート）。
+/// `YUUKA_RUST_CRON` が `1`/`true`/`yes`（大小無視）のときのみ有効。
+fn rust_cron_enabled() -> bool {
+    std::env::var("YUUKA_RUST_CRON")
+        .ok()
+        .is_some_and(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
 }
 
 /// web サーバを [`SupervisedService`] 化する（絶対制約2: panic 隔離＋バックオフ再起動）。

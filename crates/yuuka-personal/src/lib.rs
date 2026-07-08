@@ -3,14 +3,14 @@
 //! Repo + wire DTO + route を縦に持つ。凍結契約（core/types）は変更しない。
 //! DAG: `personal → web, db, types, core`。ルータは supervisor が共通レイヤ配下にマージする。
 //!
-//! Phase 1 参照スコープ = 連絡先のコア CRUD（list / save〔add|update〕 / delete）。以下は
-//! **deferred**（後続増分で追加）:
-//! - 誕生日リマインド cron（`listBirthdayContactsForDate` / `markBirthdayReminded`・
-//!   `birthday_reminded_year` 更新、全ユーザー横断クエリ）
+//! Phase 1 参照スコープ = 連絡先のコア CRUD（list / save〔add|update〕 / delete）。誕生日リマインド
+//! cron（`listBirthdayContactsForDate` / `markBirthdayReminded`・全ユーザー横断）は Phase 4 で
+//! [`cron`] に追加済み。以下は **deferred**（後続増分で追加）:
 //! - 連絡先の部分一致検索（`searchContacts`・`GET` 検索パラメータ）
 //! - コンテキストノート（`/api/context-note` GET/POST・`context_notes` 表）
 //! - クリップボード（`/api/clipboard`・`/api/clipboard/delete`・`clipboard_entries` 表）
 
+pub mod cron;
 pub mod dto;
 pub mod repo;
 pub mod routes;

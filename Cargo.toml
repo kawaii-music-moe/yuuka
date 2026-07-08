@@ -99,6 +99,8 @@ async-trait              = "0.1"
 tracing                  = "0.1"
 tracing-subscriber       = { version = "0.3", features = ["env-filter", "fmt"] }
 serde_yaml               = "0.9"
+chrono                   = { version = "0.4", default-features = false, features = ["clock", "std"] }  # cron スケジューラのローカル壁時計（node-cron はローカル時刻）。SQLite datetime とは別用途
+croner                   = "2"                                                  # 5-field cron 式の次回発火計算（node-cron / cron-parser パリティ）
 
 # yuuka クレート間の内部依存（パス依存）
 yuuka-core  = { path = "crates/yuuka-core" }
@@ -118,3 +120,4 @@ yuuka-personal   = { path = "crates/yuuka-personal" }
 yuuka-credential = { path = "crates/yuuka-credential" }
 yuuka-playbook   = { path = "crates/yuuka-playbook" }
 yuuka-persona    = { path = "crates/yuuka-persona" }
+yuuka-services   = { path = "crates/yuuka-services" }

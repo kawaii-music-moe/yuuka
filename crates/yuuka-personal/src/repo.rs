@@ -18,8 +18,8 @@ const CONTACT_COLUMNS: &str = "id, name, birthday, relationship, contact_info, n
 
 /// 連絡先リポジトリ（DB ハンドルを借用する軽量ラッパ・per-request 構築）。
 pub struct ContactRepo<'a> {
-    read: &'a ReadPool,
-    writer: &'a WriterHandle,
+    pub(crate) read: &'a ReadPool,
+    pub(crate) writer: &'a WriterHandle,
 }
 
 impl ScopedRepo for ContactRepo<'_> {}

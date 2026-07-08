@@ -27,6 +27,7 @@ yuuka-auth.workspace = true
 yuuka-tools.workspace = true
 yuuka-gemini.workspace = true
 yuuka-discord.workspace = true
+yuuka-services.workspace = true
 axum.workspace = true
 tokio.workspace = true
 tracing.workspace = true

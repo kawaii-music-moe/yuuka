@@ -3,14 +3,15 @@
 //! **参照実装は yuuka-todo**。凍結契約（core/types）は変更しない。
 //! DAG: `reminder → web, db, types, core`。ルータは supervisor が共通レイヤ配下にマージする。
 //!
-//! Phase 1 スコープ = コア CRUD（list/add/cancel/delete）。deferred（後回し）:
-//! - cron（リマインドエンジン）用の全件走査 listDuePending / markSent / rescheduleRepeat
+//! Phase 1 スコープ = コア CRUD（list/add/cancel/delete）。cron 用の全件走査
+//! （listDuePending / markSent / rescheduleRepeat）は Phase 4 で [`cron`] に追加済み。deferred（後回し）:
 //! - repeat_rule の cron 式検証・過去日時の次回時刻補正
 //! - trigger_at の ISO/Date 正規化（現状は DB 形式文字列を受領）
 //! - 既定送信先解決（users.notify_target_*）・source/source_id の各機能連携
 //!
 //! cancel 失敗の **404（不在）/ 409（実在するが pending でない）** 区別は M-12 で実装済み。
 
+pub mod cron;
 pub mod dto;
 pub mod repo;
 pub mod routes;

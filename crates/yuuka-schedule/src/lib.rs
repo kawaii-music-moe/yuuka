@@ -2,9 +2,10 @@
 //!
 //! 参照スコープ = コア CRUD（list_upcoming/add/delete）。Google カレンダー同期
 //! （google_event_id/google_calendar_id・link/update/backfill）、期間集約
-//! （listSchedulesInRange・日報/週報）、cron リマインド（getUnreminded/markReminded）は
-//! deferred（後続パスで追加）。DAG: `schedule → web, db, types, core`。
+//! （listSchedulesInRange・日報/週報）は deferred（後続パスで追加）。cron リマインド
+//! （getUnreminded/markReminded）は Phase 4 で [`cron`] に追加済み。DAG: `schedule → web, db, types, core`。
 
+pub mod cron;
 pub mod dto;
 pub mod repo;
 pub mod routes;

@@ -21,8 +21,8 @@ const DEFAULT_REMIND_BEFORE_MINUTES: i64 = 10;
 
 /// schedule リポジトリ（DB ハンドルを借用する軽量ラッパ・per-request 構築）。
 pub struct ScheduleRepo<'a> {
-    read: &'a ReadPool,
-    writer: &'a WriterHandle,
+    pub(crate) read: &'a ReadPool,
+    pub(crate) writer: &'a WriterHandle,
 }
 
 impl ScopedRepo for ScheduleRepo<'_> {}
