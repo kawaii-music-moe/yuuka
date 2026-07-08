@@ -5,7 +5,27 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
-description = "yuuka Discord 層（twilight マルチテナント bot）— Phase 0 stub"
+description = "yuuka Discord 層（twilight 0.17 マルチテナント bot・caller 駆動 Shard poll loop・注入ポート）"
+
+[dependencies]
+yuuka-core = { workspace = true }
+twilight-gateway = { workspace = true }
+twilight-http = { workspace = true }
+twilight-model = { workspace = true }
+# builder feature: InteractionResponseDataBuilder / EmbedBuilder（既定 off・明示 opt-in が必須）。
+twilight-util = { workspace = true, features = ["builder"] }
+tokio = { workspace = true }
+secrecy = { workspace = true }
+# 添付（画像/音声）を URL 取得 → base64 化して Gemini マルチモーダルへ渡す（§8.1.5）。
+reqwest = { workspace = true }
+base64 = { workspace = true }
+regex = { workspace = true }
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
 
 [lints]
 workspace = true

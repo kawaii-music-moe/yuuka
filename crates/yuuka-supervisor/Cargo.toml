@@ -26,6 +26,7 @@ yuuka-persona.workspace = true
 yuuka-auth.workspace = true
 yuuka-tools.workspace = true
 yuuka-gemini.workspace = true
+yuuka-discord.workspace = true
 axum.workspace = true
 tokio.workspace = true
 tracing.workspace = true

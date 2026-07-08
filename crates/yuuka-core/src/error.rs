@@ -216,17 +216,40 @@ impl GeminiError {
 }
 
 /// Discord 層（twilight）。ゲートウェイ断、HTTP 4xx/5xx、レート制限。
+///
+/// **Phase 3 拡張（§8.1.2 / R-15）**: `#[non_exhaustive]` の許可された拡張点として、
+/// yuuka-discord 実装時に `ShardClosedFatal`（恒久クローズ＝無効トークン/インテント拒否等・
+/// `CloseCode::can_reconnect()==false`）と `Transport`（添付取得等の I/O 失敗・文字列化して
+/// core に reqwest 依存を持ち込まない）を追加した。テナントループは一過性のシャードエラーを
+/// 内部で吸収し、`ShardClosedFatal` のみを Err で返す（supervisor 側で Permanent 分類・
+/// 無限再起動を避ける）。
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum DiscordError {
     #[error("gateway connection lost")]
     GatewayClosed,
 
+    /// 恒久クローズ（再接続不能）。無効トークン・DisallowedIntents 等。テナント停止＝再起動しない。
+    #[error("discord gateway closed fatally (code {code:?})")]
+    ShardClosedFatal { code: Option<u16> },
+
     #[error("discord http error: status {status}")]
     Http { status: u16 },
 
     #[error("discord rate limited (retry after {retry_after:?})")]
     RateLimited { retry_after: Option<Duration> },
+
+    /// 添付取得等の I/O 失敗（文字列化して core を reqwest 非依存に保つ・DbError::Operation と同方針）。
+    #[error("discord transport error: {0}")]
+    Transport(String),
+}
+
+impl DiscordError {
+    /// 恒久障害（再起動で直らない）か。テナント supervisor が Permanent 分類に使う。
+    #[must_use]
+    pub fn is_fatal(&self) -> bool {
+        matches!(self, DiscordError::ShardClosedFatal { .. })
+    }
 }
 
 /// ツール／プラグイン層（Native/MCP/WASM）。呼び出し失敗、能力スコープ違反、タイムアウト。
