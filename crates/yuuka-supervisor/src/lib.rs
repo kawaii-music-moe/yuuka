@@ -73,9 +73,12 @@ mod tests {
         }
     }
 
+    static TEST_DB_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
     fn test_db() -> Db {
+        let seq = TEST_DB_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let path = std::env::temp_dir()
-            .join(format!("yuuka_sup_test_{}.sqlite", std::process::id()));
+            .join(format!("yuuka_sup_test_{}_{seq}.sqlite", std::process::id()));
         {
             let conn = rusqlite::Connection::open(&path).expect("seed");
             conn.execute_batch(

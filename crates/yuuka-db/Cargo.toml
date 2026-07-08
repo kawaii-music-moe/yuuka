@@ -16,6 +16,7 @@ yuuka-core.workspace = true
 rusqlite.workspace = true          # bundled SQLite 3.53.2（ADR アンカー）
 tokio.workspace = true             # writer actor の mpsc/oneshot・read pool の Semaphore/spawn_blocking
 tracing.workspace = true
+refinery.workspace = true
 
 # 逸脱: deadpool-sqlite 0.13 は rusqlite ^0.38 で頭打ち（libsqlite3-sys の links 衝突で
 # rusqlite 0.40 と両立不可）。ADR は rusqlite 0.40 を優先（synapse 統一・SQLite 3.53.2）する

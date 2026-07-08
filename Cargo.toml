@@ -27,12 +27,12 @@ members = [
     "crates/yuuka-credential",
     "crates/yuuka-playbook",
     "crates/yuuka-persona",
+    "src/rust_crawler",
+    "src/rust_synapse",
     "xtask",
 ]
 exclude = [
     ".claude",
-    "src/rust_synapse",
-    "src/rust_crawler",
     "clients/desktop",
 ]
 
@@ -72,7 +72,7 @@ axum                     = { version = "0.8.9", features = ["ws", "macros"] }
 tower                    = "0.5"
 tower-http               = { version = "0.6", features = ["fs", "compression-br", "compression-gzip", "set-header"] }  # 0.7 は axum 0.8.9 未対応の恐れ→0.6 固定
 hyper                    = "1"
-rusqlite                 = { version = "0.40", features = ["bundled"] }         # bundled SQLite 3.53.2
+rusqlite                 = { version = "0.32", features = ["bundled"] }
 deadpool-sqlite          = "0.13"
 refinery                 = { version = "0.9", features = ["rusqlite"] }
 backon                   = "1.6"                                                # backoff は RUSTSEC-2025-0012 で禁止

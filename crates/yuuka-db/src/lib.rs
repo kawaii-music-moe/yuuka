@@ -7,17 +7,15 @@
 //!   deadpool の `interact`（内部 `spawn_blocking`）でブロッキングプールへ逃がす。
 //! - PRAGMA（WAL / foreign_keys / busy_timeout=5000 / synchronous=NORMAL）は
 //!   [`pool::open_conn`] で明示。全書込 Tx は BEGIN IMMEDIATE（[`WriterHandle::transaction`]）。
-//! - 移行期は **Rust が DDL を発行しない**。[`schema::assert_schema_compatible`] で
-//!   `schema_version == "17"` を確認し、不一致なら起動時 fail-fast（DDL 所有権は Node）。
-//!
-//! DAG: `db → core`。エラーは [`yuuka_core::DbError`]（driver 非依存の層別型）。
+//! - DDL 所有権は Rust 側に移行済み。`refinery` による前方専用マイグレーションを
+//!   適用する（[`schema::run_migrations`]）。
 
 pub mod pool;
 pub mod schema;
 pub mod writer;
 
 pub use pool::{open_conn, ReadPool};
-pub use schema::{assert_schema_compatible, EXPECTED_SCHEMA_VERSION};
+pub use schema::run_migrations;
 pub use writer::WriterHandle;
 
 use yuuka_core::DbError;
@@ -42,8 +40,7 @@ pub fn map_sqlite(e: rusqlite::Error) -> DbError {
 #[cfg(test)]
 mod tests {
     use super::{
-        assert_schema_compatible, map_sqlite, open_conn, ReadPool, WriterHandle,
-        EXPECTED_SCHEMA_VERSION,
+        map_sqlite, open_conn, run_migrations, ReadPool, WriterHandle,
     };
     use tempfile::tempdir;
     use yuuka_core::DbError;
@@ -94,39 +91,17 @@ mod tests {
     }
 
     #[test]
-    fn schema_guard_rejects_wrong_and_accepts_expected() {
+    fn run_migrations_succeeds_on_empty_and_existing() {
         let dir = tempdir().unwrap();
-        let path = dir.path().join("s.sqlite");
+        let path = dir.path().join("m.sqlite");
         seed_db(&path, "");
-        let conn = open_conn(&path, false).unwrap();
+        let mut conn = open_conn(&path, false).unwrap();
 
-        // system_settings 不在 → Migration（fail-fast）。
-        assert!(matches!(
-            assert_schema_compatible(&conn),
-            Err(DbError::Migration { .. })
-        ));
+        // 初回（空 DB からのスキーマ構築）
+        run_migrations(&mut conn).unwrap();
 
-        conn.execute_batch(
-            "CREATE TABLE system_settings(key TEXT PRIMARY KEY, value TEXT);
-             INSERT INTO system_settings(key, value) VALUES('schema_version', '16');",
-        )
-        .unwrap();
-        let err = assert_schema_compatible(&conn).unwrap_err();
-        assert!(
-            matches!(err, DbError::Migration { .. }),
-            "expected Migration error, got {err:?}"
-        );
-        if let DbError::Migration { expected, found } = err {
-            assert_eq!(expected, EXPECTED_SCHEMA_VERSION);
-            assert_eq!(found, "16");
-        }
-
-        conn.execute(
-            "UPDATE system_settings SET value = '17' WHERE key = 'schema_version'",
-            [],
-        )
-        .unwrap();
-        assert_schema_compatible(&conn).unwrap();
+        // 2 回目（既存 DB での冪等実行）
+        run_migrations(&mut conn).unwrap();
     }
 
     #[tokio::test]

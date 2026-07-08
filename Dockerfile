@@ -8,21 +8,16 @@
 # インスタンス固有の差分（ポート/データ/シークレット/設定）は docker-compose 側で注入。
 # ==============================================================================
 
-# ---- stage 1: Rust crawler + synapse engine ----------------------------------
+# ---- stage 1: Rust backend (workspace) ----------------------------------
 FROM rust:1-bookworm AS rust-builder
-# クローラ（browser 不変層）
-WORKDIR /build/crawler
-COPY src/rust_crawler/Cargo.toml src/rust_crawler/Cargo.lock ./
-COPY src/rust_crawler/src ./src
-RUN cargo build --release \
- && cp target/release/yuuka-crawler /yuuka-crawler
-# シナプスエンジン（schema v10 / 一新案 v3。記憶の重い処理を V8 ヒープ外へ）
-WORKDIR /build/synapse
-COPY src/rust_synapse/Cargo.toml src/rust_synapse/Cargo.lock ./
-COPY src/rust_synapse/src ./src
-RUN cargo build --release \
- && cp target/release/yuuka-synapse /yuuka-synapse
+WORKDIR /build
+COPY Cargo.toml Cargo.lock ./
+COPY crates ./crates
+COPY src/rust_crawler ./src/rust_crawler
+COPY src/rust_synapse ./src/rust_synapse
+COPY xtask ./xtask
 
+RUN cargo build --release --bin yuuka --bin yuuka-crawler --bin yuuka-synapse  && cp target/release/yuuka /yuuka  && cp target/release/yuuka-crawler /yuuka-crawler  && cp target/release/yuuka-synapse /yuuka-synapse
 # ---- stage 1b: Desktop client (Windows .exe をクロスコンパイル) --------------
 # Linux 上から x86_64-pc-windows-gnu ターゲットで Windows GUI バイナリを生成する。
 # C/asm 依存（ring 等）と最終リンクに mingw-w64 が必要。成果物はダッシュボードから
@@ -77,6 +72,7 @@ RUN pnpm exec tsgo \
  && mkdir -p dist/bin dist/assets \
  && cp -r src/assets/. dist/assets/
 # Rust バイナリを dist/bin へ配置（browserService / synapseEngine が参照）
+COPY --from=rust-builder /yuuka dist/bin/yuuka
 COPY --from=rust-builder /yuuka-crawler dist/bin/yuuka-crawler
 COPY --from=rust-builder /yuuka-synapse dist/bin/yuuka-synapse
 # デスクトップ版 exe を配布ディレクトリへ配置（desktopClientRoutes が参照）。
@@ -117,4 +113,5 @@ COPY package.json ./
 RUN mkdir -p /app/data /app/scratch && chown -R node:node /app
 USER node
 EXPOSE 7854
-CMD ["node", "dist/index.js"]
+ENV YUUKA_RUST_CRON=1
+CMD ["./dist/bin/yuuka"]

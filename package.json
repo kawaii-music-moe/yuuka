@@ -1,7 +1,7 @@
 {
   "name": "yuuka",
   "version": "2.0.0",
-  "description": "Discord Gemini 秘書ボット & Web管理ダッシュボード",
+  "description": "Discord Gemini \u79d8\u66f8\u30dc\u30c3\u30c8 & Web\u7ba1\u7406\u30c0\u30c3\u30b7\u30e5\u30dc\u30fc\u30c9",
   "license": "MIT",
   "private": true,
   "type": "module",
@@ -17,8 +17,8 @@
     "dev:all": "concurrently -k \"pnpm dev:host\" \"pnpm dev:front\"",
     "build:front": "vite build --config frontend/vite.config.ts",
     "typecheck:front": "svelte-check --tsconfig frontend/tsconfig.json",
-    "build": "cargo build --release --manifest-path src/rust_crawler/Cargo.toml && cargo build --release --manifest-path src/rust_synapse/Cargo.toml && mkdir -p dist/bin dist/assets && cp src/rust_crawler/target/release/yuuka-crawler dist/bin/ && cp src/rust_synapse/target/release/yuuka-synapse dist/bin/ && cp -r src/assets/. dist/assets/ && tsgo && pnpm exec vite build --config frontend/vite.config.ts",
-    "start": "node dist/index.js",
+    "build": "cargo build --release && mkdir -p dist/bin dist/assets && cp target/release/yuuka dist/bin/ && cp target/release/yuuka-crawler dist/bin/ && cp target/release/yuuka-synapse dist/bin/ && cp -r src/assets/. dist/assets/ && pnpm exec vite build --config frontend/vite.config.ts",
+    "start": "./dist/bin/yuuka",
     "lint": "biome check src/",
     "lint:fix": "biome check --write src/",
     "format": "biome format --write src/",
@@ -76,7 +76,7 @@
     "vitest": "^4.1.9"
   },
   "pnpm": {
-    "comment": "推移的依存の既知脆弱性をパッチ版へ固定。互換性維持のため undici は discord.js が前提とする 6.x 系内の修正版に留める（メジャー跨ぎを避ける）。uuid も修正版直近の系統に固定。",
+    "comment": "\u63a8\u79fb\u7684\u4f9d\u5b58\u306e\u65e2\u77e5\u8106\u5f31\u6027\u3092\u30d1\u30c3\u30c1\u7248\u3078\u56fa\u5b9a\u3002\u4e92\u63db\u6027\u7dad\u6301\u306e\u305f\u3081 undici \u306f discord.js \u304c\u524d\u63d0\u3068\u3059\u308b 6.x \u7cfb\u5185\u306e\u4fee\u6b63\u7248\u306b\u7559\u3081\u308b\uff08\u30e1\u30b8\u30e3\u30fc\u8de8\u304e\u3092\u907f\u3051\u308b\uff09\u3002uuid \u3082\u4fee\u6b63\u7248\u76f4\u8fd1\u306e\u7cfb\u7d71\u306b\u56fa\u5b9a\u3002",
     "overrides": {
       "undici@<6.27.0": "^6.27.0",
       "uuid@<11.1.1": "^11.1.1",
