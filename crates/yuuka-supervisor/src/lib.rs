@@ -92,7 +92,19 @@ mod tests {
             )
             .expect("ddl");
         }
-        Db::open(&path).expect("open")
+        let db = Db::open(&path).expect("open"); // migrations で users 表を作成。
+        // /api/me は DB からユーザーを再取得する（P3-5）。FakeAuth のユーザー "u" を seed する
+        // （V17 実スキーマの NOT NULL: username/password_hash/salt を充足）。
+        {
+            let conn = rusqlite::Connection::open(&path).expect("open users");
+            conn.execute(
+                "INSERT OR REPLACE INTO users (discord_id, username, password_hash, salt, role) \
+                 VALUES ('u', 'u', 'x', '00', 'user')",
+                [],
+            )
+            .expect("seed user");
+        }
+        db
     }
 
     fn app() -> Router {
