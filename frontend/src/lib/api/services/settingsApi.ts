@@ -36,11 +36,15 @@ export const settingsApi = {
 		api.post<ApiResponse>("/api/settings/gemini", body, USER),
 
 	// ── Discord 連携 ──
+	// ★bot-scoped: サーバは GET ?botId= / POST body.botId で対象Botを特定し、
+	//   オーナー（system_default は Admin）権限を検査する（settingsRoutes.ts:507-）。
+	//   USER だと botId 欠落 → 常に system_default 扱い → 非Adminは 403、
+	//   独自Botのトークン閲覧/保存が誤対象になる。
 	/** GET /api/settings/discord */
-	getDiscord: () => api.get<DiscordSettingsResponse>("/api/settings/discord", USER),
+	getDiscord: () => api.get<DiscordSettingsResponse>("/api/settings/discord", BOT),
 	/** POST /api/settings/discord */
 	updateDiscord: (body: Record<string, unknown>) =>
-		api.post<ApiResponse>("/api/settings/discord", body, USER),
+		api.post<ApiResponse>("/api/settings/discord", body, BOT),
 
 	// ── Google 連携 ──
 	/** GET /api/settings/google/oauth/url — OAuth 開始 URL 取得 */
