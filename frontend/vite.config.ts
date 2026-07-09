@@ -89,27 +89,28 @@ export default defineConfig({
 				// precache manifest は Vite のハッシュ資産から自動生成（固定パス列挙を廃止）。
 				// ★ html は precache しない（GSV 実行時置換をバイパスさせないため。注記(a)）。
 				globPatterns: ["**/*.{js,css,woff2,png,svg,webp,json,ico}"],
-				navigateFallback: "/index.html",
-				// /api・/hook・/ws・/proxy を navigateFallback から除外
-				navigateFallbackDenylist: [
-					/^\/api\//,
-					/^\/hook\//,
-					/^\/ws\//,
-					/^\/proxy\//,
-				],
+				// ★ navigateFallback は使わない（不具合修正）。
+				//   navigateFallback:"/index.html" は Workbox が SW 初期化時に
+				//   precache.createHandlerBoundToURL("/index.html") を呼ぶが、html は GSV 実行時
+				//   置換のため意図的に precache 対象外（globPatterns に html 無し）。結果
+				//   "non-precached-url: /index.html" を throw し SW が壊れる（この方式と両立しない）。
+				//   代わりに下の NetworkFirst ルールが request.mode==="navigate" の全 SPA 遷移
+				//   （/, /index.html, /bot/... 等）を捌く。オンラインは常に最新 index.html（GSV 置換済）、
+				//   オフラインは訪問済みルートのキャッシュへフォールバック。
 				runtimeCaching: [
-					// index.html / "/" は precache せず NetworkFirst のみ（GSV 置換を必ず通す。注記(a)）
+					// SPA ナビゲーション（HTML 遷移）は NetworkFirst（GSV 置換を必ず通す。注記(a)）
 					{
-						urlPattern: ({ url }) =>
+						urlPattern: ({ request, url }) =>
+							request.mode === "navigate" &&
 							url.origin === self.location.origin &&
-							!/^\/(api|hook|ws|proxy)\//.test(url.pathname) &&
-							(url.pathname === "/" || url.pathname === "/index.html"),
+							!/^\/(api|hook|ws|proxy)\//.test(url.pathname),
 						handler: "NetworkFirst",
 						options: { cacheName: "app-shell" },
 					},
-					// その他 same-origin 静的資産（/api・/hook・/ws・/proxy は否定条件で除外）
+					// その他 same-origin 静的資産（ナビゲーション以外。/api・/hook・/ws・/proxy は除外）
 					{
-						urlPattern: ({ url }) =>
+						urlPattern: ({ request, url }) =>
+							request.mode !== "navigate" &&
 							url.origin === self.location.origin &&
 							!/^\/(api|hook|ws|proxy)\//.test(url.pathname),
 						handler: "StaleWhileRevalidate",
