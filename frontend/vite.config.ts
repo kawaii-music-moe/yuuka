@@ -97,6 +97,10 @@ export default defineConfig({
 				//   代わりに下の NetworkFirst ルールが request.mode==="navigate" の全 SPA 遷移
 				//   （/, /index.html, /bot/... 等）を捌く。オンラインは常に最新 index.html（GSV 置換済）、
 				//   オフラインは訪問済みルートのキャッシュへフォールバック。
+				//   ★キー省略では不十分: vite-plugin-pwa は defaultWorkbox
+				//     { navigateFallback: "index.html" } を Object.assign でマージするため
+				//     （dist/index.js:838,858）、null を明示して初めてデフォルト注入が消える。
+				navigateFallback: null,
 				runtimeCaching: [
 					// SPA ナビゲーション（HTML 遷移）は NetworkFirst（GSV 置換を必ず通す。注記(a)）
 					{
