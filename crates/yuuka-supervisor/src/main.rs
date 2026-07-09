@@ -19,9 +19,11 @@ use yuuka_auth::{AuthRuntime, CompositeAuth, NullRegistrationDm, SessionStore};
 use yuuka_core::secrets::ExposeSecret;
 use yuuka_core::{Config, DbError};
 use yuuka_crypto::{rotate_secret_key, SystemCrypto, LEGACY_FALLBACK_SECRET};
+use yuuka_orchestrator::ChatEngine;
 use yuuka_services::{MetricsRegistry, NullNotifier, ServiceContext};
 use yuuka_supervisor::{
-    build_app, build_supervised_services, ServiceError, ShutdownToken, SupervisedService, Supervisor,
+    build_app, build_supervised_services, build_tool_registry, ws_routes, ServiceError,
+    ShutdownToken, SupervisedService, Supervisor,
 };
 use yuuka_web::{AppState, Db, WebConfig};
 
@@ -83,6 +85,18 @@ async fn run() -> Result<(), String> {
             None
         }
     };
+
+    // 4.6) 会話エンジン（ChatEngine）— `/ws/chat`（デスクトップ）を駆動する（P1-2）。ツールレジストリ +
+    //      暗号（Gemini キー復号）+ DB を保持。crypto 未設定でも構築でき、キー未設定ユーザーは ⚠️ 応答。
+    let tool_registry =
+        build_tool_registry(&db).map_err(|e| format!("build tool registry: {e}"))?;
+    let chat_engine = Arc::new(ChatEngine::with_real_gemini(
+        db.clone(),
+        crypto.clone(),
+        tool_registry,
+    ));
+    let chat_ws_routes = ws_routes(chat_engine);
+
     match yuuka_auth::invite::seed_initial_codes(&db, &cfg.invite_codes).await {
         Ok(n) if n > 0 => tracing::info!(seeded = n, "招待コードをシードしました"),
         Ok(_) => {}
@@ -110,6 +124,7 @@ async fn run() -> Result<(), String> {
     let web = Arc::new(WebService {
         state,
         auth_routes,
+        ws_routes: chat_ws_routes,
         addr,
         dist_dir,
     });
@@ -206,6 +221,8 @@ struct WebService {
     state: AppState,
     /// 認証発行ルータ（`AuthRuntime` を `Extension` で内包済み・再起動毎に clone して merge）。
     auth_routes: Router<AppState>,
+    /// 会話 WS ルータ（`ChatEngine` を `Extension` で内包済み・`/ws/chat`）。
+    ws_routes: Router<AppState>,
     addr: SocketAddr,
     dist_dir: Option<PathBuf>,
 }
@@ -220,6 +237,7 @@ impl SupervisedService for WebService {
         let app = build_app(
             self.state.clone(),
             self.auth_routes.clone(),
+            self.ws_routes.clone(),
             self.dist_dir.as_deref(),
         );
         let listener = tokio::net::TcpListener::bind(self.addr)

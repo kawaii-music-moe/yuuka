@@ -15,21 +15,30 @@ pub mod discord;
 pub mod services;
 pub mod supervisor;
 pub mod tool_registry;
+pub mod ws;
 
 pub use discord::DiscordTenantService;
 pub use services::{build_supervised_services, CronSupervised};
 pub use supervisor::{RestartPolicy, ServiceError, ShutdownToken, SupervisedService, Supervisor};
 pub use tool_registry::{build_native_provider, build_tool_registry};
+pub use ws::ws_routes;
 
-/// 完成アプリのルータを組み立てる（フレームワーク + 認証発行 + 全ドメイン + 任意の静的配信 + 共通レイヤ）。
+/// 完成アプリのルータを組み立てる（フレームワーク + 認証発行 + 会話 WS + 全ドメイン + 任意の静的配信 + 共通レイヤ）。
 ///
 /// 新ドメイン（finance/schedule/…）は `.merge(yuuka_xxx::routes())` を足す。`auth_routes` は
-/// [`yuuka_auth::routes`] が返す認証発行ルータ（`AuthRuntime` を `Extension` で内包済み）。web の
-/// 再起動毎に呼ばれるので、呼び出し側で 1 度組んだものを clone して渡す（`Router` は安価に clone 可能）。
-/// `dist_dir` を渡すと SPA（`dist/public`）を `fallback_service` として載せる（未指定は API のみ）。
-pub fn build_app(state: AppState, auth_routes: Router<AppState>, dist_dir: Option<&Path>) -> Router {
+/// [`yuuka_auth::routes`] が返す認証発行ルータ、`ws_routes` は [`ws::ws_routes`] が返す `/ws/chat`
+/// ルータ（それぞれ `Extension` で依存を内包済み）。web の再起動毎に呼ばれるので、呼び出し側で 1 度
+/// 組んだものを clone して渡す（`Router` は安価に clone 可能）。`dist_dir` を渡すと SPA
+/// （`dist/public`）を `fallback_service` として載せる（未指定は API のみ）。
+pub fn build_app(
+    state: AppState,
+    auth_routes: Router<AppState>,
+    ws_routes: Router<AppState>,
+    dist_dir: Option<&Path>,
+) -> Router {
     let routes = framework_routes()
         .merge(auth_routes)
+        .merge(ws_routes)
         .merge(yuuka_todo::routes())
         .merge(yuuka_finance::routes())
         .merge(yuuka_schedule::routes())
@@ -122,6 +131,8 @@ mod tests {
         super::build_app(
             AppState::new(Arc::new(FakeAuth), WebConfig::default(), test_db()),
             yuuka_auth::routes(runtime),
+            // WS ルータは merge 検証には不要（ChatEngine 構築を避け空ルータを渡す）。
+            axum::Router::new(),
             None,
         )
     }

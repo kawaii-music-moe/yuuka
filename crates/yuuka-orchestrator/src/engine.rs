@@ -104,6 +104,14 @@ impl ChatEngine {
         matches!(user::user_gemini(&self.db, user_id).await, Ok(Some(_)))
     }
 
+    /// 会話コンテキストをリセットする（WS `reset` フレーム・Node `clearContext`）。
+    ///
+    /// # Errors
+    /// 書き込み失敗時 [`DbError`]。
+    pub async fn reset_context(&self, user_id: &str, bot_id: &str) -> Result<(), DbError> {
+        message_log::clear_context(&self.db, user_id, bot_id).await
+    }
+
     /// 秘書経路の 1 ターンを処理する（Node `processMessage`）。
     ///
     /// # Errors

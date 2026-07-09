@@ -14,6 +14,8 @@ path = "src/main.rs"
 [dependencies]
 yuuka-core.workspace = true
 yuuka-crypto.workspace = true
+yuuka-types.workspace = true           # /ws/chat フレームの SessionUser 直列化
+yuuka-db.workspace = true              # /ws/chat の bot 一覧クエリ（map_sqlite）
 yuuka-web.workspace = true
 yuuka-todo.workspace = true
 yuuka-finance.workspace = true
@@ -27,6 +29,7 @@ yuuka-persona.workspace = true
 yuuka-auth.workspace = true
 yuuka-tools.workspace = true
 yuuka-gemini.workspace = true
+yuuka-orchestrator.workspace = true    # 会話エンジン（ChatEngine）— /ws/chat の駆動（P1-2）
 yuuka-discord.workspace = true
 yuuka-services.workspace = true
 axum.workspace = true
@@ -36,6 +39,11 @@ tracing-subscriber.workspace = true
 backon.workspace = true
 thiserror.workspace = true
 async-trait.workspace = true
+serde.workspace = true                 # /ws/chat フレームの Deserialize/Serialize
+serde_json.workspace = true            # フレーム JSON 直列化
+futures-util = "0.3"                    # WebSocket の split（Sink/Stream 分離）
+base64.workspace = true                 # 受信ファイル（rich reply）の base64 化
+getrandom.workspace = true              # messageId 生成
 
 [dev-dependencies]
 tokio.workspace = true
@@ -43,7 +51,8 @@ tower = { workspace = true, features = ["util"] }
 tempfile = "3"
 rusqlite = { workspace = true }
 serde_json.workspace = true
-yuuka-types.workspace = true
+secrecy.workspace = true
+tokio-tungstenite = "0.29"              # /ws/chat の live 統合テスト用 WS クライアント
 
 [lints]
 workspace = true
