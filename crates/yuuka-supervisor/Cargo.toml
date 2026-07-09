@@ -13,6 +13,7 @@ path = "src/main.rs"
 
 [dependencies]
 yuuka-core.workspace = true
+yuuka-crypto.workspace = true
 yuuka-web.workspace = true
 yuuka-todo.workspace = true
 yuuka-finance.workspace = true

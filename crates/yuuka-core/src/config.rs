@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 use serde_yaml::{Mapping, Value};
 
 use crate::error::ConfigError;
+use crate::secrets::SecretString;
 
 /// 起動時に検証済みの型付き設定。以後サービスループへ不変で渡す。
 #[derive(Debug, Clone)]
@@ -37,6 +38,13 @@ pub struct Config {
     pub privacy_policy_url: String,
     /// 利用規約 URL（`TERMS_URL`・同上）。
     pub terms_url: String,
+    /// 保存時暗号化のマスタ秘密（`YUUKA_ENCRYPTION_SECRET`）。API キー・Discord トークン・
+    /// OAuth トークン・資格情報等の at-rest 暗号鍵の導出材料（Node `config.secretKey`）。
+    /// 未設定なら `None`＝暗号層は fail-closed（[`crate::secrets`] で redact 保持）。
+    pub encryption_secret: Option<SecretString>,
+    /// 鍵ローテーション用の新秘密（`YUUKA_ENCRYPTION_SECRET_NEW`）。設定時は起動時に
+    /// 旧鍵→新鍵で全暗号化列を再暗号化する（Node `config.secretKeyNew` / `rotateSecretKey`）。
+    pub encryption_secret_new: Option<SecretString>,
 }
 
 impl Config {
@@ -79,6 +87,9 @@ impl Config {
             google_site_verification: non_empty(get("GOOGLE_SITE_VERIFICATION")),
             privacy_policy_url: get("PRIVACY_POLICY_URL").unwrap_or_default(),
             terms_url: get("TERMS_URL").unwrap_or_default(),
+            encryption_secret: non_empty(get("YUUKA_ENCRYPTION_SECRET")).map(SecretString::from),
+            encryption_secret_new: non_empty(get("YUUKA_ENCRYPTION_SECRET_NEW"))
+                .map(SecretString::from),
         };
         cfg.validate()?;
         Ok(cfg)

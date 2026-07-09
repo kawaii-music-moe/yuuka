@@ -9,6 +9,7 @@
 resolver = "2"
 members = [
     "crates/yuuka-core",
+    "crates/yuuka-crypto",
     "crates/yuuka-db",
     "crates/yuuka-types",
     "crates/yuuka-web",
@@ -98,6 +99,12 @@ extism                   = "1.30"
 redis                    = { version = "0.27", features = ["tokio-comp", "connection-manager"] }  # or fred（tokio-comp + 自動再接続）
 sha2                     = "0.10"                                               # セッション/デスクトップトークンの sha256hex
 base64                   = "0.22"                                               # Discord 添付 → Gemini inlineData 用 base64
+# ── 保存時暗号化（yuuka-crypto・Node src/utils/crypto.ts パリティ・P1-5） ──
+aes-gcm                  = "0.10"                                               # AES-256-GCM（Node createCipheriv aes-256-gcm 相当・12B IV / 16B tag）
+scrypt                   = "0.11"                                               # システム鍵導出（Node crypto.scryptSync 既定 N=16384/r=8/p=1）
+argon2                   = "0.5"                                                # ユーザー鍵導出（Node @node-rs/argon2 hashRawSync・Argon2id m=19456/t=2/p=1）
+hex                      = "0.4"                                                # 暗号文/IV/authTag の hex 表現（Node の hex 文字列と相互運用）
+getrandom                = "0.2"                                                # IV（12B CSPRNG）生成
 regex                    = "1"                                                  # Discord 非対応 Markdown 変換（toDiscordMarkdown 移植）
 async-trait              = "0.1"
 tracing                  = "0.1"
@@ -107,7 +114,8 @@ chrono                   = { version = "0.4", default-features = false, features
 croner                   = "2"                                                  # 5-field cron 式の次回発火計算（node-cron / cron-parser パリティ）
 
 # yuuka クレート間の内部依存（パス依存）
-yuuka-core  = { path = "crates/yuuka-core" }
+yuuka-core   = { path = "crates/yuuka-core" }
+yuuka-crypto = { path = "crates/yuuka-crypto" }
 yuuka-db    = { path = "crates/yuuka-db" }
 yuuka-types = { path = "crates/yuuka-types" }
 yuuka-web        = { path = "crates/yuuka-web" }

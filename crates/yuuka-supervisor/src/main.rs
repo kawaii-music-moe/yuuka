@@ -15,7 +15,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use yuuka_auth::{CompositeAuth, SessionStore};
-use yuuka_core::Config;
+use yuuka_core::secrets::ExposeSecret;
+use yuuka_core::{Config, DbError};
+use yuuka_crypto::{rotate_secret_key, LEGACY_FALLBACK_SECRET};
 use yuuka_services::{MetricsRegistry, NullNotifier, ServiceContext};
 use yuuka_supervisor::{
     build_app, build_supervised_services, ServiceError, ShutdownToken, SupervisedService, Supervisor,
@@ -46,8 +48,15 @@ async fn run() -> Result<(), String> {
     let cfg = Config::load_and_validate(Path::new(CONFIG_PATH))
         .map_err(|e| format!("config load failed: {e}"))?;
 
-    // 2) 既存 SQLite（Node 作成済み前提）を read pool + 単一 writer actor で開く。
+    // 2) 既存 SQLite（Node 作成済み前提）を read pool + 単一 writer actor で開く
+    //    （writer 起動時に migrations が適用される）。
     let db = Db::open(&cfg.db_path).map_err(|e| format!("open db {:?}: {e}", cfg.db_path))?;
+
+    // 2.5) 鍵ローテーション（P1-5・Node `rotateSecretKey` パリティ）。`YUUKA_ENCRYPTION_SECRET_NEW`
+    //      が設定されていれば、サービス起動前に **writer actor 上で 1 回だけ**全暗号化列を
+    //      旧鍵→新鍵で再暗号化する（R-2: 第二 writer 経路を作らない）。migrations 適用後・
+    //      web/cron が書き込みを始める前に完了させる（Node の同期起動ローテーションと同じ位置）。
+    rotate_secret_if_requested(&db, &cfg).await?;
 
     // 3) Redis セッション（到達不能でも起動継続＝Cookie のみ縮退）。
     let sessions = SessionStore::connect(&cfg.redis_url).await;
@@ -102,6 +111,47 @@ async fn run() -> Result<(), String> {
     tracing::info!(%addr, "yuuka supervisor 起動（web を監督下に配置）");
     supervisor.run(shutdown_signal()).await;
     tracing::info!("yuuka supervisor stopped");
+    Ok(())
+}
+
+/// `YUUKA_ENCRYPTION_SECRET_NEW` が設定されていれば鍵ローテーションを実行する（Node パリティ）。
+///
+/// 旧鍵は現行 `YUUKA_ENCRYPTION_SECRET`、未設定ならプレリリース版フォールバック鍵
+/// （Node `rotateSecretKey` と同一のレスキュー動作）。writer actor 上で単一 Tx を回し、
+/// 1 件でも復号失敗すれば全ロールバックして起動を fail-fast させる（部分適用を残さない）。
+///
+/// # Errors
+/// ローテーション（DB/復号/鍵導出）失敗で `Err`（起動中断）。
+async fn rotate_secret_if_requested(db: &Db, cfg: &Config) -> Result<(), String> {
+    let Some(new_secret) = cfg.encryption_secret_new.as_ref() else {
+        return Ok(()); // _NEW 未設定＝通常起動（ローテーションしない）。
+    };
+    let new = new_secret.expose_secret().to_owned();
+
+    // 旧鍵: 現行 secret。未設定なら既知フォールバック鍵からの移行（漏えい済みとみなす）。
+    let old = match cfg.encryption_secret.as_ref() {
+        Some(cur) => cur.expose_secret().to_owned(),
+        None => {
+            tracing::warn!(
+                "YUUKA_ENCRYPTION_SECRET 未設定のためプレリリース版フォールバック鍵で復号して再暗号化します。\
+                 移行後は保存済みトークン/APIキー等を各プロバイダ側で必ずローテーションしてください"
+            );
+            LEGACY_FALLBACK_SECRET.to_owned()
+        }
+    };
+
+    let rotated = db
+        .writer
+        .execute(move |conn| {
+            rotate_secret_key(conn, &old, &new).map_err(|e| DbError::Operation(e.to_string()))
+        })
+        .await
+        .map_err(|e| format!("secret rotation failed: {e}"))?;
+
+    tracing::warn!(
+        rotated,
+        "YUUKA_ENCRYPTION_SECRET ローテーション完了。次手順: _NEW の値を _SECRET に昇格し _NEW を削除して再起動"
+    );
     Ok(())
 }
 
