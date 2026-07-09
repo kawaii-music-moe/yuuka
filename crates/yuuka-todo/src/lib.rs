@@ -149,6 +149,52 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn delete_cascades_to_descendants_m6() {
+        // M-6: 親の削除で全子孫が再帰的に消える（Node `WITH RECURSIVE descendants` parity）。
+        // 単一行 DELETE だと子が孤児化し build_todo_tree がルートへ昇格させて再出現する。
+        let db = seed_db();
+        let repo = TodoRepo::new(&db);
+        let s = scope("u");
+        let parent = repo.add(&s, new_todo("parent", vec![])).await.unwrap();
+        let child = repo
+            .add(
+                &s,
+                NewTodo {
+                    title: "child".to_owned(),
+                    parent_id: Some(parent.id),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        let grandchild = repo
+            .add(
+                &s,
+                NewTodo {
+                    title: "grandchild".to_owned(),
+                    parent_id: Some(child.id),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        // 別系統の独立タスク（削除に巻き込まれてはいけない）。
+        let other = repo.add(&s, new_todo("other", vec![])).await.unwrap();
+
+        assert!(repo.delete(&s, parent.id).await.unwrap());
+
+        // 子孫がルートに再出現せず、残るのは other のみ。
+        let listed = repo.list_tree(&s, None, None).await.unwrap();
+        assert_eq!(listed.len(), 1, "親削除で子孫も消え、孤児のルート昇格が起きない");
+        assert_eq!(listed[0].title, "other");
+        // 子孫は個別 get でも消滅。
+        assert!(repo.get(&s, child.id).await.unwrap().is_none());
+        assert!(repo.get(&s, grandchild.id).await.unwrap().is_none());
+        // 無関係タスクは無傷。
+        assert!(repo.get(&s, other.id).await.unwrap().is_some());
+    }
+
+    #[tokio::test]
     async fn parent_id_outside_scope_is_demoted() {
         let db = seed_db();
         let repo = TodoRepo::new(&db);
@@ -184,6 +230,49 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(sibling.parent_id, Some(parent.id));
+    }
+
+    #[tokio::test]
+    async fn subtask_does_not_inherit_repeat_fields() {
+        // Node parity: サブタスク（parent_id あり）はルーチンにしない（親のみ繰り返し対象）。
+        let db = seed_db();
+        let repo = TodoRepo::new(&db);
+        let s = scope("u");
+        let parent = repo.add(&s, new_todo("parent", vec![])).await.unwrap();
+
+        // 親はルーチン可（repeat_rule 保持）。
+        let routine_parent = repo
+            .add(
+                &s,
+                NewTodo {
+                    title: "routine".to_owned(),
+                    repeat_rule: Some("daily".to_owned()),
+                    repeat_count: Some(5),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(routine_parent.repeat_rule.as_deref(), Some("daily"));
+        assert_eq!(routine_parent.repeat_count, Some(5));
+
+        // サブタスクに repeat_* を付けても NULL 化される（recurrence が子を複製しない）。
+        let sub = repo
+            .add(
+                &s,
+                NewTodo {
+                    title: "sub".to_owned(),
+                    parent_id: Some(parent.id),
+                    repeat_rule: Some("daily".to_owned()),
+                    repeat_count: Some(5),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(sub.parent_id, Some(parent.id));
+        assert_eq!(sub.repeat_rule, None, "サブタスクはルーチンにしない");
+        assert_eq!(sub.repeat_count, None);
     }
 
     struct FakeAuth {

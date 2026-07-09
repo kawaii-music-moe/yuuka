@@ -15,6 +15,7 @@
 //! GET 系（list/day）は従来どおり `Query<BotQuery>`（botId は query）で正しい。
 
 use axum::extract::{FromRequest, FromRequestParts, Query, Request};
+use axum::response::IntoResponse;
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde_json::Value;
@@ -58,12 +59,28 @@ where
             .and_then(|q| q.0.bot_id);
         let req = Request::from_parts(parts, body);
 
-        // body を JSON Value として読む（DefaultBodyLimit レイヤは Bytes 抽出にも効く）。
-        let bytes = axum::body::Bytes::from_request(req, state)
-            .await
-            .map_err(|_| ApiError(WebError::Validation("unreadable request body".to_owned())))?;
-        let json: Value = serde_json::from_slice(&bytes)
-            .map_err(|_| ApiError(WebError::Validation("request body must be JSON".to_owned())))?;
+        // body を Bytes として読む（DefaultBodyLimit レイヤは Bytes 抽出にも効く）。
+        // 上限超過（M-2）は 413 に写像する（Node `server.ts` parity。400 の Validation と区別）。
+        let bytes = match axum::body::Bytes::from_request(req, state).await {
+            Ok(b) => b,
+            Err(rej) => {
+                let too_large =
+                    rej.into_response().status() == axum::http::StatusCode::PAYLOAD_TOO_LARGE;
+                return Err(ApiError(if too_large {
+                    WebError::PayloadTooLarge
+                } else {
+                    WebError::Validation("unreadable request body".to_owned())
+                }));
+            }
+        };
+        // 空ボディ（Content-Length: 0）は Node 同様 `{}` として続行する（全フィールド任意
+        // DTO・削除系 POST の parity。400 で弾かない）。非空は従来どおり厳密に JSON パースする。
+        let json: Value = if bytes.is_empty() {
+            Value::Object(serde_json::Map::new())
+        } else {
+            serde_json::from_slice(&bytes)
+                .map_err(|_| ApiError(WebError::Validation("request body must be JSON".to_owned())))?
+        };
 
         // body.botId ?? query.botId（Node `resolveBotId` と同一 nullish 優先）。
         // `botId` キーが在れば（空文字含む）body 値を採用、非存在時のみ query へ。
@@ -124,5 +141,22 @@ mod tests {
         let req = post("/x", r#"{"title":"#);
         let r = ScopedJson::<Value>::from_request(req, &()).await;
         assert!(r.is_err(), "malformed JSON body must be rejected");
+    }
+
+    #[tokio::test]
+    async fn empty_body_is_treated_as_empty_object_m2() {
+        // M-2: 空ボディ（Content-Length: 0）は 400 で弾かず `{}` として続行する
+        // （全フィールド任意 DTO・削除系 POST の Node parity）。
+        let req = Request::builder()
+            .method("POST")
+            .uri("/x?botId=queryBot")
+            .body(Body::empty())
+            .expect("request");
+        let s = ScopedJson::<Value>::from_request(req, &())
+            .await
+            .expect("empty body accepted as {}");
+        assert_eq!(s.value, serde_json::json!({}));
+        // botId は body 非存在なので query へフォールバックする。
+        assert_eq!(s.bot_id.as_deref(), Some("queryBot"));
     }
 }

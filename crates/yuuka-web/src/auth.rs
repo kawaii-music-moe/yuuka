@@ -72,7 +72,15 @@ fn bearer_token(parts: &Parts) -> Option<&str> {
     }
 }
 
-/// Cookie 優先 → Bearer の順でユーザーを解決する（未認証は `Ok(None)`）。
+/// Cookie 優先 → Bearer の順でユーザーを解決する（未認証・縮退時とも `Ok(None)`）。
+///
+/// **M-1（認証縮退）**: Node の `getSessionUser`/`getBearerUser` は各ストア呼び出しを
+/// try/catch で包み、実行時障害（Redis 断・SQLite 障害）を **null に潰して次経路へ継続**する
+/// （[`src/server/httpHelpers.ts`] `getSessionUser`/`getBearerUser`/`resolveRequestUser`）。
+/// これを移植し、`AuthError::Backend`（ストア到達不能）を `?` で 502 伝播させない。
+/// もし伝播させると、有効な Bearer を持つデスクトップクライアントや `OptionalUser` 任意認証
+/// ルートまで Redis 断で 502 に巻き込まれる。縮退は無音にせず `tracing::warn!` で必ず残す
+/// （「全員 Cookie 認証が静かに効かなくなる」障害を追跡可能にする）。
 async fn resolve_user(parts: &Parts, state: &AppState) -> Result<Option<SessionUser>, AuthError> {
     // 既存 Node(httpHelpers.ts:52-57) と一致: **HTTPS 本番は `__Host-` のみ受理**し、
     // 開発時のみ非 prefix 名も許す（HTTPS で非 `__Host-` を受理すると `__Host-` の
@@ -83,13 +91,22 @@ async fn resolve_user(parts: &Parts, state: &AppState) -> Result<Option<SessionU
         cookie_value(parts, COOKIE_HOST).or_else(|| cookie_value(parts, COOKIE_DEV))
     };
     if let Some(tok) = cookie_tok {
-        if let Some(user) = state.auth.session_user(tok).await? {
-            return Ok(Some(user));
+        match state.auth.session_user(tok).await {
+            Ok(Some(user)) => return Ok(Some(user)),
+            Ok(None) => {} // セッション無効 → Bearer を試す（Node の null 継続）。
+            Err(e) => {
+                // 認証ストア到達不能（Redis 断等）。502 化せず縮退して Bearer 経路へ継続。
+                tracing::warn!(error = %e, "session store 到達不能: Cookie 認証を縮退し Bearer にフォールバック");
+            }
         }
     }
     if let Some(tok) = bearer_token(parts) {
-        if let Some(user) = state.auth.desktop_user(tok).await? {
-            return Ok(Some(user));
+        match state.auth.desktop_user(tok).await {
+            Ok(Some(user)) => return Ok(Some(user)),
+            Ok(None) => {}
+            Err(e) => {
+                tracing::warn!(error = %e, "desktop token store 到達不能: Bearer 認証を縮退");
+            }
         }
     }
     Ok(None)

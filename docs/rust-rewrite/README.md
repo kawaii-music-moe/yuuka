@@ -45,11 +45,16 @@
 
 > `verification/verify-*.md`（小サイズ）は親エージェントの中間メモ。詳細は上記 `rpt-*.md` を参照。
 
+## 残作業ロードマップ
+
+- **[remaining-work.md](remaining-work.md)** — **本番投入までの ToDo 全集**（2026-07-09 調査の実測に基づく）。判定=「ほぼ本番」は未到達（否）／機械ゲート（build/clippy/test238 緑・deny は補助クレートのみ赤）／被覆率（Web ~18%・ツール ~28%・WS 0%）／P0 データ安全〜P3 衛生の優先度別チェックリスト／strangler カナリアと単独本番の 2 経路。
+
 ## 実装レビュー
 
 - [review-2026-07-06-phase1.md](review-2026-07-06-phase1.md) — Phase 0〜1 / T1 実装（16クレート・約9,250行）の精読レビュー。HIGH 3件（入力DTOのcamelCase欠落・CSP欠落・/api/tasks形状乖離）＋MED 12件、機械検査実測（clippy/test/deny 通過、fmt 差分あり）、推奨対応順つき。
 - [review-2026-07-06-fix-policy.md](review-2026-07-06-fix-policy.md) — 上記レビューの**修正方針（唯一の基準）**。7バッチの実施順・各所見の処置（対応／fail-closed＋deferred／却下）・検証戦略。確定事項: wire 契約は「入力camelCase・出力snake_case」の非対称（レビューの「出力DTOもcamelCase」は事実誤認と訂正。ただし reminder の入力のみ snake_case 例外）／移行期データ整合は fail-closed 優先で完全parityは deferred（M-6 連鎖削除のみ parity 実装）／応答形状は Node 厳密一致。
 - [review-2026-07-07-batch1.md](review-2026-07-07-batch1.md) — **Batch 1（`9c8688d`）の修正レビュー: 承認**。完了条件全達成・テスト 90→97・gen-types ドリフトなし。reminder の snake_case 例外を Node 実測で正当と確認。所見は LOW 1 件（float priority の受理幅）と記録事項のみ。
+- [review-2026-07-09-batch4-6.md](review-2026-07-09-batch4-6.md) — **Batch 4/5/6（M-6）＋migration hazard の修正レビュー: 承認**（M-1 認証縮退・M-2 413/空ボディ・M-4 Auth fatality・M-5 writer panic 隔離・M-6 連鎖削除・baseline 冪等化＋schema_version 刻印）。clippy -D クリーン・対象 4 クレート 60 テスト全緑。運用注意 1 件: V17 書き換えによる refinery checksum divergence（旧バイナリ適用済み DB は履歴削除が必要・カットオーバー後は baseline 変更禁止）。
 
 ## 次のアクション（実装開始前）
 

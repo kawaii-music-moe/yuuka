@@ -78,7 +78,7 @@ CREATE TABLE IF NOT EXISTS personas (
     );
 CREATE INDEX IF NOT EXISTS idx_personas_owner ON personas(owner_id);
 CREATE INDEX IF NOT EXISTS idx_personas_public ON personas(is_public);
-CREATE VIRTUAL TABLE message_logs_fts USING fts5(
+CREATE VIRTUAL TABLE IF NOT EXISTS message_logs_fts USING fts5(
       content,
       content='message_logs',
       content_rowid='id',
@@ -343,13 +343,13 @@ CREATE TABLE IF NOT EXISTS "message_logs" (
 CREATE INDEX IF NOT EXISTS idx_message_logs_user ON message_logs(user_id, id);
 CREATE INDEX IF NOT EXISTS idx_message_logs_discord_msg ON message_logs(discord_msg_id);
 CREATE INDEX IF NOT EXISTS idx_message_logs_bot_guild ON message_logs(bot_id, guild_id, id);
-CREATE TRIGGER message_logs_ai AFTER INSERT ON message_logs BEGIN
+CREATE TRIGGER IF NOT EXISTS message_logs_ai AFTER INSERT ON message_logs BEGIN
       INSERT INTO message_logs_fts(rowid, content) VALUES (new.id, new.content);
     END;
-CREATE TRIGGER message_logs_ad AFTER DELETE ON message_logs BEGIN
+CREATE TRIGGER IF NOT EXISTS message_logs_ad AFTER DELETE ON message_logs BEGIN
       INSERT INTO message_logs_fts(message_logs_fts, rowid, content) VALUES ('delete', old.id, old.content);
     END;
-CREATE TRIGGER message_logs_au AFTER UPDATE ON message_logs BEGIN
+CREATE TRIGGER IF NOT EXISTS message_logs_au AFTER UPDATE ON message_logs BEGIN
       INSERT INTO message_logs_fts(message_logs_fts, rowid, content) VALUES ('delete', old.id, old.content);
       INSERT INTO message_logs_fts(rowid, content) VALUES (new.id, new.content);
     END;
@@ -638,3 +638,10 @@ CREATE TABLE IF NOT EXISTS timeline_records (
     );
 CREATE INDEX IF NOT EXISTS idx_timeline_records_user_date
       ON timeline_records(user_id, bot_id, date);
+-- スキーマバージョンを刻印する（Node `migrations.ts:1574-1578` parity・移行期の必須ガード）。
+-- これが無いと、Rust が新規作成した DB を Node が開いたとき getCurrentSchemaVersion() が
+-- 既定の "1" を返し、DROP 条件（version!="17" && legacy テーブル在 && version=="1"）が成立して
+-- users/bots/tasks/schedules/expenses/credentials/playbooks 等のコアテーブルを全 DROP する
+-- （＝データ全喪失）。既存 DB では既に '17' が刻まれているため upsert で冪等に一致させる。
+INSERT INTO system_settings (key, value) VALUES ('schema_version', '17')
+  ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now', 'localtime');

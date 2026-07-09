@@ -159,6 +159,70 @@ mod tests {
         }
     }
 
+    /// M-1 検証用: セッションストア（Redis）が実行時障害を起こす縮退状態を模す。
+    /// `session_user` は常に `AuthError::Backend` を返し、Bearer(SQLite) は生きている。
+    struct RedisDownAuth {
+        bearer_token: String,
+        user: SessionUser,
+    }
+
+    #[async_trait]
+    impl AuthBackend for RedisDownAuth {
+        async fn session_user(&self, _token: &str) -> Result<Option<SessionUser>, AuthError> {
+            Err(AuthError::Backend)
+        }
+        async fn desktop_user(&self, token: &str) -> Result<Option<SessionUser>, AuthError> {
+            Ok((token == self.bearer_token).then(|| self.user.clone()))
+        }
+    }
+
+    fn redis_down_app() -> Router {
+        let auth = Arc::new(RedisDownAuth {
+            bearer_token: "desk-token".to_owned(),
+            user: session_user(Role::User),
+        });
+        super::build_router(AppState::new(auth, WebConfig::default(), test_db()))
+    }
+
+    #[tokio::test]
+    async fn m1_redis_down_falls_back_to_bearer() {
+        // Redis 断（session_user が Backend エラー）でも、有効な Bearer を持つデスクトップ
+        // クライアントは 502 に巻き込まれず認証が通る（Node getBearerUser フォールバック）。
+        let resp = redis_down_app()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/me")
+                    .header("cookie", "__Host-yuuka-session=stale")
+                    .header("authorization", "Bearer desk-token")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(resp.status(), StatusCode::OK, "Redis 断でも Bearer で認証成立");
+    }
+
+    #[tokio::test]
+    async fn m1_redis_down_without_bearer_is_401_not_502() {
+        // Cookie のみ・Redis 断: Node は null→未認証。502 ではなく 401 に縮退する
+        // （純 Cookie ユーザーは再ログイン誘導。全経路 502 に巻き込まない）。
+        let resp = redis_down_app()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/me")
+                    .header("cookie", "__Host-yuuka-session=stale")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(
+            resp.status(),
+            StatusCode::UNAUTHORIZED,
+            "Redis 断は 502 でなく 401 に縮退（Bearer 経路を潰さない）"
+        );
+    }
+
     fn app_with(role: Role) -> Router {
         let auth = Arc::new(FakeAuth {
             cookie_token: "good-token".to_owned(),

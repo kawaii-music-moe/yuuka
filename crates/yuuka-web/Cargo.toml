@@ -21,6 +21,8 @@ async-trait.workspace = true
 rusqlite.workspace = true
 # fs: 静的配信の index.html / 404.html 読取（Node serveStaticFile の per-request 読取と一致）。
 tokio.workspace = true
+# 認証縮退（M-1）の tracing::warn! による可観測性（無音縮退を残さない）。
+tracing.workspace = true
 
 [dev-dependencies]
 tokio.workspace = true

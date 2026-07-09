@@ -41,7 +41,19 @@ impl WriterHandle {
             .spawn(move || {
                 // 非同期ランタイム外の専用スレッドなので blocking_recv でよい。
                 while let Some(job) = rx.blocking_recv() {
-                    job(&mut conn);
+                    // M-5: ジョブ内 panic（debug の整数オーバーフロー等）を **タスク境界で隔離**する。
+                    // catch_unwind が無いと 1 発の panic で writer スレッドが unwind して死に、
+                    // 以後の全書き込みが恒久的に `WriterGone` になる（この writer は生 std::thread で
+                    // supervisor の JoinSet 監督外のため誰も再 spawn しない）。panic した job の
+                    // oneshot sender は unwind 中に drop され、その呼び出しだけが `WriterGone` を
+                    // 受け取る（他ジョブは継続）。進行中 Tx は Drop でロールバックされ conn は健全。
+                    let outcome =
+                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| job(&mut conn)));
+                    if outcome.is_err() {
+                        tracing::error!(
+                            "yuuka-db writer: ジョブが panic。タスク境界で隔離し writer を継続します"
+                        );
+                    }
                 }
             })
             .map_err(|e| DbError::Operation(format!("spawn writer thread: {e}")))?;

@@ -160,14 +160,17 @@ impl<'a> TodoRepo<'a> {
                         .map_err(map_sqlite)?,
                     None => None,
                 };
-                // ルーチン列は repeat_rule がある時のみ有効（Node addTodo と同じ・無ければ NULL）。
-                let (repeat_rule, repeat_until, repeat_count) = match &input.repeat_rule {
-                    Some(rule) => (
+                // ルーチン列は repeat_rule がある時のみ有効。かつ **サブタスク（parent_id あり）は
+                // ルーチンにしない**（親のみ繰り返し対象・Node addTodo `todoRepo.ts:176-178`
+                // `parentId == null ? repeatRule : null`）。この parent_id ゲートが無いと、
+                // サブタスクに repeat_* が残り recurrence サービスが子タスクを複製してしまう。
+                let (repeat_rule, repeat_until, repeat_count) = match (parent_id, &input.repeat_rule) {
+                    (None, Some(rule)) => (
                         Some(rule.clone()),
                         input.repeat_until.clone(),
                         input.repeat_count,
                     ),
-                    None => (None, None, None),
+                    _ => (None, None, None),
                 };
                 tx.execute(
                     "INSERT INTO todos \
@@ -227,7 +230,15 @@ impl<'a> TodoRepo<'a> {
         }
     }
 
-    /// todo を削除する（削除できたら `true`）。
+    /// todo を削除する（全子孫も再帰的に削除・削除できたら `true`）。
+    ///
+    /// **M-6（連鎖削除 parity）**: Node `deleteTodo`（[`src/db/todoRepo.ts`] `:364-381`）は
+    /// `WITH RECURSIVE descendants` で全子孫 id を収集してから一括 DELETE する。`parent_id` は
+    /// 後付け列で FK `ON DELETE CASCADE` が効かないため、単一行 DELETE だと子が孤児化し、
+    /// `build_todo_tree` が孤児をルートへ昇格させて**削除したはずのサブタスクがトップレベルに
+    /// 再出現**する。再帰 CTE で子孫を巻き取り、Node と挙動を一致させる。再帰段にも scope 検査を
+    /// 付け、万一のクロススコープ parent_id 連鎖でも他人の行を消さない（`list_tree` と同方針・
+    /// Node より厳格側）。
     ///
     /// # Errors
     /// 削除失敗時 [`DbError`]。
@@ -237,7 +248,14 @@ impl<'a> TodoRepo<'a> {
             .transaction(move |tx| {
                 let n = tx
                     .execute(
-                        "DELETE FROM todos WHERE id = ?1 AND user_id = ?2 AND bot_id = ?3",
+                        "WITH RECURSIVE descendants(id) AS ( \
+                           SELECT id FROM todos \
+                             WHERE id = ?1 AND user_id = ?2 AND bot_id = ?3 \
+                           UNION ALL \
+                           SELECT t.id FROM todos t JOIN descendants d ON t.parent_id = d.id \
+                             WHERE t.user_id = ?2 AND t.bot_id = ?3 \
+                         ) \
+                         DELETE FROM todos WHERE id IN (SELECT id FROM descendants)",
                         params![id, uid, bid],
                     )
                     .map_err(map_sqlite)?;

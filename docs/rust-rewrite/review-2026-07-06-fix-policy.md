@@ -74,7 +74,7 @@ Node 参照とフロントを実測した結果、契約は左右非対称:
 - **検証**: `NewSchedule` 由来の wire テストを横展開し、**camelCase body → 正しくデシリアライズ**＋**view 出力が snake_case のまま**を各ドメインで凍結する回帰テスト。
 - **完了条件**: `dueDate`/`startDate`/`parentId`/`recordedAt`/`todoId`/`contactInfo`/`remindBeforeMinutes` が全入力経路で受理され、既存フロント接続で NULL 消去が起きないことをテストで保証。
 
-### Batch 2 — 静的配信 ＆ セキュリティヘッダ（SPA 配信の前提）【HIGH＋MED】
+### Batch 2 — 静的配信 ＆ セキュリティヘッダ（SPA 配信の前提）【HIGH＋MED】 ✅ 完了（`8c7d3e6`・承認記録: [review-2026-07-07-batch3-plan.md](review-2026-07-07-batch3-plan.md) 冒頭）
 - **H-2**: `CSP`（script-src から `unsafe-inline` 除外）と `Referrer-Policy` を全静的応答に付与。PLAN §6.6 の**同一文字列**を `SetResponseHeaderLayer` で移植（[docs/rust-rewrite/PLAN.md](PLAN.md) §6.6、値は既定義済み）。
 - **M-3**: 静的配信のキャッシュ/404 挙動を Node 一致に:
   - (a) `/assets` の **404 に `immutable` キャッシュを付けない**。
@@ -82,23 +82,23 @@ Node 参照とフロントを実測した結果、契約は左右非対称:
   - (c) SPA フォールバックは**拡張子なしパスのみ**。`/sw.js` 等の拡張子付き未存在パスは index.html を返さず 404（SW 更新・欠落検知を壊さない）。
 - **完了条件**: Rust が SPA を配信し始める**前**に、XSS 多層防御とキャッシュ挙動が Node と等価。ヘッダ有無・キャッシュ・SPA フォールバック分岐のテスト。
 
-### Batch 3 — `/api/tasks` 形状 ＆ 応答形状契約の確定【HIGH＋MED】
+### Batch 3 — `/api/tasks` 形状 ＆ 応答形状契約の確定【HIGH＋MED】 ✅ 完了（`3dfbfe9` H-3 ＋ `a00e1cd` M-12・実装方針: [review-2026-07-07-batch3-plan.md](review-2026-07-07-batch3-plan.md)）
 - **H-3**: `GET /api/tasks` を Node 一致に = **親のみ＋`subtasks` ネスト**、`effective_progress` 算出、`status`/`tag` フィルタ、**優先度→期日→作成日ソート**（Node の `ORDER_CLAUSE`／`TodoWithSubtasks`）。
 - **M-12**: mutation 応答形状を **Node と厳密一致**（0 節の決定）。Node の `200 + {success:false}` を Rust が 404 に変えている箇所、save 系の `{success,message}` vs `{success,<entity>}` 等を Node 実挙動に合わせる。**2.2 の `*DeletedData` 全 7 struct もここで是正**（Node は `deletedId` を返さないためフィールドごと削除の見込み。Node 実応答を golden として確定）。
 - **完了条件**: 応答の HTTP ステータス・キー名・`success` セマンティクスを golden test で凍結。フロントの `success` 分岐がエラートースト経路に落ちない。**ts-rs `generated/` を再生成し、`deletedId` 等の幽霊フィールドが生成物から消えていること**。
 
-### Batch 4 — Web 層 parity（認証縮退・ボディ制限）【MED】
+### Batch 4 — Web 層 parity（認証縮退・ボディ制限）【MED】 ✅ 完了（未コミット・レビュー承認: [review-2026-07-09-batch4-6.md](review-2026-07-09-batch4-6.md)）
 - **M-1**: session 解決の Redis 実行時障害を `?` 伝播にせず **catch→null で Bearer フォールバック継続**（Node 踏襲）。有効 Bearer を持つデスクトップクライアントや `OptionalUser` 任意認証ルートを 502 に巻き込まない。**縮退時の `tracing::warn!` を必須とする** — 無音で null に畳むと「全員 Cookie 認証が静かに効かなくなる」障害が追跡不能になるため（Batch 7 の「502 の原因を tracing に残す」と同一原則）。
 - **M-2**: body 上限超過（10MB）を **413**（Node 準拠、現状 400）に。**空ボディ（`Content-Length: 0`）を 400 拒否せず `{}` 相当で続行**（全フィールド任意 DTO・削除系 POST の parity）。
 - **完了条件**: Redis 断中に Bearer 経路が生きる／413・空ボディ挙動のテスト。
 
-### Batch 5 — 自己復帰の根幹【MED】
+### Batch 5 — 自己復帰の根幹【MED】 ✅ 完了（未コミット・レビュー承認: [review-2026-07-09-batch4-6.md](review-2026-07-09-batch4-6.md)。M-5 は再 spawn でなく catch_unwind による発生源隔離で完了条件の趣旨を達成）
 - **M-4**: `AppError::fatality()` の `Auth(_)` 一律 `Permanent` を是正。`AuthError::Backend`（回復可能な上流障害）を **`Transient` 分類**にし、Redis 断からの自己復帰を機能させる（PLAN §5.6/§5.7 と整合、[docs/rust-rewrite/PLAN.md](PLAN.md) §5.7）。
-- **M-5**: writer スレッドのジョブ実行を **`catch_unwind` で隔離**し、panic 1 発で writer 全滅 → 以後全書き込み `WriterGone` を防ぐ。あわせて **`WriterGone` を再 spawn 可能な分類に**（supervisor 再起動対象）。debug ビルドの整数オーバーフロー等で現実に踏み得るため必須。
-- **完了条件**: writer panic 後に supervisor が再 spawn して書き込みが復帰するテスト。Auth::Backend が `Transient` に分類されるテスト。
+- **M-5**: writer スレッドのジョブ実行を **`catch_unwind`（`AssertUnwindSafe`）で隔離**し、panic 1 発で writer 全滅 → 以後全書き込み `WriterGone` を防ぐ。debug ビルドの整数オーバーフロー等で現実に踏み得るため必須。**実装（2026-07-09・[review-2026-07-09-batch4-6.md](review-2026-07-09-batch4-6.md)）**: この writer は生 `std::thread` で supervisor の JoinSet 監督外のため、当初案の「`WriterGone` を再 spawn 可能な分類に（supervisor 再起動対象）」は**不採用**（不要化）。catch_unwind で writer 自体が死ななくなり（panic した job の oneshot sender は unwind 中に drop され当該呼び出しのみ `WriterGone`、進行中 Tx は Drop でロールバック、writer と後続ジョブは継続）、`WriterGone` の分類は `Permanent` のまま据え置く。
+- **完了条件**: writer panic 後も writer が死なず（catch_unwind 隔離・再 spawn 不要）、当該呼び出しのみ `WriterGone` を受け取り後続の書き込みが成功して読み戻せるテスト（`writer_survives_job_panic_m5`）。`AuthError::Backend` が `Transient`・他バリアントが `Permanent` に分類されるテスト（`auth_backend_is_transient_others_permanent_m4`）。
 
-### Batch 6 — 移行期データ整合（fail-closed 優先・完全 parity は deferred）【MED】
-各項目は **今すぐ fail-closed**（劣化データを DB に残さない最小対応）を実施し、**Node 完全 parity は deferred として lib.rs 冒頭に明示**する。
+### Batch 6 — 移行期データ整合（fail-closed 優先・完全 parity は deferred）【MED】（M-6 のみ完了: [review-2026-07-09-batch4-6.md](review-2026-07-09-batch4-6.md)・M-7〜M-11 は未着手）
+各項目は **今すぐ fail-closed**（劣化データを DB に残さない最小対応）を原則とする（**例外: M-6 は Node で成功する操作を 400 化するユーザー可視リグレッションを避けるため、fail-closed でなく連鎖削除 parity に変更**。下表参照）。**Node 完全 parity は deferred として lib.rs 冒頭に明示**する方針だが、これは M-7〜M-11 着手時に実施する（現状 M-6 のみ完了のため未記載）。
 
 | # | fail-closed（今回・DB 汚染を止める） | deferred（完全 parity・別途） |
 |---|---|---|
@@ -110,7 +110,20 @@ Node 参照とフロントを実測した結果、契約は左右非対称:
 | M-11 | 適用中 persona の delete を **400 拒否**（ダングリング参照防止）、`PersonaListData` に `active_persona_id` を追加（「適用中」表示の復元） | delete のトランザクション化（適用解除＋`recommended_persona_id` 解除の同時実行） |
 
 - **注**: M-8 の入力 DTO 是正は Batch 1（H-1）と同一ファイルを触るため、**timeline は Batch 1 で camelCase 化＋内部列除去をまとめて行い、amount 検証を Batch 6 で追加**する運用も可（コンフリクト回避）。実装時に確定。
-- **完了条件**: 各 fail-closed 経路のテスト（拒否 400・正規化後の値）。deferred は lib.rs 冒頭列挙で「未実装＝安全に拒否」を明記。
+- **完了条件（M-6・済）**: 連鎖削除 parity のテスト（`delete_cascades_to_descendants_m6`＝孫まで消滅・孤児のルート昇格なし・無関係タスク無傷）＋サブタスク repeat ゲート（`subtask_does_not_inherit_repeat_fields`）。
+- **完了条件（M-7〜M-11・未着手）**: 各 fail-closed 経路のテスト（拒否・正規化後の値）。deferred は lib.rs 冒頭列挙で「未実装＝安全に拒否」を明記（**着手時に実施**）。
+
+### 移行期 migration hazard（Batch 外・データ全喪失ガード）✅ 完了（未コミット・レビュー承認: [review-2026-07-09-batch4-6.md](review-2026-07-09-batch4-6.md)）
+Batch 4/5/6 の実装中に判明した、本方針書起票時に未認識だった移行期ハザード。**Node が Rust 作成の DB を legacy-v1 と誤検出してコアテーブルを全 DROP する（＝データ全喪失）経路**（[parts/06-migration-workflow.md](parts/06-migration-workflow.md) §11.4・[verification/rpt-migrations-sqlx-refinery.md](verification/rpt-migrations-sqlx-refinery.md)）を塞ぐため、Batch 外だが同時に固めた。
+
+| # | 対応（今回・実装済み） |
+|---|---|
+| #1 schema_version 刻印 | `V17__baseline.sql` 末尾で `system_settings.schema_version='17'` を upsert（Node `migrations.ts:1574-1578` parity）。無いと Node が既定 `"1"` を読み、DROP 条件（version≠"17" && legacy テーブル在 && version=="1"）が成立してコアテーブルを全 DROP する。 |
+| #2 baseline 冪等化 | `CREATE VIRTUAL TABLE`（fts5）と `CREATE TRIGGER` ×3 に `IF NOT EXISTS` を付与。既存 Node DB へ refinery が baseline を流すとき「object already exists」で writer 起動不能になるのを防ぐ。 |
+| 付随: 一過性ロックの誤 Fatal 防止 | `schema.rs` `run_migrations` が refinery エラーのうち SQLITE_BUSY/LOCKED を `DbError::Busy`（Transient）へ分類し、恒久 Migration 失敗（Fatal＝即終了）への誤判定を防ぐ（Batch 7 の schema 検査側 SQLITE_BUSY 区別とは別経路）。 |
+
+- **完了条件**: `baseline_reruns_on_fully_populated_db_and_stamps_schema_version`（全オブジェクト既存の DB へ baseline を再走させ #2 の冪等性を、`schema_version='17'` 刻印で #1 を凍結）。
+- **[運用注意] refinery checksum divergence**: `V17__baseline.sql` はコミット済み内容を書き換えているため、**旧 checksum が `refinery_schema_history` に記録済みの DB があると次回起動で divergent エラー**（Busy 判定に掛からず Fatal 扱い）になる。ブランチ未 push・本番未稼働のため現時点で実害はないが、旧バイナリでマイグレーション済みの dev/テスト用データディレクトリは `refinery_schema_history` の削除か DB 作り直しが必要。**カットオーバー後は baseline の書き換え自体を禁止し、以後の変更は V18+ で行う**（§5 参照）。
 
 ### Batch 7 — LOW 群 ＋ 衛生（fmt/CI ゲート）【LOW】
 - **撤去**: `POST /api/reminders/delete`（契約凍結、2.3）。
@@ -130,7 +143,7 @@ Node 参照とフロントを実測した結果、契約は左右非対称:
 
 1. **wire 回帰テスト**: 入力 camelCase → デシリアライズ、出力 snake_case → シリアライズを各ドメインで凍結（2.1 の不変条件をテスト化）。`NewSchedule` の既存テストを雛形に横展開。
 2. **golden test（応答形状）**: Batch 3 で Node の実応答（ステータス・キー・`success`）をゴールデンとして固定。M-12 の恣意的差分をここで根絶。
-3. **機械検査ゲート**: `clippy --workspace --all-targets`（警告ゼロ維持）／`cargo test --workspace`（現状 90 passed を回帰させない）／`cargo deny check`／`cargo fmt --check`。Batch 7 で CI に組み込む。
+3. **機械検査ゲート**: `clippy --workspace --all-targets`（警告ゼロ維持）／`cargo test --workspace`（各バッチ/フェーズ完了時点の全 passed を回帰フロアとする。**現状 238 passed**＝Batch 1〜3 で 90→108 まで増加、以降 Phase 2〜5 の合流でさらに増加。※ batch4-6 レビューの「60 passed」は対象 4 クレート限定の部分計測でありワークスペース総数とは別物）／`cargo deny check`／`cargo fmt --check`。Batch 7 で CI に組み込む。
 4. **絶対制約の維持**: 本番コードに `unwrap`/`expect`/`panic` を新規混入させない（`cfg(test)` 限定緩和を維持）。網羅 match（`_ =>` 禁止）を崩さない。
 5. **敵対的再レビュー**: HIGH 修正（Batch 1〜3）完了後、修正差分に対する敵対的レビューを 1 周（過去の T1 fan-out と同運用）。
 
@@ -141,12 +154,14 @@ Node 参照とフロントを実測した結果、契約は左右非対称:
 - **view DTO への camelCase 付与は却下**（2.1）。フロント受信型が snake_case のため、足すと全ドメインで表示が壊れる。レビューの「出力 DTO は camelCase」記述に引きずられないこと。
 - **応答形状の「クリーン化」は移行期は却下**（M-12＝Node 厳密一致）。カットオーバー後に別途検討。
 - **M-7〜M-11 の完全 parity は今回 deferred**（fail-closed で汚染だけ止める）。ただし deferred は必ず lib.rs 冒頭で「未実装＝安全に拒否」と明記し、「未実装＝無音劣化」を残さない。**例外: M-6 は fail-closed でなく parity 実装に変更**（Batch 6 表参照。400 拒否がユーザー可視リグレッションになり、コストも連鎖削除と大差ないため）。
+- **カットオーバー後の `V17__baseline.sql` 書き換えは禁止**。コミット済み baseline を編集すると `refinery_schema_history` の旧 checksum と divergent になり起動不能になる。スキーマ変更は必ず新規 `V18+` マイグレーションで行う（§3「移行期 migration hazard」および [review-2026-07-09-batch4-6.md](review-2026-07-09-batch4-6.md) の運用注意を参照）。
 
 ---
 
 ## 6. 参照
 
 - レビュー本体: [review-2026-07-06-phase1.md](review-2026-07-06-phase1.md)
+- Batch 4/5/6 実装レビュー（M-1/M-2/M-4/M-5/M-6 ＋移行期 migration hazard・refinery checksum 運用注意）: [review-2026-07-09-batch4-6.md](review-2026-07-09-batch4-6.md)
 - 設計基準: [PLAN.md](PLAN.md)（§5.6/§5.7 fatality、§6.4 CSRF/body、§6.5 静的配信、§6.6 セキュリティヘッダ）
 - 上位決定: [00-decisions.md](00-decisions.md)
 - 移行前提: [parts/06-migration-workflow.md](parts/06-migration-workflow.md)（§11.3 共有 Redis、§11.4 SQLite 移行ハザード）

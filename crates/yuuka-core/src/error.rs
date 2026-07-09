@@ -132,6 +132,24 @@ pub enum AuthError {
     Backend,
 }
 
+impl AuthError {
+    /// supervisor 分類（§5.7・M-4）。**認証層を一律 `Permanent` にしてはならない**:
+    /// `Backend`（認証ストア到達不能＝Redis/SQLite の一過性障害）は回復可能なので
+    /// `Transient`（バックオフ再起動・自己復帰対象）。`SessionInvalid`/`TokenMalformed`/
+    /// `Forbidden` はクライアント要求の不備でリクエスト単位に 4xx 化するため、再起動で
+    /// 直らない `Permanent`。`#[non_exhaustive]` だが core 内なので網羅 match でバリアント
+    /// 追加漏れをコンパイルエラー化できる。
+    #[must_use]
+    pub fn fatality(&self) -> Fatality {
+        match self {
+            AuthError::Backend => Fatality::Transient,
+            AuthError::SessionInvalid | AuthError::TokenMalformed | AuthError::Forbidden => {
+                Fatality::Permanent
+            }
+        }
+    }
+}
+
 /// 入力検証層。DTO 制約違反、範囲外、必須欠落。回復可能（400 化）。
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
@@ -324,6 +342,10 @@ pub enum WebError {
     Conflict,
     #[error("invalid request: {0}")]
     Validation(String),
+    /// リクエストボディが上限（`MAX_BODY_BYTES`=10MB）超過（413）。Node `server.ts` の
+    /// `413 Payload Too Large` パリティ。400（Validation）と区別して返す（M-2）。
+    #[error("payload too large")]
+    PayloadTooLarge,
     #[error("upstream unavailable")]
     Upstream,
     #[error("internal error")]
@@ -344,6 +366,7 @@ impl WebError {
             WebError::NotFound => 404,
             WebError::Conflict => 409,
             WebError::Validation(_) => 400,
+            WebError::PayloadTooLarge => 413,
             WebError::Upstream => 502,
             WebError::Internal => 500,
         }
@@ -359,6 +382,7 @@ impl WebError {
             WebError::NotFound => "not found".to_owned(),
             WebError::Conflict => "conflict".to_owned(),
             WebError::Validation(m) => m.clone(),
+            WebError::PayloadTooLarge => "payload too large".to_owned(),
             WebError::Upstream => "upstream unavailable".to_owned(),
             WebError::Internal => "internal".to_owned(),
         }
@@ -423,8 +447,11 @@ impl AppError {
             AppError::Gemini(_) => Fatality::Transient,
             AppError::Discord(_) => Fatality::Transient,
             AppError::Ipc(_) => Fatality::Transient,
+            // 認証は variant 別に委譲（M-4）: Backend（ストア到達不能）は Transient で
+            // 自己復帰対象、SessionInvalid/TokenMalformed/Forbidden はリクエスト不備で Permanent。
+            // 一律 Permanent にすると Redis 断が supervisor 上で自己復帰不能になる。
+            AppError::Auth(e) => e.fatality(),
             // 恒久（クライアント要求の不備）はリクエスト単位で 4xx 化し、再起動対象にしない。
-            AppError::Auth(_) => Fatality::Permanent,
             AppError::Validation(_) => Fatality::Permanent,
             AppError::Tool(_) => Fatality::Permanent,
             AppError::Web(_) => Fatality::Permanent,
@@ -449,3 +476,38 @@ pub enum Fatality {
 /// supervisor はサービスの戻り値エラーを `Retryability` で分類し、
 /// `Transient` のみ指数バックオフ再 spawn する。
 pub type Retryability = Fatality;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn auth_backend_is_transient_others_permanent_m4() {
+        // M-4: 認証ストア到達不能（Redis/SQLite 断）は自己復帰対象＝Transient。
+        assert_eq!(AuthError::Backend.fatality(), Fatality::Transient);
+        // クライアント要求不備は再起動で直らない＝Permanent。
+        assert_eq!(AuthError::SessionInvalid.fatality(), Fatality::Permanent);
+        assert_eq!(AuthError::TokenMalformed.fatality(), Fatality::Permanent);
+        assert_eq!(AuthError::Forbidden.fatality(), Fatality::Permanent);
+        // AppError 経由でも Backend は Transient（supervisor が再起動できる）。
+        assert_eq!(
+            AppError::Auth(AuthError::Backend).fatality(),
+            Fatality::Transient
+        );
+        assert!(AppError::Auth(AuthError::Backend).is_transient());
+        assert_eq!(
+            AppError::Auth(AuthError::SessionInvalid).fatality(),
+            Fatality::Permanent
+        );
+    }
+
+    #[test]
+    fn payload_too_large_maps_to_413_m2() {
+        // M-2: body 上限超過は 413（400 の Validation と区別する）。
+        assert_eq!(WebError::PayloadTooLarge.status(), 413);
+        assert_eq!(WebError::PayloadTooLarge.client_message(), "payload too large");
+        // 内部詳細を漏らさない他の丸めは従来どおり。
+        assert_eq!(WebError::Internal.status(), 500);
+        assert_eq!(WebError::Validation("x".to_owned()).status(), 400);
+    }
+}

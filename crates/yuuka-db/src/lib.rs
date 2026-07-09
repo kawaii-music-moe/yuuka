@@ -104,6 +104,38 @@ mod tests {
         run_migrations(&mut conn).unwrap();
     }
 
+    #[test]
+    fn baseline_reruns_on_fully_populated_db_and_stamps_schema_version() {
+        // 移行期の現実シナリオ: 全スキーマオブジェクト（fts 仮想表・トリガ含む）が既に存在する
+        // DB へ refinery が V17 baseline を流す。refinery 履歴を消して baseline 全体を再走させ、
+        // #2（CREATE VIRTUAL TABLE / CREATE TRIGGER の IF NOT EXISTS 冪等性）を検証する。
+        // IF NOT EXISTS が欠けると「object already exists」で失敗し Rust writer が起動不能になる。
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("populated.sqlite");
+        seed_db(&path, "");
+        let mut conn = open_conn(&path, false).unwrap();
+
+        // 1) 全オブジェクトを作成（+ refinery 履歴を刻む）。
+        run_migrations(&mut conn).unwrap();
+
+        // 2) refinery 履歴を消し、「未適用だが全オブジェクトは既存」の状態を作る。
+        conn.execute_batch("DROP TABLE refinery_schema_history;")
+            .unwrap();
+
+        // 3) baseline 全体を再走 — 全 CREATE が IF NOT EXISTS で冪等なら成功する（#2 のガード）。
+        run_migrations(&mut conn).unwrap();
+
+        // #1: schema_version が '17' で刻まれている（Node がこの DB を開いても再 DROP しない）。
+        let v: String = conn
+            .query_row(
+                "SELECT value FROM system_settings WHERE key='schema_version'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(v, "17", "baseline は schema_version='17' を刻印する");
+    }
+
     #[tokio::test]
     async fn writer_serializes_and_reader_reads_back() {
         let dir = tempdir().unwrap();
@@ -132,5 +164,49 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(name, "hello");
+    }
+
+    #[tokio::test]
+    // panic-isolation を検証するテストは意図的に panic! を使う（clippy::panic はテスト例外
+    // 設定が無いため関数単位で許可する。supervisor.rs のテストと同方針）。
+    #[allow(clippy::panic)]
+    async fn writer_survives_job_panic_m5() {
+        // M-5: ジョブ内 panic で writer スレッドが死なず、後続の書き込みが継続できること。
+        // catch_unwind が無いと 1 発の panic 以後、全書き込みが恒久 WriterGone になる。
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("panic.sqlite");
+        seed_db(&path, "CREATE TABLE items(id INTEGER PRIMARY KEY, name TEXT);");
+        let writer = WriterHandle::spawn(path.clone()).unwrap();
+
+        // 1) panic するジョブ。当該呼び出しは WriterGone を受け取る（sender が unwind で drop）。
+        let panicked = writer
+            .execute(|_conn| -> Result<(), DbError> { panic!("boom in job") })
+            .await;
+        assert!(
+            matches!(panicked, Err(DbError::WriterGone)),
+            "panic した呼び出しは WriterGone を返す: {panicked:?}"
+        );
+
+        // 2) writer は生存: 後続の通常書き込みが成功する。
+        writer
+            .transaction(|tx| {
+                tx.execute("INSERT INTO items(name) VALUES(?1)", ["after-panic"])
+                    .map_err(map_sqlite)?;
+                Ok(())
+            })
+            .await
+            .expect("writer は panic 後も生存して書き込みを処理する");
+
+        let pool = ReadPool::open(&path).unwrap();
+        let name: String = pool
+            .read(|c| {
+                c.query_row("SELECT name FROM items WHERE name = 'after-panic'", [], |r| {
+                    r.get(0)
+                })
+                .map_err(map_sqlite)
+            })
+            .await
+            .unwrap();
+        assert_eq!(name, "after-panic");
     }
 }

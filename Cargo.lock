@@ -3606,6 +3606,7 @@ dependencies = [
  "tokio",
  "tower",
  "tower-http",
+ "tracing",
  "yuuka-core",
  "yuuka-db",
  "yuuka-types",
