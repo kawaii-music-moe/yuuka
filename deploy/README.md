@@ -70,8 +70,30 @@ deploy/instance.sh dev  up -d          # 開発インスタンス（ホスト :7
 2. `deploy/instance.sh <name> up -d` → 起動時に全暗号化データが新鍵で再暗号化される
 3. 完了後 `secret.key` を新鍵に置き換え、`secret.key.new` を削除して再起動
 
+## 移行期（Rust 直起動）の運用注意 — カットオーバー必読
+
+Phase 5 で `Dockerfile` の CMD は Rust バイナリ単独（`./dist/bin/yuuka`）に切替済み。以下は
+Node/systemd 運用から Rust 直起動へ移す際、**データ喪失・二重 writer を避けるための必須事項**
+（詳細は `docs/rust-rewrite/remaining-work.md` P0-2/P0-4）。
+
+### DB は起動前に必ず存在させる（P0-4）
+Rust は**存在しない DB を作らない**（`open_conn` は `SQLITE_OPEN_CREATE` を付けず、無ければ即エラー
+で起動失敗）。まっさらなインスタンスを Rust で立ち上げる前に、`DATA_DIR/yuuka.db` を必ず用意する:
+- 既存インスタンスの移行: 旧 Node/systemd が作成済みの `data/yuuka.db` をそのまま `DATA_DIR` に置く。
+- 新規インスタンス: 一度旧 Node で起動して DB を生成させてから Rust に切替える（Rust の baseline は
+  既存 DB に対して冪等・`schema_version='17'` を刻印する。V17 凍結）。
+
+### cron を回すプロセスは厳密に 1 つ（P0-2・最重要リスク R-1）
+`Dockerfile` は `ENV YUUKA_RUST_CRON=1` を焼き込むため、**コンテナ内 Rust が cron の所有者**になる。
+同一 `data/` に対する writer は 1 つでなければならない（SQLite WAL 単一ライター）。したがって:
+- **Rust コンテナと旧 systemd（`yuuka` = Node・自前 cron 持ち）を同時稼働させない**。同時起動は
+  reminder/backup 等の書き込みが二重に走り即 `SQLITE_BUSY`（busy_timeout でも解決不能）。
+- 逆に「Rust は web 専任・cron は Node」で並走させる 経路 A（strangler）を採る場合は、Rust 側の
+  `YUUKA_RUST_CRON=0` を明示（`instance.env` で上書き）し、cron 所有を Node 一択にする。
+- カットオーバー後は cron 所有 = Rust。ロールバック時（下記）は Rust を落としてから systemd を起動する。
+
 ## 本番ロールバック（systemd へ戻す）
-コンテナと systemd は同じ `data/` を共有するため **同時起動は不可**（SQLite WAL 単一ライター）。
+コンテナと systemd は同じ `data/` を共有するため **同時起動は不可**（SQLite WAL 単一ライター・上記 cron 所有も参照）。
 ```bash
 deploy/instance.sh prod down
 sudo systemctl start yuuka       # 旧 systemd 運用へ復帰
