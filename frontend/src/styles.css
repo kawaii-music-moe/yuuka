@@ -409,14 +409,14 @@ textarea {
 	border-bottom: none;
 }
 
-/* Tab Views management */
+/* Tab Views management
+   ★旧 vanilla の「全タブを DOM に並べ .active 付与で切替」前提だった
+     `display:none` / `.tab-view.active` は撤去（不具合修正）。
+     Svelte 版は BotShell が現在タブの 1 コンポーネントだけをマウントし、
+     どこも .active を付けないため、旧規則が残ると全タブが常時非表示になる
+     （BotConfig だけ scoped .config-tab{display:flex} が偶然上書きして見えていた）。 */
 .tab-view {
-	display: none;
 	animation: tab-fade-in 0.3s cubic-bezier(0.4, 0, 0.2, 1) forwards;
-}
-
-.tab-view.active {
-	display: block;
 }
 
 /* ==============================================================================
