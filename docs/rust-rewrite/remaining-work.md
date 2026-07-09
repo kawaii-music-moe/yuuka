@@ -1,10 +1,11 @@
 # Rust 移行 — 残作業ロードマップ（本番投入までの ToDo 全集）
 
-- 最終更新: 2026-07-09（実装セッション 2026-07-09c で P0 全消化 + P1-5/6/7 + P1-4 アダプタ + P3-4/5 を着地）
+- 最終更新: 2026-07-09（実装セッション 2026-07-09d で **P1-1 認証発行経路（資格情報ログイン）** を着地）
 - 対象ブランチ: `feature/rust-rewrite`（未 push）
-- git HEAD: `31b18a2`（このセッションのコミット群。旧起点は `078680b` Phase 5 cutover）
+- git HEAD: `7a4c07f`（旧セッション）+ 本セッションの P1-1 コミット群
 - 前提資料: [review-2026-07-06-fix-policy.md](review-2026-07-06-fix-policy.md)（修正方針の唯一の基準）・[review-2026-07-09-batch4-6.md](review-2026-07-09-batch4-6.md)・[PLAN.md](PLAN.md) §11（移行ロードマップ）
-- **本セッションの成果**: P0-1〜4（データ安全/カットオーバー整合）・P1-5（保存時暗号層・Node バイト単位パリティ）・P1-6（batch 確定）・P1-7（deny 緑）・P1-4 アダプタ（notifier bridge・配線待ち）・P3-4/P3-5 を実装しコミット。機械ゲート全緑（build/clippy-D/deny/test 248）。**経路 A のコード/設定ブロッカーは解消**（残: 共有 Redis セッションのライブ確認のみ）。
+- **本セッション（2026-07-09d）の成果**: **P1-1 のうち資格情報認証発行**を実装 — `SessionStore` を検証専用→**発行+検証**へ拡張（Node `sessionService.ts` パリティ・in-memory フォールバック）、`/api/setup/status`・`/api/setup`・`/api/register`・`/api/register/verify`・`/api/login`・`/api/logout`・`/api/users` の 7 ルート、bcrypt cost 12（`$2b$` Node 相互運用・`spawn_blocking`）、パスワードポリシー・招待コード（seed/consume）・監査ログ・DM チャレンジ登録状態機械（`RegistrationDm` ポート・Discord live まで `NullRegistrationDm`）・レート制限・`ConnectInfo` クライアント IP・Cookie 発行。`main.rs` に `AuthRuntime` 配線（`SessionStore` を発行↔検証で共有）+ invite 起動時シード。多エージェント・アドバーサリレビュー実施 → 確定 2 指摘（legal URL の `system_settings` 優先=Node `publicLegalUrls` パリティ、暗号未設定時の setup 半端 commit 回避）を修正。機械ゲート全緑（build/release/clippy-D/deny/**test 278**）。統合テストで **ブラウザ login/setup → セッション発行 → /api/me 200** を通しで確認。
+- **前セッション（2026-07-09c）の成果**: P0-1〜4・P1-5（暗号層）・P1-6/7・P1-4 アダプタ・P3-4/5。
 
 ---
 
@@ -16,17 +17,19 @@
 |---|---|
 | `cargo build --release --workspace` | ✅ exit 0 |
 | `cargo clippy --workspace --all-targets` | ✅ exit 0（ts-rs 良性 warning のみ） |
-| `cargo test --workspace` | ✅ **248 passed / 0 failed**（crypto 10 + /api/me 404 + notify_bridge 2 を追加） |
-| `cargo deny check` | ✅ **exit 0**（P1-7 済: crawler/synapse を exclude へ戻した） |
+| `cargo test --workspace` | ✅ **278 passed / 0 failed**（P1-1 で +30: 認証発行・セッション発行・bcrypt・pending・settings 等） |
+| `cargo deny check` | ✅ **exit 0**（bcrypt/blowfish 追加後も緑） |
 | 保存時暗号層（Argon2id/AES-256-GCM） | ✅ **実装済**（P1-5・Node ゴールデンベクタでバイト単位パリティ・鍵ローテ起動時配線） |
-| HTTP ルート被覆 | 27 / 152 パス ≒ **18%**（`/api/me` は DB 再取得+404 化して parity 完了） |
+| 認証発行（login/setup/logout/register/users） | ✅ **実装済**（P1-1・セッション発行 + bcrypt + 招待 + 監査 + レート制限。OAuth は残） |
+| HTTP ルート被覆 | 34 / 152 パス ≒ **22%**（`/api/me` + 認証 7 ルートを追加） |
 | Gemini ツール被覆 | 24 / 87 native ≒ **28%**（動的 MCP 0） |
 | WebSocket `/ws/chat` | **0%**（未実装・P1-2） |
 | Gemini FC ループ本体 | 1:1 移植 ≒ 95% 完成（ただし呼び出し口なし・P1-2） |
 | 通知配信ブリッジ | 🔶 **アダプタ実装済**（P1-4）・main の messenger 差し替え（P1-3）待ち |
+| 登録 DM ブリッジ | 🔶 **ポート実装済**（P1-1・`RegistrationDm`）・Discord live 化（P1-3）で adapter 配線待ち |
 
 **進め方の2経路:**
-- **経路 A（strangler 並走カナリア）** — Node が認証/会話/Discord/暗号を担い、Rust は移行済み CRUD の一部だけを共有 Redis セッション前提で配信。§7-A の前提を満たせば数日規模で到達可能。
+- **経路 A（strangler 並走カナリア）** — Node が認証/会話/Discord/暗号を担い、Rust は移行済み CRUD の一部だけを共有 Redis セッション前提で配信。§7-A の前提を満たせば数日規模で到達可能。**（P1-1 により Rust 単独でのセッション発行も可能になった＝Rust だけでログイン→CRUD が回る。）**
 - **経路 B（単独ほぼ本番）** — Rust だけで完結。P1〜P2 のブロッカーを全て潰す必要があり、現状は全体の約 1/4。相当先。
 
 ---
@@ -68,11 +71,11 @@
 
 ## P1 — 致命ブロッカー（単独ほぼ本番に不可欠）
 
-- [ ] **P1-1 認証の発行経路（ログイン + Discord OAuth）を実装する**
-  - 内容: `/api/login` `/api/logout` `/api/register` `/api/register/verify` `/api/setup` `/api/setup/status` `/api/users`（Node `authRoutes.ts`）と Google/Discord OAuth フロー（`settingsRoutes.ts` の url + callback）が未移植。セッション**検証** backend（Redis/desktop）は実装済みだが、**セッションを発行する経路が皆無**。
-  - なぜ: 発行が無いと Rust 単独ではログイン不能（＝ユーザーが何もできない）。
-  - 対象: `crates/yuuka-web/`（新規 auth ルート群）、`crates/yuuka-auth/`、config に `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET`/`INVITE_CODES`/`ADMIN_DISCORD_IDS` の読み込み追加。
-  - 完了条件: ブラウザからログイン→Redis にセッション発行→`/api/me` 200 まで通る。invite-code シード・初期 admin bootstrap も Node パリティ。
+- [~] **P1-1 認証の発行経路** — **資格情報ログインは実装済み・OAuth は残（P2-A へ）**
+  - 済（2026-07-09d）: `/api/login` `/api/logout` `/api/register` `/api/register/verify` `/api/setup` `/api/setup/status` `/api/users`（Node `authRoutes.ts` パリティ）を `crates/yuuka-auth/`（`routes.rs`・`AuthRuntime`）に実装。`SessionStore` に**発行**（`create`/`destroy` + in-memory フォールバック）を追加し、`CompositeAuth`（検証）と**同一ストアを共有**（`main.rs` で `sessions.clone()`）。bcrypt cost 12（`$2b$`・Node bcryptjs 相互運用・`spawn_blocking`）、`verifyPasswordConstantTime`（不在ユーザーもダミー比較でタイミングオラクル対策）、パスワードポリシー（8 文字/2 種/denylist fail-open・UTF-16 長）、招待コード（`is_valid`/atomic consume/起動時 seed）、監査ログ、DM チャレンジ登録（`PendingStore` + `RegistrationDm` ポート・`NullRegistrationDm` 縮退）、レート制限（login lockout・register-send window）、`ConnectInfo`+XFF クライアント IP、Cookie 発行（`setSessionCookie` パリティ）。config に `INVITE_CODES`/`ADMIN_DISCORD_IDS` 追加。統合テストで **login/setup → セッション発行 → /api/me 200** を確認。
+  - 残: **Google/Discord OAuth フロー**（`settingsRoutes.ts` の url + callback・`GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET`）は未移植 → **P2-A（設定系ルート）へ移す**。
+  - 残（P1-3 と一体）: `register` の確認コード DM は `NullRegistrationDm` のため現状 502。Discord live 化で `impl RegistrationDm for DiscordMessenger`（既存 `send_registration_code_dm` へ委譲・notify_bridge と同型）を足し `Arc<DiscordMessenger>` を注入すれば届く。
+  - 残（経路 A のライブ確認）: 共有 Redis 稼働下で Node が発行した Cookie を Rust が検証、Rust が発行した Cookie を Node が検証、の相互運用を実 Redis で確認（キー書式・sha256hex・camelCase JSON は一致済み）。
 
 - [ ] **P1-2 会話経路（WebSocket + オーケストレーション + 実 TurnProcessor）を実装する**
   - 内容: 3 点セットが全欠。
