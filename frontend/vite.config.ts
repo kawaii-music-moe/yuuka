@@ -57,14 +57,32 @@ export default defineConfig({
 		// P1a: Service Worker（Workbox generateSW / self-host / CSP準拠）
 		// 旧 src/public/sw.js（yuuka-v10, 固定 /app.js precache）を置換。
 		VitePWA({
-			// 更新フローの単一責任者。skipWaiting/clientsClaim は明示しない
-			//（autoUpdate + skipWaiting + clientsClaim の三点セットは新旧チャンク混在→白画面を再誘発するため禁止）。
-			registerType: "autoUpdate",
+			// 更新フローの単一責任者。
+			// ★重要（不具合修正）: registerType:"autoUpdate" は vite-plugin-pwa が
+			//   generateSW に skipWaiting:true / clientsClaim:true を*強制注入*する
+			//   （node_modules/vite-plugin-pwa/dist/index.js:874-876。injectRegister==null
+			//    かつ autoUpdate のとき workbox 側の指定を上書きして true 固定）。
+			//   この三点セット（autoUpdate + skipWaiting + clientsClaim）は、ルート遅延
+			//   ロード（§P1b の 29チャンク）と cleanupOutdatedCaches の併用時に
+			//   「デプロイ直後、開いていた旧タブが旧hashの遅延チャンクを import → 新イメージ
+			//    側で 404 → そのタブが白画面/何も出ない」を誘発する（例: MCP・Discord連携）。
+			//   → registerType を "prompt" にして強制注入条件を外す。新SWは全タブが閉じる
+			//     まで waiting に留まり、セッション途中でチャンクをすげ替えない
+			//     （旧SWが旧チャンクを供給し続ける）。更新は次回フルロードで安全に適用。
+			//   ※ main.ts は onNeedRefresh 無しで registerSW するため UI プロンプトは出ない
+			//     （= 実質サイレント待機。旧 autoUpdate の即時反映は捨て、安全側に倒す）。
+			registerType: "prompt",
 			// 登録は main.ts の registerSW で明示（inline script を出さない = CSP準拠）
 			injectRegister: null,
 			// 既存の frontend/public/manifest.json を尊重（自前の webmanifest を生成・注入しない）
 			manifest: false,
 			workbox: {
+				// 明示的に skipWaiting/clientsClaim を無効化（registerType:"prompt" では
+				// プラグインの強制注入が働かないため、この指定が実際に効く）。生成 sw.js に
+				// self.skipWaiting()/clients.claim() を入れないことで、遅延チャンク +
+				// cleanupOutdatedCaches のセッション途中すげ替え（白画面）を根絶する。
+				skipWaiting: false,
+				clientsClaim: false,
 				// Workbox ランタイムを sw.js にインライン化し
 				// https://storage.googleapis.com/workbox-cdn の importScripts を消す（唯一の CSP 準拠要件）。
 				inlineWorkboxRuntime: true,
