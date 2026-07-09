@@ -1,6 +1,6 @@
 # Rust 移行 — 残作業ロードマップ（本番投入までの ToDo 全集）
 
-- 最終更新: 2026-07-09（実装セッション 2026-07-09d で **P1-1 認証発行経路（資格情報ログイン）** を着地）
+- 最終更新: 2026-07-09（実装セッション 2026-07-09d で **P1-1 認証発行 + P1-2 会話オーケストレーション中核** を着地）
 - 対象ブランチ: `feature/rust-rewrite`（未 push）
 - git HEAD: `7a4c07f`（旧セッション）+ 本セッションの P1-1 コミット群
 - 前提資料: [review-2026-07-06-fix-policy.md](review-2026-07-06-fix-policy.md)（修正方針の唯一の基準）・[review-2026-07-09-batch4-6.md](review-2026-07-09-batch4-6.md)・[PLAN.md](PLAN.md) §11（移行ロードマップ）
@@ -23,8 +23,9 @@
 | 認証発行（login/setup/logout/register/users） | ✅ **実装済**（P1-1・セッション発行 + bcrypt + 招待 + 監査 + レート制限。OAuth は残） |
 | HTTP ルート被覆 | 34 / 152 パス ≒ **22%**（`/api/me` + 認証 7 ルートを追加） |
 | Gemini ツール被覆 | 24 / 87 native ≒ **28%**（動的 MCP 0） |
-| WebSocket `/ws/chat` | **0%**（未実装・P1-2） |
-| Gemini FC ループ本体 | 1:1 移植 ≒ 95% 完成（ただし呼び出し口なし・P1-2） |
+| チャットオーケストレーション（秘書ターン） | ✅ **実装済**（P1-2・`yuuka-orchestrator`・実 TurnProcessor・統合テスト緑。transport 未配線） |
+| WebSocket `/ws/chat` | **0%**（transport 未実装・P1-2 残(1)。中核は到達可能） |
+| Gemini FC ループ本体 | 1:1 移植 ≒ 95% 完成（**オーケストレーション層から到達可能に**・P1-2） |
 | 通知配信ブリッジ | 🔶 **アダプタ実装済**（P1-4）・main の messenger 差し替え（P1-3）待ち |
 | 登録 DM ブリッジ | 🔶 **ポート実装済**（P1-1・`RegistrationDm`）・Discord live 化（P1-3）で adapter 配線待ち |
 
@@ -77,19 +78,17 @@
   - 残（P1-3 と一体）: `register` の確認コード DM は `NullRegistrationDm` のため現状 502。Discord live 化で `impl RegistrationDm for DiscordMessenger`（既存 `send_registration_code_dm` へ委譲・notify_bridge と同型）を足し `Arc<DiscordMessenger>` を注入すれば届く。
   - 残（経路 A のライブ確認）: 共有 Redis 稼働下で Node が発行した Cookie を Rust が検証、Rust が発行した Cookie を Node が検証、の相互運用を実 Redis で確認（キー書式・sha256hex・camelCase JSON は一致済み）。
 
-- [ ] **P1-2 会話経路（WebSocket + オーケストレーション + 実 TurnProcessor）を実装する**
-  - 内容: 3 点セットが全欠。
-    - `/ws/chat` WebSocket（Node `src/server/chatWebSocket.ts`：Bearer 認証 + `?botId=` 所有/共有検証 + ping/pong + message/reset/interaction フレーム）。
-    - チャットオーケストレーション層（`buildSystemInstruction` / シナプス想起 assembleRecall / turnPlanner / messageLog 永続 / botCapabilities）。Gemini crate は FC ループのみで**この上位層を含まない**。
-    - 本番用 `TurnProcessor` 実装（現在は trait とテスト fake のみ）。
-  - なぜ: これが無いと FC ループ（≒完成済み）がどの endpoint からも到達不能で、**ユーザーはアシスタントと会話できない**。
-  - 対象: `crates/yuuka-web/`（WS upgrade）、新規 orchestration crate または `yuuka-gemini` 上位層、`crates/yuuka-discord/src/ports.rs`（TurnProcessor 実装）。
-  - 完了条件: デスクトップ/Web から 1 往復の会話が成立し、ツール呼び出しが実行される。
+- [~] **P1-2 会話経路** — **オーケストレーション中核（実 TurnProcessor）は実装済み・transport 配線が残**
+  - 済（2026-07-09d・新 `crates/yuuka-orchestrator`）: **チャットオーケストレーション層 + 実 `TurnProcessor`** を実装。`ChatEngine::secretary_turn`＝Node `processMessage`（秘書経路）パリティ: リッチ返信フラグ → ユーザー発言永続化（`describeIncomingMessage`）→ 直近 15 件を古い順ロード → `contents` 組立（連続同一 role を `\n` 結合・添付 inline data）→ `buildSystemInstruction`（DEFAULT_PERSONA/ペルソナ + 情報保存/承認/リッチ返信/音声/ファクトチェック/機能一覧/システムルール[現在日時・**未実行の完了報告禁止**]を verbatim 移植）→ ユーザーの Gemini キー復号（`SystemCrypto`・秘書経路は `users` の鍵）→ **FC ループ**（既存 `run_function_calling_loop`）→ アシスタント応答を必ず永続化 → `TurnReply`。`message_log`/`user`/`persona` repo 新設（`message_logs` の add/recent_context[floor=`system_settings` `context_floor:`]/clear_context）。`impl TurnProcessor for ChatEngine`（`process_secretary`/`parse_receipt` 実装）。`GeminiFactory` トレイトで fake backend 注入 → 統合テストで user 発言→履歴→鍵復号→FC ループ→assistant 保存→reply を通し検証。
+  - 残 **(1) `/ws/chat` WebSocket transport**（Node `chatWebSocket.ts`）: axum WS upgrade + **Bearer（desktop token）認証**（クライアントは Svelte ではなく **Rust デスクトップ** `clients/desktop/src/model.rs` の `ClientFrame`/`ServerFrame` が真の契約）+ `?botId=` 所有/共有検証（`has_bot_access` 済）+ ping/pong 30s + フレーム（msg/reset/interaction・ready/status/interim/done/push/error）。**`ready` フレームに BotInfo が要るため最小 bot repo（`getBotById`→name/avatar、`listBotsForUser`）を先に作る**（現状 Rust に bot repo なし）。`ChatEngine` を `Extension` で注入（`AuthRuntime` と同型・`AppState` 非改変）。
+  - 残 **(2) 縮退シームの本体化（後続・任意）**: ターンプランナー・シナプス想起（Phase H daemon）・非同期配信（interim/deferred）・**能力ゲート**（現状全ツール露出＝P2-B）・返信チェーン。
+  - 残 **(3) Discord 経路**: `ChatEngine`（`Arc<dyn TurnProcessor>`）を P1-3 の `DiscordManager` へ注入。汎用モード（guild/owner DM・Bot 専用キー）の `process_guild`/`process_bot_dm` は現状未実装（P1-3 で実装）。
+  - 完了条件: デスクトップ/Web から 1 往復の会話が成立し、ツール呼び出しが実行される（中核は成立・transport 待ち）。
 
 - [ ] **P1-3 Discord を実起動し、Supervisor 配下へ配線する**
   - 内容: `main.rs` が `DiscordManager` を構築せず `.prepare()` もテナント登録もしない。twilight 転送層（shard loop・マルチテナント・message/button ルーティング・DM ヘルパ・権限ガード）は構築 + test 済みだが**不活性**。
-  - なぜ: 起動しないので bot が一切反応しない（+ P1-2 の TurnProcessor が無いと起動しても応答不能）。
-  - 対象: `crates/yuuka-supervisor/src/main.rs`、`crates/yuuka-supervisor/src/discord.rs`（既存 `DiscordTenantService` アダプタは未使用のまま存在）。
+  - なぜ: 起動しないので bot が一切反応しない。**秘書経路の実 TurnProcessor（`yuuka_orchestrator::ChatEngine`）は P1-2 で実装済み**＝`Arc<dyn TurnProcessor>` として注入できる（汎用モード guild/owner DM の `process_guild`/`process_bot_dm` は本 Phase で実装）。
+  - 対象: `crates/yuuka-supervisor/src/main.rs`、`crates/yuuka-supervisor/src/discord.rs`（既存 `DiscordTenantService` アダプタは未使用のまま存在）。実ポート（`BotDirectory`/`MembershipService`/`RateLimiter`）の DB 実装も必要（現状 trait のみ・bot repo 未整備）。
   - 完了条件: main が Discord テナントを Supervisor に登録し、メンション/DM に実応答。restart/backoff 監督下。
 
 - [~] **P1-4 通知配信の橋渡し（Messenger → Notifier）を実装する** — **アダプタ実装済み・配線は P1-3 待ち**
