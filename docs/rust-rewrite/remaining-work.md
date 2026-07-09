@@ -170,15 +170,15 @@
 ## P3 — 品質 / 運用衛生
 
 - [ ] **P3-1 CI ゲートの新設**: build + clippy(-D warnings) + test + `cargo deny` + `gen-types --check`(drift) + `cargo fmt --check` を CI 化（現状ローカル手動のみ）。
-- [ ] **P3-2 `cargo fmt` 差分の解消**（Phase1 レビュー時点で ~20 ファイルに fmt 差分）。
+- [ ] **P3-2 `cargo fmt` 差分の解消**（2026-07-09 実測で ~193 hunk・ほぼ全 crate に及ぶ）。**P3-1 の CI ゲート新設と同一コミットで一括正規化する**（部分 fmt は別種の不整合を生むため単発の workspace 全体 `cargo fmt --all` を推奨）。
 - [ ] **P3-3 残レビュー指摘 M-7〜M-11（fail-closed）**:
   - [ ] M-7 priority 正規化 + float `2.0` 受理幅
   - [ ] M-8 finance amount 検証
   - [ ] M-9 reminder `trigger_at` 正規化（**ISO 入力で壊れる懸念** = add 時の日時正規化欠落）
   - [ ] M-10 credential 許可フィルタ（bot_credential_access）
   - [ ] M-11 persona 適用中の delete 拒否
-- [ ] **P3-4 README 冒頭の古い記述を修正**（[README.md](README.md) の「実装はまだ開始していない」は Phase 5 まで進んだ今は虚偽）。
-- [ ] **P3-5 `/api/me` の DB 再取得 + 404 分岐**（現状 TODO・repo 配線後の parity ギャップ、`yuuka-web/src/routes.rs`）。
+- [x] **P3-4 README 冒頭の古い記述を修正** — 済（[README.md](README.md) の「実装はまだ開始していない」を Phase 0〜5 着地の現況＋remaining-work.md 参照に更新）。
+- [x] **P3-5 `/api/me` の DB 再取得 + 404 分岐** — 済（`yuuka-web/src/routes.rs`：セッション解決後に `SELECT username, role FROM users WHERE discord_id` を read pool で再取得し、消失時 404 `{success:false,message:"ユーザーが見つかりません。"}`＝Node parity。role は DB 権威。テスト `me_returns_404_when_user_deleted_from_db` 追加・既存 200 テストは users 行を seed）。
 - [ ] **P3-6 index.html への google-site-verification meta 注入**（deferred・`static_files.rs`）。
 - [ ] **P3-7 Docker イメージのスリム化**（Node ランタイム / node_modules / dist/index.js / chromium は Rust 直起動では未使用。ハイブリッドで肥大。frontend ビルドのみ Node 段が必要）。
 - [ ] **P3-8 LOW 群**（`reminders/delete` 撤去の是非・float priority 受理幅ドキュメント化・repo docstring stale 等）。

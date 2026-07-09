@@ -1,7 +1,7 @@
 # yuuka バックエンド Rust 移行 — ドキュメント索引
 
-このディレクトリは、yuuka バックエンド（現行 Node.js/TypeScript）を **Rust へ全面書き換え**する計画一式。
-ブランチ `feature/rust-rewrite` で作成（2026-07-01）。実装はまだ開始していない（本ディレクトリは**計画・準備フェーズ**の成果物）。
+このディレクトリは、yuuka バックエンド（現行 Node.js/TypeScript）を **Rust へ全面書き換え**する計画・実装ドキュメント一式。
+ブランチ `feature/rust-rewrite`（2026-07-01 起票）。**実装は進行中**（Phase 0〜5 着地: 契約凍結・Web/認証/ドメイン CRUD・Gemini FC ループ・Discord 転送層・cron 常駐・Dockerfile/nginx カットオーバー・保存時暗号化）。本番投入までの残作業は **[remaining-work.md](remaining-work.md)**（P0 データ安全〜P3 衛生）を参照。
 
 ## 読む順序
 

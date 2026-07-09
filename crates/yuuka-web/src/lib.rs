@@ -124,15 +124,46 @@ mod tests {
 
     static TEST_DB_SEQ: AtomicU64 = AtomicU64::new(0);
 
-    /// テスト用の一時 DB を用意する（本番の open は CREATE しないため先に seed する）。
-    fn test_db() -> Db {
+    /// 一意な一時 DB パスを払い出す。
+    fn fresh_db_path() -> std::path::PathBuf {
         let seq = TEST_DB_SEQ.fetch_add(1, Ordering::Relaxed);
-        let path =
-            std::env::temp_dir().join(format!("yuuka_web_test_{}_{seq}.sqlite", std::process::id()));
+        std::env::temp_dir().join(format!("yuuka_web_test_{}_{seq}.sqlite", std::process::id()))
+    }
+
+    /// テスト用の一時 DB を用意する（本番の open は CREATE しないため先に seed する）。
+    /// `users` 行は入れない（`/api/me` の 404 経路や、DB に到達しない 401/CSRF テスト用）。
+    fn test_db() -> Db {
+        let path = fresh_db_path();
         {
             rusqlite::Connection::open(&path).expect("seed db");
         }
         Db::open(&path).expect("open db")
+    }
+
+    /// `/api/me` の DB 再取得（P3-5）で 200 を返す経路用に、`users` 行を 1 件 seed した DB。
+    /// V17 実スキーマは username/password_hash/salt が NOT NULL なので最小限充足する。
+    fn test_db_with_user(discord_id: &str, username: &str, role: Role) -> Db {
+        let path = fresh_db_path();
+        {
+            rusqlite::Connection::open(&path).expect("seed db");
+        }
+        let db = Db::open(&path).expect("open db"); // migrations で users 表を作成。
+        let conn = rusqlite::Connection::open(&path).expect("open");
+        conn.execute(
+            "INSERT OR REPLACE INTO users (discord_id, username, password_hash, salt, role) \
+             VALUES (?1, ?2, 'x', '00', ?3)",
+            rusqlite::params![discord_id, username, role_text(role)],
+        )
+        .expect("seed user");
+        db
+    }
+
+    /// [`Role`] を `users.role` 文字列へ（seed 用・`parse_role` の逆写像）。
+    fn role_text(role: Role) -> &'static str {
+        match role {
+            Role::Admin => "admin",
+            Role::User => "user",
+        }
     }
 
     /// テスト用のインメモリ認証バックエンド（Cookie トークン一致で固定ユーザーを返す）。
@@ -181,7 +212,8 @@ mod tests {
             bearer_token: "desk-token".to_owned(),
             user: session_user(Role::User),
         });
-        super::build_router(AppState::new(auth, WebConfig::default(), test_db()))
+        let db = test_db_with_user("123", "yuu", Role::User);
+        super::build_router(AppState::new(auth, WebConfig::default(), db))
     }
 
     #[tokio::test]
@@ -232,7 +264,9 @@ mod tests {
             terms_url: "https://example.test/terms".to_owned(),
             ..WebConfig::default()
         };
-        super::build_router(AppState::new(auth, config, test_db()))
+        // /api/me は DB 再取得で role/username を返すため、session role と一致する行を seed。
+        let db = test_db_with_user("123", "yuu", role);
+        super::build_router(AppState::new(auth, config, db))
     }
 
     async fn body_json(resp: Response) -> serde_json::Value {
@@ -284,6 +318,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn me_returns_404_when_user_deleted_from_db() {
+        // P3-5: セッションは有効だが DB からユーザーが消えている → Node parity で 404
+        // （`{success:false,message}`）。DB 再取得をしていないと 200 を返してしまう。
+        let auth = Arc::new(FakeAuth {
+            cookie_token: "good-token".to_owned(),
+            user: session_user(Role::User),
+        });
+        // users 行を入れない DB（test_db）。session は通るが再取得で不在→404。
+        let app = super::build_router(AppState::new(auth, WebConfig::default(), test_db()));
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/me")
+                    .header("cookie", "__Host-yuuka-session=good-token")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        let j = body_json(resp).await;
+        assert_eq!(j["success"], serde_json::json!(false));
+        assert_eq!(j["message"], serde_json::json!("ユーザーが見つかりません。"));
+    }
+
+    #[tokio::test]
     async fn https_prod_requires_host_prefixed_cookie() {
         // HTTPS 本番（config.https=true）は `__Host-` のみ受理し、非 prefix cookie は拒否する。
         let auth = Arc::new(FakeAuth {
@@ -294,7 +354,8 @@ mod tests {
             https: true,
             ..WebConfig::default()
         };
-        let app = super::build_router(AppState::new(auth, config, test_db()));
+        let db = test_db_with_user("123", "yuu", Role::User);
+        let app = super::build_router(AppState::new(auth, config, db));
 
         // 非 __Host- cookie → 拒否（401）。
         let rejected = app
