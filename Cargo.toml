@@ -27,13 +27,17 @@ members = [
     "crates/yuuka-credential",
     "crates/yuuka-playbook",
     "crates/yuuka-persona",
-    "src/rust_crawler",
-    "src/rust_synapse",
     "xtask",
 ]
 exclude = [
     ".claude",
     "clients/desktop",
+    # 逸脱#1（本ファイル冒頭）へ復帰: crawler/synapse は daemon 吸収（最終 Phase H）まで
+    # workspace members に入れない。members にあると cargo deny が赤（fxhash unmaintained
+    # RUSTSEC-2025-0057 / MPL-2.0 ×4 未許可 / license 欄欠落で unlicensed）になるため exclude へ戻す。
+    # 取り込みは Phase H で license 欄追加 + deny.toml 調整とセットで行う（remaining-work.md P1-7）。
+    "src/rust_crawler",
+    "src/rust_synapse",
 ]
 
 [workspace.package]
