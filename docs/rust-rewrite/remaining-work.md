@@ -86,11 +86,11 @@
   - 対象: `crates/yuuka-supervisor/src/main.rs`、`crates/yuuka-supervisor/src/discord.rs`（既存 `DiscordTenantService` アダプタは未使用のまま存在）。
   - 完了条件: main が Discord テナントを Supervisor に登録し、メンション/DM に実応答。restart/backoff 監督下。
 
-- [ ] **P1-4 通知配信の橋渡し（Messenger → Notifier）を実装する**
-  - 内容: `main.rs:85` が `NullNotifier` を無条件注入。Discord `DiscordMessenger` と services `Notifier` trait を繋ぐアダプタが無い。
-  - なぜ: reminder/birthday/payment サービスは動くが送信が常に `false` で **リマインダーが永遠に届かない**（near-prod テストの主目的が死ぬ）。
-  - 対象: `crates/yuuka-services/src/notifier.rs`、`crates/yuuka-discord/`（`impl services::Notifier for DiscordMessenger` + `NotifyTarget`↔`DeliverTarget` 変換）、`main.rs`。
-  - 完了条件: 期限到来リマインドが実 Discord チャンネルへ届く。
+- [~] **P1-4 通知配信の橋渡し（Messenger → Notifier）を実装する** — **アダプタ実装済み・配線は P1-3 待ち**
+  - 済: `crates/yuuka-discord/src/notify_bridge.rs`＝`impl yuuka_services::Notifier for DiscordMessenger`（`NotifyTarget`↔`DeliverTarget` 変換＝Default→DM・Channel 透過、空本文 false、`TurnReply::text` 化して `send_to_user` へ委譲）。孤児規則により discord 側に実装（services→discord 逆依存なし＝非循環）。target 写像を単体テストで凍結。
+  - 残（P1-3 と一体）: `main.rs` の `NullNotifier` を、Discord live 化で構築した `Arc<DiscordMessenger>` へ差し替える 1 行のみ。
+  - なぜ: reminder/birthday/payment サービスは動くが送信が常に `false` で **リマインダーが永遠に届かない**。アダプタが埋まったので、あとは messenger を注入すれば届く。
+  - 完了条件: 期限到来リマインドが実 Discord チャンネルへ届く（＝P1-3 の messenger 構築 + 上記差し替え）。
 
 - [x] **P1-5 秘密情報の暗号層（Argon2id + AES-256-GCM）を実装する** — 済（新 `crates/yuuka-crypto`）。scrypt システム鍵 + Argon2id ユーザー鍵 + AES-256-GCM を Node `src/utils/crypto.ts` と **バイト単位パリティ**で実装（Node 実出力のゴールデンベクタ `golden_parity_with_node` で凍結）。`config` が `YUUKA_ENCRYPTION_SECRET`/`_NEW` を `SecretString` で読込。鍵ローテ（`rotate_secret_key`＝Node `ENCRYPTED_COLUMNS` パリティ）を supervisor 起動時に **writer actor 上で 1 回**実行（R-2 遵守）。**残（消費側の配線は P2）**: credential register/decrypt ルート・Discord/Gemini トークン復号は `SystemCrypto`/`decrypt_text` を呼ぶだけ（本層で提供済み）。
   - 内容: **Rust 全クレートが読む env は `YUUKA_RUST_CRON` ただ 1 つ**。`YUUKA_ENCRYPTION_SECRET` / `YUUKA_ENCRYPTION_SECRET_NEW`（鍵ローテ）/ `GOOGLE_CLIENT_SECRET` は未読。復号層が「本クレート外」のまま存在しない（`yuuka-credential` は register/decrypt を deferred）。

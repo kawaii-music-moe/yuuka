@@ -88,6 +88,9 @@ async fn run() -> Result<(), String> {
     //    Node cron を停止したら `YUUKA_RUST_CRON=1` で Rust cron を起動する（reminder は起動時
     //    即時実行で取りこぼしを復帰・§10）。通知先 Discord は未配線のため縮退（NullNotifier）で
     //    始まり、リマインド等は配信可能になるまで pending のまま保持される。
+    //    P1-4: `impl yuuka_services::Notifier for DiscordMessenger`（notify_bridge）は実装済み。
+    //    Discord live 化（P1-3）で `Arc<DiscordMessenger>` を構築できたら、ここの `NullNotifier` を
+    //    それへ差し替えるだけで実 Discord 配信へ切り替わる（アダプタは配線待ち）。
     if rust_cron_enabled() {
         let service_ctx = ServiceContext::new(
             db,

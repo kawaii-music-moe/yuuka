@@ -9,6 +9,9 @@ description = "yuuka Discord 層（twilight 0.17 マルチテナント bot・cal
 
 [dependencies]
 yuuka-core = { workspace = true }
+# P1-4: services::Notifier ポートを DiscordMessenger にアダプトするため（services→discord の
+# 逆依存は無い＝非循環。transport 層が配信ポートを実装して上位へ注入する規律）。
+yuuka-services = { workspace = true }
 twilight-gateway = { workspace = true }
 twilight-http = { workspace = true }
 twilight-model = { workspace = true }

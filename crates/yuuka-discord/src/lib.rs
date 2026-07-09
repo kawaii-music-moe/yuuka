@@ -22,6 +22,7 @@ mod idempotent;
 mod interaction;
 mod manager;
 mod message_flow;
+mod notify_bridge;
 mod presence;
 mod reply;
 mod tenant;

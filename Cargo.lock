@@ -3228,6 +3228,7 @@ dependencies = [
  "twilight-model",
  "twilight-util",
  "yuuka-core",
+ "yuuka-services",
 ]
 
 [[package]]
