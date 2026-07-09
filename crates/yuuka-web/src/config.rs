@@ -11,6 +11,9 @@ pub struct WebConfig {
     pub terms_url: String,
     /// HTTPS デプロイか（Cookie 名 `__Host-` の選択に使う・§11.3）。
     pub https: bool,
+    /// XFF 信頼判定に使う信頼プロキシ（レート制限のクライアント IP 解決・Node `getClientIp`）。
+    /// 直前 peer がこのリストに含まれるときのみ `X-Forwarded-For` を信頼する。
+    pub trusted_proxies: Vec<std::net::IpAddr>,
 }
 
 impl WebConfig {
@@ -21,6 +24,7 @@ impl WebConfig {
             privacy_policy_url: cfg.privacy_policy_url.clone(),
             terms_url: cfg.terms_url.clone(),
             https: cfg.is_https_deployment(),
+            trusted_proxies: cfg.trusted_proxies.clone(),
         }
     }
 }

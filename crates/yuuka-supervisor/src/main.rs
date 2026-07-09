@@ -14,10 +14,11 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use yuuka_auth::{CompositeAuth, SessionStore};
+use axum::Router;
+use yuuka_auth::{AuthRuntime, CompositeAuth, NullRegistrationDm, SessionStore};
 use yuuka_core::secrets::ExposeSecret;
 use yuuka_core::{Config, DbError};
-use yuuka_crypto::{rotate_secret_key, LEGACY_FALLBACK_SECRET};
+use yuuka_crypto::{rotate_secret_key, SystemCrypto, LEGACY_FALLBACK_SECRET};
 use yuuka_services::{MetricsRegistry, NullNotifier, ServiceContext};
 use yuuka_supervisor::{
     build_app, build_supervised_services, ServiceError, ShutdownToken, SupervisedService, Supervisor,
@@ -58,13 +59,43 @@ async fn run() -> Result<(), String> {
     //      web/cron が書き込みを始める前に完了させる（Node の同期起動ローテーションと同じ位置）。
     rotate_secret_if_requested(&db, &cfg).await?;
 
-    // 3) Redis セッション（到達不能でも起動継続＝Cookie のみ縮退）。
+    // 3) Redis セッション（到達不能でも起動継続＝Cookie のみ縮退）。発行（login/setup）と検証
+    //    （CompositeAuth）で同一ストアを共有する（同じ clone を両者へ渡す）。
     let sessions = SessionStore::connect(&cfg.redis_url).await;
 
     // 4) 実 AuthBackend（Cookie=Redis / Bearer=SQLite）。
-    let auth = Arc::new(CompositeAuth::new(db.clone(), sessions, cfg.session_ttl_days));
+    let auth = Arc::new(CompositeAuth::new(
+        db.clone(),
+        sessions.clone(),
+        cfg.session_ttl_days,
+    ));
     let web_config = WebConfig::from_core(&cfg);
     let state = AppState::new(auth, web_config, db.clone());
+
+    // 4.5) 認証発行ランタイム（P1-1）。セッション発行・Gemini キー暗号化・保留登録・DM ポート・
+    //      レート制限を束ねる。暗号は `YUUKA_ENCRYPTION_SECRET` 未設定なら `None`（setup/verify のみ
+    //      500 に縮退・login 等は動作）。DM は Discord live（P1-3）まで `NullRegistrationDm`（register は
+    //      502）。招待コードは起動時に冪等シードする。
+    let crypto = match SystemCrypto::from_config(&cfg) {
+        Ok(c) => Some(Arc::new(c)),
+        Err(e) => {
+            tracing::warn!(error = %e, "SystemCrypto を構築できません（setup/register は 500 に縮退・login 等は動作）");
+            None
+        }
+    };
+    match yuuka_auth::invite::seed_initial_codes(&db, &cfg.invite_codes).await {
+        Ok(n) if n > 0 => tracing::info!(seeded = n, "招待コードをシードしました"),
+        Ok(_) => {}
+        Err(e) => tracing::warn!(error = %e, "招待コードのシードに失敗（起動は継続）"),
+    }
+    let auth_runtime = Arc::new(AuthRuntime::new(
+        sessions,
+        cfg.session_ttl_days,
+        crypto,
+        Arc::new(NullRegistrationDm),
+        cfg.admin_discord_ids.clone(),
+    ));
+    let auth_routes = yuuka_auth::routes(auth_runtime);
 
     // 5) 静的配信元（dist/public があれば SPA を載せる）。
     let dist = PathBuf::from(DIST_DIR);
@@ -78,6 +109,7 @@ async fn run() -> Result<(), String> {
     let addr = SocketAddr::new(cfg.host, cfg.port);
     let web = Arc::new(WebService {
         state,
+        auth_routes,
         addr,
         dist_dir,
     });
@@ -172,6 +204,8 @@ fn rust_cron_enabled() -> bool {
 /// `ServiceError::Transient`（supervisor が再起動）、shutdown での正常停止は Ok(())（再起動しない）。
 struct WebService {
     state: AppState,
+    /// 認証発行ルータ（`AuthRuntime` を `Extension` で内包済み・再起動毎に clone して merge）。
+    auth_routes: Router<AppState>,
     addr: SocketAddr,
     dist_dir: Option<PathBuf>,
 }
@@ -183,15 +217,24 @@ impl SupervisedService for WebService {
     }
 
     async fn run(&self, mut shutdown: ShutdownToken) -> Result<(), ServiceError> {
-        let app = build_app(self.state.clone(), self.dist_dir.as_deref());
+        let app = build_app(
+            self.state.clone(),
+            self.auth_routes.clone(),
+            self.dist_dir.as_deref(),
+        );
         let listener = tokio::net::TcpListener::bind(self.addr)
             .await
             .map_err(|e| ServiceError::transient(format!("bind {}: {e}", self.addr)))?;
         tracing::info!(addr = %self.addr, "yuuka web serving");
-        axum::serve(listener, app)
-            .with_graceful_shutdown(async move { shutdown.cancelled().await })
-            .await
-            .map_err(|e| ServiceError::transient(format!("serve: {e}")))?;
+        // ConnectInfo<SocketAddr> を有効化し、レート制限のクライアント IP 解決（Node getClientIp
+        // 相当）が peer アドレスを参照できるようにする（信頼プロキシ配下では XFF を優先）。
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .with_graceful_shutdown(async move { shutdown.cancelled().await })
+        .await
+        .map_err(|e| ServiceError::transient(format!("serve: {e}")))?;
         tracing::info!("yuuka web stopped");
         Ok(())
     }

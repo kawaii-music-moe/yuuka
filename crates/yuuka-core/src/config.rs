@@ -2,8 +2,9 @@
 //!
 //! `config.yaml`（存在すれば）＋環境変数を **既存 Node `getSetting` と同一の優先順**
 //! （`yaml[KEY] ?? env[KEY] ?? default`・キーは **UPPERCASE**）で読み、型付き構造体へ
-//! 落とす。未知キー（`INVITE_CODES`/`GOOGLE_*`/`REMINDER_CRON` 等・bot/他系用）は
-//! **無視**する（web 起動に不要なため）。型不一致・不正値は起動時に fail-fast
+//! 落とす。認証発行（P1-1）に必要な `INVITE_CODES`/`ADMIN_DISCORD_IDS` は取り込む
+//! （起動時の invite シード・初期 admin 昇格に使う）。それ以外の未知キー（`GOOGLE_*`/
+//! `REMINDER_CRON` 等・bot/他系用）は **無視**する（web 起動に不要なため）。型不一致・不正値は起動時に fail-fast
 //! （`ConfigError`。§5.6 の唯一の致命ポイント）。機密は本 struct に平文で持たず
 //! [`crate::secrets`] の `SecretString` で扱う。
 
@@ -45,6 +46,11 @@ pub struct Config {
     /// 鍵ローテーション用の新秘密（`YUUKA_ENCRYPTION_SECRET_NEW`）。設定時は起動時に
     /// 旧鍵→新鍵で全暗号化列を再暗号化する（Node `config.secretKeyNew` / `rotateSecretKey`）。
     pub encryption_secret_new: Option<SecretString>,
+    /// 起動時に DB へ投入する招待コード一覧（`INVITE_CODES`・カンマ/YAML 配列・Node `config.inviteCodes`）。
+    pub invite_codes: Vec<String>,
+    /// 初期 admin に昇格する Discord ユーザー ID（`ADMIN_DISCORD_IDS`・任意・Node `config.adminDiscordIds`）。
+    /// `createUser` はこのリストに含まれる ID（または最初のユーザー）を admin ロールで作成する。
+    pub admin_discord_ids: Vec<String>,
 }
 
 impl Config {
@@ -90,6 +96,8 @@ impl Config {
             encryption_secret: non_empty(get("YUUKA_ENCRYPTION_SECRET")).map(SecretString::from),
             encryption_secret_new: non_empty(get("YUUKA_ENCRYPTION_SECRET_NEW"))
                 .map(SecretString::from),
+            invite_codes: parse_string_list(get("INVITE_CODES").as_deref()),
+            admin_discord_ids: parse_string_list(get("ADMIN_DISCORD_IDS").as_deref()),
         };
         cfg.validate()?;
         Ok(cfg)
@@ -164,6 +172,20 @@ fn parse_field<T: std::str::FromStr>(field: &'static str, raw: &str) -> Result<T
     })
 }
 
+/// カンマ区切りの文字列リストをパースする（`getSettingArray` 相当：split(',')→trim→空除去）。
+///
+/// YAML 配列は `yaml_string` が事前にカンマ結合するため、env のカンマ区切りと同一経路で処理できる。
+fn parse_string_list(raw: Option<&str>) -> Vec<String> {
+    raw.map(|r| {
+        r.split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+            .collect()
+    })
+    .unwrap_or_default()
+}
+
 /// カンマ区切りの IP リストをパースする（空・未設定は空 Vec・`getSettingArray` 相当）。
 fn parse_ip_list(field: &'static str, raw: Option<&str>) -> Result<Vec<IpAddr>, ConfigError> {
     let Some(raw) = raw else {
@@ -204,6 +226,7 @@ mod tests {
              TERMS_URL: \"https://ex.test/terms\"\n\
              REMINDER_CRON: \"* * * * *\"\n\
              INVITE_CODES:\n  - \"a\"\n  - \"b\"\n\
+             ADMIN_DISCORD_IDS: \"111, 222\"\n\
              GOOGLE_CLIENT_ID: \"xxx\"\n",
         );
         let cfg = Config::load_and_validate(f.path()).expect("load");
@@ -214,6 +237,9 @@ mod tests {
         assert_eq!(cfg.redis_url, "redis://127.0.0.1:6379");
         assert_eq!(cfg.terms_url, "https://ex.test/terms");
         assert!(!cfg.is_https_deployment());
+        // P1-1: 招待コード（YAML 配列→カンマ結合→分割）と admin ID（カンマ区切り・trim）を取り込む。
+        assert_eq!(cfg.invite_codes, vec!["a".to_owned(), "b".to_owned()]);
+        assert_eq!(cfg.admin_discord_ids, vec!["111".to_owned(), "222".to_owned()]);
     }
 
     #[test]

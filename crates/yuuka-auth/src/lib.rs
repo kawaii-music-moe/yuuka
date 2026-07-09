@@ -12,6 +12,19 @@
 mod desktop;
 mod session;
 
+pub mod audit;
+pub mod invite;
+pub mod password_policy;
+pub mod pending;
+pub mod ratelimit;
+pub mod routes;
+pub mod token;
+pub mod users;
+
+pub use pending::{
+    NullRegistrationDm, PendingRegistration, PendingStore, RegistrationDm, VerifyResult,
+};
+pub use routes::{routes, AuthRuntime};
 pub use session::SessionStore;
 
 use async_trait::async_trait;

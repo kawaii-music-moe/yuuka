@@ -105,6 +105,7 @@ scrypt                   = "0.11"                                               
 argon2                   = "0.5"                                                # ユーザー鍵導出（Node @node-rs/argon2 hashRawSync・Argon2id m=19456/t=2/p=1）
 hex                      = "0.4"                                                # 暗号文/IV/authTag の hex 表現（Node の hex 文字列と相互運用）
 getrandom                = "0.2"                                                # IV（12B CSPRNG）生成
+bcrypt                   = "0.16"                                               # パスワードハッシュ（Node bcryptjs v3・$2b$ cost 12 と相互運用・P1-1）
 regex                    = "1"                                                  # Discord 非対応 Markdown 変換（toDiscordMarkdown 移植）
 async-trait              = "0.1"
 tracing                  = "0.1"

@@ -51,6 +51,8 @@ pub async fn me(user: AuthenticatedUser, State(state): State<AppState>) -> Respo
             .into_response();
     };
 
+    // legal URL は system_settings（admin 保存値）を優先し、無ければ config へ（Node publicLegalUrls）。
+    let (privacy_policy_url, terms_url) = crate::settings::public_legal_urls(&state).await;
     Json(Envelope::ok(MeData {
         // DB 最新値で返す（role は DB 権威・Node の `user.role || "user"` 相当）。
         user: SessionUser {
@@ -58,8 +60,8 @@ pub async fn me(user: AuthenticatedUser, State(state): State<AppState>) -> Respo
             username,
             role: parse_role(&role),
         },
-        privacy_policy_url: state.config.privacy_policy_url.clone(),
-        terms_url: state.config.terms_url.clone(),
+        privacy_policy_url,
+        terms_url,
     }))
     .into_response()
 }

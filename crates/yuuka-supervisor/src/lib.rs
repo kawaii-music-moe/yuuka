@@ -21,12 +21,15 @@ pub use services::{build_supervised_services, CronSupervised};
 pub use supervisor::{RestartPolicy, ServiceError, ShutdownToken, SupervisedService, Supervisor};
 pub use tool_registry::{build_native_provider, build_tool_registry};
 
-/// 完成アプリのルータを組み立てる（フレームワーク + 全ドメイン + 任意の静的配信 + 共通レイヤ）。
+/// 完成アプリのルータを組み立てる（フレームワーク + 認証発行 + 全ドメイン + 任意の静的配信 + 共通レイヤ）。
 ///
-/// 新ドメイン（finance/schedule/…）は `.merge(yuuka_xxx::routes())` を足す。
+/// 新ドメイン（finance/schedule/…）は `.merge(yuuka_xxx::routes())` を足す。`auth_routes` は
+/// [`yuuka_auth::routes`] が返す認証発行ルータ（`AuthRuntime` を `Extension` で内包済み）。web の
+/// 再起動毎に呼ばれるので、呼び出し側で 1 度組んだものを clone して渡す（`Router` は安価に clone 可能）。
 /// `dist_dir` を渡すと SPA（`dist/public`）を `fallback_service` として載せる（未指定は API のみ）。
-pub fn build_app(state: AppState, dist_dir: Option<&Path>) -> Router {
+pub fn build_app(state: AppState, auth_routes: Router<AppState>, dist_dir: Option<&Path>) -> Router {
     let routes = framework_routes()
+        .merge(auth_routes)
         .merge(yuuka_todo::routes())
         .merge(yuuka_finance::routes())
         .merge(yuuka_schedule::routes())
@@ -108,7 +111,19 @@ mod tests {
     }
 
     fn app() -> Router {
-        super::build_app(AppState::new(Arc::new(FakeAuth), WebConfig::default(), test_db()), None)
+        // 認証発行ルータ（in-memory セッション・DM 未配線・暗号なし）を組んで merge を検証する。
+        let runtime = std::sync::Arc::new(yuuka_auth::AuthRuntime::new(
+            yuuka_auth::SessionStore::in_memory(),
+            7,
+            None,
+            std::sync::Arc::new(yuuka_auth::NullRegistrationDm),
+            Vec::new(),
+        ));
+        super::build_app(
+            AppState::new(Arc::new(FakeAuth), WebConfig::default(), test_db()),
+            yuuka_auth::routes(runtime),
+            None,
+        )
     }
 
     #[tokio::test]

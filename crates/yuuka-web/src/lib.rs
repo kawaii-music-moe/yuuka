@@ -15,6 +15,7 @@ pub mod error;
 pub mod extract;
 pub mod routes;
 pub mod scope;
+pub mod settings;
 pub mod state;
 pub mod static_files;
 
@@ -23,6 +24,7 @@ pub use config::WebConfig;
 pub use error::ApiError;
 pub use extract::ScopedJson;
 pub use scope::{has_bot_access, resolve_scope};
+pub use settings::{get_system_setting, public_legal_urls};
 pub use state::{AppState, Db};
 pub use static_files::mount_static;
 

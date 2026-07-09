@@ -12,16 +12,23 @@ yuuka-core.workspace = true
 yuuka-types.workspace = true
 yuuka-db.workspace = true
 yuuka-web.workspace = true
+yuuka-crypto.workspace = true          # /api/setup の Gemini API キー暗号化（P1-1・P1-5 の SystemCrypto を利用）
 rusqlite.workspace = true
 redis.workspace = true
 sha2.workspace = true
+serde.workspace = true                 # 認証リクエストボディの Deserialize（login/setup/register）
 serde_json.workspace = true
 async-trait.workspace = true
+axum.workspace = true                  # 認証発行ルート（P1-1・framework 層に merge）
+bcrypt.workspace = true                # パスワードハッシュ（Node bcryptjs $2b$ cost 12 パリティ）
+base64.workspace = true                # セッショントークン（32B → base64url no-pad・Node generateToken パリティ）
+getrandom.workspace = true             # トークン/確認コードの CSPRNG
 tokio.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
 tokio.workspace = true
+tower = { workspace = true, features = ["util"] }
 tempfile = "3"
 
 [lints]

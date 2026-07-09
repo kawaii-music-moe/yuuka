@@ -1,10 +1,17 @@
-//! Cookie セッション検証（共有 Redis の不透明トークン・Node `getSession` パリティ）。
+//! Cookie セッションの**発行 + 検証**（共有 Redis の不透明トークン・Node `sessionService.ts` パリティ）。
 //!
-//! Rust は**検証専用**（セッション発行は Node のログインが担う）。`session:{token_hash}` の
-//! JSON `{discordId,username,role}` を引き、取得成功時に `session:` と `user_sessions:{discordId}`
-//! の TTL をスライディング更新する。Redis 到達不能時は縮退（`Ok(None)`）＝Cookie 認証のみ無効化。
+//! - トークン: CSPRNG（[`crate::token::generate_token`]）。保存はハッシュ化キー `session:{sha256(token)}`
+//!   のみ（Redis ダンプが漏れても生トークンは復元不能）。
+//! - TTL: `session_ttl_days` 日。アクセス毎に自動延長（スライディングウィンドウ）。
+//! - ユーザー毎の発行済みセット `user_sessions:{discordId}` を保持（将来の一括失効用）。
+//! - **Redis 不通時は in-memory Map フォールバック**（Node と同一・プロセス再起動で消えるのは許容）。
+//!
+//! キー書式・ハッシュ・シリアライズ（camelCase `{discordId,username,role}`）は既存 Node と一致させ、
+//! 移行期は Node/Rust が同一 Redis を共有できる（strangler）。
 
-use std::time::Duration;
+use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::time::{Duration, Instant};
 
 use redis::aio::ConnectionManager;
 use redis::AsyncCommands;
@@ -14,79 +21,285 @@ use yuuka_types::SessionUser;
 /// 起動時の初期 Redis 接続に許す上限時間（Redis 障害で起動をハングさせない）。
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 
-/// セッション検証に使う Redis ストア（自動再接続つき `ConnectionManager`）。
+/// in-memory セッション（Redis 縮退時のフォールバック）。
+struct MemSession {
+    user: SessionUser,
+    expires_at: Instant,
+}
+
+/// Redis 縮退時のフォールバックストア（Node の `memorySessions`/`memoryUserSessions` 相当）。
+#[derive(Default)]
+struct MemoryStore {
+    /// `token_hash → セッション`。
+    sessions: HashMap<String, MemSession>,
+    /// `discord_id → 発行済み token_hash 集合`（将来の一括失効用）。
+    user_sessions: HashMap<String, HashSet<String>>,
+}
+
+/// セッションの発行・検証を担う共有ストア（Redis + in-memory フォールバック）。
 ///
-/// 起動時に Redis へ到達できなければ [`SessionStore::Disabled`]（起動は継続・Cookie 縮退）。
+/// `ConnectionManager` は背後で自動再接続する。全クローンが同一 Redis と同一 in-memory を共有する
+/// （`Arc<Mutex<..>>`）。
 #[derive(Clone)]
-pub enum SessionStore {
-    /// 接続済み Redis（`ConnectionManager` が背後で自動再接続する）。
-    ///
-    /// `ConnectionManager` は大きいので `Box` に入れる（`Disabled` との variant サイズ差回避）。
-    Redis(Box<ConnectionManager>),
-    /// Redis 未接続（起動時到達不能／URL 不正）。Cookie セッションは検証不可。
-    Disabled,
+pub struct SessionStore {
+    /// 接続済み Redis（未接続時は `None` ＝ in-memory のみ）。
+    redis: Option<ConnectionManager>,
+    /// Redis 縮退時のフォールバック（全クローン共有）。
+    memory: Arc<Mutex<MemoryStore>>,
 }
 
 impl SessionStore {
-    /// `redis_url` へ接続を試みる。到達不能でも `Disabled` を返して**起動は継続**する。
+    /// `redis_url` へ接続を試みる。到達不能でも **起動は継続**（in-memory フォールバックのみ有効）。
     #[must_use]
     pub async fn connect(redis_url: &str) -> Self {
+        let memory = Arc::new(Mutex::new(MemoryStore::default()));
         let client = match redis::Client::open(redis_url) {
             Ok(c) => c,
             Err(e) => {
-                tracing::warn!(error = %e, "REDIS_URL が不正。Cookie セッションは縮退");
-                return Self::Disabled;
+                tracing::warn!(error = %e, "REDIS_URL が不正。Cookie セッションは in-memory 縮退");
+                return Self { redis: None, memory };
             }
         };
-        // 初期接続に上限時間を設ける（Redis 障害時に起動がハングしない・制約2）。
         match tokio::time::timeout(CONNECT_TIMEOUT, ConnectionManager::new(client)).await {
             Ok(Ok(cm)) => {
-                tracing::info!("Redis 接続確立（Cookie セッション検証 有効）");
-                Self::Redis(Box::new(cm))
+                tracing::info!("Redis 接続確立（Cookie セッション 発行/検証 有効）");
+                Self {
+                    redis: Some(cm),
+                    memory,
+                }
             }
             Ok(Err(e)) => {
-                tracing::warn!(error = %e, "Redis 接続不可。Cookie セッションは縮退（Bearer は動作）");
-                Self::Disabled
+                tracing::warn!(error = %e, "Redis 接続不可。Cookie セッションは in-memory 縮退");
+                Self { redis: None, memory }
             }
             Err(_) => {
-                tracing::warn!("Redis 接続タイムアウト。Cookie セッションは縮退（Bearer は動作）");
-                Self::Disabled
+                tracing::warn!("Redis 接続タイムアウト。Cookie セッションは in-memory 縮退");
+                Self { redis: None, memory }
             }
         }
     }
 
-    /// `session:{token_hash}` を引き、TTL をスライディング更新して [`SessionUser`] を返す。
+    /// Redis を使わない in-memory 専用ストアを作る（単一インスタンス構成/テスト向け）。
     ///
-    /// 未ヒット・破損値・Redis 縮退はいずれも `Ok(None)`（＝未認証扱い）。
+    /// [`connect`](Self::connect) が Redis 到達不能で返すのと同じ縮退状態を明示的に作る。
+    #[must_use]
+    pub fn in_memory() -> Self {
+        Self {
+            redis: None,
+            memory: Arc::new(Mutex::new(MemoryStore::default())),
+        }
+    }
+
+    /// セッションを**発行**し、生トークンを返す（Node `createSession`）。呼び出し側は Cookie で渡す。
+    ///
+    /// Redis 保存に失敗（または未接続）なら in-memory へフォールバックする（トークンは常に返る）。
     ///
     /// # Errors
-    /// Redis コマンド失敗（接続断など）は [`AuthError::Backend`]（502・監視向け。401 と区別）。
+    /// CSPRNG（トークン生成）失敗時のみ [`AuthError::Backend`]（弱いトークンを発行しない）。実質起こらない。
+    pub async fn create(&self, user: &SessionUser, ttl_secs: u64) -> Result<String, AuthError> {
+        let token = crate::token::generate_token().map_err(|_| AuthError::Backend)?;
+        let hash = crate::sha256_hex(&token);
+        // SessionUser は camelCase の固定形状で serialize は失敗し得ないが、lint 準拠で伝播する。
+        let payload = serde_json::to_string(user).map_err(|_| AuthError::Backend)?;
+
+        if let Some(cm) = &self.redis {
+            let mut cm = cm.clone();
+            match redis_create(&mut cm, &hash, &payload, &user.discord_id, ttl_secs).await {
+                Ok(()) => return Ok(token),
+                Err(e) => {
+                    tracing::warn!(error = %e, "Redis へのセッション保存に失敗。in-memory へフォールバック");
+                }
+            }
+        }
+        self.memory_create(&hash, user, ttl_secs);
+        Ok(token)
+    }
+
+    /// トークン（ハッシュ済み）からユーザーを解決し、TTL をスライディング更新する（Node `getSession`）。
+    ///
+    /// 引数 `token_hash` は生トークンの sha256hex。未ヒット・破損値・Redis 縮退は `Ok(None)`。
+    ///
+    /// # Errors
+    /// Redis コマンド失敗**かつ** in-memory にも無い場合のみ [`AuthError::Backend`]（502・監視向け・
+    /// 401 と区別）。in-memory に救済がある場合は `Ok(Some)` を返す（Node の in-memory 救済と一致）。
     pub async fn get(
         &self,
         token_hash: &str,
         ttl_secs: u64,
     ) -> Result<Option<SessionUser>, AuthError> {
-        let Self::Redis(cm) = self else {
-            return Ok(None);
-        };
-        let mut cm = (**cm).clone();
+        let ttl = i64::try_from(ttl_secs).unwrap_or(i64::MAX);
         let session_key = format!("session:{token_hash}");
 
-        let json: Option<String> = cm.get(&session_key).await.map_err(|_| AuthError::Backend)?;
-        let Some(json) = json else {
-            return Ok(None);
-        };
-        // 破損値は無効扱い（Node は破損レコードを削除するが、検証専用の Rust は None で足りる）。
-        let Ok(user) = serde_json::from_str::<SessionUser>(&json) else {
-            return Ok(None);
-        };
+        if let Some(cm) = &self.redis {
+            let mut cm = cm.clone();
+            match cm.get::<_, Option<String>>(&session_key).await {
+                Ok(Some(json)) => {
+                    // 破損値は無効扱い（検証専用の Rust は None で足りる）。
+                    let Ok(user) = serde_json::from_str::<SessionUser>(&json) else {
+                        return Ok(None);
+                    };
+                    let user_key = format!("user_sessions:{}", user.discord_id);
+                    let _: Result<i64, _> = cm.expire(&session_key, ttl).await;
+                    let _: Result<i64, _> = cm.expire(&user_key, ttl).await;
+                    return Ok(Some(user));
+                }
+                // Redis 稼働中にキーが無い → in-memory を確認（Redis 一時停止中発行分の救済）。
+                Ok(None) => {}
+                Err(_) => {
+                    // Redis 障害: in-memory に救済があれば返し、無ければ Backend（502 シグナル）。
+                    return match self.memory_get(token_hash, ttl_secs) {
+                        Some(user) => Ok(Some(user)),
+                        None => Err(AuthError::Backend),
+                    };
+                }
+            }
+        }
+        Ok(self.memory_get(token_hash, ttl_secs))
+    }
 
-        // スライディング更新（session + user_sessions 両キー）。失敗しても検証結果は返す。
-        let ttl = i64::try_from(ttl_secs).unwrap_or(i64::MAX);
-        let user_key = format!("user_sessions:{}", user.discord_id);
-        let _: Result<i64, _> = cm.expire(&session_key, ttl).await;
-        let _: Result<i64, _> = cm.expire(&user_key, ttl).await;
+    /// セッションを失効させる（Node `destroySession`）。Redis と in-memory の両方から削除する。
+    pub async fn destroy(&self, token: &str) {
+        let hash = crate::sha256_hex(token);
+        let session_key = format!("session:{hash}");
 
-        Ok(Some(user))
+        if let Some(cm) = &self.redis {
+            let mut cm = cm.clone();
+            // 発行済みセットからも除くため先にユーザーを特定する。
+            let raw: Option<String> = cm.get(&session_key).await.unwrap_or(None);
+            let _: Result<i64, _> = cm.del(&session_key).await;
+            if let Some(json) = raw {
+                if let Ok(user) = serde_json::from_str::<SessionUser>(&json) {
+                    let user_key = format!("user_sessions:{}", user.discord_id);
+                    let _: Result<i64, _> = cm.srem(&user_key, &hash).await;
+                }
+            }
+        }
+        self.memory_remove(&hash);
+    }
+
+    fn memory(&self) -> MutexGuard<'_, MemoryStore> {
+        self.memory.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn memory_create(&self, hash: &str, user: &SessionUser, ttl_secs: u64) {
+        let mut mem = self.memory();
+        mem.sessions.insert(
+            hash.to_owned(),
+            MemSession {
+                user: user.clone(),
+                expires_at: Instant::now() + Duration::from_secs(ttl_secs),
+            },
+        );
+        mem.user_sessions
+            .entry(user.discord_id.clone())
+            .or_default()
+            .insert(hash.to_owned());
+    }
+
+    /// in-memory から解決し、ヒット時は TTL をスライディング更新する。期限切れは削除して `None`。
+    fn memory_get(&self, token_hash: &str, ttl_secs: u64) -> Option<SessionUser> {
+        let now = Instant::now();
+        let mut mem = self.memory();
+        // 期限切れ判定（不変借用）→ 削除、を分けて借用衝突を避ける。
+        let expired = match mem.sessions.get(token_hash) {
+            None => return None,
+            Some(e) => e.expires_at <= now,
+        };
+        if expired {
+            self.remove_locked(&mut mem, token_hash);
+            return None;
+        }
+        // 生存: スライディング更新して user を複製して返す（expect を使わず if let で束ねる）。
+        if let Some(e) = mem.sessions.get_mut(token_hash) {
+            e.expires_at = now + Duration::from_secs(ttl_secs);
+            return Some(e.user.clone());
+        }
+        None
+    }
+
+    fn memory_remove(&self, hash: &str) {
+        let mut mem = self.memory();
+        self.remove_locked(&mut mem, hash);
+    }
+
+    /// ロック保持中に session + user_sessions 両方から token_hash を除く。
+    fn remove_locked(&self, mem: &mut MemoryStore, hash: &str) {
+        if let Some(e) = mem.sessions.remove(hash) {
+            let uid = e.user.discord_id;
+            if let Some(set) = mem.user_sessions.get_mut(&uid) {
+                set.remove(hash);
+                if set.is_empty() {
+                    mem.user_sessions.remove(&uid);
+                }
+            }
+        }
+    }
+}
+
+/// Redis へセッションを書く（`SET session:{hash}` EX + `SADD user_sessions:{id}` + EXPIRE）。
+async fn redis_create(
+    cm: &mut ConnectionManager,
+    hash: &str,
+    payload: &str,
+    discord_id: &str,
+    ttl_secs: u64,
+) -> redis::RedisResult<()> {
+    let session_key = format!("session:{hash}");
+    let user_key = format!("user_sessions:{discord_id}");
+    let ttl_i64 = i64::try_from(ttl_secs).unwrap_or(i64::MAX);
+    let _: () = cm.set_ex(&session_key, payload, ttl_secs).await?;
+    let _: () = cm.sadd(&user_key, hash).await?;
+    // 発行済みセットもセッションと同じだけ生存させる（アクセス毎に延長）。
+    let _: () = cm.expire(&user_key, ttl_i64).await?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SessionStore;
+    use yuuka_types::{Role, SessionUser};
+
+    /// Redis 未接続（in-memory のみ）のストアを作る。
+    fn memory_only() -> SessionStore {
+        SessionStore::in_memory()
+    }
+
+    fn user() -> SessionUser {
+        SessionUser {
+            discord_id: "123".to_owned(),
+            username: "yuu".to_owned(),
+            role: Role::User,
+        }
+    }
+
+    #[tokio::test]
+    async fn issue_then_verify_roundtrips_in_memory() {
+        let store = memory_only();
+        let token = store.create(&user(), 3600).await.expect("issued");
+        // 発行トークンを sha256hex 化して get で解決できる（発行↔検証のキー整合）。
+        let hash = crate::sha256_hex(&token);
+        let got = store.get(&hash, 3600).await.expect("no backend err");
+        assert_eq!(got.map(|u| u.discord_id), Some("123".to_owned()));
+    }
+
+    #[tokio::test]
+    async fn destroy_removes_session() {
+        let store = memory_only();
+        let token = store.create(&user(), 3600).await.expect("issued");
+        let hash = crate::sha256_hex(&token);
+        store.destroy(&token).await;
+        let got = store.get(&hash, 3600).await.expect("no backend err");
+        assert!(got.is_none(), "失効後は解決できない");
+    }
+
+    #[tokio::test]
+    async fn expired_memory_session_is_none() {
+        let store = memory_only();
+        // TTL 0 秒で発行 → 即時失効扱い。
+        let token = store.create(&user(), 0).await.expect("issued");
+        let hash = crate::sha256_hex(&token);
+        // わずかに待つ必要なく、expires_at <= now で None（0 秒なので now と同時）。
+        let got = store.get(&hash, 0).await.expect("no backend err");
+        assert!(got.is_none());
     }
 }
