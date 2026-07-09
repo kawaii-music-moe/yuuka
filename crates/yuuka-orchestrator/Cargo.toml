@@ -1,0 +1,31 @@
+[package]
+name = "yuuka-orchestrator"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "yuuka 会話オーケストレーション（秘書ターン処理・現行 gemini.ts processMessage の上位層／P1-2）"
+
+[dependencies]
+yuuka-core.workspace = true
+yuuka-db.workspace = true
+yuuka-web.workspace = true          # Db（read pool + writer actor）
+yuuka-crypto.workspace = true       # 保存済み Gemini キーの復号（SystemCrypto）
+yuuka-gemini.workspace = true       # FC ループ・GeminiClient・Content/Part
+yuuka-tools.workspace = true        # ツールレジストリ snapshot
+yuuka-discord.workspace = true      # provider 中立 DTO（TurnProcessor/TurnReply/IncomingChat 等）
+rusqlite.workspace = true
+serde_json.workspace = true
+secrecy.workspace = true
+base64.workspace = true             # ツール生成メディア（rich_parts）の base64 デコード
+chrono.workspace = true             # システムプロンプトのローカル日時（Node formatDateTimeJa）
+async-trait.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+tempfile = "3"
+
+[lints]
+workspace = true

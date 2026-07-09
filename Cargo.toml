@@ -17,6 +17,7 @@ members = [
     "crates/yuuka-discord",
     "crates/yuuka-gemini",
     "crates/yuuka-tools",
+    "crates/yuuka-orchestrator",
     "crates/yuuka-services",
     "crates/yuuka-supervisor",
     "crates/yuuka-todo",
@@ -123,6 +124,7 @@ yuuka-web        = { path = "crates/yuuka-web" }
 yuuka-auth       = { path = "crates/yuuka-auth" }
 yuuka-tools      = { path = "crates/yuuka-tools" }
 yuuka-gemini     = { path = "crates/yuuka-gemini" }
+yuuka-orchestrator = { path = "crates/yuuka-orchestrator" }
 yuuka-discord    = { path = "crates/yuuka-discord" }
 yuuka-todo       = { path = "crates/yuuka-todo" }
 yuuka-finance    = { path = "crates/yuuka-finance" }

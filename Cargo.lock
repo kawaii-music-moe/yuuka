@@ -3302,6 +3302,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "yuuka-orchestrator"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "base64",
+ "chrono",
+ "rusqlite",
+ "secrecy",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "yuuka-core",
+ "yuuka-crypto",
+ "yuuka-db",
+ "yuuka-discord",
+ "yuuka-gemini",
+ "yuuka-tools",
+ "yuuka-web",
+]
+
+[[package]]
 name = "yuuka-persona"
 version = "0.1.0"
 dependencies = [
