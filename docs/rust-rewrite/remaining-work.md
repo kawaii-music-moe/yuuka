@@ -1,9 +1,10 @@
 # Rust 移行 — 残作業ロードマップ（本番投入までの ToDo 全集）
 
-- 最終更新: 2026-07-09（調査セッション 2026-07-09b の実測に基づく）
+- 最終更新: 2026-07-09（実装セッション 2026-07-09c で P0 全消化 + P1-5/6/7 + P1-4 アダプタ + P3-4/5 を着地）
 - 対象ブランチ: `feature/rust-rewrite`（未 push）
-- git HEAD: `078680b`（Phase 5 cutover = Dockerfile/nginx を Rust バイナリ直起動へ切替。**配管の切替であって機能完成ではない**）
+- git HEAD: `31b18a2`（このセッションのコミット群。旧起点は `078680b` Phase 5 cutover）
 - 前提資料: [review-2026-07-06-fix-policy.md](review-2026-07-06-fix-policy.md)（修正方針の唯一の基準）・[review-2026-07-09-batch4-6.md](review-2026-07-09-batch4-6.md)・[PLAN.md](PLAN.md) §11（移行ロードマップ）
+- **本セッションの成果**: P0-1〜4（データ安全/カットオーバー整合）・P1-5（保存時暗号層・Node バイト単位パリティ）・P1-6（batch 確定）・P1-7（deny 緑）・P1-4 アダプタ（notifier bridge・配線待ち）・P3-4/P3-5 を実装しコミット。機械ゲート全緑（build/clippy-D/deny/test 248）。**経路 A のコード/設定ブロッカーは解消**（残: 共有 Redis セッションのライブ確認のみ）。
 
 ---
 
@@ -15,12 +16,14 @@
 |---|---|
 | `cargo build --release --workspace` | ✅ exit 0 |
 | `cargo clippy --workspace --all-targets` | ✅ exit 0（ts-rs 良性 warning のみ） |
-| `cargo test --workspace` | ✅ **238 passed**（20 テストバイナリ） |
-| `cargo deny check` | ❌ exit 5（**補助クレート `yuuka-crawler`/`yuuka-synapse` のみが原因**。コア書換クレートは緑） |
-| HTTP ルート被覆 | 27 / 152 パス ≒ **18%** |
+| `cargo test --workspace` | ✅ **248 passed / 0 failed**（crypto 10 + /api/me 404 + notify_bridge 2 を追加） |
+| `cargo deny check` | ✅ **exit 0**（P1-7 済: crawler/synapse を exclude へ戻した） |
+| 保存時暗号層（Argon2id/AES-256-GCM） | ✅ **実装済**（P1-5・Node ゴールデンベクタでバイト単位パリティ・鍵ローテ起動時配線） |
+| HTTP ルート被覆 | 27 / 152 パス ≒ **18%**（`/api/me` は DB 再取得+404 化して parity 完了） |
 | Gemini ツール被覆 | 24 / 87 native ≒ **28%**（動的 MCP 0） |
-| WebSocket `/ws/chat` | **0%**（未実装） |
-| Gemini FC ループ本体 | 1:1 移植 ≒ 95% 完成（ただし呼び出し口なし） |
+| WebSocket `/ws/chat` | **0%**（未実装・P1-2） |
+| Gemini FC ループ本体 | 1:1 移植 ≒ 95% 完成（ただし呼び出し口なし・P1-2） |
+| 通知配信ブリッジ | 🔶 **アダプタ実装済**（P1-4）・main の messenger 差し替え（P1-3）待ち |
 
 **進め方の2経路:**
 - **経路 A（strangler 並走カナリア）** — Node が認証/会話/Discord/暗号を担い、Rust は移行済み CRUD の一部だけを共有 Redis セッション前提で配信。§7-A の前提を満たせば数日規模で到達可能。
