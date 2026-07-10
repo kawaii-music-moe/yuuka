@@ -252,3 +252,29 @@ async fn missing_bot_key_degrades_by_scope() {
         .expect("guild ok");
     assert!(guild.is_silent(), "guild は黙殺（空応答）");
 }
+
+#[tokio::test]
+async fn non_llm_error_returns_bot_persona_reply() {
+    let (db, path) = fresh_db();
+    let crypto = Arc::new(SystemCrypto::new(SecretString::from("gen-secret".to_owned())).unwrap());
+    seed_guild_bot(&path, &crypto, "botG", "owner1", true);
+    // message_logs を破壊して非 LLM（DB）エラーを誘発。
+    conn(&path)
+        .execute_batch("ALTER TABLE message_logs RENAME TO message_logs_broken")
+        .expect("break table");
+    let engine = engine_with(db, crypto, "すみません、ちょっと調子が悪いみたいです…");
+
+    let reply = engine
+        .process_guild(
+            &BotId::new("botG"),
+            &GuildId::new("g1"),
+            speaker("mem1", "たろう"),
+            IncomingChat { text: "こんにちは".to_owned(), ..IncomingChat::default() },
+            null_sink(),
+            Arc::new(NoopDelivery),
+        )
+        .await
+        .expect("persona error reply");
+    // 固定の GENERIC_ERROR ではなく、Bot 専用キーで生成したペルソナ入りエラー報告が返る。
+    assert_eq!(reply.text, "すみません、ちょっと調子が悪いみたいです…");
+}

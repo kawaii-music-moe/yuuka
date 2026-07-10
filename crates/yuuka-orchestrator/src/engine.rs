@@ -50,6 +50,35 @@ const GENERIC_RATE_LIMIT_MESSAGE: &str =
 /// サーバーエラー応答（汎用モード・Node `guildErrorResult`・gemini.ts:1333）。
 const GENERIC_SERVER_ERROR_MESSAGE: &str =
     "⚠️ AIサーバーが現在混み合っているか、一時的なエラーが発生しています。しばらく待ってからもう一度お試しください。";
+/// 非 LLM エラー時にペルソナ口調のエラー報告を生成させる指示（システムプロンプト末尾へ連結）。
+const PERSONA_ERROR_INSTRUCTION: &str = "# エラー報告\n\
+いまシステム内部でエラーが発生し、ユーザーの直前のメッセージを処理できませんでした。\
+あなたのペルソナ・口調のまま、処理に失敗したことを短く（1〜3文で）謝り、\
+少し時間をおいてもう一度試すようユーザーへ伝えてください。\
+技術的な詳細・エラー内容・システム用語は出さないでください。";
+/// ペルソナ入りエラー報告の生成トリガー（Gemini は contents 必須のための合成ユーザーターン）。
+const PERSONA_ERROR_NOTICE: &str =
+    "（システム通知）内部エラーが発生しました。ユーザーへ知らせてください。";
+
+/// ターン失敗の内部分類（ペルソナ入りエラー応答を試みてよいかの判定）。
+///
+/// - [`TurnFailure::Llm`]: LLM 関連（鍵復号不能・backend 構築失敗・上流の未分類エラー）。LLM を
+///   呼べない/信頼できないため従来の固定文へ（レート/サーバーは分類済み ⚠️ で先に返すためここに来ない）。
+/// - [`TurnFailure::NonLlm`]: LLM 以外（DB 障害等）。LLM は使える見込みがあるため、ペルソナ口調の
+///   エラー報告を生成して返す（生成失敗時は固定文へフォールバック）。
+enum TurnFailure {
+    Llm(TurnError),
+    NonLlm(TurnError),
+}
+
+/// ペルソナ入りエラー応答に使うペルソナ/キーの出所。
+#[derive(Clone, Copy)]
+enum PersonaSource {
+    /// 秘書経路: 発話ユーザーのキー + アクティブペルソナ（無ければ `DEFAULT_PERSONA`）。
+    Secretary,
+    /// 汎用モード: Bot 専用キー + Bot ペルソナ（無ければ指示のみ）。
+    Bot,
+}
 
 /// 復号済み Gemini キー + モデルから [`GenerateBackend`] を作るファクトリ。
 ///
@@ -130,9 +159,13 @@ impl ChatEngine {
 
     /// 秘書経路の 1 ターンを処理する（Node `processMessage`）。
     ///
+    /// 非 LLM エラー（DB 障害等）は固定文ではなく**ペルソナ口調のエラー報告**を LLM 生成して返す
+    /// （生成不能時は従来の固定文へフォールバック）。LLM 関連エラー（レート/サーバー/鍵）は従来どおり
+    /// 分類済み ⚠️ または固定文。
+    ///
     /// # Errors
-    /// DB 障害・鍵復号失敗・上流（Gemini）障害時 [`TurnError`]。キー未設定は ⚠️ テキスト応答
-    /// （Node `processMessage` の catch と同じく `Ok` で返す）。
+    /// 鍵復号失敗・上流（Gemini）障害・ペルソナ応答も生成不能な DB 障害時 [`TurnError`]。
+    /// キー未設定は ⚠️ テキスト応答（Node `processMessage` の catch と同じく `Ok` で返す）。
     pub async fn secretary_turn(
         &self,
         bot_id: &BotId,
@@ -140,6 +173,30 @@ impl ChatEngine {
         msg: IncomingChat,
         status: &StatusSink,
     ) -> Result<TurnReply, TurnError> {
+        match self.secretary_turn_impl(bot_id, user_id, msg, status).await {
+            Ok(r) => Ok(r),
+            Err(TurnFailure::Llm(e)) => Err(e),
+            Err(TurnFailure::NonLlm(e)) => {
+                tracing::warn!(error = %e, "非 LLM エラー: ペルソナ入りエラー応答の生成を試みます");
+                match self
+                    .persona_error_reply(bot_id, user_id, PersonaSource::Secretary)
+                    .await
+                {
+                    Some(text) => Ok(TurnReply::text(text)),
+                    None => Err(e),
+                }
+            }
+        }
+    }
+
+    /// [`Self::secretary_turn`] の本体（失敗を LLM/非 LLM に分類して返す）。
+    async fn secretary_turn_impl(
+        &self,
+        bot_id: &BotId,
+        user_id: &UserId,
+        msg: IncomingChat,
+        status: &StatusSink,
+    ) -> Result<TurnReply, TurnFailure> {
         let uid = user_id.as_str();
         let bid = bot_id.as_str();
 
@@ -158,19 +215,19 @@ impl ChatEngine {
                 msg.reply_to_msg_id.as_deref(),
             )
             .await
-            .map_err(to_turn_err)?;
+            .map_err(db_fail)?;
         }
 
         // 2. 直近 15 件（古い順）をロードして contents を組む。
         let history = message_log::recent_context(&self.db, uid, bid, message_log::CONTEXT_LIMIT)
             .await
-            .map_err(to_turn_err)?;
+            .map_err(db_fail)?;
         let mut contents = build_contents(&history, &msg);
 
         // 3. システムプロンプト（ペルソナ + 固定ルール + 現在日時）。
         let persona_prompt = persona::active_persona_prompt(&self.db, uid, bid)
             .await
-            .map_err(to_turn_err)?;
+            .map_err(db_fail)?;
         let sys = system_prompt::build_system_instruction(
             persona_prompt.as_deref(),
             rich,
@@ -180,23 +237,23 @@ impl ChatEngine {
         // 4. ユーザーの Gemini キー（未設定は ⚠️ 応答）。⚠️ 定型応答は履歴に**保存しない**
         //    （Node `processMessage` の catch は `saveAssistant` を通らず返すだけ＝キー未設定/レート/
         //    サーバーエラーの警告文が以後の文脈ウィンドウを汚染しない）。
-        let Some(cfg) = user::user_gemini(&self.db, uid).await.map_err(to_turn_err)? else {
+        let Some(cfg) = user::user_gemini(&self.db, uid).await.map_err(db_fail)? else {
             return Ok(TurnReply::text(NO_KEY_MESSAGE));
         };
         let crypto = self
             .crypto
             .as_ref()
-            .ok_or_else(|| TurnError::Failed("encryption unavailable (YUUKA_ENCRYPTION_SECRET)".to_owned()))?;
+            .ok_or_else(|| llm_fail("encryption unavailable (YUUKA_ENCRYPTION_SECRET)".to_owned()))?;
         let plaintext = crypto
             .decrypt_text(&cfg.encrypted, &cfg.iv, &cfg.tag)
-            .map_err(|e| TurnError::Failed(format!("gemini key decrypt: {e}")))?;
+            .map_err(|e| llm_fail(format!("gemini key decrypt: {e}")))?;
         let backend = self
             .factory
             .build(&cfg.model, SecretString::from(plaintext))
-            .map_err(|e| TurnError::Failed(e.to_string()))?;
+            .map_err(|e| llm_fail(e.to_string()))?;
 
         // 5. 能力ゲート: この Bot の能力集合を解決（Node `resolveBotCapabilities`・DB 未登録は秘書相当）。
-        let caps = match bot_repo::get_bot(&self.db, bid).await.map_err(to_turn_err)? {
+        let caps = match bot_repo::get_bot(&self.db, bid).await.map_err(db_fail)? {
             Some(bot) => bot.capability_set(),
             None => bot_repo::secretary_full_capabilities(),
         };
@@ -224,7 +281,7 @@ impl ChatEngine {
             Ok(r) => r,
             Err(e) => {
                 // Node `processMessage` catch: レート/サーバーエラーは分類済み ⚠️ を通常応答で返す
-                // （履歴には保存しない）。それ以外は generic フォールバックへ（finish_reply が GENERIC_ERROR）。
+                // （履歴には保存しない）。その他の上流エラーは LLM 関連＝固定文フォールバックへ。
                 if let Some(msg) = classify_gemini_error(
                     &e,
                     SECRETARY_RATE_LIMIT_MESSAGE,
@@ -232,7 +289,7 @@ impl ChatEngine {
                 ) {
                     return Ok(TurnReply::text(msg));
                 }
-                return Err(TurnError::Failed(e.to_string()));
+                return Err(llm_fail(e.to_string()));
             }
         };
 
@@ -244,7 +301,7 @@ impl ChatEngine {
         };
         message_log::add_message_log(&self.db, uid, bid, "assistant", &reply_text, None, None)
             .await
-            .map_err(to_turn_err)?;
+            .map_err(db_fail)?;
 
         Ok(TurnReply {
             text: reply_text,
@@ -261,8 +318,9 @@ impl ChatEngine {
     /// P2-B・現状は秘書経路と同じく全ツール露出）。
     ///
     /// # Errors
-    /// DB 障害・鍵復号失敗・上流（Gemini）障害時 [`TurnError`]。Bot レコード不在は空応答（黙殺）、
-    /// DM でのキー未設定は ⚠️ テキストを `Ok` で返す。
+    /// 鍵復号失敗・上流（Gemini）障害・ペルソナ応答も生成不能な DB 障害時 [`TurnError`]。
+    /// Bot レコード不在は空応答（黙殺）、DM でのキー未設定は ⚠️ テキストを `Ok` で返す。
+    /// 非 LLM エラー（DB 障害等）は Bot ペルソナ口調のエラー報告を生成して返す。
     async fn generic_turn(
         &self,
         bot_id: &BotId,
@@ -272,12 +330,41 @@ impl ChatEngine {
         msg: IncomingChat,
         status: &StatusSink,
     ) -> Result<TurnReply, TurnError> {
+        match self
+            .generic_turn_impl(bot_id, scope, guild_id, speaker, msg, status)
+            .await
+        {
+            Ok(r) => Ok(r),
+            Err(TurnFailure::Llm(e)) => Err(e),
+            Err(TurnFailure::NonLlm(e)) => {
+                tracing::warn!(error = %e, "非 LLM エラー: ペルソナ入りエラー応答の生成を試みます");
+                match self
+                    .persona_error_reply(bot_id, &speaker.user_id, PersonaSource::Bot)
+                    .await
+                {
+                    Some(text) => Ok(TurnReply::text(text)),
+                    None => Err(e),
+                }
+            }
+        }
+    }
+
+    /// [`Self::generic_turn`] の本体（失敗を LLM/非 LLM に分類して返す）。
+    async fn generic_turn_impl(
+        &self,
+        bot_id: &BotId,
+        scope: GuildScope,
+        guild_id: Option<&GuildId>,
+        speaker: &Speaker,
+        msg: IncomingChat,
+        status: &StatusSink,
+    ) -> Result<TurnReply, TurnFailure> {
         let bid = bot_id.as_str();
         let uid = speaker.user_id.as_str();
         let gid = guild_id.map(GuildId::as_str);
 
         // Bot レコード（無ければ黙殺・Node は `getBotById` 不在で空応答）。
-        let Some(bot) = bot_repo::get_bot(&self.db, bid).await.map_err(to_turn_err)? else {
+        let Some(bot) = bot_repo::get_bot(&self.db, bid).await.map_err(db_fail)? else {
             return Ok(TurnReply::default());
         };
 
@@ -292,7 +379,7 @@ impl ChatEngine {
                         msg.discord_msg_id.as_deref(), msg.reply_to_msg_id.as_deref(),
                     )
                     .await
-                    .map_err(to_turn_err)?;
+                    .map_err(db_fail)?;
                 }
                 _ => {
                     message_log::add_message_log(
@@ -300,7 +387,7 @@ impl ChatEngine {
                         msg.discord_msg_id.as_deref(), msg.reply_to_msg_id.as_deref(),
                     )
                     .await
-                    .map_err(to_turn_err)?;
+                    .map_err(db_fail)?;
                 }
             }
         }
@@ -314,21 +401,21 @@ impl ChatEngine {
             }
             _ => message_log::recent_bot_dm_context(&self.db, bid, uid, message_log::CONTEXT_LIMIT).await,
         }
-        .map_err(to_turn_err)?;
+        .map_err(db_fail)?;
         let mut contents = build_contents(&history, &msg);
 
         // 3. システムプロンプト（Bot 単位ペルソナ + 共有/個人ノート）。
         let persona_prompt = match bot.persona_id {
-            Some(pid) => bot_repo::persona_prompt_by_id(&self.db, pid).await.map_err(to_turn_err)?,
+            Some(pid) => bot_repo::persona_prompt_by_id(&self.db, pid).await.map_err(db_fail)?,
             None => None,
         };
         let guild_note = match (scope, gid) {
             (GuildScope::Guild, Some(gid)) => {
-                bot_repo::bot_guild_note(&self.db, bid, gid).await.map_err(to_turn_err)?
+                bot_repo::bot_guild_note(&self.db, bid, gid).await.map_err(db_fail)?
             }
             _ => String::new(),
         };
-        let personal_note = bot_repo::bot_user_note(&self.db, bid, uid).await.map_err(to_turn_err)?;
+        let personal_note = bot_repo::bot_user_note(&self.db, bid, uid).await.map_err(db_fail)?;
         let sys = guild_prompt::build_guild_system_instruction(
             persona_prompt.as_deref(),
             scope,
@@ -340,7 +427,7 @@ impl ChatEngine {
         );
 
         // 4. Bot 専用 Gemini キー（未設定: guild は黙殺・DM は ⚠️ 応答）。
-        let Some(triplet) = bot_repo::bot_gemini(&self.db, bid).await.map_err(to_turn_err)? else {
+        let Some(triplet) = bot_repo::bot_gemini(&self.db, bid).await.map_err(db_fail)? else {
             return Ok(match scope {
                 GuildScope::Guild => TurnReply::default(),
                 GuildScope::Dm => TurnReply::text(BOT_NO_KEY_MESSAGE),
@@ -349,14 +436,14 @@ impl ChatEngine {
         let crypto = self
             .crypto
             .as_ref()
-            .ok_or_else(|| TurnError::Failed("encryption unavailable (YUUKA_ENCRYPTION_SECRET)".to_owned()))?;
+            .ok_or_else(|| llm_fail("encryption unavailable (YUUKA_ENCRYPTION_SECRET)".to_owned()))?;
         let plaintext = crypto
             .decrypt_text(&triplet.encrypted, &triplet.iv, &triplet.tag)
-            .map_err(|e| TurnError::Failed(format!("bot gemini key decrypt: {e}")))?;
+            .map_err(|e| llm_fail(format!("bot gemini key decrypt: {e}")))?;
         let backend = self
             .factory
             .build(bot_repo::BOT_DEFAULT_MODEL, SecretString::from(plaintext))
-            .map_err(|e| TurnError::Failed(e.to_string()))?;
+            .map_err(|e| llm_fail(e.to_string()))?;
 
         // 5. FC ループ（ギルドは ctx.guild_id を通す・リッチ返信は常時有効・汎用モードのツールカタログ）。
         //    能力ゲート: Bot の能力集合 + GuildAssistant 経路 ⇒ 秘書ツールは露出せず guild-assistant のみ。
@@ -385,12 +472,13 @@ impl ChatEngine {
             Ok(r) => r,
             Err(e) => {
                 // Node `guildErrorResult`: レート/サーバーエラーは分類済み ⚠️ を通常応答で返す（履歴非保存）。
+                // その他の上流エラーは LLM 関連＝固定文フォールバックへ。
                 if let Some(msg) =
                     classify_gemini_error(&e, GENERIC_RATE_LIMIT_MESSAGE, GENERIC_SERVER_ERROR_MESSAGE)
                 {
                     return Ok(TurnReply::text(msg));
                 }
-                return Err(TurnError::Failed(e.to_string()));
+                return Err(llm_fail(e.to_string()));
             }
         };
 
@@ -406,13 +494,87 @@ impl ChatEngine {
             }
             _ => message_log::add_message_log(&self.db, uid, bid, "assistant", &reply_text, None, None).await,
         }
-        .map_err(to_turn_err)?;
+        .map_err(db_fail)?;
 
         Ok(TurnReply {
             text: reply_text,
             files: rich_parts_to_files(&result.rich_parts),
             ..TurnReply::default()
         })
+    }
+
+    /// 非 LLM エラー時のペルソナ入りエラー報告を生成する（best-effort・失敗は `None`＝固定文へ）。
+    ///
+    /// 秘書経路は発話ユーザーのキー + アクティブペルソナ（無ければ `DEFAULT_PERSONA`）、汎用モードは
+    /// Bot 専用キー + Bot ペルソナを使う。ツールは渡さない（謝罪文の生成のみ）。⚠️ 定型と同じく
+    /// **履歴には保存しない**（エラー通知で文脈を汚染しない）。
+    async fn persona_error_reply(
+        &self,
+        bot_id: &BotId,
+        user_id: &UserId,
+        source: PersonaSource,
+    ) -> Option<String> {
+        let crypto = self.crypto.as_ref()?;
+        let (persona, model, enc, iv, tag) = match source {
+            PersonaSource::Secretary => {
+                let cfg = user::user_gemini(&self.db, user_id.as_str()).await.ok()??;
+                let persona =
+                    persona::active_persona_prompt(&self.db, user_id.as_str(), bot_id.as_str())
+                        .await
+                        .ok()
+                        .flatten()
+                        .unwrap_or_else(|| system_prompt::DEFAULT_PERSONA.to_owned());
+                (Some(persona), cfg.model, cfg.encrypted, cfg.iv, cfg.tag)
+            }
+            PersonaSource::Bot => {
+                let t = bot_repo::bot_gemini(&self.db, bot_id.as_str()).await.ok()??;
+                let persona = match bot_repo::get_bot(&self.db, bot_id.as_str())
+                    .await
+                    .ok()
+                    .flatten()
+                    .and_then(|b| b.persona_id)
+                {
+                    Some(pid) => bot_repo::persona_prompt_by_id(&self.db, pid).await.ok().flatten(),
+                    None => None,
+                };
+                (
+                    persona,
+                    bot_repo::BOT_DEFAULT_MODEL.to_owned(),
+                    t.encrypted,
+                    t.iv,
+                    t.tag,
+                )
+            }
+        };
+        let plaintext = crypto.decrypt_text(&enc, &iv, &tag).ok()?;
+        let backend = self
+            .factory
+            .build(&model, SecretString::from(plaintext))
+            .ok()?;
+
+        let sys = match persona {
+            Some(p) => format!("{p}\n\n{PERSONA_ERROR_INSTRUCTION}"),
+            None => PERSONA_ERROR_INSTRUCTION.to_owned(),
+        };
+        let mut contents = vec![Content {
+            role: Role::User,
+            parts: vec![Part::text(PERSONA_ERROR_NOTICE.to_owned())],
+        }];
+        // ツール無しの単発生成（謝罪文にツール実行は不要）。
+        let ctx = ToolContext::new(bot_id.clone(), user_id.clone());
+        let empty = ToolRegistry::new().snapshot(&ctx);
+        let result = run_function_calling_loop(
+            backend.as_ref(),
+            &empty,
+            &sys,
+            &mut contents,
+            &ctx,
+            &LoopOptions::default(),
+        )
+        .await
+        .ok()?;
+        let text = result.text.trim();
+        (!text.is_empty()).then(|| text.to_owned())
     }
 }
 
@@ -476,9 +638,14 @@ impl TurnProcessor for ChatEngine {
     }
 }
 
-/// [`DbError`] を [`TurnError`] へ写像する。
-fn to_turn_err(e: DbError) -> TurnError {
-    TurnError::Failed(e.to_string())
+/// [`DbError`] を非 LLM 失敗（ペルソナ入りエラー応答の対象）へ写像する。
+fn db_fail(e: DbError) -> TurnFailure {
+    TurnFailure::NonLlm(TurnError::Failed(e.to_string()))
+}
+
+/// LLM 関連の失敗（固定文フォールバック対象）を組む。
+fn llm_fail(msg: String) -> TurnFailure {
+    TurnFailure::Llm(TurnError::Failed(msg))
 }
 
 /// FC ループの Gemini エラーを Node パリティで分類する。Node は数値 `status` のみで判定する

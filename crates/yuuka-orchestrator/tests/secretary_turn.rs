@@ -196,3 +196,54 @@ async fn missing_gemini_key_returns_warning_reply() {
     assert_eq!(count_logs(&path, "u3", "user"), 1, "ユーザー発言は保存される");
     assert_eq!(count_logs(&path, "u3", "assistant"), 0, "⚠️ 応答は履歴を汚染しない");
 }
+
+/// `message_logs` を破壊して非 LLM（DB）エラーを誘発する。
+fn break_message_logs(path: &std::path::Path) {
+    rusqlite::Connection::open(path)
+        .expect("open")
+        .execute_batch("ALTER TABLE message_logs RENAME TO message_logs_broken")
+        .expect("break table");
+}
+
+#[tokio::test]
+async fn non_llm_error_returns_persona_styled_reply() {
+    let (db, path) = fresh_db();
+    let crypto =
+        Arc::new(SystemCrypto::new(SecretString::from("orch-test-secret".to_owned())).unwrap());
+    seed_user_with_key(&path, &crypto, "u4");
+    break_message_logs(&path);
+    let engine = engine_with(db, Some(crypto), "ごめんなさい、うまく処理できませんでした…！");
+
+    let reply = engine
+        .secretary_turn(
+            &BotId::system_default(),
+            &UserId::new("u4"),
+            IncomingChat { text: "やあ".to_owned(), ..IncomingChat::default() },
+            &null_sink(),
+        )
+        .await
+        .expect("persona error reply");
+    // 固定の GENERIC_ERROR ではなく、LLM（fake）が生成したペルソナ入りエラー報告が返る。
+    assert_eq!(reply.text, "ごめんなさい、うまく処理できませんでした…！");
+}
+
+#[tokio::test]
+async fn non_llm_error_without_key_falls_back_to_fixed_error() {
+    let (db, path) = fresh_db();
+    seed_user_no_key(&path, "u5");
+    break_message_logs(&path);
+    let crypto =
+        Arc::new(SystemCrypto::new(SecretString::from("orch-test-secret".to_owned())).unwrap());
+    let engine = engine_with(db, Some(crypto), "unused");
+
+    let result = engine
+        .secretary_turn(
+            &BotId::system_default(),
+            &UserId::new("u5"),
+            IncomingChat { text: "やあ".to_owned(), ..IncomingChat::default() },
+            &null_sink(),
+        )
+        .await;
+    // キー無し＝ペルソナ応答も生成不能 → Err（呼び出し側の固定文フォールバックへ）。
+    assert!(result.is_err(), "生成不能時は Err で固定文経路へ: {result:?}");
+}
