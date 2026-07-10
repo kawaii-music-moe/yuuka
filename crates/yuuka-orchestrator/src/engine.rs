@@ -177,9 +177,10 @@ impl ChatEngine {
             &system_prompt::now_date_time_ja(),
         );
 
-        // 4. ユーザーの Gemini キー（未設定は ⚠️ 応答・アシスタント側も保存）。
+        // 4. ユーザーの Gemini キー（未設定は ⚠️ 応答）。⚠️ 定型応答は履歴に**保存しない**
+        //    （Node `processMessage` の catch は `saveAssistant` を通らず返すだけ＝キー未設定/レート/
+        //    サーバーエラーの警告文が以後の文脈ウィンドウを汚染しない）。
         let Some(cfg) = user::user_gemini(&self.db, uid).await.map_err(to_turn_err)? else {
-            let _ = message_log::add_message_log(&self.db, uid, bid, "assistant", NO_KEY_MESSAGE, None, None).await;
             return Ok(TurnReply::text(NO_KEY_MESSAGE));
         };
         let crypto = self

@@ -7,6 +7,10 @@
 //! 起動時に `main` が構築して [`yuuka_discord::ManagerPorts`] へ渡す。DB エラーは trait が値を返す
 //! 契約のため**安全側の既定**（不在/不許可/false）へ畳んで `tracing` へ記録する（Discord 経路を
 //! 起動不能にしない）。トレイト定義は `yuuka-discord`、実装は本クレート（orphan 規則 OK）。
+//!
+//! **意図的 divergence**: Node は membership 判定中の DB 例外を外側 catch へ伝播し「処理中にエラーが
+//! 発生しました」を返信するが、本実装は安全側 deny（一過性 SQLITE_BUSY でもその 1 発言を黙殺/非メンバー
+//! 誘導）。WAL の読み取りは BUSY をほぼ返さないため実害は稀で、Discord 経路の頑健性を優先した。
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};

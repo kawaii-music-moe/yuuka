@@ -27,16 +27,20 @@ use yuuka_orchestrator::ChatEngine;
 use yuuka_types::SessionUser;
 use yuuka_web::{has_bot_access, AppState, AuthenticatedUser, Db};
 
-/// 1 メッセージ添付上限（MB）。Node `DESKTOP_MAX_UPLOAD_MB` 既定 20。
-const MAX_UPLOAD_MB: u32 = 20;
 /// keepalive ping 間隔（Node `PING_INTERVAL_MS = 30_000`）。
 const PING_INTERVAL: Duration = Duration::from_secs(30);
 
-/// `/ws/chat` ルータ（`ChatEngine` を `Extension` で注入・`AppState` 上でマージ）。
-pub fn ws_routes(engine: Arc<ChatEngine>) -> Router<AppState> {
+/// 1 メッセージ添付上限（MB・config `DESKTOP_MAX_UPLOAD_MB`）。`Extension` 注入用 newtype。
+#[derive(Debug, Clone, Copy)]
+struct MaxUploadMb(u32);
+
+/// `/ws/chat` ルータ（`ChatEngine` と添付上限を `Extension` で注入・`AppState` 上でマージ）。
+/// `max_upload_mb` は config の `DESKTOP_MAX_UPLOAD_MB`（Node `config.desktopMaxUploadMb`・既定 20）。
+pub fn ws_routes(engine: Arc<ChatEngine>, max_upload_mb: u32) -> Router<AppState> {
     Router::new()
         .route("/ws/chat", get(ws_upgrade))
         .layer(Extension(engine))
+        .layer(Extension(MaxUploadMb(max_upload_mb)))
 }
 
 #[derive(Debug, Deserialize)]
@@ -50,6 +54,7 @@ async fn ws_upgrade(
     user: AuthenticatedUser,
     State(state): State<AppState>,
     Extension(engine): Extension<Arc<ChatEngine>>,
+    Extension(max_upload): Extension<MaxUploadMb>,
     Query(q): Query<BotQuery>,
     ws: WebSocketUpgrade,
 ) -> Response {
@@ -63,7 +68,9 @@ async fn ws_upgrade(
         Ok(false) => return (StatusCode::FORBIDDEN, "forbidden").into_response(),
         Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, "internal").into_response(),
     }
-    ws.on_upgrade(move |socket| handle_socket(socket, user.0, bot_id, state.db.clone(), engine))
+    ws.on_upgrade(move |socket| {
+        handle_socket(socket, user.0, bot_id, state.db.clone(), engine, max_upload)
+    })
 }
 
 // ─── サーバ → クライアントのフレーム（clients/desktop/src/model.rs `ServerFrame` に一致） ───
@@ -92,7 +99,7 @@ enum ServerFrame<'a> {
     },
     Error {
         code: &'static str,
-        message: &'static str,
+        message: String,
     },
 }
 
@@ -149,6 +156,7 @@ async fn handle_socket(
     bot_id: String,
     db: Db,
     engine: Arc<ChatEngine>,
+    max_upload: MaxUploadMb,
 ) {
     let (mut sink, mut stream) = socket.split();
     // 送信は writer タスクへ集約（ステータスコールバックとメインループの並行送信を安全にする）。
@@ -171,7 +179,7 @@ async fn handle_socket(
         user: &user,
         bot: bound,
         bots,
-        max_upload_mb: MAX_UPLOAD_MB,
+        max_upload_mb: max_upload.0,
     };
     let _ = tx.send(json_msg(&ready));
 
@@ -184,7 +192,7 @@ async fn handle_socket(
             incoming = stream.next() => {
                 match incoming {
                     Some(Ok(Message::Text(t))) => {
-                        handle_text(t.as_str(), &user, &bot_id, &engine, &tx).await;
+                        handle_text(t.as_str(), &user, &bot_id, &engine, &tx, max_upload).await;
                     }
                     Some(Ok(Message::Pong(_))) => is_alive = true,
                     Some(Ok(Message::Ping(p))) => {
@@ -215,10 +223,17 @@ async fn handle_text(
     bot_id: &str,
     engine: &Arc<ChatEngine>,
     tx: &mpsc::UnboundedSender<Message>,
+    max_upload: MaxUploadMb,
 ) {
     // 上限超過（base64 込みのフレーム長で概算）。Node は raw バイト長で判定する。
-    if text.len() > (MAX_UPLOAD_MB as usize) * 1024 * 1024 {
-        let _ = tx.send(json_msg(&err_frame("too_large", "メッセージが大きすぎます。")));
+    if text.len() > (max_upload.0 as usize) * 1024 * 1024 {
+        let _ = tx.send(json_msg(&err_frame(
+            "too_large",
+            format!(
+                "メッセージが大きすぎます（上限 {}MB）。画像を縮小するか音声を短くしてください。",
+                max_upload.0
+            ),
+        )));
         return;
     }
     let frame: ClientFrame = match serde_json::from_str(text) {
@@ -317,8 +332,11 @@ fn done_frame(reply: TurnReply) -> ServerFrame<'static> {
     }
 }
 
-fn err_frame(code: &'static str, message: &'static str) -> ServerFrame<'static> {
-    ServerFrame::Error { code, message }
+fn err_frame(code: &'static str, message: impl Into<String>) -> ServerFrame<'static> {
+    ServerFrame::Error {
+        code,
+        message: message.into(),
+    }
 }
 
 fn to_media(a: WsAttachment) -> InlineMedia {

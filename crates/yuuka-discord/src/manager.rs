@@ -175,6 +175,10 @@ pub struct DiscordMessenger {
 impl DiscordMessenger {
     /// bot_id 指定時のクライアント解決（現行 `resolveClientForUser` の botId 経路）。
     /// 当該 Bot のクライアントがあればそれ、無ければデフォルト（system_default）へフォールバック。
+    ///
+    /// **意図的 divergence**: Node は `readyAt`（gateway 接続済み）を要求するが、twilight の HTTP
+    /// クライアントはトークンだけで REST 送信できる（gateway 非依存）ため readiness ゲートを設けない。
+    /// gateway 未接続でも DM/チャンネル送信は成功する＝Node が拒否するケースでも配信できる（改善側）。
     fn resolve_client(&self, bot_id: &BotId) -> Option<Arc<Client>> {
         if bot_id.as_str() != BotId::SYSTEM_DEFAULT {
             if let Some(c) = self.clients.get(bot_id) {

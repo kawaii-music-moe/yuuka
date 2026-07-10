@@ -115,7 +115,7 @@ async fn ws_chat_ready_then_msg_returns_done() {
         }),
     ));
     let state = AppState::new(Arc::new(FakeAuth), WebConfig::default(), db);
-    let app = build_app(state, axum::Router::new(), ws_routes(engine), None);
+    let app = build_app(state, axum::Router::new(), ws_routes(engine, 20), None);
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();

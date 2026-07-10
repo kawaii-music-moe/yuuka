@@ -96,7 +96,7 @@ async fn run() -> Result<(), String> {
         crypto.clone(),
         tool_registry,
     ));
-    let chat_ws_routes = ws_routes(chat_engine.clone());
+    let chat_ws_routes = ws_routes(chat_engine.clone(), cfg.desktop_max_upload_mb);
 
     // 4.7) Discord マルチテナント（P1-3）。実ポート（BotDirectory/RateLimiter/MembershipService）＋
     //      会話エンジン（processor）を注入して DiscordManager を組み、`prepare` でトークン解決 +

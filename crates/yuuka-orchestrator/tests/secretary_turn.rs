@@ -192,4 +192,7 @@ async fn missing_gemini_key_returns_warning_reply() {
         .await
         .expect("turn ok");
     assert!(reply.text.contains("Gemini API Keyが設定されていません"), "reply={}", reply.text);
+    // ⚠️ 定型応答は履歴に保存しない（Node processMessage catch パリティ）。ユーザー発言は保存済み。
+    assert_eq!(count_logs(&path, "u3", "user"), 1, "ユーザー発言は保存される");
+    assert_eq!(count_logs(&path, "u3", "assistant"), 0, "⚠️ 応答は履歴を汚染しない");
 }

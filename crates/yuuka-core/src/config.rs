@@ -51,6 +51,9 @@ pub struct Config {
     /// 初期 admin に昇格する Discord ユーザー ID（`ADMIN_DISCORD_IDS`・任意・Node `config.adminDiscordIds`）。
     /// `createUser` はこのリストに含まれる ID（または最初のユーザー）を admin ロールで作成する。
     pub admin_discord_ids: Vec<String>,
+    /// デスクトップ `/ws/chat` の 1 メッセージ添付上限（MB・`DESKTOP_MAX_UPLOAD_MB`・既定 20・
+    /// Node `config.desktopMaxUploadMb`）。
+    pub desktop_max_upload_mb: u32,
 }
 
 impl Config {
@@ -98,6 +101,10 @@ impl Config {
                 .map(SecretString::from),
             invite_codes: parse_string_list(get("INVITE_CODES").as_deref()),
             admin_discord_ids: parse_string_list(get("ADMIN_DISCORD_IDS").as_deref()),
+            desktop_max_upload_mb: parse_field(
+                "DESKTOP_MAX_UPLOAD_MB",
+                &get("DESKTOP_MAX_UPLOAD_MB").unwrap_or_else(|| "20".to_owned()),
+            )?,
         };
         cfg.validate()?;
         Ok(cfg)
