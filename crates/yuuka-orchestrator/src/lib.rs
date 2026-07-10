@@ -7,10 +7,14 @@
 //!
 //! DAG: `orchestrator → {gemini, tools, discord(DTO), crypto, web(Db), db, core}`。
 
+pub mod bot_repo;
+pub mod discord_ports;
 pub mod engine;
+pub mod guild_prompt;
 pub mod message_log;
 pub mod persona;
 pub mod system_prompt;
 pub mod user;
 
+pub use discord_ports::{DbBotDirectory, DbMembership, InMemoryRateLimiter};
 pub use engine::{ChatEngine, GeminiFactory, RealGeminiFactory};

@@ -15,15 +15,16 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use axum::Router;
-use yuuka_auth::{AuthRuntime, CompositeAuth, NullRegistrationDm, SessionStore};
+use yuuka_auth::{AuthRuntime, CompositeAuth, SessionStore};
 use yuuka_core::secrets::ExposeSecret;
 use yuuka_core::{Config, DbError};
 use yuuka_crypto::{rotate_secret_key, SystemCrypto, LEGACY_FALLBACK_SECRET};
-use yuuka_orchestrator::ChatEngine;
-use yuuka_services::{MetricsRegistry, NullNotifier, ServiceContext};
+use yuuka_discord::{DiscordManager, ManagerPorts, Prepared};
+use yuuka_orchestrator::{ChatEngine, DbBotDirectory, DbMembership, InMemoryRateLimiter};
+use yuuka_services::{MetricsRegistry, ServiceContext};
 use yuuka_supervisor::{
-    build_app, build_supervised_services, build_tool_registry, ws_routes, ServiceError,
-    ShutdownToken, SupervisedService, Supervisor,
+    build_app, build_supervised_services, build_tool_registry, ws_routes, DiscordTenantService,
+    MessengerRegistrationDm, ServiceError, ShutdownToken, SupervisedService, Supervisor,
 };
 use yuuka_web::{AppState, Db, WebConfig};
 
@@ -95,18 +96,33 @@ async fn run() -> Result<(), String> {
         crypto.clone(),
         tool_registry,
     ));
-    let chat_ws_routes = ws_routes(chat_engine);
+    let chat_ws_routes = ws_routes(chat_engine.clone());
+
+    // 4.7) Discord マルチテナント（P1-3）。実ポート（BotDirectory/RateLimiter/MembershipService）＋
+    //      会話エンジン（processor）を注入して DiscordManager を組み、`prepare` でトークン解決 +
+    //      共有 Messenger を作る（ここでは twilight REST クライアント生成のみ・gateway 未接続）。
+    //      Messenger は登録コード DM（下）・cron 通知（P1-4）の共通配信基盤として使う。gateway の
+    //      起動は後述の YUUKA_RUST_DISCORD ゲートで制御する（二重 gateway ＝二重応答の回避）。
+    let discord_manager = DiscordManager::new(ManagerPorts {
+        directory: Arc::new(DbBotDirectory::new(db.clone(), crypto.clone())),
+        rate_limiter: Arc::new(InMemoryRateLimiter::new(db.clone())),
+        processor: chat_engine,
+        membership: Arc::new(DbMembership::new(db.clone())),
+    });
+    let Prepared { runners, messenger } = discord_manager.prepare().await;
 
     match yuuka_auth::invite::seed_initial_codes(&db, &cfg.invite_codes).await {
         Ok(n) if n > 0 => tracing::info!(seeded = n, "招待コードをシードしました"),
         Ok(_) => {}
         Err(e) => tracing::warn!(error = %e, "招待コードのシードに失敗（起動は継続）"),
     }
+    // 登録コード DM は Discord Messenger 経由（P1-1 の `NullRegistrationDm` を差し替え）。デフォルト Bot
+    // が未起動（トークン未登録）なら送信は false を返し `/api/register` は 502 に縮退する（従来と同挙動）。
     let auth_runtime = Arc::new(AuthRuntime::new(
         sessions,
         cfg.session_ttl_days,
         crypto,
-        Arc::new(NullRegistrationDm),
+        Arc::new(MessengerRegistrationDm::new(messenger.clone())),
         cfg.admin_discord_ids.clone(),
     ));
     let auth_routes = yuuka_auth::routes(auth_runtime);
@@ -130,18 +146,40 @@ async fn run() -> Result<(), String> {
     });
     let mut supervisor = Supervisor::new().service(web);
 
+    // 6.5) Discord ゲートウェイ（P1-3・strangler カットオーバーの env ゲート）。移行期は Node が gateway
+    //      を所有し、同一トークンで Rust も接続すると MESSAGE_CREATE が二重処理される（＝二重応答）。
+    //      Node bot を停止したら `YUUKA_RUST_DISCORD=1` で各テナント（Shard poll ループ）を監督下へ置く
+    //      （panic 隔離 + 指数バックオフ・恒久クローズ=無効トークン等は再起動しない）。REST 送信（登録
+    //      DM・通知）は gateway 非依存のため本ゲートに関わらず messenger 経由で機能する。
+    if rust_discord_enabled() {
+        if runners.is_empty() {
+            tracing::warn!(
+                "YUUKA_RUST_DISCORD 有効ですが起動対象 Bot がありません（トークン未登録 or 暗号鍵未設定）"
+            );
+        }
+        for runner in runners {
+            tracing::info!(bot_id = %runner.bot_id(), "Discord テナントを監督下に配置");
+            supervisor = supervisor.service(Arc::new(DiscordTenantService::new(runner)));
+        }
+    } else {
+        drop(runners);
+        tracing::info!(
+            "Rust Discord ゲートウェイは無効（既定・Node が gateway を所有）。有効化は YUUKA_RUST_DISCORD=1（Node bot 停止後）"
+        );
+    }
+
     // 7) cron 常駐サービス群（Phase 4）。**strangler カットオーバー用の env ゲート**で制御する:
     //    移行期は Node が cron を所有し Rust は read-only（二重 writer 回避が絶対条件・R-1）。
     //    Node cron を停止したら `YUUKA_RUST_CRON=1` で Rust cron を起動する（reminder は起動時
     //    即時実行で取りこぼしを復帰・§10）。通知先 Discord は未配線のため縮退（NullNotifier）で
     //    始まり、リマインド等は配信可能になるまで pending のまま保持される。
-    //    P1-4: `impl yuuka_services::Notifier for DiscordMessenger`（notify_bridge）は実装済み。
-    //    Discord live 化（P1-3）で `Arc<DiscordMessenger>` を構築できたら、ここの `NullNotifier` を
-    //    それへ差し替えるだけで実 Discord 配信へ切り替わる（アダプタは配線待ち）。
+    //    P1-4: `impl yuuka_services::Notifier for DiscordMessenger`（notify_bridge）+ 上の Discord
+    //    Messenger 構築（P1-3）が揃ったので、通知先を実 Discord Messenger に配線する。デフォルト Bot が
+    //    未起動ならリマインド等は送信 false のまま保持され、Bot 起動後に配信可能になる。
     if rust_cron_enabled() {
         let service_ctx = ServiceContext::new(
             db,
-            Arc::new(NullNotifier),
+            messenger,
             Arc::new(MetricsRegistry::new()),
         );
         let cron = build_supervised_services(&service_ctx);
@@ -209,6 +247,15 @@ async fn rotate_secret_if_requested(db: &Db, cfg: &Config) -> Result<(), String>
 /// `YUUKA_RUST_CRON` が `1`/`true`/`yes`（大小無視）のときのみ有効。
 fn rust_cron_enabled() -> bool {
     std::env::var("YUUKA_RUST_CRON")
+        .ok()
+        .is_some_and(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+}
+
+/// Rust Discord ゲートウェイ（各テナントの Shard poll ループ）を起動するか（strangler カットオーバーの
+/// env ゲート）。`YUUKA_RUST_DISCORD` が `1`/`true`/`yes`（大小無視）のときのみ有効。無効時も REST 送信
+/// （登録 DM・通知）は messenger 経由で機能する（gateway 二重接続＝二重応答のみを避ける）。
+fn rust_discord_enabled() -> bool {
+    std::env::var("YUUKA_RUST_DISCORD")
         .ok()
         .is_some_and(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
 }

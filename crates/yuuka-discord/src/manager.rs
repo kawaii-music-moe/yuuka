@@ -385,11 +385,24 @@ impl Notifier for DiscordMessenger {
             tracing::warn!(user = %user_id, "利用可能な Bot クライアントがありません");
             return false;
         };
-        let Some(channel_id) = Self::resolve_channel(&client, user_id, &target).await else {
-            return false;
+        // Channel 宛が解決不能（不明チャンネル / 対象ユーザーが閲覧不可）なら DM へフォールバックする
+        // （Node `sendToUser` notifier.ts:130-142・cron 経路は deliver_final を通らないため本メソッドで担保）。
+        let channel_id = match Self::resolve_channel(&client, user_id, &target).await {
+            Some(cid) => cid,
+            None => match &target {
+                DeliverTarget::Channel(_) => {
+                    let Some(dm) =
+                        Self::resolve_channel(&client, user_id, &DeliverTarget::Dm).await
+                    else {
+                        return false;
+                    };
+                    tracing::info!(user = %user_id, "チャンネル宛が解決不能のため DM へフォールバック");
+                    dm
+                }
+                DeliverTarget::Dm => return false,
+            },
         };
         // notifier はフレッシュ送信（reply_to なし）。分割・添付は send_channel_reply に委譲。
-        // 送信可否をそのまま返す → deliver_final の同チャンネル→DM フォールバックが機能する。
         let _ = &self.directory; // 将来 botId 無し経路（listBotsForUser）で使用。
         send_channel_reply(&client, channel_id, None, &reply).await
     }

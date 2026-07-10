@@ -26,14 +26,18 @@ use yuuka_gemini::{
 use yuuka_tools::ToolRegistry;
 use yuuka_web::Db;
 
+use crate::guild_prompt::{self, GuildScope};
 use crate::message_log::{self, ContextEntry};
-use crate::{persona, system_prompt, user};
+use crate::{bot_repo, persona, system_prompt, user};
 
 /// 空応答時の既定文（Node `runPlannedTurn` の `fallbackText` 既定）。
 const FALLBACK_TEXT: &str = "処理が完了しました。";
 /// Gemini キー未設定時の応答（Node `processMessage` の catch が返す ⚠️ 文言）。
 const NO_KEY_MESSAGE: &str =
     "⚠️ Gemini API Keyが設定されていません。管理画面からあなた専用のAPIキーを設定してください。";
+/// 汎用モードで Bot 専用キー未設定時の owner DM 応答（Node `processBotDmMessage` の ⚠️ 文言）。
+const BOT_NO_KEY_MESSAGE: &str =
+    "⚠️ このBotにはBot専用のGemini APIキーが設定されていません。管理画面の「Bot設定」→「汎用モード設定」から設定してください。";
 
 /// 復号済み Gemini キー + モデルから [`GenerateBackend`] を作るファクトリ。
 ///
@@ -213,6 +217,154 @@ impl ChatEngine {
             ..TurnReply::default()
         })
     }
+
+    /// 汎用モード（ギルド常駐 / owner DM）の 1 ターンを処理する（Node `processGuildMessage` /
+    /// `processBotDmMessage`）。秘書経路との差分: **Bot 専用 Gemini キー**（発話者本人キーは使わない）・
+    /// ギルド/DM 分離コンテキスト・Bot 単位ペルソナ + 共有/個人ノートのシステムプロンプト。
+    ///
+    /// **縮退シーム（秘書経路と同様）**: 返信チェーン・非同期配信・能力ゲート（ツール絞り込みは
+    /// P2-B・現状は秘書経路と同じく全ツール露出）。
+    ///
+    /// # Errors
+    /// DB 障害・鍵復号失敗・上流（Gemini）障害時 [`TurnError`]。Bot レコード不在は空応答（黙殺）、
+    /// DM でのキー未設定は ⚠️ テキストを `Ok` で返す。
+    async fn generic_turn(
+        &self,
+        bot_id: &BotId,
+        scope: GuildScope,
+        guild_id: Option<&GuildId>,
+        speaker: &Speaker,
+        msg: IncomingChat,
+        status: &StatusSink,
+    ) -> Result<TurnReply, TurnError> {
+        let bid = bot_id.as_str();
+        let uid = speaker.user_id.as_str();
+        let gid = guild_id.map(GuildId::as_str);
+
+        // Bot レコード（無ければ黙殺・Node は `getBotById` 不在で空応答）。
+        let Some(bot) = bot_repo::get_bot(&self.db, bid).await.map_err(to_turn_err)? else {
+            return Ok(TurnReply::default());
+        };
+
+        // 1. 発話を記録（guild は `[名前]: ` プレフィックス + ギルドログ、DM は plain + DM ログ）。
+        let log_text = describe_incoming(&msg);
+        if !log_text.is_empty() {
+            match (scope, gid) {
+                (GuildScope::Guild, Some(gid)) => {
+                    let prefixed = format!("[{}]: {}", speaker.display_name, log_text);
+                    message_log::add_guild_message_log(
+                        &self.db, bid, gid, uid, "user", &prefixed,
+                        msg.discord_msg_id.as_deref(), msg.reply_to_msg_id.as_deref(),
+                    )
+                    .await
+                    .map_err(to_turn_err)?;
+                }
+                _ => {
+                    message_log::add_message_log(
+                        &self.db, uid, bid, "user", &log_text,
+                        msg.discord_msg_id.as_deref(), msg.reply_to_msg_id.as_deref(),
+                    )
+                    .await
+                    .map_err(to_turn_err)?;
+                }
+            }
+        }
+
+        // 2. コンテキスト（guild: 直近 30・bot×guild / DM: 直近 15・bot×owner）。
+        //    DM は owner 専用 floor（`context_floor:{botId}:dm:{userId}`）で秘書コンテキストと分離する
+        //    （Node `getBotDmContext`・秘書 `getRecentContext` と floor キーを分ける）。
+        let history = match (scope, gid) {
+            (GuildScope::Guild, Some(gid)) => {
+                message_log::recent_guild_context(&self.db, bid, gid, message_log::GUILD_CONTEXT_LIMIT).await
+            }
+            _ => message_log::recent_bot_dm_context(&self.db, bid, uid, message_log::CONTEXT_LIMIT).await,
+        }
+        .map_err(to_turn_err)?;
+        let mut contents = build_contents(&history, &msg);
+
+        // 3. システムプロンプト（Bot 単位ペルソナ + 共有/個人ノート）。
+        let persona_prompt = match bot.persona_id {
+            Some(pid) => bot_repo::persona_prompt_by_id(&self.db, pid).await.map_err(to_turn_err)?,
+            None => None,
+        };
+        let guild_note = match (scope, gid) {
+            (GuildScope::Guild, Some(gid)) => {
+                bot_repo::bot_guild_note(&self.db, bid, gid).await.map_err(to_turn_err)?
+            }
+            _ => String::new(),
+        };
+        let personal_note = bot_repo::bot_user_note(&self.db, bid, uid).await.map_err(to_turn_err)?;
+        let sys = guild_prompt::build_guild_system_instruction(
+            persona_prompt.as_deref(),
+            scope,
+            &speaker.display_name,
+            uid,
+            &guild_note,
+            &personal_note,
+            &system_prompt::now_date_time_ja(),
+        );
+
+        // 4. Bot 専用 Gemini キー（未設定: guild は黙殺・DM は ⚠️ 応答）。
+        let Some(triplet) = bot_repo::bot_gemini(&self.db, bid).await.map_err(to_turn_err)? else {
+            return Ok(match scope {
+                GuildScope::Guild => TurnReply::default(),
+                GuildScope::Dm => TurnReply::text(BOT_NO_KEY_MESSAGE),
+            });
+        };
+        let crypto = self
+            .crypto
+            .as_ref()
+            .ok_or_else(|| TurnError::Failed("encryption unavailable (YUUKA_ENCRYPTION_SECRET)".to_owned()))?;
+        let plaintext = crypto
+            .decrypt_text(&triplet.encrypted, &triplet.iv, &triplet.tag)
+            .map_err(|e| TurnError::Failed(format!("bot gemini key decrypt: {e}")))?;
+        let backend = self
+            .factory
+            .build(bot_repo::BOT_DEFAULT_MODEL, SecretString::from(plaintext))
+            .map_err(|e| TurnError::Failed(e.to_string()))?;
+
+        // 5. FC ループ（ギルドは ctx.guild_id を通す・リッチ返信は常時有効）。
+        let mut ctx = ToolContext::new(bot_id.clone(), speaker.user_id.clone());
+        ctx.rich_reply_enabled = true;
+        if let (GuildScope::Guild, Some(gid)) = (scope, guild_id) {
+            ctx.guild_id = Some(gid.clone());
+        }
+        let snapshot = self.registry.snapshot(&ctx);
+        let opts = LoopOptions {
+            on_status: Some(status_bridge(status)),
+            ..LoopOptions::default()
+        };
+        let result = run_function_calling_loop(
+            backend.as_ref(),
+            &snapshot,
+            &sys,
+            &mut contents,
+            &ctx,
+            &opts,
+        )
+        .await
+        .map_err(|e| TurnError::Failed(e.to_string()))?;
+
+        // 6. 応答テキスト（空は fallback）+ アシスタント応答を永続化。
+        let reply_text = if result.text.trim().is_empty() {
+            FALLBACK_TEXT.to_owned()
+        } else {
+            result.text.clone()
+        };
+        match (scope, gid) {
+            (GuildScope::Guild, Some(gid)) => {
+                message_log::add_guild_message_log(&self.db, bid, gid, uid, "assistant", &reply_text, None, None).await
+            }
+            _ => message_log::add_message_log(&self.db, uid, bid, "assistant", &reply_text, None, None).await,
+        }
+        .map_err(to_turn_err)?;
+
+        Ok(TurnReply {
+            text: reply_text,
+            files: rich_parts_to_files(&result.rich_parts),
+            ..TurnReply::default()
+        })
+    }
 }
 
 #[async_trait]
@@ -250,30 +402,28 @@ impl TurnProcessor for ChatEngine {
 
     async fn process_guild(
         &self,
-        _bot_id: &BotId,
-        _guild_id: &GuildId,
-        _speaker: Speaker,
-        _msg: IncomingChat,
-        _status: StatusSink,
+        bot_id: &BotId,
+        guild_id: &GuildId,
+        speaker: Speaker,
+        msg: IncomingChat,
+        status: StatusSink,
         _delivery: Arc<dyn TurnDelivery>,
     ) -> Result<TurnReply, TurnError> {
-        // 汎用モード（ギルド常駐・Bot 専用キー）は P1-3/汎用モードのスコープ。未実装を明示。
-        Err(TurnError::Failed(
-            "guild generic mode は未実装（P1-3/汎用モード）".to_owned(),
-        ))
+        // 非同期配信（deferred）は縮退シーム＝同期実行のみ（delivery は未使用）。
+        self.generic_turn(bot_id, GuildScope::Guild, Some(guild_id), &speaker, msg, &status)
+            .await
     }
 
     async fn process_bot_dm(
         &self,
-        _bot_id: &BotId,
-        _speaker: Speaker,
-        _msg: IncomingChat,
-        _status: StatusSink,
+        bot_id: &BotId,
+        speaker: Speaker,
+        msg: IncomingChat,
+        status: StatusSink,
         _delivery: Arc<dyn TurnDelivery>,
     ) -> Result<TurnReply, TurnError> {
-        Err(TurnError::Failed(
-            "owner DM generic mode は未実装（P1-3/汎用モード）".to_owned(),
-        ))
+        self.generic_turn(bot_id, GuildScope::Dm, None, &speaker, msg, &status)
+            .await
     }
 }
 
@@ -282,10 +432,12 @@ fn to_turn_err(e: DbError) -> TurnError {
     TurnError::Failed(e.to_string())
 }
 
-/// ログへ残す発言表現（Node `describeIncomingMessage`＝`text || "[音声メッセージ]" || "[画像]" || ""`）。
+/// ログへ残す発言表現（Node `describeIncomingMessage`＝`text?.trim() || "[音声メッセージ]" || "[画像]" || ""`）。
+/// 空白のみのテキストは空扱いで添付プレースホルダへ落とす（Node の `.trim()` パリティ）。
 fn describe_incoming(msg: &IncomingChat) -> String {
-    if !msg.text.is_empty() {
-        msg.text.clone()
+    let text = msg.text.trim();
+    if !text.is_empty() {
+        text.to_owned()
     } else if msg.audio.is_some() {
         "[音声メッセージ]".to_owned()
     } else if msg.image.is_some() {
@@ -297,8 +449,10 @@ fn describe_incoming(msg: &IncomingChat) -> String {
 
 /// 履歴 + 新規ユーザー発言から Gemini `contents` を組む（Node `buildContentsFromHistory` の中核）。
 ///
-/// 連続する同一 role は `\n` で結合し、Gemini が要求する user/model 交互列にする。新規発言は末尾の
-/// user ターンとして（テキスト + 添付画像/音声を inline data で）付ける。
+/// 連続する同一 role は `\n` で結合し、Gemini が要求する user/model 交互列にする。**発言テキスト本体は
+/// persist-before-load で既に履歴末尾に永続化済みのため再追加しない**（二重ユーザーターン＝交互列崩れの
+/// 防止・Node は空履歴のときだけ `message.text` を積む）。添付画像/音声のみ直近 user content へ inline
+/// data で合流させる。
 fn build_contents(history: &[ContextEntry], msg: &IncomingChat) -> Vec<Content> {
     let mut out: Vec<Content> = Vec::new();
     let mut last_role: Option<&str> = None;
@@ -329,23 +483,37 @@ fn build_contents(history: &[ContextEntry], msg: &IncomingChat) -> Vec<Content> 
         }
     }
 
-    let mut parts = Vec::new();
-    if !msg.text.is_empty() {
-        parts.push(Part::text(msg.text.clone()));
+    // 空履歴のときだけ最新発言を lone user turn として積む（Node `buildContentsFromHistory`
+    // gemini.ts:1176-1178）。非空なら発言は既に履歴末尾にあるため積まない。
+    if out.is_empty() {
+        out.push(Content {
+            role: Role::User,
+            parts: vec![Part::text(msg.text.clone())],
+        });
     }
+
+    // 添付（画像・音声）を直近の user content へ inline data で合流（Node gemini.ts:1198-1205）。
+    // 直近が user でなければ空テキスト + 添付だけの user content を積む。
+    let mut inline = Vec::new();
     if let Some(img) = &msg.image {
-        parts.push(Part::inline_data(img.mime_type.clone(), img.data_base64.clone()));
+        inline.push(Part::inline_data(img.mime_type.clone(), img.data_base64.clone()));
     }
     if let Some(aud) = &msg.audio {
-        parts.push(Part::inline_data(aud.mime_type.clone(), aud.data_base64.clone()));
+        inline.push(Part::inline_data(aud.mime_type.clone(), aud.data_base64.clone()));
     }
-    if parts.is_empty() {
-        parts.push(Part::text(String::new()));
+    if !inline.is_empty() {
+        match out.last_mut() {
+            Some(last) if matches!(last.role, Role::User) => last.parts.extend(inline),
+            _ => {
+                let mut parts = vec![Part::text(String::new())];
+                parts.extend(inline);
+                out.push(Content {
+                    role: Role::User,
+                    parts,
+                });
+            }
+        }
     }
-    out.push(Content {
-        role: Role::User,
-        parts,
-    });
     out
 }
 
@@ -383,4 +551,75 @@ fn rich_parts_to_files(parts: &[ResponsePart]) -> Vec<FileAttachment> {
             _ => None,
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn entry(role: &str, content: &str) -> ContextEntry {
+        ContextEntry {
+            role: role.to_owned(),
+            content: content.to_owned(),
+        }
+    }
+
+    fn count_user_turns(contents: &[Content]) -> usize {
+        contents
+            .iter()
+            .filter(|c| matches!(c.role, Role::User))
+            .count()
+    }
+
+    /// persist-before-load で履歴末尾に既にある発言を build_contents が再追加しない
+    /// （二重ユーザーターン回帰の防止・Node `buildContentsFromHistory` パリティ）。
+    #[test]
+    fn build_contents_does_not_duplicate_persisted_message() {
+        let history = vec![entry("assistant", "前回の返信"), entry("user", "こんにちは")];
+        let msg = IncomingChat {
+            text: "こんにちは".to_owned(),
+            ..IncomingChat::default()
+        };
+        let contents = build_contents(&history, &msg);
+        assert_eq!(contents.len(), 2, "履歴 2 件がそのまま 2 content（発言の再追加なし）");
+        assert!(matches!(contents[0].role, Role::Model));
+        assert!(matches!(contents[1].role, Role::User));
+        assert_eq!(contents[1].parts[0].text.as_deref(), Some("こんにちは"));
+        assert_eq!(count_user_turns(&contents), 1, "user ターンは 1 つだけ");
+    }
+
+    /// 空履歴のときだけ最新発言を lone user turn として積む（Node gemini.ts:1176-1178）。
+    #[test]
+    fn build_contents_empty_history_pushes_lone_user_turn() {
+        let msg = IncomingChat {
+            text: "初回".to_owned(),
+            ..IncomingChat::default()
+        };
+        let contents = build_contents(&[], &msg);
+        assert_eq!(contents.len(), 1);
+        assert!(matches!(contents[0].role, Role::User));
+        assert_eq!(contents[0].parts[0].text.as_deref(), Some("初回"));
+    }
+
+    /// 添付は直近 user content へ inline data で合流し、ユーザーターンを増やさない
+    /// （画像発言は "[画像]" として履歴末尾に永続化済み）。
+    #[test]
+    fn build_contents_merges_inline_media_into_last_user_turn() {
+        let history = vec![entry("user", "[画像]")];
+        let msg = IncomingChat {
+            text: String::new(),
+            image: Some(InlineMedia {
+                mime_type: "image/png".to_owned(),
+                data_base64: "AAAA".to_owned(),
+            }),
+            ..IncomingChat::default()
+        };
+        let contents = build_contents(&history, &msg);
+        assert_eq!(count_user_turns(&contents), 1, "添付でユーザーターンは増えない");
+        let last = contents.last().expect("content あり");
+        assert!(
+            last.parts.iter().any(|p| p.inline_data.is_some()),
+            "末尾 user content に inline data が合流している"
+        );
+    }
 }

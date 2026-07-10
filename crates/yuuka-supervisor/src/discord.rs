@@ -9,8 +9,11 @@
 //! `RateLimiter`）が揃ったら `main` が [`DiscordManager::prepare`] → 各 `runner` を本アダプタで
 //! [`Supervisor::service`] へ登録する。現段階（Phase 3）では seam のみを凍結し、live 起動へは繋がない。
 
+use std::sync::Arc;
+
+use yuuka_auth::RegistrationDm;
 use yuuka_core::DiscordError;
-use yuuka_discord::TenantRunner;
+use yuuka_discord::{DiscordMessenger, TenantRunner};
 
 use crate::supervisor::{ServiceError, ShutdownToken, SupervisedService};
 
@@ -39,6 +42,31 @@ impl SupervisedService for DiscordTenantService {
             .run(async move { shutdown.cancelled().await })
             .await;
         map_discord_result(result)
+    }
+}
+
+/// 認証発行の登録コード DM ポート（[`yuuka_auth::RegistrationDm`]）を [`DiscordMessenger`] で満たす
+/// 合成ルートアダプタ。
+///
+/// `yuuka-auth`（トレイト）と `yuuka-discord`（`send_registration_code_dm`）は互いに依存しないため、
+/// 双方に依存する supervisor で newtype 越しに橋渡しする（notify_bridge の Notifier と同じ規律）。
+/// デフォルト Bot 未起動なら `send_registration_code_dm` が `false` を返し、`/api/register` は 502 に縮退する。
+pub struct MessengerRegistrationDm {
+    messenger: Arc<DiscordMessenger>,
+}
+
+impl MessengerRegistrationDm {
+    /// messenger を注入して構築する。
+    #[must_use]
+    pub fn new(messenger: Arc<DiscordMessenger>) -> Self {
+        Self { messenger }
+    }
+}
+
+#[async_trait::async_trait]
+impl RegistrationDm for MessengerRegistrationDm {
+    async fn send_registration_code(&self, discord_id: &str, code: &str) -> bool {
+        self.messenger.send_registration_code_dm(discord_id, code).await
     }
 }
 

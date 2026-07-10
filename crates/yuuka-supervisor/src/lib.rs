@@ -17,7 +17,7 @@ pub mod supervisor;
 pub mod tool_registry;
 pub mod ws;
 
-pub use discord::DiscordTenantService;
+pub use discord::{DiscordTenantService, MessengerRegistrationDm};
 pub use services::{build_supervised_services, CronSupervised};
 pub use supervisor::{RestartPolicy, ServiceError, ShutdownToken, SupervisedService, Supervisor};
 pub use tool_registry::{build_native_provider, build_tool_registry};
