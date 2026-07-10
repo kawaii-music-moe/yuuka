@@ -60,7 +60,10 @@ mod tests {
     }
 
     fn ctx() -> ToolContext {
-        ToolContext::new(BotId::system_default(), UserId::new("u1"))
+        // 秘書 Bot 相当（能力ゲートで secretary ツールが露出するように）。
+        let mut c = ToolContext::new(BotId::system_default(), UserId::new("u1"));
+        c.capabilities = yuuka_core::CapabilitySet::from_granted(vec!["secretary".to_owned()]);
+        c
     }
 
     #[test]
@@ -82,6 +85,16 @@ mod tests {
 
         let decls = np.list(&ctx());
         assert_eq!(decls.len(), 2);
+
+        // 能力ゲート: secretary ツール（EchoTool は既定分類）は秘書経路 + secretary 能力でのみ露出。
+        let mut no_cap = ToolContext::new(BotId::system_default(), UserId::new("u1"));
+        no_cap.mode = yuuka_core::TurnMode::Secretary;
+        assert_eq!(np.list(&no_cap).len(), 0, "能力なしでは秘書ツールは隠れる");
+        let mut generic = ToolContext::new(BotId::system_default(), UserId::new("u1"));
+        generic.mode = yuuka_core::TurnMode::GuildAssistant;
+        generic.capabilities =
+            yuuka_core::CapabilitySet::from_granted(vec!["secretary".to_owned()]);
+        assert_eq!(np.list(&generic).len(), 0, "汎用モードでは秘書ツールは露出しない");
 
         let name = ToolName::namespaced("native", "add_todo").unwrap();
         let out = np

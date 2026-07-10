@@ -9,11 +9,43 @@ use rusqlite::{params, OptionalExtension};
 use yuuka_core::DbError;
 use yuuka_db::map_sqlite;
 use yuuka_discord::{BotRecord, MemberDecision, PersonaRecord, ShareRecord};
-use yuuka_core::{BotId, UserId};
+use yuuka_core::{BotId, CapabilitySet, UserId};
 use yuuka_web::Db;
 
 /// Bot 専用モデル（Node `BOT_DEFAULT_MODEL`・汎用モードは常にこれ）。
 pub const BOT_DEFAULT_MODEL: &str = "gemini-3.1-flash-lite";
+
+/// 既知の能力（Node `KNOWN_CAPABILITIES`）。JSON 内の未知エントリは除外する。`core` は暗黙付与のため含めない。
+const KNOWN_CAPABILITIES: [&str; 4] = ["persona", "memory", "mcp", "secretary"];
+
+/// 秘書相当のフル能力（Node `BOT_PRESETS.secretary.capabilities`）。DB 未登録 Bot・不正 JSON のフォールバック。
+#[must_use]
+pub fn secretary_full_capabilities() -> CapabilitySet {
+    CapabilitySet::from_granted(KNOWN_CAPABILITIES.iter().map(|c| (*c).to_owned()).collect())
+}
+
+/// capabilities JSON を能力集合へ解決する（Node `parseCapabilities`）。null/空/非配列/パース失敗は
+/// 秘書相当フルセットへフォールバックし、有効配列は既知能力のみ保持する（未知は破棄）。
+#[must_use]
+pub fn parse_capabilities(raw: &str) -> CapabilitySet {
+    // Node `JSON.parse(json || DEFAULT)`: null/空文字は DEFAULT（秘書相当）へ。
+    if raw.trim().is_empty() {
+        return secretary_full_capabilities();
+    }
+    match serde_json::from_str::<serde_json::Value>(raw) {
+        Ok(serde_json::Value::Array(arr)) => {
+            let granted: Vec<String> = arr
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .filter(|c| KNOWN_CAPABILITIES.contains(c))
+                .map(str::to_owned)
+                .collect();
+            CapabilitySet::from_granted(granted)
+        }
+        // 非配列 or パース失敗は秘書相当（Node parseCapabilities の catch / 非 Array フォールスルー）。
+        _ => secretary_full_capabilities(),
+    }
+}
 
 /// `bots` 1 行の必要フィールド射影（Node `BotRecord` の一部）。
 #[derive(Debug, Clone)]
@@ -30,6 +62,12 @@ pub struct BotRow {
 }
 
 impl BotRow {
+    /// この Bot の能力集合（Node `resolveBotCapabilities` の bot 存在時経路 = `parseCapabilities`）。
+    #[must_use]
+    pub fn capability_set(&self) -> CapabilitySet {
+        parse_capabilities(&self.capabilities)
+    }
+
     /// 汎用モード（ギルド常駐アシスタント）か（Node `isGuildAssistantBot = !capabilities.includes("secretary")`）。
     #[must_use]
     pub fn is_guild_assistant(&self) -> bool {
@@ -72,7 +110,9 @@ fn map_bot_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<BotRow> {
         stopped: r.get::<_, i64>(4)? != 0,
         recommended_persona_id: r.get(5)?,
         persona_id: r.get(6)?,
-        capabilities: r.get(7)?,
+        // NULL 耐性: 手編集/レガシー DB で capabilities が NULL でもクエリを落とさず空文字へ。
+        // parse_capabilities が空文字を秘書相当へ畳む（Node `parseCapabilities(null)` パリティ）。
+        capabilities: r.get::<_, Option<String>>(7)?.unwrap_or_default(),
         has_gemini_key: r.get::<_, i64>(8)? != 0,
     })
 }
@@ -405,16 +445,45 @@ pub async fn persona_prompt_by_id(db: &Db, persona_id: i64) -> Result<Option<Str
 
 // ─── MembershipService の DB 実体（ボタンフロー・Node `memberRequest`/`botRepo`/`personaRepo`） ──
 
-/// 利用申請 submit の結果（`ok=false` は理由文言付き）。
+/// 利用申請 submit の結果（`ok=false` は理由文言付き・`ok=true` は owner 宛 DM 用の id を伴う）。
 pub struct SubmitResult {
     pub ok: bool,
     pub message: String,
+    /// 承認 DM の宛先（Bot オーナー・Node `sendMemberRequestDM` の ownerId）。ok 時のみ。
+    pub owner_id: Option<String>,
+    /// Bot 表示名（DM 本文）。ok 時のみ。
+    pub bot_name: Option<String>,
+    /// 申請 ID（承認/却下ボタンの custom_id）。ok 時のみ。
+    pub request_id: Option<i64>,
+}
+
+/// 失敗結果（DM 情報なし）。
+fn deny_submit(message: &str) -> SubmitResult {
+    SubmitResult {
+        ok: false,
+        message: message.to_owned(),
+        owner_id: None,
+        bot_name: None,
+        request_id: None,
+    }
+}
+
+/// 成功結果（owner 宛 DM 用の id を伴う）。
+fn ok_submit(owner_id: String, bot_name: String, request_id: i64) -> SubmitResult {
+    SubmitResult {
+        ok: true,
+        message: String::new(),
+        owner_id: Some(owner_id),
+        bot_name: Some(bot_name),
+        request_id: Some(request_id),
+    }
 }
 
 /// メンバー外ユーザーの利用申請（Node `submitMemberRequest` + `createMemberRequest`）。
 ///
-/// owner 宛の受付 DM は Discord live 化後の messenger 注入に依存するため本関数では送らない（DB 上の
-/// 申請は有効で Web 管理画面の「利用申請」から拾える・Node も DM 失敗を許容）。
+/// 本関数は DB のみ確定し、owner 宛の受付 DM 用に `owner_id`/`bot_name`/`request_id` を返す
+/// （interaction ハンドラが `sendMemberRequestDM` を送る・Node `memberRequest.ts:64-71` と同分業）。
+/// DM 送信失敗でも DB 上の申請は有効で Web 管理画面の「利用申請」から拾える（Node も DM 失敗を許容）。
 ///
 /// # Errors
 /// 書き込み失敗時 [`DbError`]。
@@ -429,26 +498,20 @@ pub async fn submit_member_request(
         (bot_id.to_owned(), guild_id.to_owned(), applicant.to_owned());
     db.writer
         .transaction(move |tx| {
-            // Bot 存在 + system_default 除外 + owner 判定。
-            let owner: Option<String> = tx
+            // Bot 存在 + system_default 除外 + owner 判定。owner/name は承認 DM（Node sendMemberRequestDM）にも使う。
+            let bot: Option<(String, String)> = tx
                 .query_row(
-                    "SELECT user_id FROM bots WHERE id = ?1",
+                    "SELECT user_id, name FROM bots WHERE id = ?1",
                     params![bot_id],
-                    |r| r.get(0),
+                    |r| Ok((r.get(0)?, r.get(1)?)),
                 )
                 .optional()
                 .map_err(map_sqlite)?;
-            let Some(owner) = owner.filter(|_| bot_id != "system_default") else {
-                return Ok(SubmitResult {
-                    ok: false,
-                    message: "対象のBotが見つかりません。".to_owned(),
-                });
+            let Some((owner, bot_name)) = bot.filter(|_| bot_id != "system_default") else {
+                return Ok(deny_submit("対象のBotが見つかりません。"));
             };
             if owner == applicant {
-                return Ok(SubmitResult {
-                    ok: false,
-                    message: "あなたはこのBotのオーナーです（申請は不要です）。".to_owned(),
-                });
+                return Ok(deny_submit("あなたはこのBotのオーナーです（申請は不要です）。"));
             }
             // 既にメンバー。
             let is_member = tx
@@ -461,10 +524,7 @@ pub async fn submit_member_request(
                 .map_err(map_sqlite)?
                 .is_some();
             if is_member {
-                return Ok(SubmitResult {
-                    ok: false,
-                    message: "あなたは既にこのギルドの利用メンバーです。".to_owned(),
-                });
+                return Ok(deny_submit("あなたは既にこのギルドの利用メンバーです。"));
             }
             // 既存申請（pending は二重申請不可・却下/承認済みは pending へ戻す）。
             let existing: Option<(i64, String)> = tx
@@ -482,10 +542,9 @@ pub async fn submit_member_request(
                 .filter(|n| !n.is_empty())
                 .map(|n| n.chars().take(500).collect::<String>());
             match existing {
-                Some((_, status)) if status == "pending" => Ok(SubmitResult {
-                    ok: false,
-                    message: "既に申請済みです。オーナーの承認をお待ちください。".to_owned(),
-                }),
+                Some((_, status)) if status == "pending" => {
+                    Ok(deny_submit("既に申請済みです。オーナーの承認をお待ちください。"))
+                }
                 Some((id, _)) => {
                     tx.execute(
                         "UPDATE bot_member_requests SET status = 'pending', note = ?1, \
@@ -493,7 +552,7 @@ pub async fn submit_member_request(
                         params![trimmed_note, id],
                     )
                     .map_err(map_sqlite)?;
-                    Ok(SubmitResult { ok: true, message: String::new() })
+                    Ok(ok_submit(owner, bot_name, id))
                 }
                 None => {
                     tx.execute(
@@ -502,7 +561,7 @@ pub async fn submit_member_request(
                         params![bot_id, guild_id, applicant, trimmed_note],
                     )
                     .map_err(map_sqlite)?;
-                    Ok(SubmitResult { ok: true, message: String::new() })
+                    Ok(ok_submit(owner, bot_name, tx.last_insert_rowid()))
                 }
             }
         })
@@ -515,11 +574,14 @@ pub struct DecideResult {
     pub message: String,
     pub status: Option<MemberDecision>,
     pub bot_name: Option<String>,
+    /// 申請者（結果 DM の宛先・Node `sendMemberDecisionDM` の applicantId）。ok 時のみ。
+    pub applicant_id: Option<String>,
 }
 
 /// オーナー/Admin による申請の承認・却下（Node `decideMemberRequestById` + `decideMemberRequest`）。
 ///
-/// 申請者宛の結果 DM は messenger 注入に依存するため本関数では送らない（処理は DB 上確定済み）。
+/// 本関数は DB のみ確定し、申請者宛の結果 DM 用に `applicant_id`（+ `bot_name`/`status`）を返す
+/// （interaction ハンドラが `sendMemberDecisionDM` を送る・Node `memberRequest.ts:131-135` と同分業）。
 ///
 /// # Errors
 /// 書き込み失敗時 [`DbError`]。
@@ -598,6 +660,7 @@ pub async fn decide_member_request(
                 message: String::new(),
                 status: Some(decision),
                 bot_name: Some(bot_name),
+                applicant_id: Some(applicant),
             })
         })
         .await
@@ -610,6 +673,7 @@ fn deny_decide(message: &str) -> DecideResult {
         message: message.to_owned(),
         status: None,
         bot_name: None,
+        applicant_id: None,
     }
 }
 

@@ -170,8 +170,8 @@ impl MembershipService for DbMembership {
         applicant_label: Option<String>,
         _guild_label: Option<String>,
     ) -> SubmitOutcome {
-        // applicant_label は owner 宛 DM 用途（本 Phase は DM 未送のため未使用・将来 messenger 注入で使う）。
-        let _ = applicant_label;
+        // applicant_label/guild_label は owner 宛 DM 用途で interaction ハンドラが直接使う（本ポートは DB のみ）。
+        let _ = (applicant_label, _guild_label);
         let r = bot_repo::submit_member_request(
             &self.db,
             bot_id.as_str(),
@@ -184,12 +184,16 @@ impl MembershipService for DbMembership {
             Ok(res) => SubmitOutcome {
                 ok: res.ok,
                 message: res.message,
+                owner_id: res.owner_id,
+                bot_name: res.bot_name,
+                request_id: res.request_id,
             },
             Err(e) => {
                 tracing::warn!(error = %e, "利用申請の作成に失敗");
                 SubmitOutcome {
                     ok: false,
                     message: "申請の作成に失敗しました。".to_owned(),
+                    ..SubmitOutcome::default()
                 }
             }
         }
@@ -207,14 +211,14 @@ impl MembershipService for DbMembership {
                 message: res.message,
                 status: res.status,
                 bot_name: res.bot_name,
+                applicant_id: res.applicant_id,
             },
             Err(e) => {
                 tracing::warn!(error = %e, "利用申請の承認/却下に失敗");
                 DecisionOutcome {
                     ok: false,
                     message: "処理に失敗しました。".to_owned(),
-                    status: None,
-                    bot_name: None,
+                    ..DecisionOutcome::default()
                 }
             }
         }

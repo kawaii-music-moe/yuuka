@@ -87,7 +87,10 @@ mod tests {
     }
 
     fn ctx() -> ToolContext {
-        ToolContext::new(BotId::system_default(), UserId::new("userA"))
+        // 秘書 Bot 相当（能力ゲートで secretary ツールが露出するように）。
+        let mut c = ToolContext::new(BotId::system_default(), UserId::new("userA"));
+        c.capabilities = yuuka_core::CapabilitySet::from_granted(vec!["secretary".to_owned()]);
+        c
     }
 
     #[test]

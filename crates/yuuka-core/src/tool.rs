@@ -27,6 +27,8 @@ pub struct ToolContext {
     pub guild_id: Option<GuildId>,
     /// この呼び出しに許された能力集合（deny-by-default）。
     pub capabilities: CapabilitySet,
+    /// 会話経路（どのツールカタログを見せるか）。既定は秘書。
+    pub mode: TurnMode,
     /// リッチ返信が有効か（`false` のとき push 禁止は呼び出し側で担保）。
     pub rich_reply_enabled: bool,
 }
@@ -39,7 +41,69 @@ impl ToolContext {
             user_id,
             guild_id: None,
             capabilities: CapabilitySet::default(),
+            mode: TurnMode::Secretary,
             rich_reply_enabled: false,
+        }
+    }
+}
+
+/// 会話の経路（どのツールカタログを適用するか）。Node の秘書経路（`processMessage` /
+/// `getFunctionModulesForCapabilities`）と汎用モード経路（`processGuildMessage` /
+/// `processBotDmMessage` / `getGuildAssistantFunctionModules`）に対応する。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TurnMode {
+    /// 秘書経路。secretary/memory/core モジュールが対象。
+    #[default]
+    Secretary,
+    /// 汎用モード経路。richContent(core)/botMember/note 系のみが対象で、秘書ツールは露出しない。
+    GuildAssistant,
+}
+
+/// ツールの露出分類（Node `moduleCatalog` のモジュール属性に対応）。どの経路・どの能力で見えるか。
+///
+/// 現行 Rust ネイティブツールは全て秘書ツール（[`ToolExposure::secretary`]）。将来の core（常時）や
+/// guild-assistant ツールは [`Tool::exposure`] を上書きして分類する。
+#[derive(Debug, Clone)]
+pub struct ToolExposure {
+    /// 必要な能力（`None` = core = 常時付与）。Node `moduleCatalog` の `cap`。
+    pub capability: Option<&'static str>,
+    /// 秘書経路で露出するか（Node `getFunctionModulesForCapabilities` 対象）。
+    pub secretary: bool,
+    /// 汎用モード経路で露出するか（Node `getGuildAssistantFunctionModules` 対象）。
+    pub guild_assistant: bool,
+    /// 汎用モードで guild スコープ必須か（Node botMember/botGuildMemory の scope=guild 制約）。
+    pub requires_guild: bool,
+}
+
+impl ToolExposure {
+    /// 秘書ツールの既定分類（`secretary` 能力・秘書経路のみ・guild スコープ非依存）。
+    #[must_use]
+    pub fn secretary() -> Self {
+        Self {
+            capability: Some("secretary"),
+            secretary: true,
+            guild_assistant: false,
+            requires_guild: false,
+        }
+    }
+
+    /// この露出が `ctx`（経路 + 能力 + スコープ）で可視かを判定する（Node のモジュール選別と同義）。
+    #[must_use]
+    pub fn is_visible(&self, ctx: &ToolContext) -> bool {
+        // 1. 経路（mode）で該当カタログに含まれるか。汎用モードの guild 専用ツールは guild スコープ必須。
+        let in_catalog = match ctx.mode {
+            TurnMode::Secretary => self.secretary,
+            TurnMode::GuildAssistant => {
+                self.guild_assistant && (!self.requires_guild || ctx.guild_id.is_some())
+            }
+        };
+        if !in_catalog {
+            return false;
+        }
+        // 2. 能力ゲート（core は常時・それ以外は付与必須）。
+        match self.capability {
+            None => true,
+            Some(cap) => ctx.capabilities.has(cap),
         }
     }
 }
@@ -188,6 +252,12 @@ pub trait Tool: Send + Sync {
     /// このツールの Gemini 宣言を返す。
     fn declaration(&self) -> FunctionDeclaration;
 
+    /// このツールの露出分類（能力ゲート・Node `moduleCatalog`）。既定は秘書ツール
+    /// （現行ネイティブツールは全て `secretary` 能力・秘書経路のみ）。
+    fn exposure(&self) -> ToolExposure {
+        ToolExposure::secretary()
+    }
+
     /// ツールを実行する。`args` は sanitizer 通過後の引数。
     ///
     /// # Errors
@@ -213,4 +283,57 @@ pub trait ToolProvider: Send + Sync {
         args: Value,
         ctx: &ToolContext,
     ) -> Result<ToolOutcome, ToolError>;
+}
+
+#[cfg(test)]
+mod exposure_tests {
+    use super::*;
+    use crate::ids::{BotId, GuildId, UserId};
+
+    fn ctx(mode: TurnMode, caps: &[&str], guild: bool) -> ToolContext {
+        let mut c = ToolContext::new(BotId::new("b"), UserId::new("u"));
+        c.mode = mode;
+        c.capabilities = CapabilitySet::from_granted(caps.iter().map(|s| (*s).to_owned()).collect());
+        if guild {
+            c.guild_id = Some(GuildId::new("g"));
+        }
+        c
+    }
+
+    #[test]
+    fn secretary_tool_visible_only_in_secretary_mode_with_cap() {
+        let ex = ToolExposure::secretary();
+        // 秘書経路 + secretary 能力 → 可視。
+        assert!(ex.is_visible(&ctx(TurnMode::Secretary, &["secretary"], false)));
+        // 秘書経路だが secretary 能力なし（mcp_assistant プリセット等）→ 不可視。
+        assert!(!ex.is_visible(&ctx(TurnMode::Secretary, &["persona", "memory", "mcp"], false)));
+        // 汎用モード経路 → 秘書ツールは能力があっても一切露出しない。
+        assert!(!ex.is_visible(&ctx(TurnMode::GuildAssistant, &["secretary"], true)));
+    }
+
+    #[test]
+    fn core_tool_visible_in_both_catalogs_without_cap() {
+        let core = ToolExposure {
+            capability: None,
+            secretary: true,
+            guild_assistant: true,
+            requires_guild: false,
+        };
+        assert!(core.is_visible(&ctx(TurnMode::Secretary, &[], false)));
+        assert!(core.is_visible(&ctx(TurnMode::GuildAssistant, &[], false)));
+    }
+
+    #[test]
+    fn guild_scoped_tool_requires_guild_scope() {
+        let member = ToolExposure {
+            capability: None,
+            secretary: false,
+            guild_assistant: true,
+            requires_guild: true,
+        };
+        // guild スコープあり → 可視。
+        assert!(member.is_visible(&ctx(TurnMode::GuildAssistant, &[], true)));
+        // owner DM（guild なし）→ 不可視。
+        assert!(!member.is_visible(&ctx(TurnMode::GuildAssistant, &[], false)));
+    }
 }

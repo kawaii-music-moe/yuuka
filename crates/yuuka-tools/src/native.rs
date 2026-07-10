@@ -63,10 +63,19 @@ impl NativeProvider {
 
 #[async_trait]
 impl ToolProvider for NativeProvider {
-    fn list(&self, _ctx: &ToolContext) -> Vec<FunctionDeclaration> {
-        // 能力スコープ（どのモジュールを見せるか）は呼び出し側が provider 構成で決める（§4.2）。
-        // ここでは登録済み全ツールの宣言を返す。
-        self.tools.values().map(|t| t.declaration()).collect()
+    fn list(&self, ctx: &ToolContext) -> Vec<FunctionDeclaration> {
+        // 能力ゲート: 経路（秘書/汎用モード）× 能力集合で見えるツールだけを返す。露出不可のツールは宣言も
+        // index も作られない（snapshot が本 list から index を構築）ため invoke も不可。
+        //
+        // **部分パリティ**: Node `getFunctionModulesForCapabilities` は「能力」に加えユーザー別の
+        // `enabledModules`（`bot_user_modules`/`bots.enabled_modules` の selectable モジュール絞り込み・
+        // `resolveEnabledModulesForUser`）も適用するが、その第 2 次元は未移植（module 選択 UI 系＝P2-A）。
+        // 現状は能力 + 経路の 2 軸のみ。
+        self.tools
+            .values()
+            .filter(|t| t.exposure().is_visible(ctx))
+            .map(|t| t.declaration())
+            .collect()
     }
 
     async fn invoke(

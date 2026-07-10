@@ -15,7 +15,7 @@ use twilight_model::http::interaction::{InteractionResponse, InteractionResponse
 use twilight_util::builder::InteractionResponseDataBuilder;
 use yuuka_core::{BotId, UserId};
 
-use crate::ports::{self, BotDirectory, MemberDecision, MembershipService};
+use crate::ports::{self, BotDirectory, MemberDecision, MemberDmSender, MembershipService};
 use crate::reply::to_twilight_components;
 
 /// インタラクション処理に必要な依存（注入ポート＋twilight http）。
@@ -24,6 +24,8 @@ pub struct InteractionDeps {
     pub http: Arc<Client>,
     pub membership: Arc<dyn MembershipService>,
     pub directory: Arc<dyn BotDirectory>,
+    /// 利用申請の結果 DM 送信（Node `sendMemberRequestDM`/`sendMemberDecisionDM`）。
+    pub dm: Arc<dyn MemberDmSender>,
 }
 
 /// フォローアップ送信の記述（共有承認後の推奨ペルソナ導入確認）。
@@ -74,6 +76,10 @@ pub fn button_custom_id(interaction: &Interaction) -> Option<&str> {
 ///
 /// `invoker` は操作したユーザー、`applicant_label`/`guild_label` は memreq_apply の可読性向上のため
 /// 呼び出し側が best-effort 解決した表示名（現行 `interaction.guild.members.fetch(...).displayName`）。
+///
+/// **利用申請の受付/結果 DM（Node `sendMemberRequestDM`/`sendMemberDecisionDM`）は本関数から送る**
+/// （Discord ボタン経路）。将来 `/ws/chat` がコンポーネント dispatch を持つ場合、Node が「全経路で DM を
+/// 送る」挙動（`componentInteractionService`）に合わせて DM 送信を再配線する必要がある。
 pub async fn decide(
     deps: &InteractionDeps,
     action: &str,
@@ -90,6 +96,10 @@ pub async fn decide(
             if bot_id.is_empty() || guild_id.is_empty() {
                 return InteractionPlan::Reply("申請情報が不正です。".to_owned());
             }
+            // owner 宛 DM 用の表示ラベルを先に解決（Node: `applicantLabel?.trim() || ユーザー ${id}`）。
+            let applicant_dm_label =
+                label_or(applicant_label.as_deref(), || format!("ユーザー {}", invoker.as_str()));
+            let guild_dm_label = label_or(guild_label.as_deref(), || format!("ギルド {guild_id}"));
             let outcome = deps
                 .membership
                 .submit_member_request(
@@ -100,6 +110,17 @@ pub async fn decide(
                     guild_label,
                 )
                 .await;
+            // 受付を Bot オーナーへ DM（承認/却下ボタン付き・Node `sendMemberRequestDM`）。ボタン経由は
+            // note 無し。fire-and-forget（false は握り潰す・DB 上の申請は Web 管理から拾える）。
+            if outcome.ok {
+                if let (Some(owner), Some(name), Some(rid)) =
+                    (&outcome.owner_id, &outcome.bot_name, outcome.request_id)
+                {
+                    deps.dm
+                        .send_request_dm(owner, name, &applicant_dm_label, &guild_dm_label, None, rid)
+                        .await;
+                }
+            }
             let msg = if outcome.ok {
                 "✅ 利用申請を送信しました。Bot作成者の承認をお待ちください。".to_owned()
             } else {
@@ -124,6 +145,11 @@ pub async fn decide(
                 .await;
             if !outcome.ok {
                 return InteractionPlan::Reply(outcome.message);
+            }
+            // 申請者へ結果 DM（Node `sendMemberDecisionDM`・ボタンなし・fire-and-forget）。
+            if let (Some(applicant), Some(name)) = (&outcome.applicant_id, &outcome.bot_name) {
+                let approved = matches!(outcome.status, Some(MemberDecision::Approved));
+                deps.dm.send_decision_dm(applicant, name, approved).await;
             }
             let bot_name = outcome.bot_name.unwrap_or_default();
             let content = match outcome.status {
@@ -239,6 +265,14 @@ fn parse_id(s: &str) -> Option<i64> {
     s.trim().parse::<i64>().ok()
 }
 
+/// 表示ラベルを trim して非空なら採用、無ければ `fallback`（Node の `label?.trim() || default`）。
+fn label_or(label: Option<&str>, fallback: impl FnOnce() -> String) -> String {
+    match label.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(s) => s.to_owned(),
+        None => fallback(),
+    }
+}
+
 /// 判定結果を twilight で応答送信する（現行 `interaction.reply/update/followUp`）。
 ///
 /// 失敗は握り潰さずログする。`application_id`/`interaction.id`/`interaction.token` を使い
@@ -304,11 +338,13 @@ pub fn invoker_id(interaction: &Interaction) -> Option<UserId> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
+
     use async_trait::async_trait;
 
     use super::*;
     use crate::ports::{
-        BotRecord, DecisionOutcome, PersonaRecord, ShareRecord, SubmitOutcome,
+        BotRecord, DecisionOutcome, MemberDmSender, PersonaRecord, ShareRecord, SubmitOutcome,
     };
 
     #[test]
@@ -351,6 +387,9 @@ mod tests {
                 } else {
                     "既に申請済みです。".to_owned()
                 },
+                owner_id: self.submit_ok.then(|| "owner1".to_owned()),
+                bot_name: self.submit_ok.then(|| "テストBot".to_owned()),
+                request_id: self.submit_ok.then_some(99),
             }
         }
         async fn decide_member_request(
@@ -364,6 +403,7 @@ mod tests {
                 message: "申請が見つかりません。".to_owned(),
                 status: None,
                 bot_name: None,
+                applicant_id: None,
             })
         }
         async fn get_share(&self, _share_id: i64) -> Option<ShareRecord> {
@@ -416,11 +456,59 @@ mod tests {
 
     use yuuka_core::GuildId;
 
+    /// 受付 DM の記録（owner_id, request_id, applicant_label, guild_label, note あり?）。
+    type RequestDm = (String, i64, String, String, bool);
+
+    /// 送信された DM を記録する fake（member DM 配線 + ラベル解決の検証用）。
+    #[derive(Default)]
+    struct FakeDmSender {
+        request_dms: Mutex<Vec<RequestDm>>,
+        decision_dms: Mutex<Vec<(String, bool)>>,
+    }
+
+    #[async_trait]
+    impl MemberDmSender for FakeDmSender {
+        async fn send_request_dm(
+            &self,
+            owner_id: &str,
+            _bot_name: &str,
+            applicant_label: &str,
+            guild_label: &str,
+            note: Option<&str>,
+            request_id: i64,
+        ) -> bool {
+            self.request_dms.lock().unwrap().push((
+                owner_id.to_owned(),
+                request_id,
+                applicant_label.to_owned(),
+                guild_label.to_owned(),
+                note.is_some(),
+            ));
+            true
+        }
+        async fn send_decision_dm(&self, applicant_id: &str, _bot_name: &str, approved: bool) -> bool {
+            self.decision_dms
+                .lock()
+                .unwrap()
+                .push((applicant_id.to_owned(), approved));
+            true
+        }
+    }
+
     fn deps(membership: FakeMembership, directory: FakeDirectory) -> InteractionDeps {
+        deps_dm(membership, directory, Arc::new(FakeDmSender::default()))
+    }
+
+    fn deps_dm(
+        membership: FakeMembership,
+        directory: FakeDirectory,
+        dm: Arc<FakeDmSender>,
+    ) -> InteractionDeps {
         InteractionDeps {
             http: Arc::new(Client::new(String::new())),
             membership: Arc::new(membership),
             directory: Arc::new(directory),
+            dm,
         }
     }
 
@@ -535,5 +623,86 @@ mod tests {
         let d = deps(FakeMembership::default(), FakeDirectory::default());
         let plan = decide(&d, "totally_unknown", "1", "", &UserId::new("u"), None, None).await;
         assert_eq!(plan, InteractionPlan::Ignore);
+    }
+
+    #[tokio::test]
+    async fn memreq_apply_sends_owner_dm_on_success() {
+        let dm = Arc::new(FakeDmSender::default());
+        let d = deps_dm(
+            FakeMembership {
+                submit_ok: true,
+                ..Default::default()
+            },
+            FakeDirectory::default(),
+            dm.clone(),
+        );
+        let plan = decide(
+            &d,
+            "memreq_apply",
+            "bot1",
+            "g9",
+            &UserId::new("u"),
+            Some("申請太郎".to_owned()),
+            Some("テストギルド".to_owned()),
+        )
+        .await;
+        assert!(matches!(plan, InteractionPlan::Reply(_)));
+        let sent = dm.request_dms.lock().unwrap();
+        assert_eq!(sent.len(), 1);
+        assert_eq!(sent[0].0, "owner1", "owner 宛");
+        assert_eq!(sent[0].1, 99, "request_id");
+        assert_eq!(sent[0].2, "申請太郎", "trim 済み表示ラベル採用");
+        assert_eq!(sent[0].3, "テストギルド");
+        assert!(!sent[0].4, "ボタン経路は note なし");
+    }
+
+    #[tokio::test]
+    async fn memreq_apply_dm_uses_label_fallback_when_absent() {
+        let dm = Arc::new(FakeDmSender::default());
+        let d = deps_dm(
+            FakeMembership {
+                submit_ok: true,
+                ..Default::default()
+            },
+            FakeDirectory::default(),
+            dm.clone(),
+        );
+        // applicant_label 無し・guild_label は空白のみ → Node の `label?.trim() || default` フォールバック。
+        let _ = decide(
+            &d,
+            "memreq_apply",
+            "bot1",
+            "g9",
+            &UserId::new("u"),
+            None,
+            Some("   ".to_owned()),
+        )
+        .await;
+        let sent = dm.request_dms.lock().unwrap();
+        assert_eq!(sent[0].2, "ユーザー u", "applicant 無しは ユーザー+id フォールバック");
+        assert_eq!(sent[0].3, "ギルド g9", "guild 空白は ギルド+guildId フォールバック");
+    }
+
+    #[tokio::test]
+    async fn memreq_decide_sends_applicant_dm_on_success() {
+        let dm = Arc::new(FakeDmSender::default());
+        let d = deps_dm(
+            FakeMembership {
+                decide: Some(DecisionOutcome {
+                    ok: true,
+                    message: String::new(),
+                    status: Some(MemberDecision::Approved),
+                    bot_name: Some("テストBot".to_owned()),
+                    applicant_id: Some("applicant1".to_owned()),
+                }),
+                ..Default::default()
+            },
+            FakeDirectory::default(),
+            dm.clone(),
+        );
+        let plan = decide(&d, "memreq_approve", "5", "", &UserId::new("owner"), None, None).await;
+        assert!(matches!(plan, InteractionPlan::Update { .. }));
+        let sent = dm.decision_dms.lock().unwrap();
+        assert_eq!(sent.as_slice(), &[("applicant1".to_owned(), true)]);
     }
 }

@@ -117,6 +117,7 @@ impl DiscordManager {
                 http,
                 membership: self.ports.membership.clone(),
                 directory: self.ports.directory.clone(),
+                dm: messenger.clone(),
             };
             runners.push(TenantRunner {
                 config: TenantConfig { bot_id, token },
@@ -369,6 +370,26 @@ impl DiscordMessenger {
              ※ このDMに心当たりがない場合は、誰かがあなたのDiscord IDで登録を試みています。コードは入力しないでください。"
         );
         self.send_owner_dm(discord_id, &content, &[]).await
+    }
+}
+
+#[async_trait]
+impl crate::ports::MemberDmSender for DiscordMessenger {
+    async fn send_request_dm(
+        &self,
+        owner_id: &str,
+        bot_name: &str,
+        applicant_label: &str,
+        guild_label: &str,
+        note: Option<&str>,
+        request_id: i64,
+    ) -> bool {
+        self.send_member_request_dm(owner_id, bot_name, applicant_label, guild_label, note, request_id)
+            .await
+    }
+
+    async fn send_decision_dm(&self, applicant_id: &str, bot_name: &str, approved: bool) -> bool {
+        self.send_member_decision_dm(applicant_id, bot_name, approved).await
     }
 }
 

@@ -326,21 +326,29 @@ pub enum MemberDecision {
     Rejected,
 }
 
-/// 利用申請 submit の結果（現行 `submitMemberRequest` の `{ ok, message }`）。
-#[derive(Debug, Clone)]
+/// 利用申請 submit の結果（現行 `submitMemberRequest` の `{ ok, message }` + owner 宛 DM 用の id）。
+#[derive(Debug, Clone, Default)]
 pub struct SubmitOutcome {
     pub ok: bool,
     /// 失敗時のユーザー向けメッセージ（ok 時は空でよい）。
     pub message: String,
+    /// 承認 DM の宛先オーナー（Node `sendMemberRequestDM` の ownerId）。ok 時のみ。
+    pub owner_id: Option<String>,
+    /// Bot 表示名（DM 本文）。ok 時のみ。
+    pub bot_name: Option<String>,
+    /// 申請 ID（承認/却下ボタンの custom_id）。ok 時のみ。
+    pub request_id: Option<i64>,
 }
 
 /// 申請可否操作の結果（現行 `decideMemberRequestById` の `{ ok, message?, status?, botName? }`）。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct DecisionOutcome {
     pub ok: bool,
     pub message: String,
     pub status: Option<MemberDecision>,
     pub bot_name: Option<String>,
+    /// 申請者（結果 DM の宛先・Node `sendMemberDecisionDM` の applicantId）。ok 時のみ。
+    pub applicant_id: Option<String>,
 }
 
 /// 共有招待レコード（現行 `getShareById`）。
@@ -394,6 +402,28 @@ pub trait MembershipService: Send + Sync {
 
     /// 公開ペルソナ（`is_public===1`）を引く（現行 `getPersonaById` フィルタ済み）。
     async fn get_public_persona(&self, persona_id: i64) -> Option<PersonaRecord>;
+}
+
+/// 利用申請ボタンフローの結果 DM 送信（Node `sendMemberRequestDM`/`sendMemberDecisionDM`）。
+///
+/// interaction ハンドラが DB 確定後に呼ぶ。常に共有デフォルト Bot から送る（実装側で担保）。fire-and-forget
+/// （戻り値の false は握り潰す・DB 上の申請は Web 管理から拾えるため）。fake でユニットテスト可能にするため
+/// 注入ポートにする（[`DiscordMessenger`] が本実装）。
+#[async_trait]
+pub trait MemberDmSender: Send + Sync {
+    /// 申請受付を Bot オーナーへ通知（承認/却下ボタン付き）。
+    async fn send_request_dm(
+        &self,
+        owner_id: &str,
+        bot_name: &str,
+        applicant_label: &str,
+        guild_label: &str,
+        note: Option<&str>,
+        request_id: i64,
+    ) -> bool;
+
+    /// 承認/却下の結果を申請者へ通知（ボタンなし）。
+    async fn send_decision_dm(&self, applicant_id: &str, bot_name: &str, approved: bool) -> bool;
 }
 
 // ─── RateLimiter ─────────────────────────────────────────────────────────────

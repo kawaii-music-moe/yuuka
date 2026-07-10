@@ -13,7 +13,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use base64::Engine as _;
 use secrecy::SecretString;
-use yuuka_core::{BotId, DbError, GeminiError, GuildId, ResponsePart, ToolContext, UserId};
+use yuuka_core::{BotId, DbError, GeminiError, GuildId, ResponsePart, ToolContext, TurnMode, UserId};
 use yuuka_crypto::SystemCrypto;
 use yuuka_discord::{
     BotStatus, FileAttachment, IncomingChat, InlineMedia, Speaker, StatusSink, TurnDelivery,
@@ -38,6 +38,18 @@ const NO_KEY_MESSAGE: &str =
 /// 汎用モードで Bot 専用キー未設定時の owner DM 応答（Node `processBotDmMessage` の ⚠️ 文言）。
 const BOT_NO_KEY_MESSAGE: &str =
     "⚠️ このBotにはBot専用のGemini APIキーが設定されていません。管理画面の「Bot設定」→「汎用モード設定」から設定してください。";
+/// レート制限応答（秘書経路・Node `processMessage` catch・gemini.ts:1111・「（トークン枯渇など）」付き）。
+const SECRETARY_RATE_LIMIT_MESSAGE: &str =
+    "⚠️ 現在APIの利用制限（トークン枯渇など）に達しています。しばらく待ってからもう一度お試しください。";
+/// サーバーエラー応答（秘書経路・Node `processMessage` catch・gemini.ts:1119・「（503等）」付き）。
+const SECRETARY_SERVER_ERROR_MESSAGE: &str =
+    "⚠️ AIサーバーが現在混み合っているか、一時的なエラーが発生しています（503等）。しばらく待ってからもう一度お試しください。";
+/// レート制限応答（汎用モード・Node `guildErrorResult`・gemini.ts:1325）。
+const GENERIC_RATE_LIMIT_MESSAGE: &str =
+    "⚠️ 現在APIの利用制限に達しています。しばらく待ってからもう一度お試しください。";
+/// サーバーエラー応答（汎用モード・Node `guildErrorResult`・gemini.ts:1333）。
+const GENERIC_SERVER_ERROR_MESSAGE: &str =
+    "⚠️ AIサーバーが現在混み合っているか、一時的なエラーが発生しています。しばらく待ってからもう一度お試しください。";
 
 /// 復号済み Gemini キー + モデルから [`GenerateBackend`] を作るファクトリ。
 ///
@@ -182,15 +194,23 @@ impl ChatEngine {
             .build(&cfg.model, SecretString::from(plaintext))
             .map_err(|e| TurnError::Failed(e.to_string()))?;
 
-        // 5. FC ループ（tools 往復・完了是正・max iterations は crate 内で処理）。
+        // 5. 能力ゲート: この Bot の能力集合を解決（Node `resolveBotCapabilities`・DB 未登録は秘書相当）。
+        let caps = match bot_repo::get_bot(&self.db, bid).await.map_err(to_turn_err)? {
+            Some(bot) => bot.capability_set(),
+            None => bot_repo::secretary_full_capabilities(),
+        };
+
+        // 6. FC ループ（tools 往復・完了是正・max iterations は crate 内で処理）。秘書経路のツールカタログ。
         let mut ctx = ToolContext::new(bot_id.clone(), user_id.clone());
         ctx.rich_reply_enabled = rich;
+        ctx.capabilities = caps;
+        ctx.mode = TurnMode::Secretary;
         let snapshot = self.registry.snapshot(&ctx);
         let opts = LoopOptions {
             on_status: Some(status_bridge(status)),
             ..LoopOptions::default()
         };
-        let result = run_function_calling_loop(
+        let result = match run_function_calling_loop(
             backend.as_ref(),
             &snapshot,
             &sys,
@@ -199,7 +219,21 @@ impl ChatEngine {
             &opts,
         )
         .await
-        .map_err(|e| TurnError::Failed(e.to_string()))?;
+        {
+            Ok(r) => r,
+            Err(e) => {
+                // Node `processMessage` catch: レート/サーバーエラーは分類済み ⚠️ を通常応答で返す
+                // （履歴には保存しない）。それ以外は generic フォールバックへ（finish_reply が GENERIC_ERROR）。
+                if let Some(msg) = classify_gemini_error(
+                    &e,
+                    SECRETARY_RATE_LIMIT_MESSAGE,
+                    SECRETARY_SERVER_ERROR_MESSAGE,
+                ) {
+                    return Ok(TurnReply::text(msg));
+                }
+                return Err(TurnError::Failed(e.to_string()));
+            }
+        };
 
         // 6. 応答テキスト（空なら fallback）。7. アシスタント応答を必ず保存（空でも fallback を保存）。
         let reply_text = if result.text.trim().is_empty() {
@@ -323,9 +357,12 @@ impl ChatEngine {
             .build(bot_repo::BOT_DEFAULT_MODEL, SecretString::from(plaintext))
             .map_err(|e| TurnError::Failed(e.to_string()))?;
 
-        // 5. FC ループ（ギルドは ctx.guild_id を通す・リッチ返信は常時有効）。
+        // 5. FC ループ（ギルドは ctx.guild_id を通す・リッチ返信は常時有効・汎用モードのツールカタログ）。
+        //    能力ゲート: Bot の能力集合 + GuildAssistant 経路 ⇒ 秘書ツールは露出せず guild-assistant のみ。
         let mut ctx = ToolContext::new(bot_id.clone(), speaker.user_id.clone());
         ctx.rich_reply_enabled = true;
+        ctx.capabilities = bot.capability_set();
+        ctx.mode = TurnMode::GuildAssistant;
         if let (GuildScope::Guild, Some(gid)) = (scope, guild_id) {
             ctx.guild_id = Some(gid.clone());
         }
@@ -334,7 +371,7 @@ impl ChatEngine {
             on_status: Some(status_bridge(status)),
             ..LoopOptions::default()
         };
-        let result = run_function_calling_loop(
+        let result = match run_function_calling_loop(
             backend.as_ref(),
             &snapshot,
             &sys,
@@ -343,7 +380,18 @@ impl ChatEngine {
             &opts,
         )
         .await
-        .map_err(|e| TurnError::Failed(e.to_string()))?;
+        {
+            Ok(r) => r,
+            Err(e) => {
+                // Node `guildErrorResult`: レート/サーバーエラーは分類済み ⚠️ を通常応答で返す（履歴非保存）。
+                if let Some(msg) =
+                    classify_gemini_error(&e, GENERIC_RATE_LIMIT_MESSAGE, GENERIC_SERVER_ERROR_MESSAGE)
+                {
+                    return Ok(TurnReply::text(msg));
+                }
+                return Err(TurnError::Failed(e.to_string()));
+            }
+        };
 
         // 6. 応答テキスト（空は fallback）+ アシスタント応答を永続化。
         let reply_text = if result.text.trim().is_empty() {
@@ -430,6 +478,23 @@ impl TurnProcessor for ChatEngine {
 /// [`DbError`] を [`TurnError`] へ写像する。
 fn to_turn_err(e: DbError) -> TurnError {
     TurnError::Failed(e.to_string())
+}
+
+/// FC ループの Gemini エラーを Node パリティで分類する。Node は数値 `status` のみで判定する
+/// （レート制限 = 429 = [`GeminiError::RateLimited`]／サーバーエラー = 500/502/503/504 =
+/// [`GeminiError::ServerError`]）。該当時は経路別の ⚠️ 文言を返し、それ以外は `None`（generic へ）。
+fn classify_gemini_error(
+    e: &GeminiError,
+    rate_msg: &'static str,
+    server_msg: &'static str,
+) -> Option<&'static str> {
+    match e {
+        GeminiError::RateLimited { .. } => Some(rate_msg),
+        GeminiError::ServerError {
+            status: 500 | 502 | 503 | 504,
+        } => Some(server_msg),
+        _ => None,
+    }
 }
 
 /// ログへ残す発言表現（Node `describeIncomingMessage`＝`text?.trim() || "[音声メッセージ]" || "[画像]" || ""`）。
@@ -621,5 +686,41 @@ mod tests {
             last.parts.iter().any(|p| p.inline_data.is_some()),
             "末尾 user content に inline data が合流している"
         );
+    }
+
+    /// Node パリティ: 429=rate・{500,502,503,504}=server・他は None（generic へ）。経路別文言を通す。
+    #[test]
+    fn classify_gemini_error_matches_node_status_classification() {
+        let rl = GeminiError::RateLimited { retry_after: None };
+        // 秘書経路と汎用モード経路で別文言を返す（共有定数ではない）。
+        assert_eq!(
+            classify_gemini_error(&rl, SECRETARY_RATE_LIMIT_MESSAGE, SECRETARY_SERVER_ERROR_MESSAGE),
+            Some(SECRETARY_RATE_LIMIT_MESSAGE)
+        );
+        assert_eq!(
+            classify_gemini_error(&rl, GENERIC_RATE_LIMIT_MESSAGE, GENERIC_SERVER_ERROR_MESSAGE),
+            Some(GENERIC_RATE_LIMIT_MESSAGE)
+        );
+        // サーバーエラーは Node isServerError の 4 ステータスのみ。
+        for status in [500u16, 502, 503, 504] {
+            let e = GeminiError::ServerError { status };
+            assert_eq!(
+                classify_gemini_error(&e, GENERIC_RATE_LIMIT_MESSAGE, GENERIC_SERVER_ERROR_MESSAGE),
+                Some(GENERIC_SERVER_ERROR_MESSAGE),
+                "status {status} は server-error"
+            );
+        }
+        // 他の 5xx（501）・非上流系は分類対象外＝None（generic フォールバックへ）。
+        for e in [
+            GeminiError::ServerError { status: 501 },
+            GeminiError::Status { status: 400 },
+            GeminiError::Timeout,
+            GeminiError::MaxIterations,
+        ] {
+            assert_eq!(
+                classify_gemini_error(&e, GENERIC_RATE_LIMIT_MESSAGE, GENERIC_SERVER_ERROR_MESSAGE),
+                None
+            );
+        }
     }
 }
