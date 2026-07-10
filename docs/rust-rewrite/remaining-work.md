@@ -1,11 +1,13 @@
 # Rust 移行 — 残作業ロードマップ（本番投入までの ToDo 全集）
 
-- 最終更新: 2026-07-09（実装セッション 2026-07-09d で **P1-1 認証発行 + P1-2 会話（オーケストレーション + /ws/chat）** を着地）
+- 最終更新: 2026-07-09（実装セッション 2026-07-09e で **P1-3 Discord live 化 + P1-4 通知配線 + P1-1 登録 DM 開通** を着地）
 - 対象ブランチ: `feature/rust-rewrite`（未 push）
-- git HEAD: `7a4c07f`（旧セッション）+ 本セッションの P1-1 コミット群
+- git HEAD: 本セッションの P1-3 コミット群（前セッション `e909237` の続き）
 - 前提資料: [review-2026-07-06-fix-policy.md](review-2026-07-06-fix-policy.md)（修正方針の唯一の基準）・[review-2026-07-09-batch4-6.md](review-2026-07-09-batch4-6.md)・[PLAN.md](PLAN.md) §11（移行ロードマップ）
-- **本セッション（2026-07-09d）の成果**: **P1-1 のうち資格情報認証発行**を実装 — `SessionStore` を検証専用→**発行+検証**へ拡張（Node `sessionService.ts` パリティ・in-memory フォールバック）、`/api/setup/status`・`/api/setup`・`/api/register`・`/api/register/verify`・`/api/login`・`/api/logout`・`/api/users` の 7 ルート、bcrypt cost 12（`$2b$` Node 相互運用・`spawn_blocking`）、パスワードポリシー・招待コード（seed/consume）・監査ログ・DM チャレンジ登録状態機械（`RegistrationDm` ポート・Discord live まで `NullRegistrationDm`）・レート制限・`ConnectInfo` クライアント IP・Cookie 発行。`main.rs` に `AuthRuntime` 配線（`SessionStore` を発行↔検証で共有）+ invite 起動時シード。多エージェント・アドバーサリレビュー実施 → 確定 2 指摘（legal URL の `system_settings` 優先=Node `publicLegalUrls` パリティ、暗号未設定時の setup 半端 commit 回避）を修正。機械ゲート全緑（build/release/clippy-D/deny/**test 278**）。統合テストで **ブラウザ login/setup → セッション発行 → /api/me 200** を通しで確認。
-- **前セッション（2026-07-09c）の成果**: P0-1〜4・P1-5（暗号層）・P1-6/7・P1-4 アダプタ・P3-4/5。
+- **本セッション（2026-07-09e）の成果**: **P1-3 Discord live 化**を実装 — twilight 転送層（既存・不活性）を**起動配線**した。(1) 注入ポートの**本番 DB 実装**を新設（`yuuka-orchestrator`）: `DbBotDirectory`（Node `botRepo`/`botAttributesRepo`/`userRepo` パリティ・Bot メタ/list/共有アクセス/トークン復号[`SystemCrypto`]/メンバー・許可ロール・登録判定）・`DbMembership`（申請 submit/decide=承認で `bot_members` 追加・共有 accept/revoke・公開ペルソナ import・全て writer actor 単一 Tx）・`InMemoryRateLimiter`（Node `botRateLimit` 固定窓 5/分・100/日・1000/ギルド日・`system_settings` 上書き）。(2) **汎用モード**（`ChatEngine::process_guild`/`process_bot_dm`）実装 — Bot 専用 Gemini キー（`getBotGenAI` パリティ・`BOT_DEFAULT_MODEL`）・ギルド/DM 分離コンテキスト（`[名前]:` プレフィックス・guild 30 件/DM 15 件）・Bot 単位ペルソナ + 共有/個人ノートの `buildGuildSystemInstruction` 移植・FC ループ。(3) **`main.rs` 配線** — `DiscordManager::new(ports + processor=ChatEngine)` → `prepare()` で共有 `Messenger` 生成、各 `TenantRunner` を `DiscordTenantService` で **Supervisor 監督下**（panic 隔離 + 指数バックオフ・恒久クローズは非再起動）へ。ゲートウェイ起動は **`YUUKA_RUST_DISCORD` env ゲート**（既定 off＝二重 gateway/二重応答の回避・`YUUKA_RUST_CRON` と同思想）。**P1-4**: cron の `NullNotifier` を `Messenger`（`impl services::Notifier`）へ差し替え＝リマインド等が実 Discord へ配信可能に。**P1-1 残**: 登録コード DM を `MessengerRegistrationDm`（合成ルートアダプタ）で `Messenger` 経由に配線＝`/api/register` が実際に DM を送る。機械ゲート全緑（build/release/clippy-D/deny/**test 303**・+15: ポート DB 実装 7・汎用モード 3・guild prompt 2・build_contents 回帰 3）。
+- **本セッション（2026-07-10）の成果**: **P1-3 未コミット diff の parity レビュー**（7 次元並列 + 各指摘を敵対的検証 = confirmed 14）を通し、確定 6 件を修正した。**(H) build_contents 二重ユーザーターン** — persist-before-load で履歴末尾に既にある発言を `build_contents` が再追加していた（Node `buildContentsFromHistory` は空履歴のときだけ `message.text` を積む）。修正: 空履歴のみ lone user turn・非空は添付のみ末尾 user content へ合流。**(H) notifier の DM フォールバック欠落** — `DiscordMessenger::send_to_user` が Channel 解決失敗で即 `false`（cron 経路は deliver_final を通らないため fallback 不能＝リマインダー永久リトライ）。修正: Channel 解決不能時に DM へフォールバック（Node `sendToUser` notifier.ts:130-142）。**(M) owner DM の context floor** — DM が秘書 floor を流用していた。修正: `recent_bot_dm_context`（floor `context_floor:{botId}:dm:{userId}`・Node `getBotDmContext`）を新設し DM 分岐で使用。**(M) レート制限の日窓** — `:d` 固定キー + 25h TTL の転がり窓だった。修正: `todaySuffix`（ローカル暦日 `YYYYMMDD`）を日キーへ付与し暦日境界でリセット。**(L) describe_incoming の trim**（空白のみを添付プレースホルダへ）・**(L) レート上限設定の parseInt 寛容パース**（先頭数字のみ解釈）。**defer（doc 化済み）**: 利用申請/決定の owner・applicant DM 未送（明示的な縮退シーム＝`DbMembership` への messenger 注入待ち・§P2-A）／`has_gemini_key` は presence 判定で Node `getBotGenAI` の復号検証より弱い（低・むしろ復号エラーを表面化＝ops 良）／汎用モードの LLM エラー文言（rate-limit/server-error 別の ⚠️ ＝`guildErrorResult` 相当）は未分類（低・`TurnError` へ分類貫通が必要）。
+- **前セッション（2026-07-09d）の成果**: **P1-1 資格情報認証発行**（`SessionStore` 発行+検証・7 ルート・bcrypt `$2b$` cost12・招待/監査/レート制限）+ **P1-2 会話**（`yuuka-orchestrator`・`/ws/chat`）。
+- **前々セッション（2026-07-09c）の成果**: P0-1〜4・P1-5（暗号層）・P1-6/7・P1-4 アダプタ・P3-4/5。
 
 ---
 
@@ -17,21 +19,23 @@
 |---|---|
 | `cargo build --release --workspace` | ✅ exit 0 |
 | `cargo clippy --workspace --all-targets` | ✅ exit 0（ts-rs 良性 warning のみ） |
-| `cargo test --workspace` | ✅ **278 passed / 0 failed**（P1-1 で +30: 認証発行・セッション発行・bcrypt・pending・settings 等） |
-| `cargo deny check` | ✅ **exit 0**（bcrypt/blowfish 追加後も緑） |
+| `cargo test --workspace` | ✅ **303 passed / 0 failed**（P1-3 +12 / 2026-07-10 parity 修正 +3: build_contents 回帰） |
+| `cargo deny check` | ✅ **exit 0**（新規依存なし＝既存クレートのみで実装） |
 | 保存時暗号層（Argon2id/AES-256-GCM） | ✅ **実装済**（P1-5・Node ゴールデンベクタでバイト単位パリティ・鍵ローテ起動時配線） |
-| 認証発行（login/setup/logout/register/users） | ✅ **実装済**（P1-1・セッション発行 + bcrypt + 招待 + 監査 + レート制限。OAuth は残） |
-| HTTP ルート被覆 | 34 / 152 パス ≒ **22%**（`/api/me` + 認証 7 ルートを追加） |
+| 認証発行（login/setup/logout/register/users） | ✅ **実装済**（P1-1・セッション発行 + bcrypt + 招待 + 監査 + レート制限。**登録 DM は P1-3 で開通**・OAuth は残） |
+| HTTP ルート被覆 | 34 / 152 パス ≒ **22%**（`/api/me` + 認証 7 ルート） |
 | Gemini ツール被覆 | 24 / 87 native ≒ **28%**（動的 MCP 0） |
 | チャットオーケストレーション（秘書ターン） | ✅ **実装済**（P1-2・`yuuka-orchestrator`・実 TurnProcessor・統合テスト緑） |
+| 汎用モード（guild/owner DM ターン） | ✅ **実装済**（P1-3・`process_guild`/`process_bot_dm`・Bot 専用キー + ギルド/DM 分離文脈・統合テスト緑。能力ゲート=全ツール露出は P2-B） |
 | WebSocket `/ws/chat`（デスクトップ会話） | ✅ **実装済**（P1-2・Bearer 認証 + ready/status/done・live 統合テスト緑。interaction/deferred は縮退） |
-| Gemini FC ループ本体 | 1:1 移植 ≒ 95% 完成（**オーケストレーション層から到達可能に**・P1-2） |
-| 通知配信ブリッジ | 🔶 **アダプタ実装済**（P1-4）・main の messenger 差し替え（P1-3）待ち |
-| 登録 DM ブリッジ | 🔶 **ポート実装済**（P1-1・`RegistrationDm`）・Discord live 化（P1-3）で adapter 配線待ち |
+| Discord live（gateway 起動 + Supervisor 監督） | ✅ **配線済**（P1-3・DB ポート + `DiscordManager.prepare` + `DiscordTenantService`。既定 off・`YUUKA_RUST_DISCORD=1` で起動＝Node bot 停止後） |
+| Gemini FC ループ本体 | 1:1 移植 ≒ 95% 完成（秘書 + 汎用モードの両経路から到達可能・P1-2/P1-3） |
+| 通知配信ブリッジ | ✅ **配線済**（P1-4・main の `NullNotifier`→`Messenger` 差し替え。デフォルト Bot 起動でリマインド等が実配信） |
+| 登録 DM ブリッジ | ✅ **配線済**（P1-3・`MessengerRegistrationDm`＝`RegistrationDm`↔`Messenger` の合成アダプタ。`/api/register` が実 DM 送信） |
 
 **進め方の2経路:**
 - **経路 A（strangler 並走カナリア）** — Node が認証/会話/Discord/暗号を担い、Rust は移行済み CRUD の一部だけを共有 Redis セッション前提で配信。§7-A の前提を満たせば数日規模で到達可能。**（P1-1 により Rust 単独でのセッション発行も可能になった＝Rust だけでログイン→CRUD が回る。）**
-- **経路 B（単独ほぼ本番）** — Rust だけで完結。P1〜P2 のブロッカーを全て潰す必要があり、現状は全体の約 1/4。相当先。
+- **経路 B（単独ほぼ本番）** — Rust だけで完結。P1-1〜P1-7 は全て着地（残は P1-1 の OAuth のみ＝P2-A へ移送）。残は主に P2（機能パリティ）+ P3（CI/fmt/残指摘）。**Discord ライブ確認**（実トークンでのメンション/DM 応答・二重処理回避のカットオーバー）は要実機検証。
 
 ---
 
@@ -85,17 +89,18 @@
   - 残 **(3) Discord 経路**: `ChatEngine`（`Arc<dyn TurnProcessor>`）を P1-3 の `DiscordManager` へ注入。汎用モード（guild/owner DM・Bot 専用キー）の `process_guild`/`process_bot_dm` は現状未実装（P1-3 で実装）。
   - 完了条件: **デスクトップから 1 往復の会話が成立しツール呼び出しが実行される**（`/ws/chat` で成立・Web ダッシュボードは WS チャット未使用のため対象外）。残は Discord 経路（P1-3）。
 
-- [ ] **P1-3 Discord を実起動し、Supervisor 配下へ配線する**
-  - 内容: `main.rs` が `DiscordManager` を構築せず `.prepare()` もテナント登録もしない。twilight 転送層（shard loop・マルチテナント・message/button ルーティング・DM ヘルパ・権限ガード）は構築 + test 済みだが**不活性**。
-  - なぜ: 起動しないので bot が一切反応しない。**秘書経路の実 TurnProcessor（`yuuka_orchestrator::ChatEngine`）は P1-2 で実装済み**＝`Arc<dyn TurnProcessor>` として注入できる（汎用モード guild/owner DM の `process_guild`/`process_bot_dm` は本 Phase で実装）。
-  - 対象: `crates/yuuka-supervisor/src/main.rs`、`crates/yuuka-supervisor/src/discord.rs`（既存 `DiscordTenantService` アダプタは未使用のまま存在）。実ポート（`BotDirectory`/`MembershipService`/`RateLimiter`）の DB 実装も必要（現状 trait のみ・bot repo 未整備）。
-  - 完了条件: main が Discord テナントを Supervisor に登録し、メンション/DM に実応答。restart/backoff 監督下。
+- [x] **P1-3 Discord を実起動し、Supervisor 配下へ配線する** — **着地（2026-07-09e）+ parity レビュー済み（2026-07-10）**
+  - 済: DB ポート実装（`DbBotDirectory`/`DbMembership`/`InMemoryRateLimiter`）+ 汎用モード（`process_guild`/`process_bot_dm`）+ `main.rs` 配線（`DiscordManager.prepare` → `DiscordTenantService` を Supervisor 監督下・`YUUKA_RUST_DISCORD` env ゲート既定 off）。parity レビュー確定 6 件を修正（本ファイル冒頭「2026-07-10 の成果」参照）。
+  - 残（本 Phase の縮退シーム・要トラッキング）:
+    - [ ] **利用申請/決定の Discord DM 未送**（owner へ申請通知・applicant へ承認/却下通知）。`DbMembership::submit_member_request`/`decide_member_request` は DB のみで、Node `memberRequest.ts` の DM 送信を移植していない（`applicant_label`/`guild_label` は受領済み・未使用）。要 `Arc<DiscordMessenger>` を `DbMembership` かボタン interaction ハンドラへ注入。
+    - [ ] **汎用モード LLM エラーの文言分類**（rate-limit/server-error 別の ⚠️ ＝Node `guildErrorResult`）。現状は `TurnError::Failed` に畳んでおり文言が汎用化。要 `TurnError` へ分類貫通。
+    - [ ] **能力ゲート未適用**（全ツール露出＝P2-B と同根）。
+  - 残（実機）: 実トークンでのメンション/DM 応答確認・Node bot 停止のカットオーバー（二重処理回避）。
 
-- [~] **P1-4 通知配信の橋渡し（Messenger → Notifier）を実装する** — **アダプタ実装済み・配線は P1-3 待ち**
-  - 済: `crates/yuuka-discord/src/notify_bridge.rs`＝`impl yuuka_services::Notifier for DiscordMessenger`（`NotifyTarget`↔`DeliverTarget` 変換＝Default→DM・Channel 透過、空本文 false、`TurnReply::text` 化して `send_to_user` へ委譲）。孤児規則により discord 側に実装（services→discord 逆依存なし＝非循環）。target 写像を単体テストで凍結。
-  - 残（P1-3 と一体）: `main.rs` の `NullNotifier` を、Discord live 化で構築した `Arc<DiscordMessenger>` へ差し替える 1 行のみ。
-  - なぜ: reminder/birthday/payment サービスは動くが送信が常に `false` で **リマインダーが永遠に届かない**。アダプタが埋まったので、あとは messenger を注入すれば届く。
-  - 完了条件: 期限到来リマインドが実 Discord チャンネルへ届く（＝P1-3 の messenger 構築 + 上記差し替え）。
+- [x] **P1-4 通知配信の橋渡し（Messenger → Notifier）を実装する** — **配線済み（P1-3 と一体・2026-07-09e）+ DM フォールバック修正済み（2026-07-10）**
+  - 済: `crates/yuuka-discord/src/notify_bridge.rs`＝`impl yuuka_services::Notifier for DiscordMessenger`（`NotifyTarget`↔`DeliverTarget` 変換＝Default→DM・Channel 透過、空本文 false、`TurnReply::text` 化して `send_to_user` へ委譲）。孤児規則により discord 側に実装（services→discord 逆依存なし＝非循環）。target 写像を単体テストで凍結。`main.rs` の `NullNotifier`→`Arc<DiscordMessenger>` 差し替え済み。
+  - 済（2026-07-10 parity 修正）: `send_to_user` の Channel 解決失敗時に DM フォールバック（Node `sendToUser`）。これが無いとチャンネルを閲覧不可のリマインダーが送信されず reminder が永久リトライ状態になっていた。
+  - 完了条件: 期限到来リマインドが実 Discord チャンネルへ届く（実機確認は P1-3 のカットオーバー時）。
 
 - [x] **P1-5 秘密情報の暗号層（Argon2id + AES-256-GCM）を実装する** — 済（新 `crates/yuuka-crypto`）。scrypt システム鍵 + Argon2id ユーザー鍵 + AES-256-GCM を Node `src/utils/crypto.ts` と **バイト単位パリティ**で実装（Node 実出力のゴールデンベクタ `golden_parity_with_node` で凍結）。`config` が `YUUKA_ENCRYPTION_SECRET`/`_NEW` を `SecretString` で読込。鍵ローテ（`rotate_secret_key`＝Node `ENCRYPTED_COLUMNS` パリティ）を supervisor 起動時に **writer actor 上で 1 回**実行（R-2 遵守）。**残（消費側の配線は P2）**: credential register/decrypt ルート・Discord/Gemini トークン復号は `SystemCrypto`/`decrypt_text` を呼ぶだけ（本層で提供済み）。
   - 内容: **Rust 全クレートが読む env は `YUUKA_RUST_CRON` ただ 1 つ**。`YUUKA_ENCRYPTION_SECRET` / `YUUKA_ENCRYPTION_SECRET_NEW`（鍵ローテ）/ `GOOGLE_CLIENT_SECRET` は未読。復号層が「本クレート外」のまま存在しない（`yuuka-credential` は register/decrypt を deferred）。
