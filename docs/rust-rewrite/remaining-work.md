@@ -6,6 +6,7 @@
 - 前提資料: [review-2026-07-06-fix-policy.md](review-2026-07-06-fix-policy.md)（修正方針の唯一の基準）・[review-2026-07-09-batch4-6.md](review-2026-07-09-batch4-6.md)・[PLAN.md](PLAN.md) §11（移行ロードマップ）
 - **本セッション（2026-07-09e）の成果**: **P1-3 Discord live 化**を実装 — twilight 転送層（既存・不活性）を**起動配線**した。(1) 注入ポートの**本番 DB 実装**を新設（`yuuka-orchestrator`）: `DbBotDirectory`（Node `botRepo`/`botAttributesRepo`/`userRepo` パリティ・Bot メタ/list/共有アクセス/トークン復号[`SystemCrypto`]/メンバー・許可ロール・登録判定）・`DbMembership`（申請 submit/decide=承認で `bot_members` 追加・共有 accept/revoke・公開ペルソナ import・全て writer actor 単一 Tx）・`InMemoryRateLimiter`（Node `botRateLimit` 固定窓 5/分・100/日・1000/ギルド日・`system_settings` 上書き）。(2) **汎用モード**（`ChatEngine::process_guild`/`process_bot_dm`）実装 — Bot 専用 Gemini キー（`getBotGenAI` パリティ・`BOT_DEFAULT_MODEL`）・ギルド/DM 分離コンテキスト（`[名前]:` プレフィックス・guild 30 件/DM 15 件）・Bot 単位ペルソナ + 共有/個人ノートの `buildGuildSystemInstruction` 移植・FC ループ。(3) **`main.rs` 配線** — `DiscordManager::new(ports + processor=ChatEngine)` → `prepare()` で共有 `Messenger` 生成、各 `TenantRunner` を `DiscordTenantService` で **Supervisor 監督下**（panic 隔離 + 指数バックオフ・恒久クローズは非再起動）へ。ゲートウェイ起動は **`YUUKA_RUST_DISCORD` env ゲート**（既定 off＝二重 gateway/二重応答の回避・`YUUKA_RUST_CRON` と同思想）。**P1-4**: cron の `NullNotifier` を `Messenger`（`impl services::Notifier`）へ差し替え＝リマインド等が実 Discord へ配信可能に。**P1-1 残**: 登録コード DM を `MessengerRegistrationDm`（合成ルートアダプタ）で `Messenger` 経由に配線＝`/api/register` が実際に DM を送る。機械ゲート全緑（build/release/clippy-D/deny/**test 303**・+15: ポート DB 実装 7・汎用モード 3・guild prompt 2・build_contents 回帰 3）。
 - **本セッション（2026-07-10）の成果**: **P1-3 未コミット diff の parity レビュー**（7 次元並列 + 各指摘を敵対的検証 = confirmed 14）を通し、確定 6 件を修正した。**(H) build_contents 二重ユーザーターン** — persist-before-load で履歴末尾に既にある発言を `build_contents` が再追加していた（Node `buildContentsFromHistory` は空履歴のときだけ `message.text` を積む）。修正: 空履歴のみ lone user turn・非空は添付のみ末尾 user content へ合流。**(H) notifier の DM フォールバック欠落** — `DiscordMessenger::send_to_user` が Channel 解決失敗で即 `false`（cron 経路は deliver_final を通らないため fallback 不能＝リマインダー永久リトライ）。修正: Channel 解決不能時に DM へフォールバック（Node `sendToUser` notifier.ts:130-142）。**(M) owner DM の context floor** — DM が秘書 floor を流用していた。修正: `recent_bot_dm_context`（floor `context_floor:{botId}:dm:{userId}`・Node `getBotDmContext`）を新設し DM 分岐で使用。**(M) レート制限の日窓** — `:d` 固定キー + 25h TTL の転がり窓だった。修正: `todaySuffix`（ローカル暦日 `YYYYMMDD`）を日キーへ付与し暦日境界でリセット。**(L) describe_incoming の trim**（空白のみを添付プレースホルダへ）・**(L) レート上限設定の parseInt 寛容パース**（先頭数字のみ解釈）。**defer（doc 化済み）**: 利用申請/決定の owner・applicant DM 未送（明示的な縮退シーム＝`DbMembership` への messenger 注入待ち・§P2-A）／`has_gemini_key` は presence 判定で Node `getBotGenAI` の復号検証より弱い（低・むしろ復号エラーを表面化＝ops 良）／汎用モードの LLM エラー文言（rate-limit/server-error 別の ⚠️ ＝`guildErrorResult` 相当）は未分類（低・`TurnError` へ分類貫通が必要）。
+- **本セッション（2026-07-10b）の成果**: **P1-3 の残 3 件（縮退シーム）を実装**。**(1) 能力ゲート（P2-B）**: `ToolContext` に `mode: TurnMode`（Secretary/GuildAssistant）追加・`Tool::exposure()`（既定メソッド＝現行 23 ツールは全て secretary 分類）・`ToolExposure::is_visible`（経路 × 能力）・`NativeProvider::list` で filter・engine が `bot_repo::parse_capabilities`（Node `parseCapabilities` パリティ＝null/空/非配列/失敗は秘書相当フル）で `ctx.capabilities` を注入。秘書経路は `caps.has("secretary")` で 23 ツール露出、汎用モードは secretary ツールを一切露出しない（Node `getGuildAssistantFunctionModules` は guild-assistant モジュールのみ・未移植）。**残**: ユーザー別 `enabledModules`（`bot_user_modules`/`bots.enabled_modules` の selectable 絞り込み・Node 第 2 次元）は未移植＝module 選択 UI 系（P2-A・native.rs にコメント明記）。**(2) member-request DM**: `SubmitOutcome`/`DecisionOutcome` に owner/applicant/bot_name/request_id を露出し、interaction ハンドラが既存 text-exact ヘルパ（`send_member_request_dm`/`send_member_decision_dm`）を DB 確定後に呼ぶ（`MemberDmSender` ポートを `InteractionDeps` へ注入・fire-and-forget）。submit→owner 受付 DM（承認/却下ボタン）・decide→applicant 結果 DM。**(3) 汎用モード LLM エラー文言分類**: `classify_gemini_error`（429=`RateLimited`・{500,502,503,504}=`ServerError`・他は None→generic）で秘書/汎用の別文言（秘書は「（トークン枯渇など）」「（503等）」付き）を `Ok(TurnReply::text)` で返す（履歴非保存・Node `guildErrorResult`/`processMessage` catch）。**parity レビュー**（4 次元 + 敵対的検証 confirmed 7・全て low/medium・high 無し）を通し 7 件対応（capabilities NULL 耐性・stale doc・comment 正確化・classify/label_or 回帰テスト追加等）。機械ゲート全緑（build/release/clippy-D/deny/**test 310**・+7）。
 - **前セッション（2026-07-09d）の成果**: **P1-1 資格情報認証発行**（`SessionStore` 発行+検証・7 ルート・bcrypt `$2b$` cost12・招待/監査/レート制限）+ **P1-2 会話**（`yuuka-orchestrator`・`/ws/chat`）。
 - **前々セッション（2026-07-09c）の成果**: P0-1〜4・P1-5（暗号層）・P1-6/7・P1-4 アダプタ・P3-4/5。
 
@@ -19,7 +20,7 @@
 |---|---|
 | `cargo build --release --workspace` | ✅ exit 0 |
 | `cargo clippy --workspace --all-targets` | ✅ exit 0（ts-rs 良性 warning のみ） |
-| `cargo test --workspace` | ✅ **303 passed / 0 failed**（P1-3 +12 / 2026-07-10 parity 修正 +3: build_contents 回帰） |
+| `cargo test --workspace` | ✅ **310 passed / 0 failed**（P1-3 +12 / parity 修正 +3 / 2026-07-10b 能力ゲート+DM+エラー分類 +7） |
 | `cargo deny check` | ✅ **exit 0**（新規依存なし＝既存クレートのみで実装） |
 | 保存時暗号層（Argon2id/AES-256-GCM） | ✅ **実装済**（P1-5・Node ゴールデンベクタでバイト単位パリティ・鍵ローテ起動時配線） |
 | 認証発行（login/setup/logout/register/users） | ✅ **実装済**（P1-1・セッション発行 + bcrypt + 招待 + 監査 + レート制限。**登録 DM は P1-3 で開通**・OAuth は残） |
@@ -91,10 +92,10 @@
 
 - [x] **P1-3 Discord を実起動し、Supervisor 配下へ配線する** — **着地（2026-07-09e）+ parity レビュー済み（2026-07-10）**
   - 済: DB ポート実装（`DbBotDirectory`/`DbMembership`/`InMemoryRateLimiter`）+ 汎用モード（`process_guild`/`process_bot_dm`）+ `main.rs` 配線（`DiscordManager.prepare` → `DiscordTenantService` を Supervisor 監督下・`YUUKA_RUST_DISCORD` env ゲート既定 off）。parity レビュー確定 6 件を修正（本ファイル冒頭「2026-07-10 の成果」参照）。
-  - 残（本 Phase の縮退シーム・要トラッキング）:
-    - [ ] **利用申請/決定の Discord DM 未送**（owner へ申請通知・applicant へ承認/却下通知）。`DbMembership::submit_member_request`/`decide_member_request` は DB のみで、Node `memberRequest.ts` の DM 送信を移植していない（`applicant_label`/`guild_label` は受領済み・未使用）。要 `Arc<DiscordMessenger>` を `DbMembership` かボタン interaction ハンドラへ注入。
-    - [ ] **汎用モード LLM エラーの文言分類**（rate-limit/server-error 別の ⚠️ ＝Node `guildErrorResult`）。現状は `TurnError::Failed` に畳んでおり文言が汎用化。要 `TurnError` へ分類貫通。
-    - [ ] **能力ゲート未適用**（全ツール露出＝P2-B と同根）。
+  - 済（2026-07-10b・縮退シーム 3 件）:
+    - [x] **利用申請/決定の Discord DM**（owner へ申請通知・applicant へ承認/却下通知）。interaction ハンドラが outcome 露出の id で既存ヘルパを呼ぶ（`MemberDmSender` 注入・fire-and-forget）。
+    - [x] **汎用モード LLM エラーの文言分類**（rate-limit/server-error 別の ⚠️・秘書/汎用で別文言）。`classify_gemini_error` で `Ok(TurnReply::text)` を返す（履歴非保存）。
+    - [x] **能力ゲート適用**（秘書 × 汎用モードの経路 × 能力集合）。残: ユーザー別 `enabledModules`（P2-A・下記 P2-B 参照）。
   - 残（実機）: 実トークンでのメンション/DM 応答確認・Node bot 停止のカットオーバー（二重処理回避）。
 
 - [x] **P1-4 通知配信の橋渡し（Messenger → Notifier）を実装する** — **配線済み（P1-3 と一体・2026-07-09e）+ DM フォールバック修正済み（2026-07-10）**
@@ -158,7 +159,7 @@
 - [ ] richContent（showRichContent・常時 on のコア）
 - [ ] botAssistant（メンバー管理 + guild/personal ノート ~10）
 - [ ] **MCP 動的ツール**（`McpProvider` は未実装。`yuuka-tools/src/lib.rs` で deferred）
-- [ ] **capability ゲート適用**: 現状 `NativeProvider.list()` が全ツールを返し、bot 属性による絞り込みが未適用（`getFunctionModulesForCapabilities` 相当が無い）→ 全 bot に全ツール露出。
+- [~] **capability ゲート適用**: 済（2026-07-10b）＝経路（秘書/汎用モード）× 能力集合で `NativeProvider.list()` を絞り込み（`ToolExposure`/`ctx.mode`+`ctx.capabilities`・Node `parseCapabilities`+`getFunctionModulesForCapabilities`/`getGuildAssistantFunctionModules` パリティ）。**残**: ユーザー別 `enabledModules`（`resolveEnabledModulesForUser`＝`bot_user_modules`/`bots.enabled_modules` の selectable モジュール絞り込み・Node の第 2 次元）が未移植＝module 選択 UI 設定に連動（本項の完了はこの実装で）。
 
 ### P2-C 常駐サービス（6 実装 + 4 予約シーム + 1 欠落）
 
