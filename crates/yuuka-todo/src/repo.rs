@@ -12,7 +12,7 @@ use yuuka_core::{DbError, UserScope};
 use yuuka_db::{map_sqlite, ReadPool, WriterHandle};
 use yuuka_web::Db;
 
-use crate::dto::{NewTodo, Todo, TodoWithSubtasks};
+use crate::dto::{NewTodo, PriorityUpdate, TaskProgressLog, Todo, TodoUpdate, TodoWithSubtasks};
 
 /// 返却列（クリーンビュー・内部列 user_id/bot_id 等は含めない）。
 const TODO_COLUMNS: &str = "id, title, description, due_date, start_date, priority, tags, status, \
@@ -263,6 +263,343 @@ impl<'a> TodoRepo<'a> {
             })
             .await
     }
+
+    /// ガント表示対象（**開始日 or 期限のどちらかを持つ親タスク**）をサブタスク付きで返す
+    /// （Node `listGanttTasks`）。両方未設定のタスクは [`Self::list_someday`] へ回す仕様のため除外。
+    ///
+    /// 並びは Node のガント専用順（`COALESCE(start_date, due_date)` 昇順 → `COALESCE(due_date,
+    /// start_date)` 昇順 → 作成日時降順・NULL は後ろ）。親抽出後、子孫を [`Self::attach_subtasks`]
+    /// で束ねる。
+    ///
+    /// # Errors
+    /// クエリ失敗時 [`DbError`]。
+    pub async fn list_gantt(&self, scope: &UserScope) -> Result<Vec<TodoWithSubtasks>, DbError> {
+        let (uid, bid) = scope_keys(scope);
+        let parent_ids = self
+            .read
+            .read(move |conn| {
+                let mut stmt = conn
+                    .prepare(
+                        "SELECT id FROM todos \
+                         WHERE user_id = ?1 AND bot_id = ?2 AND parent_id IS NULL \
+                           AND (start_date IS NOT NULL OR due_date IS NOT NULL) \
+                         ORDER BY \
+                           CASE WHEN COALESCE(start_date, due_date) IS NULL THEN 1 ELSE 0 END, \
+                           datetime(COALESCE(start_date, due_date)) ASC, \
+                           datetime(COALESCE(due_date, start_date)) ASC, \
+                           created_at DESC",
+                    )
+                    .map_err(map_sqlite)?;
+                let rows = stmt
+                    .query_map(params![uid, bid], |row| row.get::<_, i64>(0))
+                    .map_err(map_sqlite)?;
+                let mut ids = Vec::new();
+                for row in rows {
+                    ids.push(row.map_err(map_sqlite)?);
+                }
+                Ok(ids)
+            })
+            .await?;
+        self.attach_subtasks(scope, parent_ids).await
+    }
+
+    /// 「いつかやる」（**開始日・期限とも未設定の親タスク**）をサブタスク付きで返す
+    /// （Node `listSomedayTasks`）。ガントに載せられないタスクの受け皿。並びは [`ORDER_CLAUSE`]。
+    ///
+    /// # Errors
+    /// クエリ失敗時 [`DbError`]。
+    pub async fn list_someday(&self, scope: &UserScope) -> Result<Vec<TodoWithSubtasks>, DbError> {
+        let (uid, bid) = scope_keys(scope);
+        let parent_ids = self
+            .read
+            .read(move |conn| {
+                let sql = format!(
+                    "SELECT id FROM todos \
+                     WHERE user_id = ?1 AND bot_id = ?2 AND parent_id IS NULL \
+                       AND start_date IS NULL AND due_date IS NULL{ORDER_CLAUSE}"
+                );
+                let mut stmt = conn.prepare(&sql).map_err(map_sqlite)?;
+                let rows = stmt
+                    .query_map(params![uid, bid], |row| row.get::<_, i64>(0))
+                    .map_err(map_sqlite)?;
+                let mut ids = Vec::new();
+                for row in rows {
+                    ids.push(row.map_err(map_sqlite)?);
+                }
+                Ok(ids)
+            })
+            .await?;
+        self.attach_subtasks(scope, parent_ids).await
+    }
+
+    /// 指定タスクの**直接の子タスク群**をツリー形式で返す（Node `listSubtasksTree`）。
+    ///
+    /// Node は「指定親を1件ルートとして子孫ツリーを構築し、そのルートの `subtasks` を返す」ため、
+    /// **親自身は含めず子（各自の孫を内包）だけ**を返す。存在しない親（またはスコープ外）は空。
+    /// detail route と progress の「子ありは手動進捗不可」判定に使う。
+    ///
+    /// # Errors
+    /// クエリ失敗時 [`DbError`]。
+    pub async fn list_subtasks_tree(
+        &self,
+        scope: &UserScope,
+        parent_id: i64,
+    ) -> Result<Vec<TodoWithSubtasks>, DbError> {
+        // 親を 1 件だけルートに据えて全子孫を束ね、その subtasks（＝直接の子ツリー）を取り出す。
+        let mut roots = self.attach_subtasks(scope, vec![parent_id]).await?;
+        Ok(match roots.pop() {
+            Some(root) => root.subtasks,
+            None => Vec::new(),
+        })
+    }
+
+    /// 進捗ログを新しい順（`created_at` 降順 → `id` 降順）で返す（Node `listProgressLogs`）。
+    ///
+    /// クリーンビュー（`user_id`/`bot_id` は返さない・[`TaskProgressLog`]）。scope 一致必須。
+    ///
+    /// # Errors
+    /// クエリ失敗時 [`DbError`]。
+    pub async fn list_progress_logs(
+        &self,
+        scope: &UserScope,
+        todo_id: i64,
+    ) -> Result<Vec<TaskProgressLog>, DbError> {
+        let (uid, bid) = scope_keys(scope);
+        self.read
+            .read(move |conn| {
+                let mut stmt = conn
+                    .prepare(
+                        "SELECT id, todo_id, progress, note, created_at FROM task_progress_logs \
+                         WHERE user_id = ?1 AND bot_id = ?2 AND todo_id = ?3 \
+                         ORDER BY datetime(created_at) DESC, id DESC",
+                    )
+                    .map_err(map_sqlite)?;
+                let rows = stmt
+                    .query_map(params![uid, bid, todo_id], |row| {
+                        Ok(TaskProgressLog {
+                            id: row.get("id")?,
+                            todo_id: row.get("todo_id")?,
+                            progress: row.get("progress")?,
+                            note: row.get("note")?,
+                            created_at: row.get("created_at")?,
+                        })
+                    })
+                    .map_err(map_sqlite)?;
+                let mut logs = Vec::new();
+                for row in rows {
+                    logs.push(row.map_err(map_sqlite)?);
+                }
+                Ok(logs)
+            })
+            .await
+    }
+
+    /// todo を部分更新し、更新後の行を返す（該当無・変更無は据え置きの最新行 / 不在は `None`）。
+    ///
+    /// **Node `updateTodo` パリティ**: 指定フィールドのみ動的 SET する。`due_date`/`start_date` は
+    /// **空文字でクリア**（NULL 化）し、`due_date` 変更時は `due_reminded = 0` にリセットして新期限で
+    /// 再度リマインドされるようにする。`priority` は 3 値（[`PriorityUpdate`]・据え置き／クリア／設定）。
+    /// SET 対象が無い場合は Node 同様 UPDATE を発行せず現在行をそのまま返す。
+    ///
+    /// # Errors
+    /// 更新・取得失敗時 [`DbError`]。
+    pub async fn update(
+        &self,
+        scope: &UserScope,
+        id: i64,
+        input: TodoUpdate,
+    ) -> Result<Option<Todo>, DbError> {
+        let (uid, bid) = scope_keys(scope);
+        let outcome = self
+            .writer
+            .transaction(move |tx| {
+                // 動的 SET 句を組み立てる（Node updateTodo と同順・同条件）。値は Vec に積む。
+                let mut sets: Vec<String> = Vec::new();
+                let mut vals: Vec<rusqlite::types::Value> = Vec::new();
+                if let Some(title) = input.title {
+                    sets.push("title = ?".to_owned());
+                    vals.push(title.into());
+                }
+                if let Some(description) = input.description {
+                    sets.push("description = ?".to_owned());
+                    vals.push(description.into());
+                }
+                if let Some(due_date) = input.due_date {
+                    // 空文字は期限クリア（NULL）。変更時は due_reminded をリセット。
+                    sets.push("due_date = ?".to_owned());
+                    sets.push("due_reminded = 0".to_owned());
+                    vals.push(empty_to_null(due_date));
+                }
+                if let Some(start_date) = input.start_date {
+                    // 空文字は開始日クリア（NULL）。
+                    sets.push("start_date = ?".to_owned());
+                    vals.push(empty_to_null(start_date));
+                }
+                match input.priority {
+                    PriorityUpdate::Unchanged => {}
+                    PriorityUpdate::Clear => {
+                        sets.push("priority = ?".to_owned());
+                        vals.push(rusqlite::types::Value::Null);
+                    }
+                    PriorityUpdate::Set(p) => {
+                        sets.push("priority = ?".to_owned());
+                        vals.push(p.into());
+                    }
+                }
+                if let Some(status) = input.status {
+                    sets.push("status = ?".to_owned());
+                    vals.push(status.into());
+                }
+                // Node: SET 対象が無ければ UPDATE せず現在行を返す（変更なし＝存在すれば現状維持）。
+                if sets.is_empty() {
+                    return Ok(UpdateOutcome::NoChange);
+                }
+                sets.push("updated_at = datetime('now', 'localtime')".to_owned());
+                let sql = format!(
+                    "UPDATE todos SET {} WHERE user_id = ? AND bot_id = ? AND id = ?",
+                    sets.join(", ")
+                );
+                vals.push(uid.into());
+                vals.push(bid.into());
+                vals.push(id.into());
+                let n = tx
+                    .execute(&sql, params_from_iter(vals.iter()))
+                    .map_err(map_sqlite)?;
+                Ok(if n > 0 {
+                    UpdateOutcome::Changed
+                } else {
+                    UpdateOutcome::Missing
+                })
+            })
+            .await?;
+        match outcome {
+            // 変更あり／SET 対象無し（現状維持）→ 最新行を返す（不在なら None）。
+            UpdateOutcome::Changed | UpdateOutcome::NoChange => self.get(scope, id).await,
+            // UPDATE が 0 行 = 対象不在（スコープ外含む）→ None。
+            UpdateOutcome::Missing => Ok(None),
+        }
+    }
+
+    /// 進捗を更新し進捗ログを 1 件追記する（トランザクション・Node `updateProgress`）。
+    ///
+    /// `progress` は 0-100 に**クランプ**（`round` 後）。`100` で `status=done`、`100` 未満で
+    /// `status=open` へ同期する。対象行が無ければ何もせず `None`。子を持つ親は呼び出し側
+    /// （route/`update_progress` 前の `list_subtasks_tree` 判定）で弾く前提。
+    ///
+    /// # Errors
+    /// 更新・取得失敗時 [`DbError`]。
+    pub async fn update_progress(
+        &self,
+        scope: &UserScope,
+        id: i64,
+        progress: i64,
+        note: Option<String>,
+    ) -> Result<Option<Todo>, DbError> {
+        let (uid, bid) = scope_keys(scope);
+        let clamped = progress.clamp(0, 100);
+        let changed = self
+            .writer
+            .transaction(move |tx| {
+                let n = tx
+                    .execute(
+                        "UPDATE todos SET progress = ?1, \
+                         status = CASE WHEN ?1 >= 100 THEN 'done' ELSE 'open' END, \
+                         updated_at = datetime('now', 'localtime') \
+                         WHERE user_id = ?2 AND bot_id = ?3 AND id = ?4",
+                        params![clamped, uid, bid, id],
+                    )
+                    .map_err(map_sqlite)?;
+                if n == 0 {
+                    return Ok(false);
+                }
+                tx.execute(
+                    "INSERT INTO task_progress_logs (user_id, bot_id, todo_id, progress, note, created_at) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, datetime('now', 'localtime'))",
+                    params![uid, bid, id, clamped, note],
+                )
+                .map_err(map_sqlite)?;
+                Ok(true)
+            })
+            .await?;
+        if changed {
+            self.get(scope, id).await
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// 指定した親 id 群とその全子孫を再帰 CTE で 1 クエリ収集し、ツリー化して**指定ルートのみ**
+    /// を親 id の入力順で返す（Node `attachSubtasks`）。
+    ///
+    /// gantt/someday/detail/subtasks が親抽出後に共通で使う。ソートは [`ORDER_CLAUSE`]。再帰段にも
+    /// scope 検査を付け、クロススコープ parent_id 連鎖でも他人の行を取り込まない（`list_tree` と同方針）。
+    async fn attach_subtasks(
+        &self,
+        scope: &UserScope,
+        parent_ids: Vec<i64>,
+    ) -> Result<Vec<TodoWithSubtasks>, DbError> {
+        if parent_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let (uid, bid) = scope_keys(scope);
+        self.read
+            .read(move |conn| {
+                // ?1=uid ?2=bid、?3.. に親 id を割り当てる（IN 句のプレースホルダを動的生成）。
+                let placeholders = (0..parent_ids.len())
+                    .map(|i| format!("?{}", i + 3))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let sql = format!(
+                    "WITH RECURSIVE tree(id) AS ( \
+                       SELECT id FROM todos \
+                         WHERE user_id = ?1 AND bot_id = ?2 AND id IN ({placeholders}) \
+                       UNION ALL \
+                       SELECT t.id FROM todos t JOIN tree ON t.parent_id = tree.id \
+                         WHERE t.user_id = ?1 AND t.bot_id = ?2 \
+                     ) \
+                     SELECT {TODO_COLUMNS_QUALIFIED} FROM todos JOIN tree ON todos.id = tree.id \
+                     WHERE todos.user_id = ?1 AND todos.bot_id = ?2{ORDER_CLAUSE}"
+                );
+                let mut all_params: Vec<rusqlite::types::Value> = vec![uid.into(), bid.into()];
+                all_params.extend(parent_ids.iter().map(|&pid| pid.into()));
+                let mut stmt = conn.prepare(&sql).map_err(map_sqlite)?;
+                let rows = stmt
+                    .query_map(params_from_iter(all_params.iter()), row_to_todo)
+                    .map_err(map_sqlite)?;
+                let mut flat = Vec::new();
+                for row in rows {
+                    flat.push(row.map_err(map_sqlite)?);
+                }
+                // 全件ツリーを構築したうえで、指定ルートのみを入力順で返す（Node attachSubtasks）。
+                let full_tree = build_todo_tree(flat);
+                let mut by_id: HashMap<i64, TodoWithSubtasks> =
+                    full_tree.into_iter().map(|n| (n.id, n)).collect();
+                let mut roots = Vec::new();
+                for pid in parent_ids {
+                    if let Some(node) = by_id.remove(&pid) {
+                        roots.push(node);
+                    }
+                }
+                Ok(roots)
+            })
+            .await
+    }
+}
+
+/// `update` の結果 3 値（変更あり／SET 対象無し＝現状維持／対象不在）。
+enum UpdateOutcome {
+    Changed,
+    NoChange,
+    Missing,
+}
+
+/// 空文字を SQL NULL に、非空文字を Text に写す（Node `updateTodo` の `=== "" ? null : value`）。
+fn empty_to_null(value: String) -> rusqlite::types::Value {
+    if value.is_empty() {
+        rusqlite::types::Value::Null
+    } else {
+        value.into()
+    }
 }
 
 /// スコープから所有 String キーを取り出す（`spawn_blocking` の `'static` クロージャ用）。
@@ -334,8 +671,8 @@ fn build_node(
 }
 
 /// 算出進捗（Node `computeEffectiveProgress`）: 子なしは `done?100:progress`、子ありは葉の
-/// 完了率 `round(done/total*100)`（葉が 0 件なら 0）。
-fn effective_progress(todo: &Todo, subtasks: &[TodoWithSubtasks]) -> i64 {
+/// 完了率 `round(done/total*100)`（葉が 0 件なら 0）。detail route も同じ式で兄弟キーを埋める。
+pub(crate) fn effective_progress(todo: &Todo, subtasks: &[TodoWithSubtasks]) -> i64 {
     if subtasks.is_empty() {
         return if todo.status == "done" {
             100

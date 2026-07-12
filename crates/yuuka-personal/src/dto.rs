@@ -66,3 +66,56 @@ pub struct ContactListData {
 pub struct ContactData {
     pub contact: Contact,
 }
+
+/// コンテキストノートの上限文字数（Node `CONTEXT_NOTE_MAX_LENGTH`・§3.7.2）。
+///
+/// **文字数の定義**: Node は `content.length`（UTF-16 code unit 数）で判定する。
+/// Rust では `chars().count()`（Unicode scalar 値数）で近似する。BMP 内文字（日本語含む）は
+/// 両者一致し、実運用の上限判定に差は生じない（サロゲートペア＝絵文字等でのみ理論差）。
+pub const CONTEXT_NOTE_MAX_LENGTH: usize = 10_000;
+
+/// クライアントへ返すクリップボードエントリ（クリーンビュー・snake_case）。
+///
+/// **機密フェイルクローズ**: Node の `listEntries` は `SELECT *` で `user_id`/`bot_id` を含む
+/// 生行を返すが、フロント契約（`frontend/src/lib/api/types.ts` の `ClipboardEntry`）は
+/// `id`/`content`/`expires_at`/`created_at` のみを消費する。連絡先 [`Contact`] と同じく内部の
+/// スコープ列を DTO のフィールドに持たせず、生成 TS にも現れない（R-13・意図的なクリーンビュー）。
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export_to = "generated/")]
+pub struct ClipboardEntry {
+    pub id: i64,
+    pub content: String,
+    /// `'YYYY-MM-DD HH:MM:SS'`（ローカルタイム）。`null` = 無期限。
+    pub expires_at: Option<String>,
+    pub created_at: String,
+}
+
+/// `GET /api/clipboard` のペイロード（`Envelope<ClipboardListData>` = `{success, entries}`）。
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export_to = "generated/")]
+pub struct ClipboardListData {
+    pub entries: Vec<ClipboardEntry>,
+}
+
+/// `GET /api/context-note` のペイロード（`{success, content, updated_at, max_length}`）。
+///
+/// Node は未登録時 `content=""`・`updated_at=null` を返す。`max_length` は定数
+/// [`CONTEXT_NOTE_MAX_LENGTH`]。
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export_to = "generated/")]
+pub struct ContextNoteData {
+    pub content: String,
+    pub updated_at: Option<String>,
+    pub max_length: usize,
+}
+
+/// `POST /api/context-note` の body（`{content}`・全体置換）。
+///
+/// Node は `typeof ctx.body.content === "string" ? ctx.body.content : ""` として非文字列・
+/// 欠落を空文字に正規化する。`#[serde(default)]` で欠落を `""` に落とし parity を取る。
+#[derive(Debug, Clone, Deserialize, TS)]
+#[ts(export_to = "generated/")]
+pub struct SetContextNote {
+    #[serde(default)]
+    pub content: String,
+}

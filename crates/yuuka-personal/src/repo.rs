@@ -10,11 +10,14 @@ use yuuka_core::{DbError, UserScope};
 use yuuka_db::{map_sqlite, ReadPool, WriterHandle};
 use yuuka_web::Db;
 
-use crate::dto::{Contact, NewContact};
+use crate::dto::{ClipboardEntry, Contact, NewContact};
 
 /// 返却列（クリーンビュー・内部列 user_id/bot_id/birthday_reminded_year 等は含めない）。
 const CONTACT_COLUMNS: &str = "id, name, birthday, relationship, contact_info, notes, tags, \
      created_at, updated_at";
+
+/// クリップボードの返却列（クリーンビュー・内部列 user_id/bot_id は含めない）。
+const CLIPBOARD_COLUMNS: &str = "id, content, expires_at, created_at";
 
 /// 連絡先リポジトリ（DB ハンドルを借用する軽量ラッパ・per-request 構築）。
 pub struct ContactRepo<'a> {
@@ -187,12 +190,160 @@ impl<'a> ContactRepo<'a> {
     }
 }
 
+/// クリップボード（一時メモ・TTL 付き）リポジトリ（`UserScope` 束縛）。Node `clipboardRepo`。
+///
+/// TTL 一括削除（`deleteExpired`・全ユーザー横断）は cron 専用の別経路（本 CRUD には無い）。
+pub struct ClipboardRepo<'a> {
+    pub(crate) read: &'a ReadPool,
+    pub(crate) writer: &'a WriterHandle,
+}
+
+impl ScopedRepo for ClipboardRepo<'_> {}
+
+impl<'a> ClipboardRepo<'a> {
+    /// 共有 DB ハンドルから構築する。
+    #[must_use]
+    pub fn new(db: &'a Db) -> Self {
+        Self {
+            read: &db.read,
+            writer: &db.writer,
+        }
+    }
+
+    /// スコープ内の有効な（期限切れでない）エントリを新しい順で返す（Node `listEntries`）。
+    ///
+    /// `expires_at IS NULL OR expires_at > datetime('now','localtime')`（無期限＋未期限）を
+    /// `created_at DESC` で返す（Node と同一）。
+    ///
+    /// # Errors
+    /// クエリ失敗時 [`DbError`]。
+    pub async fn list(&self, scope: &UserScope) -> Result<Vec<ClipboardEntry>, DbError> {
+        let (uid, bid) = scope_keys(scope);
+        self.read
+            .read(move |conn| {
+                let sql = format!(
+                    "SELECT {CLIPBOARD_COLUMNS} FROM clipboard_entries \
+                     WHERE user_id = ?1 AND bot_id = ?2 \
+                       AND (expires_at IS NULL OR expires_at > datetime('now', 'localtime')) \
+                     ORDER BY created_at DESC"
+                );
+                let mut stmt = conn.prepare(&sql).map_err(map_sqlite)?;
+                let rows = stmt
+                    .query_map(params![uid, bid], row_to_clipboard)
+                    .map_err(map_sqlite)?;
+                let mut out = Vec::new();
+                for row in rows {
+                    out.push(row.map_err(map_sqlite)?);
+                }
+                Ok(out)
+            })
+            .await
+    }
+
+    /// スコープ内のエントリを削除する（削除できたら `true`）。Node `deleteEntry` 相当。
+    ///
+    /// # Errors
+    /// 削除失敗時 [`DbError`]。
+    pub async fn delete(&self, scope: &UserScope, id: i64) -> Result<bool, DbError> {
+        let (uid, bid) = scope_keys(scope);
+        self.writer
+            .transaction(move |tx| {
+                let n = tx
+                    .execute(
+                        "DELETE FROM clipboard_entries WHERE user_id = ?1 AND bot_id = ?2 AND id = ?3",
+                        params![uid, bid, id],
+                    )
+                    .map_err(map_sqlite)?;
+                Ok(n > 0)
+            })
+            .await
+    }
+}
+
+/// コンテキストノート（永続メモ・ユーザー×bot に 1 ドキュメント）リポジトリ。Node `contextNoteRepo`。
+pub struct ContextNoteRepo<'a> {
+    pub(crate) read: &'a ReadPool,
+    pub(crate) writer: &'a WriterHandle,
+}
+
+impl ScopedRepo for ContextNoteRepo<'_> {}
+
+impl<'a> ContextNoteRepo<'a> {
+    /// 共有 DB ハンドルから構築する。
+    #[must_use]
+    pub fn new(db: &'a Db) -> Self {
+        Self {
+            read: &db.read,
+            writer: &db.writer,
+        }
+    }
+
+    /// 全文と更新時刻を返す（未登録なら `("", None)`）。Node `getContextNote` +
+    /// `getContextNoteUpdatedAt` を 1 クエリに束ねる（両者は同一行を引くため）。
+    ///
+    /// # Errors
+    /// クエリ失敗時 [`DbError`]。
+    pub async fn get(&self, scope: &UserScope) -> Result<(String, Option<String>), DbError> {
+        let (uid, bid) = scope_keys(scope);
+        self.read
+            .read(move |conn| {
+                let sql = "SELECT content, updated_at FROM context_notes \
+                     WHERE user_id = ?1 AND bot_id = ?2";
+                let mut stmt = conn.prepare(sql).map_err(map_sqlite)?;
+                let mut rows = stmt
+                    .query_map(params![uid, bid], |row| {
+                        Ok((row.get::<_, String>("content")?, row.get::<_, Option<String>>("updated_at")?))
+                    })
+                    .map_err(map_sqlite)?;
+                match rows.next() {
+                    Some(row) => row.map_err(map_sqlite),
+                    None => Ok((String::new(), None)),
+                }
+            })
+            .await
+    }
+
+    /// 全文を置換する（upsert）。Node `setContextNote`（`INSERT ... ON CONFLICT DO UPDATE`）。
+    ///
+    /// 文字数上限の検証は route 側で行う（Node は route と repo の双方で確認するが、Rust では
+    /// route で 400 を返すため repo 到達時は上限内が保証される）。
+    ///
+    /// # Errors
+    /// 書き込み失敗時 [`DbError`]。
+    pub async fn set(&self, scope: &UserScope, content: String) -> Result<(), DbError> {
+        let (uid, bid) = scope_keys(scope);
+        self.writer
+            .execute(move |conn| {
+                conn.execute(
+                    "INSERT INTO context_notes (user_id, bot_id, content, updated_at) \
+                     VALUES (?1, ?2, ?3, datetime('now', 'localtime')) \
+                     ON CONFLICT(user_id, bot_id) DO UPDATE SET \
+                       content = excluded.content, updated_at = datetime('now', 'localtime')",
+                    params![uid, bid, content],
+                )
+                .map_err(map_sqlite)?;
+                Ok(())
+            })
+            .await
+    }
+}
+
 /// スコープから所有 String キーを取り出す（`spawn_blocking` の `'static` クロージャ用）。
 fn scope_keys(scope: &UserScope) -> (String, String) {
     (
         scope.user_id().as_str().to_owned(),
         scope.bot_id().as_str().to_owned(),
     )
+}
+
+/// SQLite 行を [`ClipboardEntry`] へ変換する（クリーンビュー列のみ）。
+fn row_to_clipboard(row: &Row) -> rusqlite::Result<ClipboardEntry> {
+    Ok(ClipboardEntry {
+        id: row.get("id")?,
+        content: row.get("content")?,
+        expires_at: row.get("expires_at")?,
+        created_at: row.get("created_at")?,
+    })
 }
 
 /// SQLite 行を [`Contact`] へ変換する（`tags` は JSON 文字列 → `Vec<String>`）。

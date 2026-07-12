@@ -3,12 +3,13 @@
 //! Repo + wire DTO + route を縦に持つ。凍結契約（core/types）は変更しない。
 //! DAG: `personal → web, db, types, core`。ルータは supervisor が共通レイヤ配下にマージする。
 //!
-//! Phase 1 参照スコープ = 連絡先のコア CRUD（list / save〔add|update〕 / delete）。誕生日リマインド
-//! cron（`listBirthdayContactsForDate` / `markBirthdayReminded`・全ユーザー横断）は Phase 4 で
-//! [`cron`] に追加済み。以下は **deferred**（後続増分で追加）:
+//! 参照スコープ = 連絡先のコア CRUD（list / save〔add|update〕 / delete）＋コンテキストノート
+//! （`/api/context-note` GET/POST・`context_notes` 表）＋クリップボード（`/api/clipboard` GET・
+//! `/api/clipboard/delete` POST・`clipboard_entries` 表）。誕生日リマインド cron
+//! （`listBirthdayContactsForDate` / `markBirthdayReminded`・全ユーザー横断）は [`cron`] に追加済み。
+//! 以下は **deferred**（後続増分で追加）:
 //! - 連絡先の部分一致検索（`searchContacts`・`GET` 検索パラメータ）
-//! - コンテキストノート（`/api/context-note` GET/POST・`context_notes` 表）
-//! - クリップボード（`/api/clipboard`・`/api/clipboard/delete`・`clipboard_entries` 表）
+//! - クリップボードの追加（`addEntry`）と TTL 一括削除 cron（`deleteExpired`・全ユーザー横断）
 
 pub mod cron;
 pub mod dto;
@@ -33,6 +34,10 @@ pub fn export_bindings(base_dir: &Path) -> Result<(), ts_rs::ExportError> {
     <dto::NewContact as TS>::export_all(&cfg)?;
     <dto::ContactListData as TS>::export_all(&cfg)?;
     <dto::ContactData as TS>::export_all(&cfg)?;
+    <dto::ClipboardEntry as TS>::export_all(&cfg)?;
+    <dto::ClipboardListData as TS>::export_all(&cfg)?;
+    <dto::ContextNoteData as TS>::export_all(&cfg)?;
+    <dto::SetContextNote as TS>::export_all(&cfg)?;
     Ok(())
 }
 
@@ -50,7 +55,7 @@ mod tests {
     use yuuka_web::{AppState, AuthBackend, Db, WebConfig};
 
     use crate::dto::NewContact;
-    use crate::repo::ContactRepo;
+    use crate::repo::{ClipboardRepo, ContactRepo, ContextNoteRepo};
 
     static SEQ: AtomicU64 = AtomicU64::new(0);
 
@@ -70,6 +75,25 @@ mod tests {
         updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
     );";
 
+    // V17__baseline.sql の clipboard_entries を反映（bot_id は後付け列・default system_default）。
+    const CLIPBOARD_DDL: &str = "CREATE TABLE clipboard_entries (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id TEXT NOT NULL,
+        content TEXT NOT NULL,
+        expires_at TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+        bot_id TEXT NOT NULL DEFAULT 'system_default'
+    );";
+
+    // V17__baseline.sql の context_notes を反映（PK(user_id, bot_id)・upsert 対象）。
+    const CONTEXT_NOTES_DDL: &str = "CREATE TABLE context_notes (
+        user_id TEXT NOT NULL,
+        bot_id TEXT NOT NULL DEFAULT 'system_default',
+        content TEXT NOT NULL DEFAULT '',
+        updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+        PRIMARY KEY (user_id, bot_id)
+    );";
+
     fn seed_db() -> Db {
         let seq = SEQ.fetch_add(1, Ordering::Relaxed);
         let path = std::env::temp_dir().join(format!(
@@ -79,6 +103,9 @@ mod tests {
         {
             let conn = rusqlite::Connection::open(&path).expect("seed db");
             conn.execute_batch(CONTACTS_DDL).expect("create contacts");
+            conn.execute_batch(CLIPBOARD_DDL).expect("create clipboard");
+            conn.execute_batch(CONTEXT_NOTES_DDL)
+                .expect("create context_notes");
         }
         Db::open(&path).expect("open db")
     }
@@ -354,5 +381,221 @@ mod tests {
             serde_json::json!("frank@example.com")
         );
         assert_eq!(j["contact"]["name"], serde_json::json!("Frank R."));
+    }
+
+    // ─── クリップボード（repo） ──────────────────────────────────────────────
+
+    /// 期限付き（`expires_at`）でエントリを直接挿入する（add は deferred のためテスト用ヘルパ）。
+    async fn seed_clipboard(db: &Db, scope: &UserScope, content: &str, expires_at: Option<&str>) {
+        let uid = scope.user_id().as_str().to_owned();
+        let bid = scope.bot_id().as_str().to_owned();
+        let content = content.to_owned();
+        let expires_at = expires_at.map(str::to_owned);
+        db.writer
+            .execute(move |conn| {
+                conn.execute(
+                    "INSERT INTO clipboard_entries (user_id, bot_id, content, expires_at) \
+                     VALUES (?1, ?2, ?3, ?4)",
+                    rusqlite::params![uid, bid, content, expires_at],
+                )
+                .map_err(yuuka_db::map_sqlite)?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn clipboard_list_filters_expired_and_scopes() {
+        let db = seed_db();
+        // 無期限・未来期限は見える。過去期限は除外。別ユーザーは不可視。
+        seed_clipboard(&db, &scope("cbA"), "forever", None).await;
+        seed_clipboard(&db, &scope("cbA"), "future", Some("2999-12-31 00:00:00")).await;
+        seed_clipboard(&db, &scope("cbA"), "past", Some("2000-01-01 00:00:00")).await;
+        seed_clipboard(&db, &scope("cbB"), "otheruser", None).await;
+
+        let repo = ClipboardRepo::new(&db);
+        let entries = repo.list(&scope("cbA")).await.unwrap();
+        let contents: Vec<&str> = entries.iter().map(|e| e.content.as_str()).collect();
+        assert!(contents.contains(&"forever"));
+        assert!(contents.contains(&"future"));
+        assert!(!contents.contains(&"past"), "expired entry must be filtered");
+        assert!(
+            !contents.contains(&"otheruser"),
+            "other user's entry must not leak"
+        );
+        assert_eq!(entries.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn clipboard_delete_respects_scope() {
+        let db = seed_db();
+        seed_clipboard(&db, &scope("cbUser"), "note", None).await;
+        let repo = ClipboardRepo::new(&db);
+        let id = repo.list(&scope("cbUser")).await.unwrap()[0].id;
+
+        // 別ユーザーは削除できない（該当行 0 → false）。
+        assert!(!repo.delete(&scope("intruder"), id).await.unwrap());
+        // 本人は削除できる。二重削除は false。
+        assert!(repo.delete(&scope("cbUser"), id).await.unwrap());
+        assert!(!repo.delete(&scope("cbUser"), id).await.unwrap());
+        assert!(repo.list(&scope("cbUser")).await.unwrap().is_empty());
+    }
+
+    // ─── コンテキストノート（repo） ──────────────────────────────────────────
+
+    #[tokio::test]
+    async fn context_note_get_default_is_empty() {
+        let db = seed_db();
+        let repo = ContextNoteRepo::new(&db);
+        let (content, updated_at) = repo.get(&scope("cn")).await.unwrap();
+        assert_eq!(content, "");
+        assert_eq!(updated_at, None);
+    }
+
+    #[tokio::test]
+    async fn context_note_set_upserts_and_scopes() {
+        let db = seed_db();
+        let repo = ContextNoteRepo::new(&db);
+        repo.set(&scope("cnA"), "first".to_owned()).await.unwrap();
+        let (content, updated_at) = repo.get(&scope("cnA")).await.unwrap();
+        assert_eq!(content, "first");
+        assert!(updated_at.is_some(), "updated_at set on write");
+
+        // 同一 scope への 2 回目は upsert（全体置換）。
+        repo.set(&scope("cnA"), "second".to_owned()).await.unwrap();
+        assert_eq!(repo.get(&scope("cnA")).await.unwrap().0, "second");
+
+        // 別ユーザーは独立（分離キーを型で強制）。
+        assert_eq!(repo.get(&scope("cnB")).await.unwrap().0, "");
+    }
+
+    // ─── クリップボード・コンテキストノート（route） ─────────────────────────
+
+    #[tokio::test]
+    async fn route_context_note_roundtrip() {
+        let app = app();
+        // 初期は空・max_length 同梱。
+        let get0 = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/context-note")
+                    .header("cookie", "__Host-yuuka-session=good")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(get0.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(get0.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let j: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(j["success"], serde_json::json!(true));
+        assert_eq!(j["content"], serde_json::json!(""));
+        assert_eq!(j["updated_at"], serde_json::Value::Null);
+        assert_eq!(j["max_length"], serde_json::json!(10_000));
+
+        // 保存。
+        let post = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/context-note")
+                    .header("cookie", "__Host-yuuka-session=good")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"content":"覚えておいてね"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(post.status(), StatusCode::OK);
+
+        // 再取得で保存内容が返る。
+        let get1 = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/context-note")
+                    .header("cookie", "__Host-yuuka-session=good")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let bytes = axum::body::to_bytes(get1.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let j: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(j["content"], serde_json::json!("覚えておいてね"));
+        assert!(j["updated_at"].is_string());
+    }
+
+    #[tokio::test]
+    async fn route_context_note_rejects_oversize() {
+        // 上限（10,000 文字）超で 400 + Node 同一メッセージ（3 桁区切り）。
+        let over = "あ".repeat(10_001);
+        let body = serde_json::json!({ "content": over }).to_string();
+        let resp = app()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/context-note")
+                    .header("cookie", "__Host-yuuka-session=good")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let j: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(j["success"], serde_json::json!(false));
+        assert_eq!(
+            j["message"],
+            serde_json::json!("コンテキストノートは10,000文字以内です（現在: 10,001文字）")
+        );
+    }
+
+    #[tokio::test]
+    async fn route_clipboard_delete_missing_is_200_false() {
+        // Node parity: 該当無でも 200 + {success:false, message}。
+        let resp = app()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/clipboard/delete")
+                    .header("cookie", "__Host-yuuka-session=good")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"id":99999}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let j: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(j["success"], serde_json::json!(false));
+        assert_eq!(j["message"], serde_json::json!("メモが見つかりません。"));
+    }
+
+    #[tokio::test]
+    async fn route_clipboard_requires_auth() {
+        let resp = app()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/clipboard")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
 }

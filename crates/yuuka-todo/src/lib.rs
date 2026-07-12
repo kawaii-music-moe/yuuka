@@ -33,6 +33,10 @@ pub fn export_bindings(base_dir: &Path) -> Result<(), ts_rs::ExportError> {
     <dto::NewTodo as TS>::export_all(&cfg)?;
     <dto::TaskListData as TS>::export_all(&cfg)?;
     <dto::TaskData as TS>::export_all(&cfg)?;
+    <dto::TaskProgressLog as TS>::export_all(&cfg)?;
+    <dto::TaskDetailData as TS>::export_all(&cfg)?;
+    <dto::TodoUpdate as TS>::export_all(&cfg)?;
+    <dto::TodoProgress as TS>::export_all(&cfg)?;
     Ok(())
 }
 
@@ -49,7 +53,7 @@ mod tests {
     use yuuka_types::{Role, SessionUser};
     use yuuka_web::{AppState, AuthBackend, Db, WebConfig};
 
-    use crate::dto::NewTodo;
+    use crate::dto::{NewTodo, PriorityUpdate, TodoUpdate};
     use crate::repo::TodoRepo;
 
     static SEQ: AtomicU64 = AtomicU64::new(0);
@@ -76,6 +80,17 @@ mod tests {
         updated_at TEXT NOT NULL
     );";
 
+    /// task_progress_logs（進捗ログ）。V17__baseline.sql と同列（progress/note の追記対象）。
+    const PROGRESS_LOGS_DDL: &str = "CREATE TABLE task_progress_logs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id TEXT NOT NULL,
+        bot_id TEXT NOT NULL DEFAULT 'system_default',
+        todo_id INTEGER NOT NULL,
+        progress INTEGER NOT NULL,
+        note TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+    );";
+
     fn seed_db() -> Db {
         let seq = SEQ.fetch_add(1, Ordering::Relaxed);
         let path = std::env::temp_dir().join(format!(
@@ -85,6 +100,8 @@ mod tests {
         {
             let conn = rusqlite::Connection::open(&path).expect("seed db");
             conn.execute_batch(TODOS_DDL).expect("create todos");
+            conn.execute_batch(PROGRESS_LOGS_DDL)
+                .expect("create task_progress_logs");
         }
         Db::open(&path).expect("open db")
     }
@@ -708,5 +725,404 @@ mod tests {
         let j: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(j["success"], serde_json::json!(false));
         assert!(j["task"].is_null());
+    }
+
+    // ─── 新規ルート: gantt / someday / detail / update / progress ───────────────
+
+    /// `nt` に開始日/期限を差した親を作るヘルパ。
+    async fn add_dated(
+        repo: &TodoRepo<'_>,
+        s: &UserScope,
+        title: &str,
+        start: Option<&str>,
+        due: Option<&str>,
+    ) -> crate::dto::Todo {
+        let mut t = nt(title);
+        t.start_date = start.map(str::to_owned);
+        t.due_date = due.map(str::to_owned);
+        repo.add(s, t).await.unwrap()
+    }
+
+    /// list_gantt: 開始日 or 期限を持つ親のみ返し、両方 NULL は除外する（Node `listGanttTasks`）。
+    #[tokio::test]
+    async fn repo_list_gantt_includes_only_dated_parents() {
+        let db = seed_db();
+        let repo = TodoRepo::new(&db);
+        let s = scope("u");
+        let with_due = add_dated(&repo, &s, "with-due", None, Some("2026-07-10")).await;
+        let with_start = add_dated(&repo, &s, "with-start", Some("2026-07-05"), None).await;
+        // 両方 NULL の someday タスクは gantt に載らない。
+        repo.add(&s, nt("someday")).await.unwrap();
+
+        let gantt = repo.list_gantt(&s).await.unwrap();
+        let ids: Vec<i64> = gantt.iter().map(|t| t.id).collect();
+        assert_eq!(gantt.len(), 2, "日付付き親のみ");
+        assert!(ids.contains(&with_due.id));
+        assert!(ids.contains(&with_start.id));
+        // 並び: COALESCE(start,due) 昇順（with-start=07-05 が with-due=07-10 より先）。
+        assert_eq!(gantt[0].id, with_start.id);
+        assert_eq!(gantt[1].id, with_due.id);
+    }
+
+    /// list_gantt: サブタスクはネストして返る（進捗算出のため状態問わず同梱）。
+    #[tokio::test]
+    async fn repo_list_gantt_nests_subtasks() {
+        let db = seed_db();
+        let repo = TodoRepo::new(&db);
+        let s = scope("u");
+        let parent = add_dated(&repo, &s, "p", None, Some("2026-07-10")).await;
+        let mut child = nt("c");
+        child.parent_id = Some(parent.id);
+        let child = repo.add(&s, child).await.unwrap();
+        repo.complete(&s, child.id).await.unwrap();
+
+        let gantt = repo.list_gantt(&s).await.unwrap();
+        assert_eq!(gantt.len(), 1);
+        assert_eq!(gantt[0].subtasks.len(), 1);
+        assert_eq!(gantt[0].effective_progress, 100, "唯一の葉が完了→100%");
+    }
+
+    /// list_someday: 開始日・期限とも NULL の親のみ返す（Node `listSomedayTasks`）。
+    #[tokio::test]
+    async fn repo_list_someday_includes_only_undated_parents() {
+        let db = seed_db();
+        let repo = TodoRepo::new(&db);
+        let s = scope("u");
+        let undated = repo.add(&s, nt("undated")).await.unwrap();
+        add_dated(&repo, &s, "dated", None, Some("2026-07-10")).await;
+
+        let someday = repo.list_someday(&s).await.unwrap();
+        assert_eq!(someday.len(), 1);
+        assert_eq!(someday[0].id, undated.id);
+    }
+
+    /// list_subtasks_tree: 親自身は含めず、直接の子（各自の孫を内包）だけ返す（Node `listSubtasksTree`）。
+    #[tokio::test]
+    async fn repo_list_subtasks_tree_returns_children_not_parent() {
+        let db = seed_db();
+        let repo = TodoRepo::new(&db);
+        let s = scope("u");
+        let parent = repo.add(&s, nt("parent")).await.unwrap();
+        let mut c = nt("child");
+        c.parent_id = Some(parent.id);
+        let child = repo.add(&s, c).await.unwrap();
+        let mut g = nt("grandchild");
+        g.parent_id = Some(child.id);
+        let grandchild = repo.add(&s, g).await.unwrap();
+
+        let subs = repo.list_subtasks_tree(&s, parent.id).await.unwrap();
+        assert_eq!(subs.len(), 1, "直接の子のみをトップに");
+        assert_eq!(subs[0].id, child.id);
+        assert_eq!(subs[0].subtasks.len(), 1, "孫は子の下にネスト");
+        assert_eq!(subs[0].subtasks[0].id, grandchild.id);
+
+        // 子を持たないタスクは空。存在しない id も空。
+        assert!(repo.list_subtasks_tree(&s, grandchild.id).await.unwrap().is_empty());
+        assert!(repo.list_subtasks_tree(&s, 999_999).await.unwrap().is_empty());
+    }
+
+    /// update_progress: 0-100 にクランプし進捗ログを追記、100 で done へ同期する（Node `updateProgress`）。
+    #[tokio::test]
+    async fn repo_update_progress_clamps_logs_and_syncs_status() {
+        let db = seed_db();
+        let repo = TodoRepo::new(&db);
+        let s = scope("u");
+        let t = repo.add(&s, nt("t")).await.unwrap();
+
+        // 上限超過は 100 にクランプ＝done。
+        let done = repo
+            .update_progress(&s, t.id, 150, Some("finished".to_owned()))
+            .await
+            .unwrap()
+            .expect("row");
+        assert_eq!(done.progress, 100);
+        assert_eq!(done.status, "done");
+
+        // 下限未満は 0 にクランプ＝open。
+        let reopened = repo
+            .update_progress(&s, t.id, -20, None)
+            .await
+            .unwrap()
+            .expect("row");
+        assert_eq!(reopened.progress, 0);
+        assert_eq!(reopened.status, "open");
+
+        // 進捗ログは新しい順（2 件目=-20→0 が先頭）。note も保持。
+        let logs = repo.list_progress_logs(&s, t.id).await.unwrap();
+        assert_eq!(logs.len(), 2);
+        assert_eq!(logs[0].progress, 0);
+        assert_eq!(logs[0].note, None);
+        assert_eq!(logs[1].progress, 100);
+        assert_eq!(logs[1].note.as_deref(), Some("finished"));
+        assert_eq!(logs[1].todo_id, t.id);
+
+        // 不在 id は None（ログも増えない）。
+        assert!(repo.update_progress(&s, 999_999, 50, None).await.unwrap().is_none());
+    }
+
+    /// update: 部分更新。due_date 変更で due_reminded がリセットされ、空文字で NULL クリアされる。
+    #[tokio::test]
+    async fn repo_update_partial_and_clear_fields() {
+        let db = seed_db();
+        let repo = TodoRepo::new(&db);
+        let s = scope("u");
+        let t = add_dated(&repo, &s, "orig", Some("2026-07-01"), Some("2026-07-02")).await;
+
+        // title/description のみ更新、他は据え置き。
+        let upd = repo
+            .update(
+                &s,
+                t.id,
+                TodoUpdate {
+                    id: t.id,
+                    title: Some("renamed".to_owned()),
+                    description: Some("desc".to_owned()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap()
+            .expect("row");
+        assert_eq!(upd.title, "renamed");
+        assert_eq!(upd.description.as_deref(), Some("desc"));
+        assert_eq!(upd.due_date.as_deref(), Some("2026-07-02"), "未指定は据え置き");
+
+        // 空文字で due_date/start_date をクリア（NULL 化）。
+        let cleared = repo
+            .update(
+                &s,
+                t.id,
+                TodoUpdate {
+                    id: t.id,
+                    due_date: Some(String::new()),
+                    start_date: Some(String::new()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap()
+            .expect("row");
+        assert_eq!(cleared.due_date, None);
+        assert_eq!(cleared.start_date, None);
+
+        // 不在 id は None（スコープ外含む）。
+        assert!(repo
+            .update(&s, 999_999, TodoUpdate { id: 999_999, title: Some("x".to_owned()), ..Default::default() })
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    /// update: PriorityUpdate 3 値（据え置き / クリア / 設定）を正しく反映する。
+    #[tokio::test]
+    async fn repo_update_priority_tristate() {
+        let db = seed_db();
+        let repo = TodoRepo::new(&db);
+        let s = scope("u");
+        let mut base = nt("t");
+        base.priority = Some("high".to_owned());
+        let t = repo.add(&s, base).await.unwrap();
+        assert_eq!(t.priority.as_deref(), Some("high"));
+
+        // Unchanged: priority を触らない（他フィールドだけ更新）→ high のまま。
+        let kept = repo
+            .update(&s, t.id, TodoUpdate { id: t.id, title: Some("k".to_owned()), priority: PriorityUpdate::Unchanged, ..Default::default() })
+            .await
+            .unwrap()
+            .expect("row");
+        assert_eq!(kept.priority.as_deref(), Some("high"));
+
+        // Set: medium へ。
+        let set = repo
+            .update(&s, t.id, TodoUpdate { id: t.id, priority: PriorityUpdate::Set("medium".to_owned()), ..Default::default() })
+            .await
+            .unwrap()
+            .expect("row");
+        assert_eq!(set.priority.as_deref(), Some("medium"));
+
+        // Clear: NULL へ。
+        let cleared = repo
+            .update(&s, t.id, TodoUpdate { id: t.id, priority: PriorityUpdate::Clear, ..Default::default() })
+            .await
+            .unwrap()
+            .expect("row");
+        assert_eq!(cleared.priority, None);
+    }
+
+    /// TodoUpdate wire 契約: camelCase を受理し、priority の null/空/正規/不正を PriorityUpdate へ、
+    /// status は open/done のみ採用する。
+    #[test]
+    fn todoupdate_wire_contract() {
+        let parse = |b: &str| serde_json::from_str::<TodoUpdate>(b).unwrap();
+        // camelCase の dueDate/startDate を拾う。
+        let u = parse(r#"{"id":5,"dueDate":"2026-07-08","startDate":"2026-07-07"}"#);
+        assert_eq!(u.id, 5);
+        assert_eq!(u.due_date.as_deref(), Some("2026-07-08"));
+        assert_eq!(u.start_date.as_deref(), Some("2026-07-07"));
+        assert_eq!(u.priority, PriorityUpdate::Unchanged, "未指定は据え置き");
+
+        // priority: null/空はクリア、正規は設定、不正・数値外は据え置き。
+        assert_eq!(parse(r#"{"id":1,"priority":null}"#).priority, PriorityUpdate::Clear);
+        assert_eq!(parse(r#"{"id":1,"priority":""}"#).priority, PriorityUpdate::Clear);
+        assert_eq!(parse(r#"{"id":1,"priority":"high"}"#).priority, PriorityUpdate::Set("high".to_owned()));
+        assert_eq!(parse(r#"{"id":1,"priority":2}"#).priority, PriorityUpdate::Set("high".to_owned()));
+        assert_eq!(parse(r#"{"id":1,"priority":"bogus"}"#).priority, PriorityUpdate::Unchanged);
+        assert_eq!(parse(r#"{"id":1,"priority":9}"#).priority, PriorityUpdate::Unchanged);
+
+        // status: open/done のみ採用、他は None（据え置き）。
+        assert_eq!(parse(r#"{"id":1,"status":"open"}"#).status.as_deref(), Some("open"));
+        assert_eq!(parse(r#"{"id":1,"status":"done"}"#).status.as_deref(), Some("done"));
+        assert_eq!(parse(r#"{"id":1,"status":"bogus"}"#).status, None);
+        assert_eq!(parse(r#"{"id":1,"status":null}"#).status, None);
+    }
+
+    /// helper: 認証つきで JSON を POST/GET する（E2E）。
+    async fn get_json(app: &axum::Router, uri: &str) -> (StatusCode, serde_json::Value) {
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(uri)
+                    .header("cookie", "__Host-yuuka-session=good")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = resp.status();
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let j = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap() };
+        (status, j)
+    }
+
+    async fn post_json(app: &axum::Router, uri: &str, body: String) -> (StatusCode, serde_json::Value) {
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(uri)
+                    .header("cookie", "__Host-yuuka-session=good")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = resp.status();
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let j = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap() };
+        (status, j)
+    }
+
+    /// 親を 1 件追加して id を返す（E2E ヘルパ）。
+    async fn add_parent(app: &axum::Router, body: &str) -> i64 {
+        let (status, j) = post_json(app, "/api/tasks/add", body.to_owned()).await;
+        assert_eq!(status, StatusCode::OK);
+        j["task"]["id"].as_i64().expect("id")
+    }
+
+    /// `GET /api/tasks/detail`: id 未指定/非数値/0 は 400、不在は 404、成功は camelCase 兄弟キー付き。
+    #[tokio::test]
+    async fn route_detail_validates_and_returns_siblings() {
+        let app = app();
+        // id 未指定 → 400。
+        assert_eq!(get_json(&app, "/api/tasks/detail").await.0, StatusCode::BAD_REQUEST);
+        // 非数値 → 400（Node Number("abc")=NaN）。
+        assert_eq!(get_json(&app, "/api/tasks/detail?id=abc").await.0, StatusCode::BAD_REQUEST);
+        // 0 → 400（Node !0）。
+        assert_eq!(get_json(&app, "/api/tasks/detail?id=0").await.0, StatusCode::BAD_REQUEST);
+        // 不在 → 404。
+        assert_eq!(get_json(&app, "/api/tasks/detail?id=999999").await.0, StatusCode::NOT_FOUND);
+
+        // (a) 葉タスクの detail: 自身の進捗ログが progressLogs に載る（Node は要求 id のログを返す）。
+        let leaf = add_parent(&app, r#"{"title":"L"}"#).await;
+        let (ps, _) = post_json(&app, "/api/tasks/progress", format!(r#"{{"id":{leaf},"progress":40,"note":"half"}}"#)).await;
+        assert_eq!(ps, StatusCode::OK);
+        let (ls, lj) = get_json(&app, &format!("/api/tasks/detail?id={leaf}")).await;
+        assert_eq!(ls, StatusCode::OK);
+        assert_eq!(lj["success"], serde_json::json!(true));
+        // task はフラット単一 todo（subtasks を内包しない）。
+        assert_eq!(lj["task"]["title"], serde_json::json!("L"));
+        assert!(lj["task"]["subtasks"].is_null(), "task はフラット（サブツリー非内包）");
+        // 葉なので subtasks は空、effectiveProgress は手動 progress を反映。
+        assert_eq!(lj["subtasks"].as_array().unwrap().len(), 0);
+        assert_eq!(lj["effectiveProgress"], serde_json::json!(40));
+        // progressLogs(camelCase) に自身のログが載る。
+        assert_eq!(lj["progressLogs"][0]["progress"], serde_json::json!(40));
+        assert_eq!(lj["progressLogs"][0]["note"], serde_json::json!("half"));
+        // clean view: 進捗ログにも内部列は出ない。
+        assert!(lj["progressLogs"][0]["user_id"].is_null());
+        assert!(lj["progressLogs"][0]["bot_id"].is_null());
+
+        // (b) 親の detail: 兄弟キー subtasks に子がネストし、effectiveProgress は葉から算出（子未完→0）。
+        let pid = add_parent(&app, r#"{"title":"P"}"#).await;
+        post_json(&app, "/api/tasks/add", format!(r#"{{"title":"C","parentId":{pid}}}"#)).await;
+        let (pstatus, pj) = get_json(&app, &format!("/api/tasks/detail?id={pid}")).await;
+        assert_eq!(pstatus, StatusCode::OK);
+        assert_eq!(pj["subtasks"][0]["title"], serde_json::json!("C"));
+        assert!(pj["effectiveProgress"].is_number());
+        // 親自身の進捗ログは無い（子に付けた場合も親の progressLogs は空・Node は要求 id のログのみ）。
+        assert_eq!(pj["progressLogs"].as_array().unwrap().len(), 0);
+    }
+
+    /// `GET /api/tasks/gantt` / `someday`: 日付有無で振り分け、{success, tasks} を返す。
+    #[tokio::test]
+    async fn route_gantt_and_someday_partition_by_date() {
+        let app = app();
+        add_parent(&app, r#"{"title":"dated","dueDate":"2026-07-10"}"#).await;
+        add_parent(&app, r#"{"title":"undated"}"#).await;
+
+        let (gs, gj) = get_json(&app, "/api/tasks/gantt").await;
+        assert_eq!(gs, StatusCode::OK);
+        assert_eq!(gj["success"], serde_json::json!(true));
+        assert_eq!(gj["tasks"].as_array().unwrap().len(), 1);
+        assert_eq!(gj["tasks"][0]["title"], serde_json::json!("dated"));
+        assert!(gj["tasks"][0]["user_id"].is_null(), "clean view");
+
+        let (ss, sj) = get_json(&app, "/api/tasks/someday").await;
+        assert_eq!(ss, StatusCode::OK);
+        assert_eq!(sj["tasks"].as_array().unwrap().len(), 1);
+        assert_eq!(sj["tasks"][0]["title"], serde_json::json!("undated"));
+    }
+
+    /// `POST /api/tasks/update`: id 未指定/0 は 400、不在は 404、成功は {success, task}。
+    #[tokio::test]
+    async fn route_update_validates_and_updates() {
+        let app = app();
+        // id なし → 400（missing field id で DTO パース失敗）。
+        assert_eq!(post_json(&app, "/api/tasks/update", r#"{"title":"x"}"#.to_owned()).await.0, StatusCode::BAD_REQUEST);
+        // id=0 → 400。
+        assert_eq!(post_json(&app, "/api/tasks/update", r#"{"id":0,"title":"x"}"#.to_owned()).await.0, StatusCode::BAD_REQUEST);
+        // 不在 → 404。
+        assert_eq!(post_json(&app, "/api/tasks/update", r#"{"id":999999,"title":"x"}"#.to_owned()).await.0, StatusCode::NOT_FOUND);
+
+        let pid = add_parent(&app, r#"{"title":"orig"}"#).await;
+        let (status, j) = post_json(&app, "/api/tasks/update", format!(r#"{{"id":{pid},"title":"updated","priority":"high","status":"done"}}"#)).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(j["task"]["title"], serde_json::json!("updated"));
+        assert_eq!(j["task"]["priority"], serde_json::json!("high"));
+        assert_eq!(j["task"]["status"], serde_json::json!("done"));
+    }
+
+    /// `POST /api/tasks/progress`: 葉タスクは 200、サブタスクを持つ親は 409、不在は 404、id なしは 400。
+    #[tokio::test]
+    async fn route_progress_leaf_ok_parent_conflict() {
+        let app = app();
+        // id なし → 400。
+        assert_eq!(post_json(&app, "/api/tasks/progress", r#"{"progress":50}"#.to_owned()).await.0, StatusCode::BAD_REQUEST);
+        // 不在 → 404。
+        assert_eq!(post_json(&app, "/api/tasks/progress", r#"{"id":999999,"progress":50}"#.to_owned()).await.0, StatusCode::NOT_FOUND);
+
+        // 葉タスクは進捗更新可（200）。
+        let leaf = add_parent(&app, r#"{"title":"leaf"}"#).await;
+        let (ls, lj) = post_json(&app, "/api/tasks/progress", format!(r#"{{"id":{leaf},"progress":60}}"#)).await;
+        assert_eq!(ls, StatusCode::OK);
+        assert_eq!(lj["task"]["progress"], serde_json::json!(60));
+
+        // サブタスクを持つ親は 409（進捗は子から算出のため手動不可）。
+        let parent = add_parent(&app, r#"{"title":"parent"}"#).await;
+        post_json(&app, "/api/tasks/add", format!(r#"{{"title":"child","parentId":{parent}}}"#)).await;
+        assert_eq!(post_json(&app, "/api/tasks/progress", format!(r#"{{"id":{parent},"progress":50}}"#)).await.0, StatusCode::CONFLICT);
     }
 }

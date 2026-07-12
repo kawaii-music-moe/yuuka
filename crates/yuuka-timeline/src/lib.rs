@@ -2,9 +2,10 @@
 //! と route を縦に持つ。凍結契約（core/types）は変更しない。
 //! 依存 DAG は `timeline → web, db, types, core`。ルータは supervisor が共通レイヤ配下にマージする。
 //!
-//! Phase 1 参照スコープ = `timeline_records` のコア CRUD（day list / add / delete）。
-//! day_plan_blocks CRUD・media 保存/配信・`type=expense` の expenses 二重登録・
-//! `type=task_done` の todos 完了連携は完成パスで追加（deferred）。
+//! Phase 1 参照スコープ = `timeline_records` のコア CRUD（day list / add / delete）＋
+//! `day_plan_blocks` CRUD（plan add / update / delete・day に blocks 同梱）。
+//! media 保存/配信・`type=expense` の expenses 二重登録・`type=task_done` の todos 完了連携は
+//! 完成パスで追加（deferred）。
 
 pub mod dto;
 pub mod repo;
@@ -26,8 +27,12 @@ pub fn export_bindings(base_dir: &Path) -> Result<(), ts_rs::ExportError> {
     let cfg = ts_rs::Config::new().with_out_dir(base_dir.to_path_buf());
     <dto::TimelineRecord as TS>::export_all(&cfg)?;
     <dto::NewTimelineRecord as TS>::export_all(&cfg)?;
+    <dto::DayPlanBlock as TS>::export_all(&cfg)?;
+    <dto::NewDayPlanBlock as TS>::export_all(&cfg)?;
+    <dto::UpdatePlanBlock as TS>::export_all(&cfg)?;
     <dto::TimelineDayData as TS>::export_all(&cfg)?;
     <dto::TimelineRecordData as TS>::export_all(&cfg)?;
+    <dto::DayPlanBlockData as TS>::export_all(&cfg)?;
     Ok(())
 }
 
@@ -44,10 +49,30 @@ mod tests {
     use yuuka_types::{Role, SessionUser};
     use yuuka_web::{AppState, AuthBackend, Db, WebConfig};
 
-    use crate::dto::NewTimelineRecord;
+    use crate::dto::{NewDayPlanBlock, NewTimelineRecord, UpdatePlanBlock};
     use crate::repo::TimelineRepo;
 
     static SEQ: AtomicU64 = AtomicU64::new(0);
+
+    /// `day_plan_blocks` の DDL（V17__baseline.sql と同一。schema は凍結・ここでは複写のみ）。
+    const PLANS_DDL: &str = "CREATE TABLE day_plan_blocks (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id TEXT NOT NULL,
+        bot_id TEXT NOT NULL,
+        date TEXT NOT NULL,
+        start_time TEXT,
+        end_time TEXT,
+        type TEXT NOT NULL DEFAULT 'event',
+        title TEXT NOT NULL,
+        description TEXT,
+        todo_id INTEGER,
+        transit_from TEXT,
+        transit_to TEXT,
+        transit_line TEXT,
+        position INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+    );";
 
     const RECORDS_DDL: &str = "CREATE TABLE timeline_records (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -77,6 +102,7 @@ mod tests {
         {
             let conn = rusqlite::Connection::open(&path).expect("seed db");
             conn.execute_batch(RECORDS_DDL).expect("create timeline_records");
+            conn.execute_batch(PLANS_DDL).expect("create day_plan_blocks");
         }
         Db::open(&path).expect("open db")
     }
@@ -95,6 +121,38 @@ mod tests {
             todo_id: None,
             amount: None,
             location: None,
+        }
+    }
+
+    fn new_plan(date: &str, ty: &str, title: &str) -> NewDayPlanBlock {
+        NewDayPlanBlock {
+            date: date.to_owned(),
+            r#type: ty.to_owned(),
+            title: title.to_owned(),
+            description: None,
+            start_time: None,
+            end_time: None,
+            todo_id: None,
+            transit_from: None,
+            transit_to: None,
+            transit_line: None,
+            position: None,
+        }
+    }
+
+    /// キーを一切セットしない更新（全 nullable フィールドは外側 `None`＝キー非存在）。
+    fn empty_update(id: i64) -> UpdatePlanBlock {
+        UpdatePlanBlock {
+            id,
+            title: None,
+            description: None,
+            r#type: None,
+            start_time: None,
+            end_time: None,
+            todo_id: None,
+            transit_from: None,
+            transit_to: None,
+            transit_line: None,
         }
     }
 
@@ -331,5 +389,365 @@ mod tests {
         assert!(j["record"]["media_type"].is_null());
         assert!(j["record"]["expense_id"].is_null());
         assert!(j["record"]["expense_category"].is_null());
+    }
+
+    // ── day_plan_blocks（plan CRUD）──────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn plan_add_list_and_scope_isolation() {
+        let db = seed_db();
+        let repo = TimelineRepo::new(&db);
+        let created = repo
+            .add_plan(&scope("userA"), new_plan("2026-07-06", "event", "会議"))
+            .await
+            .unwrap();
+        assert_eq!(created.title, "会議");
+        assert_eq!(created.r#type, "event");
+        // position 未指定は 0（Node parity）。
+        assert_eq!(created.position, 0);
+        assert!(created.start_time.is_none());
+
+        let listed = repo
+            .list_plans(&scope("userA"), Some("2026-07-06".to_owned()))
+            .await
+            .unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].title, "会議");
+
+        // 別日には出ない。
+        assert!(repo
+            .list_plans(&scope("userA"), Some("2026-07-07".to_owned()))
+            .await
+            .unwrap()
+            .is_empty());
+        // 別ユーザーには見えない（分離キーを型で強制）。
+        assert!(repo
+            .list_plans(&scope("userB"), Some("2026-07-06".to_owned()))
+            .await
+            .unwrap()
+            .is_empty());
+    }
+
+    #[tokio::test]
+    async fn plan_list_ordering() {
+        // start_time IS NULL は最後・非 NULL は start_time ASC・同点は position ASC（Node parity）。
+        let db = seed_db();
+        let repo = TimelineRepo::new(&db);
+        let s = scope("u");
+
+        let mut a = new_plan("2026-07-06", "event", "早朝");
+        a.start_time = Some("09:00".to_owned());
+        a.position = Some(5);
+        repo.add_plan(&s, a).await.unwrap();
+
+        let mut b = new_plan("2026-07-06", "event", "夕方");
+        b.start_time = Some("18:00".to_owned());
+        repo.add_plan(&s, b).await.unwrap();
+
+        // 時間未定（NULL）を 2 件・position で順序決定。
+        let mut c = new_plan("2026-07-06", "free", "自由2");
+        c.position = Some(2);
+        repo.add_plan(&s, c).await.unwrap();
+        let mut d = new_plan("2026-07-06", "free", "自由1");
+        d.position = Some(1);
+        repo.add_plan(&s, d).await.unwrap();
+
+        let listed = repo
+            .list_plans(&s, Some("2026-07-06".to_owned()))
+            .await
+            .unwrap();
+        let titles: Vec<&str> = listed.iter().map(|b| b.title.as_str()).collect();
+        assert_eq!(titles, vec!["早朝", "夕方", "自由1", "自由2"]);
+    }
+
+    #[tokio::test]
+    async fn plan_update_partial_and_null_semantics() {
+        let db = seed_db();
+        let repo = TimelineRepo::new(&db);
+        let s = scope("u");
+        let mut base = new_plan("2026-07-06", "event", "元タイトル");
+        base.start_time = Some("10:00".to_owned());
+        base.description = Some("説明".to_owned());
+        base.todo_id = Some(42);
+        let created = repo.add_plan(&s, base).await.unwrap();
+
+        // title を string で更新・start_time はキー存在で null にできる・
+        // end_time はキー非存在なので不変。description は空文字→NULL。
+        let upd = UpdatePlanBlock {
+            id: created.id,
+            title: Some("新タイトル".to_owned()),
+            description: Some(String::new()), // 空文字 → NULL
+            r#type: None,
+            start_time: Some(None), // キー存在・null → NULL 化
+            end_time: None,         // キー非存在 → 不変
+            todo_id: None,          // キー非存在 → 不変（42 のまま）
+            transit_from: None,
+            transit_to: None,
+            transit_line: None,
+        };
+        let updated = repo.update_plan(&s, upd).await.unwrap().expect("row");
+        assert_eq!(updated.title, "新タイトル");
+        assert!(updated.description.is_none()); // 空文字 → NULL
+        assert!(updated.start_time.is_none()); // null 明示 → NULL
+        assert_eq!(updated.r#type, "event"); // 不変
+        assert_eq!(updated.todo_id, Some(42)); // キー非存在 → 不変
+        assert!(updated.updated_at.len() >= "2026-01-01".len());
+    }
+
+    #[tokio::test]
+    async fn plan_update_empty_touches_updated_at_only() {
+        // Node: SET 対象が無くても updated_at は更新され changes>0 → 行を返す。
+        let db = seed_db();
+        let repo = TimelineRepo::new(&db);
+        let s = scope("u");
+        let created = repo
+            .add_plan(&s, new_plan("2026-07-06", "event", "t"))
+            .await
+            .unwrap();
+        let updated = repo
+            .update_plan(&s, empty_update(created.id))
+            .await
+            .unwrap()
+            .expect("row");
+        assert_eq!(updated.title, "t"); // 不変
+    }
+
+    #[tokio::test]
+    async fn plan_update_not_found_and_scope() {
+        let db = seed_db();
+        let repo = TimelineRepo::new(&db);
+        let created = repo
+            .add_plan(&scope("owner"), new_plan("2026-07-06", "event", "t"))
+            .await
+            .unwrap();
+        // 存在しない id → None。
+        assert!(repo
+            .update_plan(&scope("owner"), empty_update(999_999))
+            .await
+            .unwrap()
+            .is_none());
+        // 別ユーザーからは更新できない → None（scope 分離）。
+        assert!(repo
+            .update_plan(&scope("intruder"), empty_update(created.id))
+            .await
+            .unwrap()
+            .is_none());
+        // owner から見ればタイトルは無傷。
+        assert_eq!(
+            repo.get_plan(&scope("owner"), created.id)
+                .await
+                .unwrap()
+                .expect("row")
+                .title,
+            "t"
+        );
+    }
+
+    #[tokio::test]
+    async fn plan_delete_and_double_delete() {
+        let db = seed_db();
+        let repo = TimelineRepo::new(&db);
+        let s = scope("u");
+        let created = repo
+            .add_plan(&s, new_plan("2026-07-06", "event", "t"))
+            .await
+            .unwrap();
+        // 別ユーザーからは削除不可。
+        assert!(!repo.delete_plan(&scope("other"), created.id).await.unwrap());
+        assert!(repo.delete_plan(&s, created.id).await.unwrap());
+        // 二重削除は false（Node parity・200 {success:false}）。
+        assert!(!repo.delete_plan(&s, created.id).await.unwrap());
+    }
+
+    /// wire 契約: plan 作成は camelCase（`startTime`/`todoId`/`transitFrom`）を受理する。
+    #[test]
+    fn new_plan_wire_contract() {
+        let camel: NewDayPlanBlock = serde_json::from_str(
+            r#"{"date":"2026-07-06","type":"transit","title":"移動","startTime":"08:00","endTime":"08:30","todoId":7,"transitFrom":"渋谷","transitTo":"新宿","transitLine":"山手線","position":3}"#,
+        )
+        .unwrap();
+        assert_eq!(camel.start_time.as_deref(), Some("08:00"));
+        assert_eq!(camel.end_time.as_deref(), Some("08:30"));
+        assert_eq!(camel.todo_id, Some(7));
+        assert_eq!(camel.transit_from.as_deref(), Some("渋谷"));
+        assert_eq!(camel.position, Some(3));
+    }
+
+    /// wire 契約: 更新の二重 Option がキー存在（`Some(None)`）とキー非存在（`None`）を区別する。
+    #[test]
+    fn update_plan_present_vs_absent() {
+        // startTime を明示 null で送る → キー存在・内側 None。
+        let present_null: UpdatePlanBlock =
+            serde_json::from_str(r#"{"id":1,"startTime":null}"#).unwrap();
+        assert_eq!(present_null.start_time, Some(None));
+        // endTime キー非存在 → 外側 None（不変扱い）。
+        assert_eq!(present_null.end_time, None);
+
+        // startTime を値付きで送る → Some(Some(..))。
+        let present_val: UpdatePlanBlock =
+            serde_json::from_str(r#"{"id":1,"startTime":"07:00"}"#).unwrap();
+        assert_eq!(present_val.start_time, Some(Some("07:00".to_owned())));
+
+        // title は string ガード: 数値/ null は拾わない（外側 None）。
+        let bad_title: UpdatePlanBlock =
+            serde_json::from_str(r#"{"id":1,"title":null}"#).unwrap();
+        assert_eq!(bad_title.title, None);
+    }
+
+    #[tokio::test]
+    async fn route_plan_add_update_delete_and_day() {
+        let app = app();
+        // 作成。
+        let add = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/timeline/plan")
+                    .header("cookie", "__Host-yuuka-session=good")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"date":"2026-07-06","type":"event","title":"会議","startTime":"10:00"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(add.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(add.into_body(), usize::MAX).await.unwrap();
+        let j: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(j["success"], serde_json::json!(true));
+        assert_eq!(j["block"]["title"], serde_json::json!("会議"));
+        // 内部列は露出しない（構造的フェイルクローズ）。
+        assert!(j["block"]["user_id"].is_null());
+        assert!(j["block"]["bot_id"].is_null());
+        let id = j["block"]["id"].as_i64().unwrap();
+
+        // 更新。
+        let upd = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/timeline/plan/update")
+                    .header("cookie", "__Host-yuuka-session=good")
+                    .header("content-type", "application/json")
+                    .body(Body::from(format!(
+                        r#"{{"id":{id},"title":"打合せ"}}"#
+                    )))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(upd.status(), StatusCode::OK);
+        let ub = axum::body::to_bytes(upd.into_body(), usize::MAX).await.unwrap();
+        let uj: serde_json::Value = serde_json::from_slice(&ub).unwrap();
+        assert_eq!(uj["block"]["title"], serde_json::json!("打合せ"));
+
+        // day は blocks と records の両方を返す（Node parity）。
+        let day = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/timeline/day?date=2026-07-06")
+                    .header("cookie", "__Host-yuuka-session=good")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(day.status(), StatusCode::OK);
+        let db_ = axum::body::to_bytes(day.into_body(), usize::MAX).await.unwrap();
+        let dj: serde_json::Value = serde_json::from_slice(&db_).unwrap();
+        assert_eq!(dj["blocks"][0]["title"], serde_json::json!("打合せ"));
+        assert!(dj["records"].is_array());
+
+        // 削除。
+        let del = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/timeline/plan/delete")
+                    .header("cookie", "__Host-yuuka-session=good")
+                    .header("content-type", "application/json")
+                    .body(Body::from(format!(r#"{{"id":{id}}}"#)))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(del.status(), StatusCode::OK);
+        let delb = axum::body::to_bytes(del.into_body(), usize::MAX).await.unwrap();
+        let dlj: serde_json::Value = serde_json::from_slice(&delb).unwrap();
+        assert_eq!(dlj["success"], serde_json::json!(true));
+    }
+
+    #[tokio::test]
+    async fn route_plan_add_missing_fields_is_400() {
+        // title 欠落 → 400（Node parity）。
+        let resp = app()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/timeline/plan")
+                    .header("cookie", "__Host-yuuka-session=good")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"date":"2026-07-06","type":"event"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn route_plan_update_not_found_is_404() {
+        // 存在しない id → 404（Node parity・delete の 200 とは異なる）。
+        let resp = app()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/timeline/plan/update")
+                    .header("cookie", "__Host-yuuka-session=good")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"id":424242,"title":"x"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn route_plan_update_id_zero_is_400() {
+        // id=0 は Node の `!id` で 400（0 は falsy）。
+        let resp = app()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/timeline/plan/update")
+                    .header("cookie", "__Host-yuuka-session=good")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"id":0,"title":"x"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn route_plan_requires_auth() {
+        let resp = app()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/timeline/plan")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"date":"2026-07-06","type":"event","title":"x"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
 }

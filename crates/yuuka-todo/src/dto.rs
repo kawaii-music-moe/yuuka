@@ -85,6 +85,51 @@ where
     })
 }
 
+/// update 用の優先度 3 値（Node `normalizePriority` + `updateTodo` の `!== undefined` 分岐）。
+///
+/// - [`PriorityUpdate::Unchanged`]: フィールド未指定 **または** 不正値（未知文字列・`9` 等・bool）。
+///   Node `normalizePriority` が `undefined` を返す経路（`updateTodo` は据え置き）。
+/// - [`PriorityUpdate::Clear`]: `""` または `null`。Node は `null` を返し repo が priority を NULL 化。
+/// - [`PriorityUpdate::Set`]: 数値 `0/1/2` または文字列 `"low"/"medium"/"high"` を正規化した値。
+///
+/// `#[serde(default)]` により**フィールド欠落時は `Unchanged`**（`Default`）に落ちる。
+///
+/// wire 上の `priority` は `"high"|"medium"|"low"|null` のままで、本 enum は Rust 内部の
+/// 3 値表現に過ぎない（フロントへ露出しないため `TS` は導出しない）。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum PriorityUpdate {
+    /// 据え置き（未指定・不正値）。
+    #[default]
+    Unchanged,
+    /// クリア（`null`/`""` → NULL）。
+    Clear,
+    /// 設定（正規化済み `"high"`/`"medium"`/`"low"`）。
+    Set(String),
+}
+
+impl<'de> Deserialize<'de> for PriorityUpdate {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = serde_json::Value::deserialize(deserializer)?;
+        Ok(match value {
+            // null/空文字は明示クリア（Node normalizePriority が null を返す経路）。
+            serde_json::Value::Null => Self::Clear,
+            serde_json::Value::String(s) if s.is_empty() => Self::Clear,
+            serde_json::Value::Number(n) => n
+                .as_i64()
+                .and_then(normalize_priority_num)
+                .map_or(Self::Unchanged, Self::Set),
+            serde_json::Value::String(s) => {
+                normalize_priority_str(&s).map_or(Self::Unchanged, Self::Set)
+            }
+            // bool/配列/オブジェクト等は Node で undefined 相当 → 据え置き。
+            _ => Self::Unchanged,
+        })
+    }
+}
+
 /// tool 引数（JSON 値）の優先度を Node `asOptionalPriority`/`normalizePriority` 規則で正規化する。
 ///
 /// 数値 `0/1/2` → `"low"/"medium"/"high"`、文字列は既知 3 値のみ採用、他は `None`（未設定）。
@@ -156,9 +201,103 @@ pub struct TaskListData {
     pub tasks: Vec<TodoWithSubtasks>,
 }
 
-/// 単一 todo を返すペイロード（add/complete。`{success, task}`）。
+/// 単一 todo を返すペイロード（add/complete/update。`{success, task}`）。
 #[derive(Debug, Clone, Serialize, TS)]
 #[ts(export_to = "generated/")]
 pub struct TaskData {
     pub task: Todo,
+}
+
+/// `task_progress_logs` の 1 レコード（進捗報告の時系列ログ・クリーンビュー）。
+///
+/// **機密フェイルクローズ**: Node `TaskProgressLogRecord`（[`src/db/todoRepo.ts`]）は
+/// `user_id`/`bot_id` を生 row で持つが、本 DTO は [`Todo`]/[`TodoWithSubtasks`] と同じ
+/// clean-view 原則（R-13）に従い内部列を**フィールドに存在させない**（安全側の意図的差分）。
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export_to = "generated/")]
+pub struct TaskProgressLog {
+    pub id: i64,
+    pub todo_id: i64,
+    pub progress: i64,
+    pub note: Option<String>,
+    pub created_at: String,
+}
+
+/// `GET /api/tasks/detail` のペイロード（`{success, task, subtasks, effectiveProgress, progressLogs}`）。
+///
+/// Node `todoRoutes.ts` の detail ハンドラと一致。`task` は**フラットな単一 todo**（`getTodoById`
+/// 相当・`subtasks`/`effective_progress` を内包しない）で、サブツリー・算出進捗・進捗ログは
+/// **兄弟キー**として返す。`effectiveProgress`/`progressLogs` は **camelCase**（Node の JSON 出力・
+/// フロント `TaskDetailResponse` 型と一致）。
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "generated/")]
+pub struct TaskDetailData {
+    pub task: Todo,
+    pub subtasks: Vec<TodoWithSubtasks>,
+    /// 算出進捗 0-100（`task`＋`subtasks` から Node `computeEffectiveProgress` で算出）。
+    pub effective_progress: i64,
+    /// 進捗ログ（新しい順・`listProgressLogs`）。
+    pub progress_logs: Vec<TaskProgressLog>,
+}
+
+/// todo 更新リクエスト（`POST /api/tasks/update` の body）。
+///
+/// **wire 契約**: フロント／Node は body を **camelCase**（`dueDate`/`startDate`）で送る
+/// （[`taskApi.ts`] `update`、Node `todoRoutes.ts` の `body.dueDate` 等）。`id` は必須。
+/// 未指定フィールドは更新しない（`Option::None`＝据え置き）。`due_date`/`start_date` は
+/// **空文字でクリア**（NULL 化・Node `updateTodo` パリティ。repo 側で畳む）。
+///
+/// `priority` は Node `normalizePriority` + `updateTodo` の 3 値（据え置き／クリア／設定）を
+/// [`PriorityUpdate`] で厳密に再現する（`null`/`""`→クリア、正規値→設定、不正値・未指定→据え置き）。
+#[derive(Debug, Clone, Default, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "generated/")]
+pub struct TodoUpdate {
+    pub id: i64,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub due_date: Option<String>,
+    #[serde(default)]
+    pub start_date: Option<String>,
+    /// 優先度 3 値（据え置き／クリア／設定・[`PriorityUpdate`]）。未指定は `Unchanged`。
+    /// wire 上は `"high"|"medium"|"low"|null`（`null` でクリア）。`PriorityUpdate` は `TS` 非導出の
+    /// ため、生成 TS 用に型を明示する。
+    #[serde(default)]
+    #[ts(type = "\"high\" | \"medium\" | \"low\" | null")]
+    pub priority: PriorityUpdate,
+    /// ステータス。`"open"`/`"done"` のみ採用（他は `None`＝据え置き・Node パリティ）。
+    #[serde(default, deserialize_with = "deserialize_status")]
+    pub status: Option<String>,
+}
+
+/// `status` を `"open"`/`"done"` のみ採用し、他（未知文字列・`null`・数値等）は `None` に畳む
+/// （Node `todoRoutes.ts`: `statusRaw === "open" || "done" ? statusRaw : undefined`）。
+fn deserialize_status<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(match value {
+        serde_json::Value::String(s) if s == "open" || s == "done" => Some(s),
+        _ => None,
+    })
+}
+
+/// todo 進捗更新リクエスト（`POST /api/tasks/progress` の body）。
+///
+/// **wire 契約**: フロント／Node は camelCase 相当だが本 body は `id`/`progress`/`note` のみで
+/// snake/camel の差が無い。`id`・`progress` は必須（Node は `Number()` で数値化し `!id ||
+/// !Number.isFinite(progress)` を 400 で弾く）。`progress` は repo 側で 0-100 にクランプする。
+#[derive(Debug, Clone, Default, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "generated/")]
+pub struct TodoProgress {
+    pub id: i64,
+    pub progress: i64,
+    #[serde(default)]
+    pub note: Option<String>,
 }
