@@ -46,6 +46,27 @@ impl AuthBackend for FakeAuth {
     }
 }
 
+/// Cookie セッション "sess-ok" **と** Bearer "good" の両方を解決する fake（CSWSH 回帰用）。
+/// これで「Cookie は正当なのに WS では拒否される」＝Bearer 専用化を検証できる。
+struct CookieAndBearerAuth;
+#[async_trait]
+impl AuthBackend for CookieAndBearerAuth {
+    async fn session_user(&self, t: &str) -> Result<Option<SessionUser>, AuthError> {
+        Ok((t == "sess-ok").then(|| SessionUser {
+            discord_id: "u1".to_owned(),
+            username: "yuu".to_owned(),
+            role: Role::User,
+        }))
+    }
+    async fn desktop_user(&self, t: &str) -> Result<Option<SessionUser>, AuthError> {
+        Ok((t == "good").then(|| SessionUser {
+            discord_id: "u1".to_owned(),
+            username: "yuu".to_owned(),
+            role: Role::User,
+        }))
+    }
+}
+
 /// 固定テキストを返す fake Gemini backend。
 struct FakeBackend {
     text: String,
@@ -149,6 +170,56 @@ async fn ws_chat_ready_then_msg_returns_done() {
     assert_eq!(done["deferred"], false);
 
     ws.close(None).await.ok();
+    server.abort();
+}
+
+/// **B5（CSWSH 回帰）**: 正当な Cookie セッションだけを持ち Bearer を持たない WS upgrade は
+/// **拒否**されねばならない（`/ws/chat` は Bearer 専用）。これが 101 で通ると、悪意サイトが
+/// ambient Cookie を載せて Cross-Site WebSocket Hijacking を成立させられる。
+#[tokio::test]
+async fn ws_chat_rejects_cookie_only_auth() {
+    let (db, crypto) = seeded_db();
+    let engine = Arc::new(ChatEngine::new(
+        db.clone(),
+        Some(crypto),
+        ToolRegistry::new(),
+        Arc::new(FakeFactory { text: "x".to_owned() }),
+    ));
+    let state = AppState::new(Arc::new(CookieAndBearerAuth), WebConfig::default(), db);
+    let app = build_app(state, axum::Router::new(), ws_routes(engine, 20), None);
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+
+    // 正当な Cookie セッションのみ（Authorization ヘッダ無し）で接続を試みる。
+    let mut req = format!("ws://{addr}/ws/chat?botId=system_default")
+        .into_client_request()
+        .unwrap();
+    req.headers_mut()
+        .insert("cookie", "__Host-yuuka-session=sess-ok".parse().unwrap());
+    let result = tokio_tungstenite::connect_async(req).await;
+    assert!(
+        result.is_err(),
+        "Cookie 認証での WS upgrade は 401 で拒否されねばならない（CSWSH 対策 B5）"
+    );
+
+    // 対照: 同一サーバに Bearer で接続すると 101 で通る（Bearer 専用が機能している証左）。
+    let mut ok_req = format!("ws://{addr}/ws/chat?botId=system_default")
+        .into_client_request()
+        .unwrap();
+    ok_req
+        .headers_mut()
+        .insert("authorization", "Bearer good".parse().unwrap());
+    let (mut ws, _resp) = tokio_tungstenite::connect_async(ok_req)
+        .await
+        .expect("Bearer 認証の WS upgrade は成功する");
+    let ready = next_json(&mut ws).await;
+    assert_eq!(ready["type"], "ready");
+    ws.close(None).await.ok();
+
     server.abort();
 }
 

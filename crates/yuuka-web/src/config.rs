@@ -11,6 +11,10 @@ pub struct WebConfig {
     pub terms_url: String,
     /// HTTPS デプロイか（Cookie 名 `__Host-` の選択に使う・§11.3）。
     pub https: bool,
+    /// CSRF の許可オリジン ホスト名（`config.base_url` のホスト名・Node `isAllowedHost`）。
+    /// `None`（`BASE_URL` 未設定）は localhost 群を許可する開発既定。**クライアント供給の `Host`
+    /// には依存しない**（Host 注入で allowlist を迂回されないための設定ベース信頼アンカー）。
+    pub allowed_host: Option<String>,
     /// XFF 信頼判定に使う信頼プロキシ（レート制限のクライアント IP 解決・Node `getClientIp`）。
     /// 直前 peer がこのリストに含まれるときのみ `X-Forwarded-For` を信頼する。
     pub trusted_proxies: Vec<std::net::IpAddr>,
@@ -24,6 +28,7 @@ impl WebConfig {
             privacy_policy_url: cfg.privacy_policy_url.clone(),
             terms_url: cfg.terms_url.clone(),
             https: cfg.is_https_deployment(),
+            allowed_host: crate::csrf::allowed_host_from_base_url(cfg.base_url.as_deref()),
             trusted_proxies: cfg.trusted_proxies.clone(),
         }
     }

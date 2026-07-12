@@ -52,6 +52,11 @@ async fn run() -> Result<(), String> {
     let cfg = Config::load_and_validate(Path::new(CONFIG_PATH))
         .map_err(|e| format!("config load failed: {e}"))?;
 
+    // 1.5) 保存時暗号シークレットの必須 + 強度チェック（Node `index.ts` §6.2・**N2**）。未設定/脆弱鍵での
+    //      起動を拒否する。これが無いと Rust は暗号鍵ゼロでも起動を続け（setup/register だけ 500 に縮退）、
+    //      at-rest 秘密（Gemini/Discord/OAuth トークン）に依存する機能が静かに壊れる Rust 固有の退行になる。
+    require_encryption_secret(&cfg)?;
+
     // 2) 既存 SQLite（Node 作成済み前提）を read pool + 単一 writer actor で開く
     //    （writer 起動時に migrations が適用される）。
     let db = Db::open(&cfg.db_path).map_err(|e| format!("open db {:?}: {e}", cfg.db_path))?;
@@ -202,6 +207,58 @@ async fn run() -> Result<(), String> {
     Ok(())
 }
 
+/// 保存時暗号シークレットの起動時チェック（Node `index.ts` §6.2 パリティ・**N2**）。
+///
+/// `YUUKA_ENCRYPTION_SECRET`（と鍵ローテ用 `_NEW`）が **どちらも未設定なら起動拒否**。設定済みでも
+/// 32 文字未満なら起動拒否する（脆弱鍵は KDF 強度に関わらず総当たりの前提条件になる）。`_NEW` のみ
+/// 設定はプレリリース版からのローテーション起動として許可する（[`rotate_secret_if_requested`]）。
+///
+/// # Errors
+/// 両シークレット未設定、またはいずれかが `MIN_SECRET_LEN` 未満のとき `Err`（起動中断＝非ゼロ終了）。
+fn require_encryption_secret(cfg: &Config) -> Result<(), String> {
+    // Node は `String.length`（UTF-16 code unit）。base64 秘密は ASCII なので `chars().count()` と一致。
+    check_secret_strength(
+        cfg.encryption_secret
+            .as_ref()
+            .map(|s| s.expose_secret().chars().count()),
+        cfg.encryption_secret_new
+            .as_ref()
+            .map(|s| s.expose_secret().chars().count()),
+    )
+}
+
+/// [`require_encryption_secret`] の純粋な判定部（テスト可能）。引数は各シークレットの文字長（未設定は `None`）。
+///
+/// # Errors
+/// 両方 `None`（未設定）、またはいずれかが `MIN_SECRET_LEN` 未満のとき `Err`。
+fn check_secret_strength(secret_len: Option<usize>, new_len: Option<usize>) -> Result<(), String> {
+    /// Node `MIN_SECRET_LEN`（`index.ts`）。
+    const MIN_SECRET_LEN: usize = 32;
+
+    if secret_len.is_none() && new_len.is_none() {
+        return Err(
+            "YUUKA_ENCRYPTION_SECRET が未設定です。十分に長いランダム文字列（例: openssl rand -base64 48）を \
+             設定してください。プレリリース版からの移行は YUUKA_ENCRYPTION_SECRET_NEW に新鍵を設定して起動 \
+             （鍵ローテーション）します。"
+                .to_owned(),
+        );
+    }
+    for (name, len) in [
+        ("YUUKA_ENCRYPTION_SECRET", secret_len),
+        ("YUUKA_ENCRYPTION_SECRET_NEW", new_len),
+    ] {
+        if let Some(n) = len {
+            if n < MIN_SECRET_LEN {
+                return Err(format!(
+                    "{name} が短すぎます（{n} 文字）。推測困難な {MIN_SECRET_LEN} 文字以上のランダム値 \
+                     （例: openssl rand -base64 48）を設定してください。"
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// `YUUKA_ENCRYPTION_SECRET_NEW` が設定されていれば鍵ローテーションを実行する（Node パリティ）。
 ///
 /// 旧鍵は現行 `YUUKA_ENCRYPTION_SECRET`、未設定ならプレリリース版フォールバック鍵
@@ -340,4 +397,29 @@ async fn shutdown_signal() {
         () = terminate => {}
     }
     tracing::info!("shutdown signal を受信。graceful shutdown を開始");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::check_secret_strength;
+
+    #[test]
+    fn both_absent_is_rejected() {
+        // N2 の核心: 暗号鍵が一切無い起動は拒否する（Node index.ts の process.exit(1) 相当）。
+        assert!(check_secret_strength(None, None).is_err());
+    }
+
+    #[test]
+    fn weak_secret_is_rejected() {
+        assert!(check_secret_strength(Some(31), None).is_err());
+        assert!(check_secret_strength(None, Some(10)).is_err());
+    }
+
+    #[test]
+    fn strong_secret_is_accepted() {
+        assert!(check_secret_strength(Some(32), None).is_ok());
+        assert!(check_secret_strength(Some(48), None).is_ok());
+        // 鍵ローテーション（_NEW のみ・十分長）も許可。
+        assert!(check_secret_strength(None, Some(48)).is_ok());
+    }
 }

@@ -88,8 +88,10 @@ where
         let bot_id = body_bot.or(query_bot);
 
         // 余分な `botId` キーは無視して T へ（既存 DTO は deny_unknown_fields 無し）。
+        // serde のエラー文（型/フィールド名を含む）はクライアントへ返さない（#4: スキーマ露出の抑制。
+        // 上の malformed-JSON と同じ固定文言に倒す）。
         let value = serde_json::from_value(json)
-            .map_err(|e| ApiError(WebError::Validation(format!("invalid request body: {e}"))))?;
+            .map_err(|_| ApiError(WebError::Validation("invalid request body".to_owned())))?;
 
         Ok(Self { bot_id, value })
     }

@@ -68,6 +68,13 @@ async fn add(
             "trigger_at is required".to_owned(),
         )));
     }
+    // #6/B4: 正規化できない日時（Z/オフセット/不正日付）は 400 で弾く（Node `reminderRoutes.ts`・
+    // tool `tools.rs` と同一判定）。repo は正規化済み文字列を INSERT するため、字句比較バグを残さない。
+    if crate::datetime::to_db_datetime(&input.trigger_at).is_none() {
+        return Err(ApiError(WebError::Validation(
+            "trigger_at must be a valid date-time".to_owned(),
+        )));
+    }
     let scope = resolve_scope(&user.0, &db, bot_id.as_deref()).await?;
     let reminder = ReminderRepo::new(&db).add(&scope, input).await?;
     Ok(Json(Envelope::ok(ReminderData { reminder })))

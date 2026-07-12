@@ -5,13 +5,15 @@
 //!
 //! Phase 1 スコープ = コア CRUD（list/add/cancel/delete）。cron 用の全件走査
 //! （listDuePending / markSent / rescheduleRepeat）は Phase 4 で [`cron`] に追加済み。deferred（後回し）:
-//! - repeat_rule の cron 式検証・過去日時の次回時刻補正
-//! - trigger_at の ISO/Date 正規化（現状は DB 形式文字列を受領）
+//! - repeat_rule の cron 式**厳密**検証・過去日時の次回時刻補正（cron 依存・cron_util は上位 crate）
 //! - 既定送信先解決（users.notify_target_*）・source/source_id の各機能連携
+//!
+//! trigger_at の DB 形式正規化（`T`/空白/日付のみ）は [`datetime::to_db_datetime`] で実装済み（B4 修正）。
 //!
 //! cancel 失敗の **404（不在）/ 409（実在するが pending でない）** 区別は M-12 で実装済み。
 
 pub mod cron;
+pub mod datetime;
 pub mod dto;
 pub mod repo;
 pub mod routes;

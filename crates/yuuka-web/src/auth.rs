@@ -72,6 +72,30 @@ fn bearer_token(parts: &Parts) -> Option<&str> {
     }
 }
 
+/// **Bearer 専用**でユーザーを解決する（Cookie は一切見ない・未認証/縮退とも `Ok(None)`）。
+///
+/// **B5（CSWSH 対策）**: WebSocket upgrade は GET のため [`crate::csrf_guard`]（状態変更限定）が
+/// 発火せず、Origin/Sec-Fetch も検証されない。汎用 [`resolve_user`]（Cookie 優先）を WS で使うと
+/// **ambient な Cookie** が upgrade に載って Cross-Site WebSocket Hijacking が成立する。Node の
+/// WS upgrade は `getBearerUser`（`Authorization` のみ）で構造的に CSWSH 不能だった。これを移植し、
+/// WS は Bearer 専用に束ねる（デスクトップは Bearer 送信前提＝低リスク parity）。
+/// バックエンド障害は M-1 と同じく `None` へ縮退する（`?` で 502 伝播させない）。
+async fn resolve_bearer_user(
+    parts: &Parts,
+    state: &AppState,
+) -> Result<Option<SessionUser>, AuthError> {
+    let Some(tok) = bearer_token(parts) else {
+        return Ok(None);
+    };
+    match state.auth.desktop_user(tok).await {
+        Ok(user) => Ok(user),
+        Err(e) => {
+            tracing::warn!(error = %e, "desktop token store 到達不能: Bearer 認証を縮退");
+            Ok(None)
+        }
+    }
+}
+
 /// Cookie 優先 → Bearer の順でユーザーを解決する（未認証・縮退時とも `Ok(None)`）。
 ///
 /// **M-1（認証縮退）**: Node の `getSessionUser`/`getBearerUser` は各ストア呼び出しを
@@ -144,6 +168,27 @@ impl FromRequestParts<AppState> for AdminUser {
         match resolve_user(parts, state).await? {
             Some(user) if user.role == Role::Admin => Ok(Self(user)),
             Some(_) => Err(ApiError(WebError::Forbidden)),
+            None => Err(ApiError(WebError::Unauthorized)),
+        }
+    }
+}
+
+/// **Bearer デスクトップトークン専用**の認証必須ユーザー（未認証は 401）。
+///
+/// Cookie を一切受理しないため WebSocket upgrade（`/ws/chat`）の CSWSH を構造的に封じる
+/// （[`resolve_bearer_user`] 参照・B5）。HTTP ルートは Cookie も許す [`AuthenticatedUser`] を使う。
+#[derive(Debug, Clone)]
+pub struct BearerUser(pub SessionUser);
+
+impl FromRequestParts<AppState> for BearerUser {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        match resolve_bearer_user(parts, state).await? {
+            Some(user) => Ok(Self(user)),
             None => Err(ApiError(WebError::Unauthorized)),
         }
     }

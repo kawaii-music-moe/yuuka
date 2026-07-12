@@ -104,12 +104,16 @@ impl<'a> ReminderRepo<'a> {
     /// リマインドを作成し、作成後の行を返す。
     ///
     /// `target_type` 未指定は `"dm"`、`source` は `"manual"` 固定（Web UI 由来）。
-    /// trigger_at の正規化・cron 検証・過去日時補正・既定送信先解決は deferred。
+    /// trigger_at は [`crate::datetime::to_db_datetime`] で DB 形式へ正規化する（**B4**: Node
+    /// `reminderRepo.add` と同位置。LLM/Web の `T` 区切り ISO を空白区切りへ揃え cron の字句比較を
+    /// 正す）。cron 検証・過去日時補正・既定送信先解決は deferred。
     ///
     /// # Errors
     /// 挿入失敗・作成後の取得失敗時 [`DbError`]。
     pub async fn add(&self, scope: &UserScope, input: NewReminder) -> Result<Reminder, DbError> {
         let (uid, bid) = scope_keys(scope);
+        // trigger_at を DB 形式へ正規化（正規化不能な想定外入力は原文維持＝非破壊）。
+        let trigger_at = crate::datetime::normalize_or_keep(&input.trigger_at);
         let id = self
             .writer
             .transaction(move |tx| {
@@ -127,7 +131,7 @@ impl<'a> ReminderRepo<'a> {
                         uid,
                         bid,
                         input.message,
-                        input.trigger_at,
+                        trigger_at,
                         input.repeat_rule,
                         target_type,
                         input.target_id,

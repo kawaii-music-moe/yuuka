@@ -51,7 +51,8 @@ fn build() -> Router {
         Arc::new(NullRegistrationDm),
         Vec::new(),
     ));
-    apply_common_layers(framework_routes().merge(yuuka_auth::routes(runtime)), false).with_state(state)
+    apply_common_layers(framework_routes().merge(yuuka_auth::routes(runtime)), false, None)
+        .with_state(state)
 }
 
 /// ConnectInfo（peer アドレス）を載せた JSON リクエストを 1 発投げる。

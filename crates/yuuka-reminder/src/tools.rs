@@ -239,6 +239,13 @@ impl Tool for AddReminderTool {
                 "送信日時 trigger_at (ISO 8601形式) を指定してください。",
             ));
         };
+        // B4: DB 形式へ正規化できない日時は Node 同様に弾いて理由を返す（repo でも正規化されるが、
+        // ここで検証してユーザーに再入力を促す。空白/T 区切り・日付のみ・実在日付を受理）。
+        if crate::datetime::to_db_datetime(&trigger_at).is_none() {
+            return Ok(fail_payload(format!(
+                "送信日時を解釈できません: {trigger_at}（ISO 8601形式 YYYY-MM-DDTHH:MM:SS で指定してください）"
+            )));
+        }
 
         // 繰り返しの cron 式は簡易検証（厳密検証・過去日時の次回時刻補正は deferred）。
         let repeat_rule = arg_str(&args, "repeat_rule");
@@ -562,6 +569,34 @@ mod tests {
             .unwrap();
         assert_eq!(out.payload["success"], true);
         assert_eq!(out.payload["reminder"]["repeat_rule"], "0 9 * * 1");
+    }
+
+    #[tokio::test]
+    async fn add_normalizes_iso_t_trigger_to_db_space_format() {
+        // B4 回帰: LLM の T 区切り ISO を渡すと、保存値は空白区切りに正規化される
+        // （cron の `trigger_at <= datetime('now','localtime')` 字句比較が正しく効く）。
+        let db = seed_db();
+        let tools = tools(db).unwrap();
+        let add = find(&tools, "addReminder");
+        let out = add
+            .call(
+                &ctx(),
+                json!({"message": "会議", "trigger_at": "2999-01-01T09:30:00"}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(out.payload["success"], true);
+        assert_eq!(
+            out.payload["reminder"]["trigger_at"], "2999-01-01 09:30:00",
+            "T 区切りが空白区切りへ正規化されていない（B4）"
+        );
+
+        // 解釈不能な日時は弾く（Node parity・nice message）。
+        let bad = add
+            .call(&ctx(), json!({"message": "x", "trigger_at": "あした"}))
+            .await
+            .unwrap();
+        assert_eq!(bad.payload["success"], false);
     }
 
     #[tokio::test]

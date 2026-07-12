@@ -1,8 +1,9 @@
 //! `/ws/chat` WebSocket transport（Node `src/server/chatWebSocket.ts` パリティ）。
 //!
 //! クライアントは **Rust デスクトップ**（`clients/desktop/src/model.rs` の `ClientFrame`/`ServerFrame`
-//! が唯一の契約）。認証は **Bearer デスクトップトークン**（[`AuthenticatedUser`] が Cookie→Bearer を
-//! 解決）、`?botId=` は接続時に 1 Bot へ束縛し [`has_bot_access`] で検証する。フレームは全て JSON テキスト。
+//! が唯一の契約）。認証は **Bearer デスクトップトークン専用**（[`BearerUser`]・Cookie は受理しない＝
+//! WS upgrade の CSWSH を構造的に封じる・B5）、`?botId=` は接続時に 1 Bot へ束縛し [`has_bot_access`]
+//! で検証する。フレームは全て JSON テキスト。
 //!
 //! **実装範囲（P1-2 増分）**: 接続時 `ready` → 受信 `msg` を [`ChatEngine::secretary_turn`] で処理し
 //! `status`（thinking/writing）→ `done` を返す。`reset` はコンテキストクリア、`ping` は no-op。keepalive は
@@ -25,7 +26,7 @@ use tokio::sync::mpsc;
 use yuuka_discord::{BotStatus, FileAttachment, IncomingChat, InlineMedia, StatusSink, TurnReply};
 use yuuka_orchestrator::ChatEngine;
 use yuuka_types::SessionUser;
-use yuuka_web::{has_bot_access, AppState, AuthenticatedUser, Db};
+use yuuka_web::{has_bot_access, AppState, BearerUser, Db};
 
 /// keepalive ping 間隔（Node `PING_INTERVAL_MS = 30_000`）。
 const PING_INTERVAL: Duration = Duration::from_secs(30);
@@ -49,9 +50,9 @@ struct BotQuery {
     bot_id: Option<String>,
 }
 
-/// WS upgrade ハンドラ。Bearer 認証（extractor）→ botId アクセス検証 → upgrade。
+/// WS upgrade ハンドラ。**Bearer 専用**認証（[`BearerUser`]・CSWSH 対策 B5）→ botId アクセス検証 → upgrade。
 async fn ws_upgrade(
-    user: AuthenticatedUser,
+    user: BearerUser,
     State(state): State<AppState>,
     Extension(engine): Extension<Arc<ChatEngine>>,
     Extension(max_upload): Extension<MaxUploadMb>,

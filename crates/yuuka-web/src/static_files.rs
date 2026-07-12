@@ -48,6 +48,14 @@ where
 async fn serve_static(dist: &Path, req: Request) -> Response {
     let path = req.uri().path().to_owned();
 
+    // **B6**: 未登録の `/api/*` は SPA フォールバック（index.html 200）に落とさず、明示 JSON 404 を返す
+    // （Node `server.ts:339` パリティ）。登録済み API ルートは axum が先にマッチするため、ここへ到達する
+    // `/api/*` は未実装/未登録パスのみ。これを index.html(200) で握り潰すと、フロント `client.ts` が
+    // JSON パース失敗 → `res.ok=true` で「空の成功」に誤変換し、未実装機能が沈黙して壊れる。全メソッド対象。
+    if path.starts_with("/api/") {
+        return api_not_found();
+    }
+
     // ServeDir が実ファイル配信（precompress/MIME/range/traversal 防御）。エラー型は Infallible。
     let serve = ServeDir::new(dist).precompressed_br().precompressed_gzip();
     let served = match serve.oneshot(req).await {
@@ -79,6 +87,18 @@ async fn serve_static(dist: &Path, req: Request) -> Response {
     };
     resp.headers_mut()
         .insert(CACHE_CONTROL, HeaderValue::from_static(cache));
+    resp
+}
+
+/// 未登録 `/api/*` 向けの JSON 404（Node `server.ts` の `{success:false,message:…}` と一致）。
+/// 共通セキュリティヘッダは [`crate::apply_common_layers`] が全応答へ付与する。
+fn api_not_found() -> Response {
+    let mut resp = Response::new(Body::from(
+        r#"{"success":false,"message":"APIエンドポイントが見つかりません。"}"#,
+    ));
+    *resp.status_mut() = StatusCode::NOT_FOUND;
+    resp.headers_mut()
+        .insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
     resp
 }
 
@@ -264,5 +284,26 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(&bytes[..], b"me");
+    }
+
+    #[tokio::test]
+    async fn unregistered_api_path_returns_json_404_not_index_html() {
+        // B6: 未登録 /api/* は index.html(200) ではなく明示 JSON 404 を返す（SPA 握り潰し防止）。
+        let dir = dist();
+        let resp = get_resp(dir.path(), "/api/does-not-exist").await;
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        assert_eq!(
+            resp.headers()
+                .get("content-type")
+                .and_then(|v| v.to_str().ok()),
+            Some("application/json")
+        );
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(text.contains("\"success\":false"), "body={text}");
+        assert!(text.contains("APIエンドポイントが見つかりません"), "body={text}");
+        assert!(!text.contains("SPA-SHELL"), "API 404 が index を返している: {text}");
     }
 }

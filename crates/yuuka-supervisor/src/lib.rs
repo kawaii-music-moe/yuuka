@@ -53,7 +53,8 @@ pub fn build_app(
         None => routes,
     };
     let https = state.config.https;
-    apply_common_layers(routes, https).with_state(state)
+    let allowed_host = state.config.allowed_host.clone();
+    apply_common_layers(routes, https, allowed_host).with_state(state)
 }
 
 #[cfg(test)]
