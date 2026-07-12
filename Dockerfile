@@ -1,117 +1,77 @@
 # syntax=docker/dockerfile:1
 # ==============================================================================
-# Yuuka - マルチステージ Docker ビルド
-#   stage 1 (rust-builder) : Rust 製クローラ yuuka-crawler をビルド
-#   stage 2 (node-builder) : 依存導入 + TypeScript(tsgo) ビルド -> dist/
-#   stage 3 (runtime)      : 本番実行イメージ（system chromium 同梱）
-# 同一イメージを本番(prod)・開発(dev)など複数インスタンスで使い回す。
-# インスタンス固有の差分（ポート/データ/シークレット/設定）は docker-compose 側で注入。
+# Yuuka — 本番スリムイメージ（Rust 直起動・成果物のみ同梱）
+#
+#   stage rust-builder     : Rust workspace の本番バイナリ `yuuka` をビルド（strip + thin-LTO）
+#   stage frontend-builder : Vite で SPA を `dist/public` へビルド
+#   stage runtime          : debian-slim に **バイナリ + SPA のみ**を載せた最小実行イメージ
+#
+# 設計: 出荷物は Rust バイナリ `yuuka` と、それが配信する SPA（`dist/public`）だけ。
+#   Node ランタイム / node_modules / dist/index.js（Node サーバ束）/ chromium / フォント /
+#   yuuka-crawler / yuuka-synapse / デスクトップ exe は Rust 直起動では未使用のため**同梱しない**。
+#   （Rust は外部プロセスを spawn せず、reqwest=rustls で OpenSSL 不要、migration はコンパイル時 embed。
+#    実行時の外部依存は config.yaml と dist/public のみ・ライブ検証済み。）
+#
+# 実行時トポロジ: 本イメージは **Rust 単独**（現行 CMD と同一）。Node strangler（経路A）を併走
+#   させる構成は別途フロント段プロキシが必要（docs/rust-rewrite/remaining-work.md B1 参照）。
+# インスタンス固有値（ポート/データ/シークレット/設定）は docker-compose 側で注入する。
 # ==============================================================================
 
-# ---- stage 1: Rust backend (workspace) ----------------------------------
+# ---- stage: Rust backend（workspace の本番バイナリ 1 本のみ） -----------------
 FROM rust:1-bookworm AS rust-builder
 WORKDIR /build
+# workspace のマニフェストと第一者クレートのみ。crawler/synapse（workspace exclude・未使用）は入れない。
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
-COPY src/rust_crawler ./src/rust_crawler
-COPY src/rust_synapse ./src/rust_synapse
 COPY xtask ./xtask
+# registry と target をキャッシュマウントに載せて再ビルドを高速化する。target はレイヤに残らない
+# ため、同一 RUN 内で成果物を実パス /yuuka へ取り出す（strip 済み・thin-LTO 済み）。
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/build/target \
+    cargo build --release --locked --bin yuuka \
+ && cp target/release/yuuka /yuuka
 
-RUN cargo build --release --bin yuuka --bin yuuka-crawler --bin yuuka-synapse  && cp target/release/yuuka /yuuka  && cp target/release/yuuka-crawler /yuuka-crawler  && cp target/release/yuuka-synapse /yuuka-synapse
-# ---- stage 1b: Desktop client (Windows .exe をクロスコンパイル) --------------
-# Linux 上から x86_64-pc-windows-gnu ターゲットで Windows GUI バイナリを生成する。
-# C/asm 依存（ring 等）と最終リンクに mingw-w64 が必要。成果物はダッシュボードから
-# 配布（/api/desktop/download）。clients/desktop 変更時のみ再ビルドされる（層キャッシュ）。
-FROM rust:1-bookworm AS desktop-builder
-RUN apt-get update \
- && apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64 \
- && rm -rf /var/lib/apt/lists/* \
- && rustup target add x86_64-pc-windows-gnu
-WORKDIR /build/desktop
-COPY clients/desktop/Cargo.toml clients/desktop/Cargo.lock ./
-COPY clients/desktop/src ./src
-# 配布 exe に焼き込む公開 URL（インスタンス別）。config.rs が option_env!("YUUKA_API_BASE")
-# で読む。未指定（空）なら焼き込まずローカル既定 http://127.0.0.1:7854 にフォールバックする。
-# 空文字を env に残すと option_env! が Some("") を返し壊れるため、空なら unset する。
-ARG YUUKA_API_BASE
-# /out は常に作成する。ビルドが失敗してもサーバーイメージのビルドは続行させ
-# （デプロイをブロックしない）、その場合ダッシュボードは「配布ビルド無し」を表示する。
-RUN mkdir -p /out \
- && if [ -z "${YUUKA_API_BASE:-}" ]; then unset YUUKA_API_BASE; else export YUUKA_API_BASE; fi \
- && if cargo build --release --locked --target x86_64-pc-windows-gnu; then \
-      cp target/x86_64-pc-windows-gnu/release/yuuka-desktop.exe /out/yuuka-desktop.exe \
-      && sed -n 's/^version *= *"\(.*\)"/\1/p' Cargo.toml | head -n1 > /out/version.txt; \
-    else \
-      echo "WARNING: desktop client cross-build failed; shipping server without the Windows binary." >&2; \
-    fi
-
-# ---- stage 2: Node / TypeScript build ---------------------------------------
-FROM node:24-bookworm AS node-builder
+# ---- stage: frontend（Vite → dist/public） -----------------------------------
+FROM node:24-bookworm AS frontend-builder
+# puppeteer の chromium ダウンロードを抑止（フロントビルドに不要）。
 ENV PUPPETEER_SKIP_DOWNLOAD=true
 WORKDIR /app
-# ホスト/ロックファイルと同じ pnpm 9 系を使用（pnpm 11 は package.json の pnpm.overrides を
-# 読まず lockfile と不一致になるため固定する）
+# lockfile と同じ pnpm 9 系（pnpm 11 は overrides を読まず lockfile 不一致になる）。
 RUN corepack enable && corepack prepare pnpm@9.15.0 --activate
-# better-sqlite3 等のネイティブモジュールをビルドするためのツールチェーン
+# pnpm-workspace の allowBuilds に better-sqlite3 があり install 時にネイティブビルドが走るため、
+# ビルド段にのみツールチェーンを置く（最終イメージには載らない）。
 RUN apt-get update \
  && apt-get install -y --no-install-recommends python3 make g++ \
  && rm -rf /var/lib/apt/lists/*
-# 依存導入（ロックファイル厳守）
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
-RUN pnpm install --frozen-lockfile
-# ソース・ドキュメント・フロントエンドを取り込み TypeScript(tsgo) + Vite をビルド
+RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
+    pnpm install --frozen-lockfile
+# フロントのみビルド（Node サーバ束 tsgo は不要）。outDir は frontend/vite.config.ts の
+# `../dist/public` に従い /app/dist/public へ出力される。frontend は ../src を import しない。
 COPY tsconfig.json ./
-COPY src ./src
-COPY docs ./docs
 COPY frontend ./frontend
-# ビルド順序は install → tsgo → vite build → prune を厳守（prune=:82 より前で vite build）。
-# prune 後は vite/svelte(devDeps) が消え vite build が失敗するため、必ず prune の前に実行する。
-# vite build の outDir は frontend/vite.config.ts の outDir=../dist/public に従い /app/dist/public へ出力。
-RUN pnpm exec tsgo \
- && pnpm exec vite build --config frontend/vite.config.ts \
- && mkdir -p dist/bin dist/assets \
- && cp -r src/assets/. dist/assets/
-# Rust バイナリを dist/bin へ配置（browserService / synapseEngine が参照）
-COPY --from=rust-builder /yuuka dist/bin/yuuka
-COPY --from=rust-builder /yuuka-crawler dist/bin/yuuka-crawler
-COPY --from=rust-builder /yuuka-synapse dist/bin/yuuka-synapse
-# デスクトップ版 exe を配布ディレクトリへ配置（desktopClientRoutes が参照）。
-# /out は desktop-builder で常に作られる（ビルド失敗時は空＝配布なし扱い）。
-RUN mkdir -p dist/downloads
-COPY --from=desktop-builder /out/ dist/downloads/
-# 本番依存だけに刈り込み（tsx / biome / typescript 等の devDeps を除去）
-RUN pnpm prune --prod
+RUN pnpm exec vite build --config frontend/vite.config.ts
 
-# ---- stage 3: runtime --------------------------------------------------------
-FROM node:24-bookworm-slim AS runtime
-# TZ=Asia/Tokyo: アプリは SQLite の datetime('now','localtime') や new Date()/getHours() など
-# プロセスのローカルTZに依存して時刻を扱う（JST前提）。Debian slim は既定 UTC のため、
-# 未設定だと全時刻が9時間ずれる。tzdata（下の apt-get）と併せて JST に固定する。
-ENV NODE_ENV=production \
-    TZ=Asia/Tokyo \
-    PUPPETEER_SKIP_DOWNLOAD=true \
-    PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
-WORKDIR /app
-# Puppeteer 用 system chromium + 日本語/絵文字フォント + crawler(reqwest) の TLS 依存 + tzdata(JST解決用)
+# ---- stage: runtime（最小実行イメージ） --------------------------------------
+FROM debian:bookworm-slim AS runtime
+# TZ=Asia/Tokyo: Rust は chrono の Local と SQLite datetime('now','localtime') で JST 前提の
+# 壁時計を扱う。slim は既定 UTC のため tzdata と併せ JST に固定する（未設定だと 9 時間ずれる）。
+# YUUKA_RUST_CRON=1: 本イメージは Rust が cron を所有する（Node cron と同時起動しないこと）。
+ENV TZ=Asia/Tokyo \
+    YUUKA_RUST_CRON=1
+# ca-certificates: 上流 HTTPS（Gemini/Discord/Google）用のルート証明書。tzdata: JST 解決用。
+# OpenSSL は使わない（reqwest=rustls）ため libssl3 は入れない。
 RUN apt-get update \
- && apt-get install -y --no-install-recommends \
-      chromium \
-      fonts-noto-cjk fonts-noto-color-emoji \
-      ca-certificates libssl3 \
-      tzdata \
- && rm -rf /var/lib/apt/lists/*
-# アプリ本体（runtime に必要なものだけ builder から取得）
-COPY --from=node-builder /app/node_modules ./node_modules
-# dist は tsgo 出力(dist/index.js)・Vite 出力(dist/public=フロント配信元)・サーバー資産(dist/assets) を一括で拾う
-COPY --from=node-builder /app/dist ./dist
-# src/assets は Vite の /assets/ とは別物のサーバー実行時資産（@napi-rs/canvas 等）。常に残す（不可侵）
-# （P5 完了: 旧 vanilla の src/public は撤去。フロントは dist/public 一本化。ロールバックは deploy rollback）
-COPY --from=node-builder /app/src/assets ./src/assets
-COPY --from=node-builder /app/docs ./docs
-COPY package.json ./
-# data/ は外部マウント、scratch/ はバックアップ一時作業用。node ユーザ(uid 1000)で書込可能に。
-RUN mkdir -p /app/data /app/scratch && chown -R node:node /app
-USER node
+ && apt-get install -y --no-install-recommends ca-certificates tzdata \
+ && rm -rf /var/lib/apt/lists/* \
+ && groupadd -g 1000 yuuka \
+ && useradd -u 1000 -g 1000 -m -s /usr/sbin/nologin yuuka
+WORKDIR /app
+# 成果物のみ: Rust バイナリ + それが配信する SPA。config.yaml と data/ は compose がマウントする。
+COPY --from=rust-builder /yuuka ./yuuka
+COPY --from=frontend-builder /app/dist/public ./dist/public
+# data/ は外部マウント点。所有を非 root（uid 1000・compose の PUID 既定と一致）へ。
+RUN mkdir -p /app/data && chown -R yuuka:yuuka /app
+USER yuuka
 EXPOSE 7854
-ENV YUUKA_RUST_CRON=1
-CMD ["./dist/bin/yuuka"]
+CMD ["./yuuka"]

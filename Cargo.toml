@@ -51,8 +51,16 @@ publish = false           # 第一者クレートは crates.io へ公開しな�
 # ── 自己復帰の前提: パニックは unwind（abort にしない） ──
 # tokio がタスク境界でパニックを隔離できるのは unwind のときだけ。
 # 検証: docs/rust-rewrite/verification/rpt-resilience-tokio-backon-recloser.md §1
+#
+# ── 本番バイナリのスリム化 ──
+# strip: デバッグ/シンボル情報を除去（サイズの大半＝本番配布物に不要）。バックトレースは
+#   tracing の error ログ + panic=unwind の隔離で運用するため line-table 無しでも支障なし。
+# lto="thin": クロスクレート最適化でサイズ削減 + 実行時性能向上（"fat" より高速ビルド）。
+# panic="unwind" は自己復帰の前提のため abort に変えない（サイズより堅牢性を優先）。
 [profile.release]
 panic = "unwind"
+strip = true
+lto = "thin"
 [profile.dev]
 panic = "unwind"
 

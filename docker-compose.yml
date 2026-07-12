@@ -18,15 +18,10 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-      args:
-        # 配布 Windows exe に焼き込む公開 URL（instance.env から注入）。
-        # 未設定なら空＝Dockerfile 側でローカル既定にフォールバックする。
-        YUUKA_API_BASE: "${YUUKA_API_BASE:-}"
     restart: unless-stopped
     init: true
     user: "${PUID:-1000}:${PGID:-1000}"
     environment:
-      - NODE_ENV=production
       # pass-through（compose の変数展開を回避し literal で渡す）
       - YUUKA_ENCRYPTION_SECRET
       - YUUKA_ENCRYPTION_SECRET_NEW

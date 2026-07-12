@@ -7,7 +7,7 @@
 ## 構成
 
 ```
-Dockerfile              マルチステージ（rust crawler → tsgo build → system-chromium 同梱 runtime）
+Dockerfile              本番スリム（rust-builder → frontend-builder → debian-slim runtime。成果物=Rust バイナリ + SPA のみ・Node/chromium/node_modules 非同梱）
 docker-compose.yml      パラメータ化された app + redis（インスタンス専用 redis を同梱）
 deploy/
   instance.sh           インスタンス操作ヘルパー
@@ -72,7 +72,7 @@ deploy/instance.sh dev  up -d          # 開発インスタンス（ホスト :7
 
 ## 移行期（Rust 直起動）の運用注意 — カットオーバー必読
 
-Phase 5 で `Dockerfile` の CMD は Rust バイナリ単独（`./dist/bin/yuuka`）に切替済み。以下は
+本番イメージは Rust バイナリ単独（CMD `./yuuka`・スリム化で `dist/bin/` 配下ではなく `/app/yuuka`）。以下は
 Node/systemd 運用から Rust 直起動へ移す際、**データ喪失・二重 writer を避けるための必須事項**
 （詳細は `docs/rust-rewrite/remaining-work.md` P0-2/P0-4）。
 
