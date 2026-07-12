@@ -194,7 +194,7 @@
 - [x] **P3-4 README 冒頭の古い記述を修正** — 済（[README.md](README.md) の「実装はまだ開始していない」を Phase 0〜5 着地の現況＋remaining-work.md 参照に更新）。
 - [x] **P3-5 `/api/me` の DB 再取得 + 404 分岐** — 済（`yuuka-web/src/routes.rs`：セッション解決後に `SELECT username, role FROM users WHERE discord_id` を read pool で再取得し、消失時 404 `{success:false,message:"ユーザーが見つかりません。"}`＝Node parity。role は DB 権威。テスト `me_returns_404_when_user_deleted_from_db` 追加・既存 200 テストは users 行を seed）。
 - [ ] **P3-6 index.html への google-site-verification meta 注入**（deferred・`static_files.rs`）。
-- [ ] **P3-7 Docker イメージのスリム化**（Node ランタイム / node_modules / dist/index.js / chromium は Rust 直起動では未使用。ハイブリッドで肥大。frontend ビルドのみ Node 段が必要）。
+- [x] **P3-7 Docker イメージのスリム化** — 済（2026-07-12）。`[profile.release]` に strip+thin-LTO（バイナリ 311MB→**24MB**）。`Dockerfile` を全面刷新し runtime=debian-slim に **yuuka バイナリ + `dist/public` のみ**同梱（Node/node_modules/chromium/フォント/dist/index.js/crawler/synapse/desktop.exe/docs 非同梱）。ビルド段は rust(yuuka のみ)+frontend(vite のみ)。**イメージ 59MB**・docker build/run で疎通確認済み。frontend ビルドのみ Node 段（vite）が必要なのは不変。
 - [ ] **P3-8 LOW 群**（`reminders/delete` 撤去の是非・float priority 受理幅ドキュメント化・repo docstring stale 等）。
 
 ---
