@@ -47,7 +47,7 @@
 
 ## 残作業ロードマップ
 
-- **[remaining-work.md](remaining-work.md)** — **本番投入までの ToDo 全集**（2026-07-09 調査の実測に基づく）。判定=「ほぼ本番」は未到達（否）／機械ゲート（build/clippy/test238 緑・deny は補助クレートのみ赤）／被覆率（Web ~18%・ツール ~28%・WS 0%）／P0 データ安全〜P3 衛生の優先度別チェックリスト／strangler カナリアと単独本番の 2 経路。
+- **[remaining-work.md](remaining-work.md)** — **本番投入までの ToDo 全集**（2026-07-14 実測に更新）。判定=経路 A（strangler カナリア）= GO・経路 B（単独ほぼ本番）は no-go／機械ゲート全緑（build/clippy -D/**test 386**/deny exit 0）／被覆率（Web ~37% [57/152]・ツール ~28% [24/87]・WS `/ws/chat` 実装済）／P0 データ安全〜P3 衛生の優先度別チェックリスト／strangler カナリアと単独本番の 2 経路。
 
 ## 実装レビュー
 

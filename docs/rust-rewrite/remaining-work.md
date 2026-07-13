@@ -1,8 +1,8 @@
 # Rust 移行 — 残作業ロードマップ（本番投入までの ToDo 全集）
 
-- 最終更新: 2026-07-12（**本番投入準備セッション**: 監査確定ブロッカー B5/B6/B4/N2 を修正 + Web API 面の敵対的セキュリティレビュー確定指摘を反映。全ゲート緑・**test 330**）
-- 対象ブランチ: `feature/rust-rewrite`（未 push）
-- git HEAD: 本セッションの P1-3 コミット群（前セッション `e909237` の続き）
+- 最終更新: 2026-07-14（**実装/ドキュメント整合セッション**: `b77506d`（P2 ドメイン Web-API 21 エンドポイント）を全ドキュメントへ反映。実測で全ゲート再検証 — build ✅ / clippy -D ✅ / **test 386** ✅ / deny exit0 ✅ / git 作業ツリー clean）
+- 対象ブランチ: `feature/rust-rewrite`（未 push・HEAD=`b77506d`）
+- git HEAD: `b77506d`（P2 ドメイン Web-API 拡張）
 - 前提資料: [review-2026-07-06-fix-policy.md](review-2026-07-06-fix-policy.md)（修正方針の唯一の基準）・[review-2026-07-09-batch4-6.md](review-2026-07-09-batch4-6.md)・[PLAN.md](PLAN.md) §11（移行ロードマップ）
 - **本セッション（2026-07-09e）の成果**: **P1-3 Discord live 化**を実装 — twilight 転送層（既存・不活性）を**起動配線**した。(1) 注入ポートの**本番 DB 実装**を新設（`yuuka-orchestrator`）: `DbBotDirectory`（Node `botRepo`/`botAttributesRepo`/`userRepo` パリティ・Bot メタ/list/共有アクセス/トークン復号[`SystemCrypto`]/メンバー・許可ロール・登録判定）・`DbMembership`（申請 submit/decide=承認で `bot_members` 追加・共有 accept/revoke・公開ペルソナ import・全て writer actor 単一 Tx）・`InMemoryRateLimiter`（Node `botRateLimit` 固定窓 5/分・100/日・1000/ギルド日・`system_settings` 上書き）。(2) **汎用モード**（`ChatEngine::process_guild`/`process_bot_dm`）実装 — Bot 専用 Gemini キー（`getBotGenAI` パリティ・`BOT_DEFAULT_MODEL`）・ギルド/DM 分離コンテキスト（`[名前]:` プレフィックス・guild 30 件/DM 15 件）・Bot 単位ペルソナ + 共有/個人ノートの `buildGuildSystemInstruction` 移植・FC ループ。(3) **`main.rs` 配線** — `DiscordManager::new(ports + processor=ChatEngine)` → `prepare()` で共有 `Messenger` 生成、各 `TenantRunner` を `DiscordTenantService` で **Supervisor 監督下**（panic 隔離 + 指数バックオフ・恒久クローズは非再起動）へ。ゲートウェイ起動は **`YUUKA_RUST_DISCORD` env ゲート**（既定 off＝二重 gateway/二重応答の回避・`YUUKA_RUST_CRON` と同思想）。**P1-4**: cron の `NullNotifier` を `Messenger`（`impl services::Notifier`）へ差し替え＝リマインド等が実 Discord へ配信可能に。**P1-1 残**: 登録コード DM を `MessengerRegistrationDm`（合成ルートアダプタ）で `Messenger` 経由に配線＝`/api/register` が実際に DM を送る。機械ゲート全緑（build/release/clippy-D/deny/**test 303**・+15: ポート DB 実装 7・汎用モード 3・guild prompt 2・build_contents 回帰 3）。
 - **本セッション（2026-07-10）の成果**: **P1-3 未コミット diff の parity レビュー**（7 次元並列 + 各指摘を敵対的検証 = confirmed 14）を通し、確定 6 件を修正した。**(H) build_contents 二重ユーザーターン** — persist-before-load で履歴末尾に既にある発言を `build_contents` が再追加していた（Node `buildContentsFromHistory` は空履歴のときだけ `message.text` を積む）。修正: 空履歴のみ lone user turn・非空は添付のみ末尾 user content へ合流。**(H) notifier の DM フォールバック欠落** — `DiscordMessenger::send_to_user` が Channel 解決失敗で即 `false`（cron 経路は deliver_final を通らないため fallback 不能＝リマインダー永久リトライ）。修正: Channel 解決不能時に DM へフォールバック（Node `sendToUser` notifier.ts:130-142）。**(M) owner DM の context floor** — DM が秘書 floor を流用していた。修正: `recent_bot_dm_context`（floor `context_floor:{botId}:dm:{userId}`・Node `getBotDmContext`）を新設し DM 分岐で使用。**(M) レート制限の日窓** — `:d` 固定キー + 25h TTL の転がり窓だった。修正: `todaySuffix`（ローカル暦日 `YYYYMMDD`）を日キーへ付与し暦日境界でリセット。**(L) describe_incoming の trim**（空白のみを添付プレースホルダへ）・**(L) レート上限設定の parseInt 寛容パース**（先頭数字のみ解釈）。**defer（doc 化済み）**: 利用申請/決定の owner・applicant DM 未送（明示的な縮退シーム＝`DbMembership` への messenger 注入待ち・§P2-A）／`has_gemini_key` は presence 判定で Node `getBotGenAI` の復号検証より弱い（低・むしろ復号エラーを表面化＝ops 良）／汎用モードの LLM エラー文言（rate-limit/server-error 別の ⚠️ ＝`guildErrorResult` 相当）は未分類（低・`TurnError` へ分類貫通が必要）。
@@ -10,6 +10,7 @@
 - **本セッション（2026-07-10c）の成果**: **フォールバック関連の横断精査**（Discord 配信/会話エンジン/インフラの 3 クラスタ・約 25 箇所を Node と突き合わせ）。**修正 2 件**: (H) `NO_KEY_MESSAGE`（⚠️ Gemini キー未設定）を Rust だけが `message_logs` に assistant 保存していた — Node `processMessage` の catch は `saveAssistant` を通らず返すだけ＝⚠️ 定型応答は履歴非保存が正（保存すると以後の文脈ウィンドウを警告文で汚染）。除去 + 非保存を回帰 assert で固定。(M) `/ws/chat` の添付上限が Rust ハードコード 20MB — config `DESKTOP_MAX_UPLOAD_MB`（Node `desktopMaxUploadMb`）を core `Config` に追加し `ws_routes` へ貫通、too_large 文言も Node の上限値入り文面に一致。**精査で反証**: settings 空白のみ値の扱い（両者 `" "` 採用＝一致）・context floor パース失敗→0（一致）・レート上限 parseInt（一致）・deliver_final の DM 再送は全文再送で二重配信なし（一致）・SPA fallback は API を食わない（一致）。**意図的 divergence として明文化**: resolve_client/send_owner_dm の readiness 非ゲート（twilight REST は gateway 非依存＝Node が拒否するケースでも配信できる・改善側）／`or_default` の安全側 deny（Node は DB 例外→エラー返信・WAL 読取は BUSY 稀のため頑健性優先）／セッション 502（M-1 レビュー済み契約・Node は 401→再ログイン自己回復）／config fail-fast（Node は NaN 黙殺・Rust は起動拒否＝安全側）。**既知の未移植**: Node `fallbackText` の browser 分岐（browser ツール未移植のため到達不能・P2-B と同時に移植）。機械ゲート全緑（**test 310**・clippy-D/deny exit 0）。
 - **本セッション（2026-07-10d）の成果**: **ペルソナ入りエラー応答**（ユーザー要望による Node からの意図的拡張）。ターン失敗を内部で `TurnFailure::{Llm, NonLlm}` に分類し、**非 LLM エラー（DB 障害等＝LLM は生きている）では固定の GENERIC_ERROR をやめ、LLM にペルソナ口調のエラー報告（1〜3 文・技術用語なし）を生成させて返す**。秘書経路＝ユーザーキー + アクティブペルソナ（無ければ `DEFAULT_PERSONA`）、汎用モード＝Bot 専用キー + Bot ペルソナ。生成はツール無し単発・履歴非保存（⚠️ 定型と同じ扱い）。**フォールバック連鎖**: ペルソナ生成→（生成不能: キー無し/復号不能/生成失敗）→従来の固定文。**LLM 関連エラー（レート/サーバー/鍵復号不能/backend 構築失敗/上流未分類）は従来どおり固定文**（LLM を呼べない/信頼できないため）。回帰テスト 3 件（秘書ペルソナ応答・キー無しフォールバック・汎用モード Bot ペルソナ応答）。機械ゲート全緑（**test 313**・clippy-D/deny exit 0）。
 - **本セッション（2026-07-12）の成果**: **Web/LLM-API 面の本番投入準備**。cargo 全ゲート緑（build/clippy -D/deny exit0/**test 330**・+17）+ 実バイナリのライブ疎通（N2/B5/B6/CSRF）を確認したうえで、2026-07-12 監査の確定ブロッカー4件と、Web API 面の**敵対的セキュリティレビュー**（5次元×各指摘を独立検証＝29エージェント/23指摘/確定15・判定=**canary go**）の確定 low 指摘を修正した。**確定ブロッカー4件**: (B5) `/ws/chat` の CSWSH 退行＝汎用 `AuthenticatedUser`（Cookie 優先）が WS upgrade の ambient Cookie を受理していた → **Bearer 専用 `BearerUser` extractor** を新設し Bearer 限定化（Node `getBearerUser` パリティ・構造的 CSWSH 不能・回帰テスト追加）。(B6) 未登録 `/api/*` GET が SPA index.html(200) で握り潰し → `static_files.rs` に **全メソッド `/api/*`→JSON 404**（`{success:false,message:"APIエンドポイントが見つかりません。"}`・Node `server.ts:339`）。(B4) reminder `trigger_at` の字句比較バグ＝`T` 区切り ISO を生保存 → cron の空白区切り `datetime('now','localtime')` と字句比較で当日発火が翌日まで遅延 → `datetime::to_db_datetime`（Node `toDbDateTime` パリティ・`Z`/オフセット/小数秒/日付のみ対応）を新設し repo 境界正規化 + tool/**web route 双方で入力検証**。(N2) 暗号鍵未設定でも起動継続（Rust 固有退行）→ main.rs に `require_encryption_secret`（未設定/32 文字未満は起動拒否・Node `index.ts` §6.2）。**セキュリティレビュー確定 low 指摘**: (#1) CSRF 信頼アンカーがクライアント供給 `Host` だった → **`config.base_url` 由来の `allowed_host` allowlist** へ（Node `isAllowedHost`・Host 注入耐性・`WebConfig` へ貫通）。(#2) `Sec-Fetch-Site` が `cross-site` 以外を無検証許可 → `cross-site` のみ即拒否・他値は Origin allowlist へ委譲（`same-site` 兄弟サブドメイン対策）。(#3) 空 `Bearer ` が CSRF 免除される潜在バイパス → `has_bearer` を非空トークン必須に。(#4) `ScopedJson` の serde エラー文言（型/フィールド名）露出 → 固定文言化。**確定したが本セッション未対応（低・own-user/fail-closed・doc 済）**: (#5) reminder 過去日時の拒否/繰り返し自動前進の未移植（cron next は上位 crate 依存・P3-3 M-9 の残）／(#7) 不完全添付でフレーム全体を internal error（fail-closed の意図的厳格）。レビューが**反証/refuted した非問題**（対応不要）: WS Bearer 専用化の完全性・botId IDOR 防止・WS エラー/秘密の非漏洩・接続タスク panic 隔離・CSP/セキュリティヘッダ・error→status の内部 Display 秘匿・9 ドメインの認可/multi-tenant スコープ厳密性。**判定: 経路A（strangler カナリア・単一 vhost HTTPS）= GO**（critical/high/medium ゼロ）。経路B no-go は不変（routes 22%/tools 27%）。
+- **本セッション（2026-07-13）の成果**: **P2 ドメイン Web-API 拡張**（`b77506d`・5 ドメインクレートに Node parity の新規 HTTP エンドポイント + DB 層 + DTO + テストを 21 エンドポイント追加。**test 330→386**・全緑 / clippy -D 緑 / build 緑・新規依存なし＝deny 緑不変）。全リポメソッドは `WHERE user_id=? AND bot_id=?` でスコープ束縛・全クエリ `params!` でパラメータ化・DTO は `user_id`/`bot_id` 非露出のクリーンビュー。**(finance)** 予算上限（`/api/expenses/budget-limits` GET/POST・`/delete`）+ 支払い予定の消込（`/plans` GET/`/add`/`/pay`/`/delete`）。`settle_plan` は Expense 記録・予定 settled・紐付き ToDo 自動 done を単一 Tx で実行。**(personal)** コンテキストノート（`/api/context-note` GET/POST・upsert）+ クリップボード（`/api/clipboard` GET・`/delete`・期限切れ自動除外）。**(playbook)** スケジュール（`/api/playbooks/schedules` GET/`/save`/`/toggle`/`/delete`）+ 実行履歴（`/runs` GET）。**(timeline)** 計画ブロック CRUD（`/api/timeline/plan` add/`/update`/`/delete`・day に blocks 同梱）。`UpdatePlanBlock` は `Option<Option<T>>` で Node の `"key" in obj` 意味論を再現。**(todo)** gantt/someday/detail GET + update/progress POST。子孫は再帰 CTE でスコープ束縛収集。`PriorityUpdate` は 3 値（据置/クリア/設定）で Node parity。**意図的な縮退シーム（本セッションで新設・下記 P2-A/C に反映済み）**: (1) **playbook スケジューラは未起動** — schedules/runs は永続化されるが、cron 式検証（croner がクレート依存に無い）と実行エンジン（`executePlaybook`）は deferred。**設定を保存してもマクロは自動実行されない**（reminder と同方針・別タスク）。(2) **finance** — receipt OCR（`upload-receipt`）と月次集計（total/breakdown/trend）は deferred。(3) **timeline** — media 保存/配信・`type=expense`/`type=task_done` の cross-domain 副作用は deferred。(4) **personal** — クリップボードの追加（`addEntry`）と TTL 一括削除 cron（`deleteExpired`）は deferred（誕生日リマインド cron は移植済み）。
 - **前セッション（2026-07-09d）の成果**: **P1-1 資格情報認証発行**（`SessionStore` 発行+検証・7 ルート・bcrypt `$2b$` cost12・招待/監査/レート制限）+ **P1-2 会話**（`yuuka-orchestrator`・`/ws/chat`）。
 - **前々セッション（2026-07-09c）の成果**: P0-1〜4・P1-5（暗号層）・P1-6/7・P1-4 アダプタ・P3-4/5。
 
@@ -23,11 +24,11 @@
 |---|---|
 | `cargo build --release --workspace` | ✅ exit 0 |
 | `cargo clippy --workspace --all-targets` | ✅ exit 0（ts-rs 良性 warning のみ） |
-| `cargo test --workspace` | ✅ **330 passed / 0 failed**（2026-07-12 の B5/B6/B4/N2 + CSRF ハードニングで +17） |
+| `cargo test --workspace` | ✅ **386 passed / 0 failed**（2026-07-13 の P2 ドメイン Web-API で +56・2026-07-14 実測で再確認） |
 | `cargo deny check` | ✅ **exit 0**（新規依存なし＝既存クレートのみで実装） |
 | 保存時暗号層（Argon2id/AES-256-GCM） | ✅ **実装済**（P1-5・Node ゴールデンベクタでバイト単位パリティ・鍵ローテ起動時配線） |
 | 認証発行（login/setup/logout/register/users） | ✅ **実装済**（P1-1・セッション発行 + bcrypt + 招待 + 監査 + レート制限。**登録 DM は P1-3 で開通**・OAuth は残） |
-| HTTP ルート被覆 | 34 / 152 パス ≒ **22%**（`/api/me` + 認証 7 ルート） |
+| HTTP ルート被覆 | 57 / 152 パス ≒ **37%**（認証 7 + `/api/me` + 9 ドメイン CRUD。2026-07-13 の P2 で todo/finance/timeline/personal/playbook を拡張） |
 | Gemini ツール被覆 | 24 / 87 native ≒ **28%**（動的 MCP 0） |
 | チャットオーケストレーション（秘書ターン） | ✅ **実装済**（P1-2・`yuuka-orchestrator`・実 TurnProcessor・統合テスト緑） |
 | 汎用モード（guild/owner DM ターン） | ✅ **実装済**（P1-3・`process_guild`/`process_bot_dm`・Bot 専用キー + ギルド/DM 分離文脈・統合テスト緑。能力ゲート=全ツール露出は P2-B） |
@@ -126,7 +127,9 @@
 
 ## P2 — 機能パリティ（Node にあって Rust に無い）
 
-### P2-A Web ルート（27/152 → 埋める）
+### P2-A Web ルート（57/152 → 埋める）
+
+> 2026-07-13（`b77506d`）で 9 ドメイン CRUD のうち todo/finance/timeline/personal/playbook を拡張済み（下記ドメイン別を参照）。以下の管理・設定・Bot・MCP 系は未着手。
 
 - [ ] 管理系 `/api/admin/*`（users/bots/invite-codes/stats/audit-logs/system-settings 等 ~13）— Node `adminRoutes.ts`
 - [ ] 設定系 `/api/settings/*`（profile/password/gemini/discord/google OAuth/backup/delete-account 等 ~12）— `settingsRoutes.ts`
@@ -140,16 +143,18 @@
 - [ ] Member requests `/api/bots/member-requests*` — `memberRequestRoutes.ts`
 - [ ] Persona marketplace `/api/personas/marketplace*` `/activate` `/import` `/publish` `/admin/personas/*`（現状 save/delete/list のみ）
 - [ ] `/api/status`（ヘルスチェック）・`/api/setup/status`（コメントで「後続」と言及したまま未配線）
-- [ ] ドメイン別の残ルート:
-  - [ ] todo（4/9）: detail / gantt / progress / someday / update
-  - [ ] finance（2/9）: budget-limits / plans/* / upload-receipt
-  - [ ] timeline（3/8）: media 配信 / plan/*
-  - [ ] personal（3/6）: clipboard / context-note
+- [~] ドメイン別の残ルート（2026-07-13 `b77506d` で todo/finance/timeline/personal/playbook を拡張）:
+  - [x] todo（9/9）: detail / gantt / progress / someday / update を追加（子孫は再帰 CTE でスコープ収集・`PriorityUpdate` 3 値 parity）
+  - [~] finance（7/9）: budget-limits / plans/* を追加。**残**: upload-receipt（receipt OCR）/ 月次集計 total・breakdown・trend（deferred）
+  - [~] timeline（7/8）: plan/*（add/update/delete）を追加。**残**: media 保存/配信・`type=expense`/`type=task_done` の cross-domain 副作用（deferred）
+  - [~] personal（5/6）: clipboard（GET/delete）/ context-note を追加。**残**: クリップボード追加（addEntry）・TTL 一括削除 cron（deleteExpired）（deferred）
   - [ ] credential（2/3）: register（作成 = P1-5 暗号層に依存）
-  - [ ] playbook（3/8）: runs / schedules/*
+  - [~] playbook（7/8）: runs / schedules/* を追加。**残**: cron 式検証 + 実行エンジン（`executePlaybook`・croner 依存）＝**設定は永続化されるがスケジューラ未起動**（P2-C playbook-schedule と一体・下記参照）
   - （schedule 3/3・reminder は完了）
 
 ### P2-B Gemini ツール（24/87 → 埋める）
+
+> **注意**: 2026-07-13（`b77506d`）は **Web ルート（P2-A）のみ**を拡張し、Gemini ツール（LLM が function-calling で呼ぶ側）は未追加。よって finance budget-limits/timeline plan/todo detail 等は **ダッシュボードからは操作できるが LLM からはまだ呼べない**。以下は据え置き（24/87）。
 
 - [ ] todo: 11 本（addSubtask/updateTodo/updateTaskProgress/editTodoTags/listTasksByTag/listTodoTags/getTaskDetail/getTaskUsageGuide/applyTaskPriorities/stopTodoRoutine/getRecentActionHistory）
 - [ ] finance: ~16 本（getMonthlySummary/getCategoryBreakdown/budget limits/planned payments 一式/findSettlementCandidates 等）
@@ -169,7 +174,7 @@
 - [ ] report（日報/週報）— 予約シーム no-op（Gemini aux-gen + charts 依存）
 - [ ] briefing（朝報/天気/RSS）— 予約シーム no-op（weather/RSS HTTP + SSRF ガード依存）
 - [ ] backup（Google Drive）— 予約シーム no-op。**自動バックアップが走らない**（per-user Drive OAuth 依存）。実データを扱うなら要注意。
-- [ ] playbook-schedule（マクロ自動実行）— 予約シーム no-op（Gemini processMessage 依存）
+- [ ] playbook-schedule（マクロ自動実行）— 予約シーム no-op（Gemini processMessage 依存）。**2026-07-13（`b77506d`）でスケジュール/実行履歴の CRUD API + 永続化は実装したが、cron 式検証（croner 依存）と実行エンジン（`executePlaybook`）は未移植＝設定は保存されるがマクロは自動実行されない**（reminder と同方針の縮退シーム・要注意）。
 - [ ] synapse engine（認知想起）— **予約シームですらなく完全欠落**（Node は外部 Rust synapse daemon を spawn）。Phase H の daemon 吸収で対応。
 
 ### P2-D 設定キーの取り込み
