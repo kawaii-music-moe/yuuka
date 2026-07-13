@@ -18,6 +18,9 @@ pub struct WebConfig {
     /// XFF 信頼判定に使う信頼プロキシ（レート制限のクライアント IP 解決・Node `getClientIp`）。
     /// 直前 peer がこのリストに含まれるときのみ `X-Forwarded-For` を信頼する。
     pub trusted_proxies: Vec<std::net::IpAddr>,
+    /// タイムライン メディアの保存ディレクトリ（Node `MEDIA_DIR = cwd/data/media`）。
+    /// `from_core` は `data/media`（cwd 相対）を設定する。`Default` は空（媒体経路を使わないテスト用）。
+    pub media_dir: std::path::PathBuf,
 }
 
 impl WebConfig {
@@ -30,6 +33,7 @@ impl WebConfig {
             https: cfg.is_https_deployment(),
             allowed_host: crate::csrf::allowed_host_from_base_url(cfg.base_url.as_deref()),
             trusted_proxies: cfg.trusted_proxies.clone(),
+            media_dir: std::path::PathBuf::from("data/media"),
         }
     }
 }

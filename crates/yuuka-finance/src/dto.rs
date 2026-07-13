@@ -48,14 +48,46 @@ pub struct NewExpense {
     pub r#type: Option<String>,
 }
 
-/// `GET /api/expenses` のペイロード（`Envelope<ExpenseListData>` = `{success, expenses}`）。
+/// カテゴリ別集計の1件（Node `CategoryTotal` = `{category, total, count}`）。
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export_to = "generated/")]
+pub struct CategoryTotal {
+    pub category: String,
+    /// カテゴリ合計金額（円・整数）。
+    pub total: i64,
+    /// 該当カテゴリの件数。
+    pub count: i64,
+}
+
+/// 月次推移の1点（Node `MonthlyTrendPoint` = `{month, income, expense}`）。
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export_to = "generated/")]
+pub struct MonthlyTrendPoint {
+    /// `'YYYY-MM'`。
+    pub month: String,
+    pub income: i64,
+    pub expense: i64,
+}
+
+/// `GET /api/expenses` のペイロード（`{success, expenses, total, incomeTotal, breakdown, trend}`）。
 ///
-/// Node は同エンドポイントで total/incomeTotal/breakdown/trend も返すが、
-/// 集計系は deferred（コア CRUD 縦スライスに限定）。
+/// Node `financeRoutes.ts` GET `/api/expenses` と同形: 直近収支一覧に加え、指定月
+/// （既定は当月・`?year=&month=`）の支出合計 `total`・収入合計 `incomeTotal`・カテゴリ別内訳
+/// `breakdown`・過去 6 ヶ月の推移 `trend` を返す。フロント（`BotExpenses.svelte`）は
+/// `total ?? 0` 等で読むため、欠落すると HUD が黙って 0/空表示になる（silent 縮退の解消）。
 #[derive(Debug, Clone, Serialize, TS)]
 #[ts(export_to = "generated/")]
 pub struct ExpenseListData {
     pub expenses: Vec<Expense>,
+    /// 指定月の支出合計（円）。
+    pub total: i64,
+    /// 指定月の収入合計（円）。
+    #[serde(rename = "incomeTotal")]
+    pub income_total: i64,
+    /// 指定月のカテゴリ別内訳（金額降順）。
+    pub breakdown: Vec<CategoryTotal>,
+    /// 過去 6 ヶ月の収支推移（古い順・記録無し月は 0 埋めで常に 6 件）。
+    pub trend: Vec<MonthlyTrendPoint>,
 }
 
 /// 単一収支を返すペイロード（add。`{success, expense}`）。

@@ -18,6 +18,9 @@ serde.workspace = true
 serde_json.workspace = true
 ts-rs.workspace = true
 async-trait.workspace = true
+tokio.workspace = true                    # メディアの非同期ファイル入出力（保存/配信）
+base64.workspace = true                   # メディア base64 アップロードのデコード
+getrandom.workspace = true                # メディアファイル名 suffix の CSPRNG（推測不能化）
 
 [dev-dependencies]
 tokio.workspace = true

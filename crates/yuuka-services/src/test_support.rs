@@ -9,6 +9,7 @@ use yuuka_web::Db;
 use crate::context::ServiceContext;
 use crate::metrics::MetricsRegistry;
 use crate::notifier::{Notification, Notifier, NullNotifier};
+use crate::turn::{NullPlaybookRunner, PlaybookRunner};
 
 static SEQ: AtomicU64 = AtomicU64::new(0);
 
@@ -28,12 +29,31 @@ pub fn seeded_db(ddl: &str) -> (Db, tempfile::TempDir) {
 
 /// `NullNotifier`（配信不可＝false）付きコンテキスト。
 pub fn ctx_null(db: Db) -> ServiceContext {
-    ServiceContext::new(db, Arc::new(NullNotifier), Arc::new(MetricsRegistry::new()))
+    ServiceContext::new(
+        db,
+        Arc::new(NullNotifier),
+        Arc::new(MetricsRegistry::new()),
+        Arc::new(NullPlaybookRunner),
+    )
 }
 
 /// 任意の notifier 付きコンテキスト。
 pub fn ctx_with(db: Db, notifier: Arc<dyn Notifier>) -> ServiceContext {
-    ServiceContext::new(db, notifier, Arc::new(MetricsRegistry::new()))
+    ServiceContext::new(
+        db,
+        notifier,
+        Arc::new(MetricsRegistry::new()),
+        Arc::new(NullPlaybookRunner),
+    )
+}
+
+/// 任意の notifier + playbook runner 付きコンテキスト（playbook スケジュールのテスト用）。
+pub fn ctx_full(
+    db: Db,
+    notifier: Arc<dyn Notifier>,
+    playbook_runner: Arc<dyn PlaybookRunner>,
+) -> ServiceContext {
+    ServiceContext::new(db, notifier, Arc::new(MetricsRegistry::new()), playbook_runner)
 }
 
 /// 送信を記録するテスト用 notifier（`succeed` で成功/失敗を切り替える）。

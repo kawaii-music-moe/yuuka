@@ -11,6 +11,7 @@ use yuuka_web::Db;
 
 use crate::metrics::MetricsRegistry;
 use crate::notifier::Notifier;
+use crate::turn::PlaybookRunner;
 
 /// サービス実行時の依存一式。
 #[derive(Clone)]
@@ -21,6 +22,8 @@ pub struct ServiceContext {
     pub notifier: Arc<dyn Notifier>,
     /// 軽量メトリクスレジストリ（定期ログサービスが snapshot を出す）。
     pub metrics: Arc<MetricsRegistry>,
+    /// マクロ定期実行の秘書ターン起動ポート（未配線時は [`crate::turn::NullPlaybookRunner`]）。
+    pub playbook_runner: Arc<dyn PlaybookRunner>,
     /// 横断（全ユーザー跨ぎ）アクセス証憑。cron の起点はここに限定される。
     pub cross: CrossUserAccess,
 }
@@ -28,11 +31,17 @@ pub struct ServiceContext {
 impl ServiceContext {
     /// 依存を束ねてコンテキストを作る（横断証憑はここで発行＝cron 起点）。
     #[must_use]
-    pub fn new(db: Db, notifier: Arc<dyn Notifier>, metrics: Arc<MetricsRegistry>) -> Self {
+    pub fn new(
+        db: Db,
+        notifier: Arc<dyn Notifier>,
+        metrics: Arc<MetricsRegistry>,
+        playbook_runner: Arc<dyn PlaybookRunner>,
+    ) -> Self {
         Self {
             db,
             notifier,
             metrics,
+            playbook_runner,
             cross: CrossUserAccess::for_scheduled_task(),
         }
     }

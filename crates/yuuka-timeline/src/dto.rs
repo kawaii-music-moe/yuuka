@@ -50,9 +50,11 @@ pub struct TimelineRecord {
 /// キーは `category` であって `expenseCategory` ではない）。入力 DTO から除去し、直接指定を
 /// 素通し INSERT しない。
 ///
-/// 参照スコープ = プレーン記録（memo/task_done/location 等）。`amount` は Node が body から読む
-/// （`Number(b.amount)`）ため残置する。**`type=expense` の expenses 二重登録・`amount` 必須検証・
-/// `category` キー処理は deferred（Batch 6 / M-8）**。`type=task_done` の todos.complete 連携も deferred。
+/// 参照スコープ = プレーン記録（memo/location 等）に加え、cross-domain 副作用:
+/// **`type=expense`** は `expenses` へ二次登録し `expense_id` を連結（route/tool とも `amount` 必須・
+/// `category` は Node `b.category ?? "その他"`）、**`type=task_done`** は `todo_id` 指定時に
+/// 紐付き todos を `done` に更新する（Node `completeTodo`）。内部列 `expense_id`/`expense_category`/
+/// `media_path`/`media_type` は依然どのエンドポイントでも body から読まない（M-8・サーバ内部が設定）。
 #[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "generated/")]
@@ -69,6 +71,9 @@ pub struct NewTimelineRecord {
     pub todo_id: Option<i64>,
     #[serde(default)]
     pub amount: Option<f64>,
+    /// `type=expense` の家計簿カテゴリ（Node route は `b.category`・未指定は `"その他"`）。
+    #[serde(default)]
+    pub category: Option<String>,
     #[serde(default)]
     pub location: Option<String>,
 }
@@ -211,4 +216,29 @@ pub struct DayPlanBlockData {
 #[ts(export_to = "generated/")]
 pub struct TimelineRecordData {
     pub record: TimelineRecord,
+}
+
+/// メディアアップロードのリクエスト（`POST /api/timeline/media` の body・base64 JSON）。
+///
+/// **wire 契約**: Node `timelineRoutes.ts` の media ハンドラは body を **camelCase**（`mimeType`/
+/// `recordedAt`）で読む。`date`/`base64`/`mimeType` は必須（ハンドラで空文字含め 400 検証）。
+/// サーバが `save_media_file` でファイル保存後、`type=media`・`media_path`/`media_type` を内部設定する
+/// （クライアントは `media_path`/`media_type` を直接指定できない・M-8）。
+#[derive(Debug, Clone, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "generated/")]
+pub struct NewTimelineMedia {
+    pub date: String,
+    /// メディア本体の base64（データ URL 前置なしの生 base64）。
+    pub base64: String,
+    /// `image/*` | `video/*`。許可 MIME 以外は 400。
+    pub mime_type: String,
+    #[serde(default)]
+    pub recorded_at: Option<String>,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub content: Option<String>,
+    #[serde(default)]
+    pub location: Option<String>,
 }

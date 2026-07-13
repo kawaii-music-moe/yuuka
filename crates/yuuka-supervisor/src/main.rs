@@ -111,7 +111,7 @@ async fn run() -> Result<(), String> {
     let discord_manager = DiscordManager::new(ManagerPorts {
         directory: Arc::new(DbBotDirectory::new(db.clone(), crypto.clone())),
         rate_limiter: Arc::new(InMemoryRateLimiter::new(db.clone())),
-        processor: chat_engine,
+        processor: chat_engine.clone(),
         membership: Arc::new(DbMembership::new(db.clone())),
     });
     let Prepared { runners, messenger } = discord_manager.prepare().await;
@@ -182,10 +182,15 @@ async fn run() -> Result<(), String> {
     //    Messenger 構築（P1-3）が揃ったので、通知先を実 Discord Messenger に配線する。デフォルト Bot が
     //    未起動ならリマインド等は送信 false のまま保持され、Bot 起動後に配信可能になる。
     if rust_cron_enabled() {
+        // マクロ定期実行（playbook）は会話エンジンを秘書ターンとして起動する。services→orchestrator の
+        // 逆依存を避けるため、両者を知る supervisor 層でアダプタ経由に注入する（P2 縮退の解消）。
         let service_ctx = ServiceContext::new(
             db,
             messenger,
             Arc::new(MetricsRegistry::new()),
+            Arc::new(PlaybookRunnerAdapter {
+                engine: chat_engine.clone(),
+            }),
         );
         let cron = build_supervised_services(&service_ctx);
         tracing::warn!(
@@ -205,6 +210,35 @@ async fn run() -> Result<(), String> {
     supervisor.run(shutdown_signal()).await;
     tracing::info!("yuuka supervisor stopped");
     Ok(())
+}
+
+/// [`yuuka_services::PlaybookRunner`] を [`ChatEngine`] へ橋渡しするアダプタ（マクロ定期実行）。
+///
+/// `services → orchestrator` の逆依存（循環）を避けるため、両者を知る supervisor 層でブリッジする
+/// （notify_bridge と同思想の孤児回避）。playbook は本人の Gemini キー/データで秘書ターンとして実行し、
+/// 進捗プレゼンスは cron では不要なため no-op の [`StatusSink`](yuuka_discord::StatusSink) を渡す。
+struct PlaybookRunnerAdapter {
+    engine: Arc<ChatEngine>,
+}
+
+#[async_trait]
+impl yuuka_services::PlaybookRunner for PlaybookRunnerAdapter {
+    async fn run_secretary(
+        &self,
+        bot_id: &yuuka_core::BotId,
+        user_id: &yuuka_core::UserId,
+        prompt: String,
+    ) -> Result<String, String> {
+        let msg = yuuka_discord::IncomingChat {
+            text: prompt,
+            ..Default::default()
+        };
+        let status: yuuka_discord::StatusSink = Arc::new(|_| {});
+        match self.engine.secretary_turn(bot_id, user_id, msg, &status).await {
+            Ok(reply) => Ok(reply.text),
+            Err(e) => Err(e.to_string()),
+        }
+    }
 }
 
 /// 保存時暗号シークレットの起動時チェック（Node `index.ts` §6.2 パリティ・**N2**）。

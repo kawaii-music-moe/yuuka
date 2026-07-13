@@ -1,9 +1,11 @@
-//! 予約シーム（本体 deferred）: report / briefing / backup / playbook-schedule。
+//! 予約シーム（本体 deferred）: report / briefing / backup。
 //!
 //! これらはスケジュール・監督配線・登録は本 Phase で確定させるが、tick 本体は**未整備の基盤に
 //! 依存する**ため保留する（discord の凍結シームと同方針＝配線を実証し、後で本体を埋めるだけにする）。
 //! 各サービスの tick は保留マーカーを `debug` で出す（既定 OFF・毎分でもスパムしない）。完了時は
 //! この tick を実装へ差し替えるだけでよい。
+//!
+//! （playbook-schedule は本体実装済み＝[`crate::playbook_schedule`]。）
 //!
 //! 保留理由（各サービスが必要とする未整備基盤）:
 //! - **report**（現行 `reportService.ts`）: `report_configs`/`message_logs` repo、Gemini 補助生成
@@ -12,8 +14,6 @@
 //!   （外部 HTTP＋SSRF ガード）、`generateAuxText`、Notifier。
 //! - **backup**（現行 `backupService.ts`）: ユーザー別 Google Drive OAuth クライアント、SQLite
 //!   バックアップ＋zip、`users` の Drive 連携メタ。
-//! - **playbook-schedule**（現行 `playbookScheduleService.ts`）: `processMessage`（gemini ターン処理
-//!   オーケストレーション本体・Phase 3/4 の gemini 上位層）、playbook 実行、Notifier。
 
 use async_trait::async_trait;
 
@@ -62,12 +62,7 @@ deferred_service!(
     Schedule::Cron("15 * * * *"),
     "ユーザー別 Google Drive クライアント"
 );
-deferred_service!(
-    PlaybookScheduleService,
-    "playbook-schedule",
-    Schedule::EveryMinute,
-    "processMessage（gemini オーケストレーション）"
-);
+// playbook-schedule は本体実装済み（[`crate::playbook_schedule::PlaybookScheduleService`]）。
 
 #[cfg(test)]
 mod tests {

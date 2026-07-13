@@ -8,7 +8,8 @@
 //! 参照する **bare 名**（`addContact` 等・namespace 無し）を使う。
 //!
 //! 移植済み: addContact / listContacts / updateContact / deleteContact（既存 repo
-//! add/list/get+update/delete に素直に対応）。
+//! add/list/get+update/delete に素直に対応）＋ クリップボード（一時メモ）の
+//! addClipboardEntry / listClipboardEntries / deleteClipboardEntry（Node `clipboardFunctions.ts`）。
 //! 未移植（deferred・repo 拡張要）: searchContacts（`ContactRepo` に部分一致検索メソッドが無い）。
 
 use std::sync::Arc;
@@ -20,7 +21,7 @@ use yuuka_core::{DbError, Tool, ToolContext, ToolError, ToolName, ToolOutcome, U
 use yuuka_web::Db;
 
 use crate::dto::NewContact;
-use crate::repo::ContactRepo;
+use crate::repo::{ClipboardRepo, ContactRepo};
 
 /// このドメインが公開する Native ツール一式を作る。
 ///
@@ -44,6 +45,18 @@ pub fn tools(db: Db) -> Result<Vec<Arc<dyn Tool>>, ToolError> {
         }),
         Arc::new(DeleteContactTool {
             name: ToolName::checked("deleteContact".to_owned())?,
+            db: db.clone(),
+        }),
+        Arc::new(AddClipboardEntryTool {
+            name: ToolName::checked("addClipboardEntry".to_owned())?,
+            db: db.clone(),
+        }),
+        Arc::new(ListClipboardEntriesTool {
+            name: ToolName::checked("listClipboardEntries".to_owned())?,
+            db: db.clone(),
+        }),
+        Arc::new(DeleteClipboardEntryTool {
+            name: ToolName::checked("deleteClipboardEntry".to_owned())?,
             db,
         }),
     ])
@@ -88,6 +101,13 @@ fn arg_i64(args: &Value, key: &str) -> Option<i64> {
     let v = args.get(key)?;
     v.as_i64()
         .or_else(|| v.as_str().and_then(|s| s.trim().parse::<i64>().ok()))
+}
+
+/// 数値、または数値文字列を f64 へ（Node `Number(...)` 相当・TTL 用）。
+fn arg_f64(args: &Value, key: &str) -> Option<f64> {
+    let v = args.get(key)?;
+    v.as_f64()
+        .or_else(|| v.as_str().and_then(|s| s.trim().parse::<f64>().ok()))
 }
 
 /// JSON 配列引数を `Vec<String>`（文字列要素のみ採用）へ。
@@ -340,6 +360,166 @@ impl Tool for DeleteContactTool {
     }
 }
 
+// ─── addClipboardEntry ─────────────────────────────────────────────────────────
+
+struct AddClipboardEntryTool {
+    name: ToolName,
+    db: Db,
+}
+
+#[async_trait]
+impl Tool for AddClipboardEntryTool {
+    fn declaration(&self) -> FunctionDeclaration {
+        FunctionDeclaration {
+            name: self.name.clone(),
+            description: "「今日だけ」の一時メモをクリップボードに保存する。期限が来ると自動で消える（既定24時間）。\
+                ずっと使う情報はこれではなく appendContextNote を使う。「今週中だけ」→ ttl_hours:168、\
+                「1時間後に消して」→ ttl_hours:1 のように変換する。"
+                .to_owned(),
+            parameters_json_schema: json!({
+                "type": "object",
+                "properties": {
+                    "content": { "type": "string", "description": "メモする内容" },
+                    "ttl_hours": { "type": "number", "description": "何時間で自動削除するか。省略=24時間。0=ずっと消えない" }
+                },
+                "required": ["content"]
+            }),
+            requires_confirmation: false,
+        }
+    }
+
+    async fn call(&self, ctx: &ToolContext, args: Value) -> Result<ToolOutcome, ToolError> {
+        // Node: `String(args.content ?? "").trim()` が空なら fail。
+        let Some(content) = arg_str(&args, "content") else {
+            return Ok(fail_payload("メモの内容が空です。"));
+        };
+        // Node: `args.ttl_hours === undefined ? 24 : Number(args.ttl_hours)`。非有限/負は fail。
+        let ttl = if args.get("ttl_hours").is_none() {
+            24.0
+        } else {
+            match arg_f64(&args, "ttl_hours") {
+                Some(v) if v.is_finite() && v >= 0.0 => v,
+                _ => {
+                    return Ok(fail_payload(
+                        "ttl_hours は0以上の数値で指定してください。",
+                    ))
+                }
+            }
+        };
+        // 0 = 無期限（expires_at NULL）。それ以外は now + ttl 時間。
+        let ttl_hours = if ttl == 0.0 { None } else { Some(ttl) };
+        let entry = ClipboardRepo::new(&self.db)
+            .add(&scope_of(ctx), content, ttl_hours)
+            .await
+            .map_err(exec_err)?;
+        let message = if ttl == 0.0 {
+            "クリップボードに保存しました（無期限）📎".to_owned()
+        } else {
+            format!("クリップボードに保存しました（{ttl}時間後に自動削除）📎")
+        };
+        Ok(ToolOutcome::from_payload(ok_payload(
+            message,
+            json!({ "entry": {
+                "id": entry.id,
+                "content": entry.content,
+                "expires_at": entry.expires_at,
+            } }),
+        )))
+    }
+}
+
+// ─── listClipboardEntries ──────────────────────────────────────────────────────
+
+struct ListClipboardEntriesTool {
+    name: ToolName,
+    db: Db,
+}
+
+#[async_trait]
+impl Tool for ListClipboardEntriesTool {
+    fn declaration(&self) -> FunctionDeclaration {
+        FunctionDeclaration {
+            name: self.name.clone(),
+            description: "クリップボード（一時メモ）の今も有効なメモを一覧で取り出す。\
+                「メモを見せて」「さっきクリップした内容は？」と言われた時に呼ぶ。"
+                .to_owned(),
+            parameters_json_schema: json!({ "type": "object", "properties": {} }),
+            requires_confirmation: false,
+        }
+    }
+
+    async fn call(&self, ctx: &ToolContext, _args: Value) -> Result<ToolOutcome, ToolError> {
+        let entries = ClipboardRepo::new(&self.db)
+            .list(&scope_of(ctx))
+            .await
+            .map_err(exec_err)?;
+        // Node: `expires_at ?? "無期限"`（無期限は文字列で返す）・created_at も同梱。
+        let mapped: Vec<Value> = entries
+            .iter()
+            .map(|e| {
+                json!({
+                    "id": e.id,
+                    "content": e.content,
+                    "expires_at": e.expires_at.clone().unwrap_or_else(|| "無期限".to_owned()),
+                    "created_at": e.created_at,
+                })
+            })
+            .collect();
+        Ok(ToolOutcome::from_payload(json!({
+            "success": true,
+            "count": entries.len(),
+            "entries": mapped,
+        })))
+    }
+}
+
+// ─── deleteClipboardEntry ──────────────────────────────────────────────────────
+
+struct DeleteClipboardEntryTool {
+    name: ToolName,
+    db: Db,
+}
+
+#[async_trait]
+impl Tool for DeleteClipboardEntryTool {
+    fn declaration(&self) -> FunctionDeclaration {
+        FunctionDeclaration {
+            name: self.name.clone(),
+            description: "クリップボードの指定したメモを1件削除する。消し間違えないよう、\
+                先に listClipboardEntries で正しいIDを確かめてから呼ぶ。"
+                .to_owned(),
+            parameters_json_schema: json!({
+                "type": "object",
+                "properties": {
+                    "entry_id": { "type": "number", "description": "削除するメモのID（listClipboardEntries で確認した番号）" }
+                },
+                "required": ["entry_id"]
+            }),
+            requires_confirmation: false,
+        }
+    }
+
+    async fn call(&self, ctx: &ToolContext, args: Value) -> Result<ToolOutcome, ToolError> {
+        // Node: `Number.isInteger(Number(entry_id))` でなければ fail。
+        let Some(id) = arg_i64(&args, "entry_id") else {
+            return Ok(fail_payload("entry_id が不正です。"));
+        };
+        let ok = ClipboardRepo::new(&self.db)
+            .delete(&scope_of(ctx), id)
+            .await
+            .map_err(exec_err)?;
+        // Node: `{success: ok, message}`（見つからない場合も success:false + 定型文）。
+        let message = if ok {
+            "メモを削除しました🗑️"
+        } else {
+            "指定されたメモが見つかりませんでした。"
+        };
+        Ok(ToolOutcome::from_payload(
+            json!({ "success": ok, "message": message }),
+        ))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -351,33 +531,34 @@ mod tests {
 
     static SEQ: AtomicU64 = AtomicU64::new(0);
 
-    // Node migrations.ts の contacts DDL + v3 で後付けされる bot_id 列を反映（lib.rs と同一）。
-    const CONTACTS_DDL: &str = "CREATE TABLE contacts (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id TEXT NOT NULL,
-        bot_id TEXT NOT NULL DEFAULT 'system_default',
-        name TEXT NOT NULL,
-        birthday TEXT,
-        relationship TEXT,
-        contact_info TEXT,
-        notes TEXT,
-        tags TEXT NOT NULL DEFAULT '[]',
-        birthday_reminded_year INTEGER,
-        created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
-        updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
-    );";
-
+    // 実効スキーマは `Db::open`（= run_migrations）が V17__baseline.sql を丸ごと適用して作る
+    // （contacts + clipboard_entries を含む）。部分 DDL は後続 INDEX と衝突しうるため空ファイルから
+    // マイグレーションに一任する（他ドメインのテストと同方針）。
     fn seed_db() -> Db {
         let seq = SEQ.fetch_add(1, Ordering::Relaxed);
         let path = std::env::temp_dir().join(format!(
             "yuuka_personal_tools_{}_{seq}.sqlite",
             std::process::id()
         ));
+        let _ = std::fs::remove_file(&path);
         {
             let conn = Connection::open(&path).unwrap();
-            conn.execute_batch(CONTACTS_DDL).unwrap();
+            drop(conn);
         }
-        Db::open(&path).unwrap()
+        let db = Db::open(&path).unwrap();
+        // contacts/clipboard_entries は users への FK を張るため、対象ユーザーを先に作る。
+        {
+            let conn = Connection::open(&path).unwrap();
+            for uid in ["userA", "userB"] {
+                conn.execute(
+                    "INSERT OR IGNORE INTO users (discord_id, username, password_hash, salt) \
+                     VALUES (?1, ?1, 'x', 'x')",
+                    rusqlite::params![uid],
+                )
+                .unwrap();
+            }
+        }
+        db
     }
 
     fn ctx() -> ToolContext {
@@ -512,5 +693,86 @@ mod tests {
         let out = list.call(&ctx_b, json!({})).await.unwrap();
         assert_eq!(out.payload["count"], 0);
         assert_eq!(out.payload["contacts"].as_array().unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn clipboard_add_list_delete_roundtrip() {
+        let db = seed_db();
+        let tools = tools(db).unwrap();
+
+        // 3 ツールが bare 名で登録されている。
+        let names: Vec<String> = tools
+            .iter()
+            .map(|t| t.declaration().name.to_string())
+            .collect();
+        for n in ["addClipboardEntry", "listClipboardEntries", "deleteClipboardEntry"] {
+            assert!(names.contains(&n.to_owned()), "missing tool: {n}");
+        }
+
+        let add = find(&tools, "addClipboardEntry");
+        // 既定 24 時間（expires_at は非 null）。
+        let out = add
+            .call(&ctx(), json!({"content": "会議メモ"}))
+            .await
+            .unwrap();
+        assert_eq!(out.payload["success"], true);
+        assert_eq!(out.payload["message"], "クリップボードに保存しました（24時間後に自動削除）📎");
+        assert_eq!(out.payload["entry"]["content"], "会議メモ");
+        assert!(out.payload["entry"]["expires_at"].is_string());
+        let id = out.payload["entry"]["id"].as_i64().unwrap();
+
+        // ttl_hours:0 → 無期限（expires_at null・メッセージも無期限）。
+        let out = add
+            .call(&ctx(), json!({"content": "ずっと", "ttl_hours": 0}))
+            .await
+            .unwrap();
+        assert_eq!(out.payload["message"], "クリップボードに保存しました（無期限）📎");
+        assert!(out.payload["entry"]["expires_at"].is_null());
+
+        // 空 content → fail。
+        let out = add.call(&ctx(), json!({"content": "  "})).await.unwrap();
+        assert_eq!(out.payload["success"], false);
+
+        // 負の ttl → fail。
+        let out = add
+            .call(&ctx(), json!({"content": "x", "ttl_hours": -1}))
+            .await
+            .unwrap();
+        assert_eq!(out.payload["success"], false);
+
+        // list（有効エントリ 2 件・無期限は "無期限" 文字列）。
+        let list = find(&tools, "listClipboardEntries");
+        let out = list.call(&ctx(), json!({})).await.unwrap();
+        assert_eq!(out.payload["success"], true);
+        assert_eq!(out.payload["count"], 2);
+        let entries = out.payload["entries"].as_array().unwrap();
+        assert!(entries.iter().any(|e| e["expires_at"] == "無期限"));
+
+        // delete（成功 → 見つからない）。
+        let delete = find(&tools, "deleteClipboardEntry");
+        let out = delete.call(&ctx(), json!({"entry_id": id})).await.unwrap();
+        assert_eq!(out.payload["success"], true);
+        assert_eq!(out.payload["message"], "メモを削除しました🗑️");
+        let out = delete.call(&ctx(), json!({"entry_id": id})).await.unwrap();
+        assert_eq!(out.payload["success"], false);
+
+        // entry_id 非整数 → fail。
+        let out = delete.call(&ctx(), json!({"entry_id": 1.5})).await.unwrap();
+        assert_eq!(out.payload["success"], false);
+        assert_eq!(out.payload["message"], "entry_id が不正です。");
+    }
+
+    #[tokio::test]
+    async fn clipboard_scope_isolation() {
+        let db = seed_db();
+        let tools = tools(db).unwrap();
+        let add = find(&tools, "addClipboardEntry");
+        let list = find(&tools, "listClipboardEntries");
+
+        add.call(&ctx(), json!({"content": "A のメモ"})).await.unwrap();
+
+        let ctx_b = ToolContext::new(BotId::system_default(), UserId::new("userB"));
+        let out = list.call(&ctx_b, json!({})).await.unwrap();
+        assert_eq!(out.payload["count"], 0);
     }
 }

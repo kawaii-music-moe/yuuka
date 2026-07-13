@@ -28,8 +28,8 @@ const RUNS_DEFAULT_LIMIT: i64 = 50;
 
 /// playbook リポジトリ（DB ハンドルを借用する軽量ラッパ・per-request 構築）。
 pub struct PlaybookRepo<'a> {
-    read: &'a ReadPool,
-    writer: &'a WriterHandle,
+    pub(crate) read: &'a ReadPool,
+    pub(crate) writer: &'a WriterHandle,
 }
 
 impl ScopedRepo for PlaybookRepo<'_> {}

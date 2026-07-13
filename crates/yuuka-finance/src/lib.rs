@@ -1,8 +1,9 @@
 //! yuuka-finance — finance ドメイン（T1 fan-out・参照実装は yuuka-todo）: Repo + wire DTO + route。
 //!
 //! DAG: `finance → web, db, types, core`。ルータは supervisor が共通レイヤ配下にマージする。
-//! Phase 1 参照スコープ = コア CRUD（expense の list/add/get/delete）。receipt OCR・予算上限
-//! (budget_limits)・支払い予定 (planned_payments)・月次集計 (total/breakdown/trend) は deferred。
+//! 参照スコープ = コア CRUD（expense の list/add/get/delete）・予算上限 (budget_limits)・
+//! 支払い予定 (planned_payments)・月次集計 (total/incomeTotal/breakdown/trend)。
+//! receipt OCR (upload-receipt) は Gemini vision 経路の supervisor 層配線待ちで deferred。
 
 pub mod dto;
 pub mod repo;
@@ -191,6 +192,53 @@ mod tests {
         assert!(!repo.delete(&scope("u"), created.id).await.unwrap());
     }
 
+    /// 明示日付を与えて `date` を指定月に固定した収支を作る（集計テスト用）。
+    fn dated_expense(amount: i64, category: &str, date: &str, etype: &str) -> NewExpense {
+        NewExpense {
+            amount,
+            category: category.to_owned(),
+            description: None,
+            date: Some(date.to_owned()),
+            time: Some("12:00:00".to_owned()),
+            r#type: Some(etype.to_owned()),
+        }
+    }
+
+    #[tokio::test]
+    async fn monthly_total_breakdown_and_trend() {
+        let db = seed_db();
+        let repo = ExpenseRepo::new(&db);
+        let s = scope("u");
+        // 2026-03: 食費 1000 + 食費 500 + 交通費 200（支出）、給与 40000（収入）。
+        repo.add(&s, dated_expense(1000, "食費", "2026-03-05", "expense")).await.unwrap();
+        repo.add(&s, dated_expense(500, "食費", "2026-03-20", "expense")).await.unwrap();
+        repo.add(&s, dated_expense(200, "交通費", "2026-03-21", "expense")).await.unwrap();
+        repo.add(&s, dated_expense(40_000, "給与", "2026-03-25", "income")).await.unwrap();
+        // 別月 2026-02: 食費 999（集計対象外の確認用）。
+        repo.add(&s, dated_expense(999, "食費", "2026-02-10", "expense")).await.unwrap();
+
+        // 月次合計（支出/収入）は指定月のみ集計。
+        assert_eq!(repo.monthly_total(&s, "expense", 2026, 3).await.unwrap(), 1700);
+        assert_eq!(repo.monthly_total(&s, "income", 2026, 3).await.unwrap(), 40_000);
+        // 空月は 0（COALESCE）。
+        assert_eq!(repo.monthly_total(&s, "expense", 2026, 4).await.unwrap(), 0);
+
+        // カテゴリ別内訳は金額降順・件数付き（食費 1500/2件 → 交通費 200/1件）。
+        let bd = repo.monthly_category_breakdown(&s, 2026, 3).await.unwrap();
+        assert_eq!(bd.len(), 2);
+        assert_eq!(bd[0].category, "食費");
+        assert_eq!(bd[0].total, 1500);
+        assert_eq!(bd[0].count, 2);
+        assert_eq!(bd[1].category, "交通費");
+        assert_eq!(bd[1].total, 200);
+
+        // trend は常に指定件数（古い順）で、記録の無い月は 0 埋め。
+        let trend = repo.monthly_trend(&s, 6).await.unwrap();
+        assert_eq!(trend.len(), 6);
+        // 別ユーザーには金銭データが漏れない（スコープ分離）。
+        assert_eq!(repo.monthly_total(&scope("userB"), "expense", 2026, 3).await.unwrap(), 0);
+    }
+
     struct FakeAuth {
         user: SessionUser,
     }
@@ -257,6 +305,15 @@ mod tests {
         // 内部列は露出しない（金銭データの構造的フェイルクローズ）。
         assert!(j["expenses"][0]["user_id"].is_null());
         assert!(j["expenses"][0]["bot_id"].is_null());
+        // 月次集計フィールドが同梱される（silent 縮退の解消・当月の支出 1500）。
+        assert_eq!(j["total"], serde_json::json!(1500));
+        assert_eq!(j["incomeTotal"], serde_json::json!(0));
+        assert_eq!(j["breakdown"][0]["category"], serde_json::json!("食費"));
+        assert_eq!(j["breakdown"][0]["total"], serde_json::json!(1500));
+        assert_eq!(j["breakdown"][0]["count"], serde_json::json!(1));
+        // trend は 6 件・最新（末尾）は当月で支出 1500。
+        assert_eq!(j["trend"].as_array().unwrap().len(), 6);
+        assert_eq!(j["trend"][5]["expense"], serde_json::json!(1500));
     }
 
     #[tokio::test]

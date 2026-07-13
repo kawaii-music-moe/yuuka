@@ -57,7 +57,7 @@ pub fn build_supervised_services(ctx: &ServiceContext) -> Vec<Arc<dyn Supervised
 mod tests {
     use std::sync::Arc;
 
-    use yuuka_services::{MetricsRegistry, NullNotifier, ServiceContext};
+    use yuuka_services::{MetricsRegistry, NullNotifier, NullPlaybookRunner, ServiceContext};
     use yuuka_web::Db;
 
     use super::{build_supervised_services, CronSupervised};
@@ -76,13 +76,18 @@ mod tests {
     }
 
     fn ctx() -> ServiceContext {
-        ServiceContext::new(bare_db(), Arc::new(NullNotifier), Arc::new(MetricsRegistry::new()))
+        ServiceContext::new(
+            bare_db(),
+            Arc::new(NullNotifier),
+            Arc::new(MetricsRegistry::new()),
+            Arc::new(NullPlaybookRunner),
+        )
     }
 
     #[test]
     fn builds_all_services_with_cron_prefixed_names() {
         let svcs = build_supervised_services(&ctx());
-        // 実装 6 + 予約シーム 4 = 10。
+        // 実装 7（playbook 含む）+ 予約シーム 3（report/briefing/backup）= 10。
         assert_eq!(svcs.len(), 10);
         let names: Vec<String> = svcs.iter().map(|s| s.name()).collect();
         assert!(names.iter().all(|n| n.starts_with("cron:")));

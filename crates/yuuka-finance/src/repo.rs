@@ -11,7 +11,8 @@ use yuuka_db::{map_sqlite, ReadPool, WriterHandle};
 use yuuka_web::Db;
 
 use crate::dto::{
-    BudgetLimit, Expense, NewExpense, NewPlannedPayment, PlannedPayment,
+    BudgetLimit, CategoryTotal, Expense, MonthlyTrendPoint, NewExpense, NewPlannedPayment,
+    PlannedPayment,
 };
 
 /// 返却列（クリーンビュー・内部列 user_id/bot_id は含めない）。
@@ -155,6 +156,177 @@ impl<'a> ExpenseRepo<'a> {
                 Ok(n > 0)
             })
             .await
+    }
+
+    // ── 月次集計（§3.4.1・Node expenseRepo getMonthly*） ─────────────────────
+
+    /// 現在のローカル暦の `(year, month)`（1-12）を返す（集計の既定月に使う）。
+    ///
+    /// Node は `new Date().getFullYear()/getMonth()+1`（サーバローカル時刻）で当月を決める。
+    /// Rust も SQLite の `'now','localtime'` で同じローカル暦日境界に合わせる。
+    ///
+    /// # Errors
+    /// クエリ失敗時 [`DbError`]。
+    pub async fn current_year_month(&self) -> Result<(i64, i64), DbError> {
+        self.read
+            .read(move |conn| {
+                conn.query_row(
+                    "SELECT CAST(strftime('%Y', 'now', 'localtime') AS INTEGER), \
+                            CAST(strftime('%m', 'now', 'localtime') AS INTEGER)",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .map_err(map_sqlite)
+            })
+            .await
+    }
+
+    /// 指定月・指定 type の合計金額を返す（`COALESCE(SUM(amount),0)`）。
+    ///
+    /// Node `getMonthlyTotal`（`date LIKE 'YYYY-MM%'`）パリティ。`etype` は `"expense"`/`"income"`。
+    ///
+    /// # Errors
+    /// クエリ失敗時 [`DbError`]。
+    pub async fn monthly_total(
+        &self,
+        scope: &UserScope,
+        etype: &str,
+        year: i64,
+        month: i64,
+    ) -> Result<i64, DbError> {
+        let (uid, bid) = scope_keys(scope);
+        let etype = etype.to_owned();
+        let like = format!("{}-{:02}%", year, month);
+        self.read
+            .read(move |conn| {
+                conn.query_row(
+                    "SELECT COALESCE(SUM(amount), 0) FROM expenses \
+                     WHERE user_id = ?1 AND bot_id = ?2 AND type = ?3 AND date LIKE ?4",
+                    params![uid, bid, etype, like],
+                    |row| row.get(0),
+                )
+                .map_err(map_sqlite)
+            })
+            .await
+    }
+
+    /// 指定月の支出カテゴリ別集計を金額の大きい順に返す（Node `getMonthlyCategoryBreakdown`）。
+    ///
+    /// # Errors
+    /// クエリ失敗時 [`DbError`]。
+    pub async fn monthly_category_breakdown(
+        &self,
+        scope: &UserScope,
+        year: i64,
+        month: i64,
+    ) -> Result<Vec<CategoryTotal>, DbError> {
+        let (uid, bid) = scope_keys(scope);
+        let like = format!("{}-{:02}%", year, month);
+        self.read
+            .read(move |conn| {
+                let mut stmt = conn
+                    .prepare(
+                        "SELECT category, SUM(amount) AS total, COUNT(*) AS count \
+                         FROM expenses \
+                         WHERE user_id = ?1 AND bot_id = ?2 AND type = 'expense' AND date LIKE ?3 \
+                         GROUP BY category ORDER BY total DESC",
+                    )
+                    .map_err(map_sqlite)?;
+                let rows = stmt
+                    .query_map(params![uid, bid, like], |row| {
+                        Ok(CategoryTotal {
+                            category: row.get("category")?,
+                            total: row.get("total")?,
+                            count: row.get("count")?,
+                        })
+                    })
+                    .map_err(map_sqlite)?;
+                let mut out = Vec::new();
+                for row in rows {
+                    out.push(row.map_err(map_sqlite)?);
+                }
+                Ok(out)
+            })
+            .await
+    }
+
+    /// 当月を含む過去 `months` ヶ月の収支推移を古い順に返す（Node `getMonthlyTrend`）。
+    ///
+    /// 記録の無い月も `income/expense = 0` で埋め、常に `months` 件返す。月ラベルは
+    /// ローカル暦から生成し（`new Date(y, m-i, 1)` 相当のロールオーバー整数計算）、
+    /// クエリは最古ラベル以降を `GROUP BY substr(date,1,7)` で集計する。
+    ///
+    /// # Errors
+    /// クエリ失敗時 [`DbError`]。
+    pub async fn monthly_trend(
+        &self,
+        scope: &UserScope,
+        months: i64,
+    ) -> Result<Vec<MonthlyTrendPoint>, DbError> {
+        let n = months.max(1);
+        let (cur_year, cur_month) = self.current_year_month().await?;
+        // 当月を含む過去 n ヶ月の 'YYYY-MM' ラベルを古い順に生成（0-based 月インデックスで
+        // ロールオーバー: idx = year*12 + (month-1) - i）。
+        let base = cur_year * 12 + (cur_month - 1);
+        let labels: Vec<String> = (0..n)
+            .rev()
+            .map(|i| {
+                let idx = base - i;
+                let y = idx.div_euclid(12);
+                let m = idx.rem_euclid(12) + 1;
+                format!("{}-{:02}", y, m)
+            })
+            .collect();
+        // labels は n>=1 で必ず 1 件以上だが、indexing_slicing 回避のため first() で取り出す。
+        let Some(oldest) = labels.first().cloned() else {
+            return Ok(Vec::new());
+        };
+
+        let (uid, bid) = scope_keys(scope);
+        let rows: Vec<MonthlyTrendPoint> = self
+            .read
+            .read(move |conn| {
+                let mut stmt = conn
+                    .prepare(
+                        "SELECT substr(date, 1, 7) AS month, \
+                                COALESCE(SUM(CASE WHEN type = 'income' THEN amount ELSE 0 END), 0) AS income, \
+                                COALESCE(SUM(CASE WHEN type = 'expense' THEN amount ELSE 0 END), 0) AS expense \
+                         FROM expenses \
+                         WHERE user_id = ?1 AND bot_id = ?2 AND substr(date, 1, 7) >= ?3 \
+                         GROUP BY month",
+                    )
+                    .map_err(map_sqlite)?;
+                let mapped = stmt
+                    .query_map(params![uid, bid, oldest], |row| {
+                        Ok(MonthlyTrendPoint {
+                            month: row.get("month")?,
+                            income: row.get("income")?,
+                            expense: row.get("expense")?,
+                        })
+                    })
+                    .map_err(map_sqlite)?;
+                let mut out = Vec::new();
+                for row in mapped {
+                    out.push(row.map_err(map_sqlite)?);
+                }
+                Ok(out)
+            })
+            .await?;
+
+        // 欠損月をゼロ埋めして常に n 件を古い順で返す。
+        Ok(labels
+            .into_iter()
+            .map(|label| {
+                rows.iter()
+                    .find(|r| r.month == label)
+                    .cloned()
+                    .unwrap_or(MonthlyTrendPoint {
+                        month: label,
+                        income: 0,
+                        expense: 0,
+                    })
+            })
+            .collect())
     }
 
     // ── 予算上限（budget_limits・§3.4.1） ────────────────────────────────────

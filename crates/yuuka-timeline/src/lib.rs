@@ -2,12 +2,13 @@
 //! と route を縦に持つ。凍結契約（core/types）は変更しない。
 //! 依存 DAG は `timeline → web, db, types, core`。ルータは supervisor が共通レイヤ配下にマージする。
 //!
-//! Phase 1 参照スコープ = `timeline_records` のコア CRUD（day list / add / delete）＋
-//! `day_plan_blocks` CRUD（plan add / update / delete・day に blocks 同梱）。
-//! media 保存/配信・`type=expense` の expenses 二重登録・`type=task_done` の todos 完了連携は
-//! 完成パスで追加（deferred）。
+//! 参照スコープ = `timeline_records` のコア CRUD（day list / add / delete）＋
+//! `day_plan_blocks` CRUD（plan add / update / delete・day に blocks 同梱）＋ cross-domain 副作用
+//! （`type=expense` の expenses 二重登録・`type=task_done` の todos 完了連携）＋ メディア保存/配信
+//! （[`media`]・`/api/timeline/media*`）。tool 経由の Discord 添付 URL 取得のみ deferred（reqwest 依存）。
 
 pub mod dto;
+pub mod media;
 pub mod repo;
 pub mod routes;
 pub mod tools;
@@ -33,6 +34,7 @@ pub fn export_bindings(base_dir: &Path) -> Result<(), ts_rs::ExportError> {
     <dto::TimelineDayData as TS>::export_all(&cfg)?;
     <dto::TimelineRecordData as TS>::export_all(&cfg)?;
     <dto::DayPlanBlockData as TS>::export_all(&cfg)?;
+    <dto::NewTimelineMedia as TS>::export_all(&cfg)?;
     Ok(())
 }
 
@@ -54,57 +56,37 @@ mod tests {
 
     static SEQ: AtomicU64 = AtomicU64::new(0);
 
-    /// `day_plan_blocks` の DDL（V17__baseline.sql と同一。schema は凍結・ここでは複写のみ）。
-    const PLANS_DDL: &str = "CREATE TABLE day_plan_blocks (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id TEXT NOT NULL,
-        bot_id TEXT NOT NULL,
-        date TEXT NOT NULL,
-        start_time TEXT,
-        end_time TEXT,
-        type TEXT NOT NULL DEFAULT 'event',
-        title TEXT NOT NULL,
-        description TEXT,
-        todo_id INTEGER,
-        transit_from TEXT,
-        transit_to TEXT,
-        transit_line TEXT,
-        position INTEGER NOT NULL DEFAULT 0,
-        created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
-        updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
-    );";
-
-    const RECORDS_DDL: &str = "CREATE TABLE timeline_records (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id TEXT NOT NULL,
-        bot_id TEXT NOT NULL DEFAULT 'system_default',
-        date TEXT NOT NULL,
-        recorded_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
-        type TEXT NOT NULL DEFAULT 'memo',
-        title TEXT,
-        content TEXT,
-        todo_id INTEGER,
-        expense_id INTEGER,
-        amount REAL,
-        expense_category TEXT,
-        media_path TEXT,
-        media_type TEXT,
-        location TEXT,
-        created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
-    );";
-
+    // 実効スキーマは `Db::open`（= 内部で run_migrations）が V17__baseline.sql を丸ごと適用して
+    // 作る（timeline_records/day_plan_blocks/expenses/todos すべて含む）。テスト側で部分 DDL を
+    // 手書きすると後続 INDEX（例 idx_todos_parent ON todos(parent_id)）と衝突するため、空ファイル
+    // からマイグレーションに一任する（finance テストと同方針）。cross-domain（expenses/todos）も
+    // これで正しい列構成が揃う。
     fn seed_db() -> Db {
         let seq = SEQ.fetch_add(1, Ordering::Relaxed);
         let path = std::env::temp_dir().join(format!(
             "yuuka_timeline_test_{}_{seq}.sqlite",
             std::process::id()
         ));
+        let _ = std::fs::remove_file(&path);
         {
-            let conn = rusqlite::Connection::open(&path).expect("seed db");
-            conn.execute_batch(RECORDS_DDL).expect("create timeline_records");
-            conn.execute_batch(PLANS_DDL).expect("create day_plan_blocks");
+            // ReadPool は READ_ONLY で開くため、writer がマイグレーションを流す前に空ファイルを作る。
+            let conn = rusqlite::Connection::open(&path).expect("create empty db file");
+            drop(conn);
         }
-        Db::open(&path).expect("open db")
+        let db = Db::open(&path).expect("open db");
+        // expenses/todos は users への FK を張るため、対象ユーザーを先に作る（Node は作成済み前提）。
+        {
+            let conn = rusqlite::Connection::open(&path).expect("seed users conn");
+            for uid in ["u", "userA", "userB", "other"] {
+                conn.execute(
+                    "INSERT OR IGNORE INTO users (discord_id, username, password_hash, salt) \
+                     VALUES (?1, ?1, 'x', 'x')",
+                    rusqlite::params![uid],
+                )
+                .expect("seed user");
+            }
+        }
+        db
     }
 
     fn scope(user: &str) -> UserScope {
@@ -120,6 +102,7 @@ mod tests {
             content: None,
             todo_id: None,
             amount: None,
+            category: None,
             location: None,
         }
     }
@@ -227,6 +210,125 @@ mod tests {
         assert_eq!(created.recorded_at, "2026-07-06 09:30:00");
     }
 
+    #[tokio::test]
+    async fn add_expense_record_links_expenses_row() {
+        // cross-domain: type=expense は expenses へ二次登録し expense_id/expense_category を連結。
+        let db = seed_db();
+        let repo = TimelineRepo::new(&db);
+        let mut input = new_memo("2026-07-06", "ランチ");
+        input.r#type = "expense".to_owned();
+        input.recorded_at = Some("2026-07-06 12:34:56".to_owned());
+        let record = repo
+            .add_expense_record(&scope("u"), &input, 1500.0, "食費".to_owned())
+            .await
+            .unwrap();
+        assert_eq!(record.r#type, "expense");
+        assert_eq!(record.expense_category.as_deref(), Some("食費"));
+        assert_eq!(record.amount, Some(1500.0));
+        let expense_id = record.expense_id.expect("expense_id connected");
+
+        // expenses に対応行（source='timeline'・memo=title・time=recorded_at slice・amount）。
+        let (amount, source, memo, time): (i64, String, String, String) = db
+            .read
+            .read(move |conn| {
+                conn.query_row(
+                    "SELECT amount, source, memo, time FROM expenses WHERE id = ?1",
+                    rusqlite::params![expense_id],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+                )
+                .map_err(yuuka_db::map_sqlite)
+            })
+            .await
+            .unwrap();
+        assert_eq!(amount, 1500);
+        assert_eq!(source, "timeline");
+        assert_eq!(memo, "ランチ");
+        assert_eq!(time, "12:34:56"); // recorded_at.slice(11,19)
+
+        // 別ユーザーには見えない（スコープ分離）。
+        assert!(repo.list(&scope("other"), Some("2026-07-06".to_owned())).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn add_expense_record_rounds_amount_for_integer_expenses_column() {
+        // 非整数 amount でも expenses.amount(INTEGER 列)は整数格納し、i64 read が 500 に落ちないこと。
+        let db = seed_db();
+        let repo = TimelineRepo::new(&db);
+        let mut input = new_memo("2026-07-06", "端数");
+        input.r#type = "expense".to_owned();
+        let record = repo
+            .add_expense_record(&scope("u"), &input, 1500.5, "食費".to_owned())
+            .await
+            .unwrap();
+        // timeline_records.amount は REAL 列なので raw f64（Node の値と一致）。
+        assert_eq!(record.amount, Some(1500.5));
+        let expense_id = record.expense_id.unwrap();
+        // expenses.amount は i64 として読める（round 済み・型エラーで落ちない）。
+        let amount: i64 = db
+            .read
+            .read(move |conn| {
+                conn.query_row(
+                    "SELECT amount FROM expenses WHERE id = ?1",
+                    rusqlite::params![expense_id],
+                    |r| r.get(0),
+                )
+                .map_err(yuuka_db::map_sqlite)
+            })
+            .await
+            .unwrap();
+        assert_eq!(amount, 1501); // 1500.5 は round-half-away で 1501。
+
+        // finance の list 相当（expenses を i64 で全件読む）が型エラーで落ちないこと。
+        let count: i64 = db
+            .read
+            .read(|conn| {
+                conn.query_row(
+                    "SELECT COUNT(*) FROM expenses WHERE typeof(amount) = 'integer'",
+                    [],
+                    |r| r.get(0),
+                )
+                .map_err(yuuka_db::map_sqlite)
+            })
+            .await
+            .unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[tokio::test]
+    async fn task_done_completes_linked_todo_atomically() {
+        // cross-domain: type=task_done + todo_id は同一 tx で紐付き todos を done にする。
+        let db = seed_db();
+        db.writer
+            .transaction(|tx| {
+                tx.execute(
+                    "INSERT INTO todos (id, user_id, bot_id, title, status) \
+                     VALUES (7, 'u', 'system_default', 'やること', 'open')",
+                    [],
+                )
+                .map_err(yuuka_db::map_sqlite)?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+        let repo = TimelineRepo::new(&db);
+        let mut input = new_memo("2026-07-06", "完了メモ");
+        input.r#type = "task_done".to_owned();
+        input.todo_id = Some(7);
+        let record = repo.add(&scope("u"), input).await.unwrap();
+        assert_eq!(record.r#type, "task_done");
+        assert_eq!(record.todo_id, Some(7));
+
+        let status: String = db
+            .read
+            .read(|conn| {
+                conn.query_row("SELECT status FROM todos WHERE id = 7", [], |r| r.get(0))
+                    .map_err(yuuka_db::map_sqlite)
+            })
+            .await
+            .unwrap();
+        assert_eq!(status, "done");
+    }
+
     struct FakeAuth {
         user: SessionUser,
     }
@@ -294,6 +396,145 @@ mod tests {
         // 内部列は露出しない（構造的フェイルクローズ）。
         assert!(j["records"][0]["user_id"].is_null());
         assert!(j["records"][0]["bot_id"].is_null());
+    }
+
+    #[tokio::test]
+    async fn route_expense_record_double_registers_and_validates() {
+        let app = app();
+        // type=expense: 200・record.expense_id 連結（家計簿へ二重登録された証跡）。
+        let ok = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/timeline/record")
+                    .header("cookie", "__Host-yuuka-session=good")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"date":"2026-07-06","type":"expense","amount":1500,"category":"食費","title":"ランチ"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(ok.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(ok.into_body(), usize::MAX).await.unwrap();
+        let j: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(j["success"], serde_json::json!(true));
+        assert_eq!(j["record"]["type"], serde_json::json!("expense"));
+        assert_eq!(j["record"]["expense_category"], serde_json::json!("食費"));
+        assert!(j["record"]["expense_id"].is_i64());
+
+        // amount 欠落は 400（Node `amount が必要です。`）。
+        let bad = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/timeline/record")
+                    .header("cookie", "__Host-yuuka-session=good")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"date":"2026-07-06","type":"expense"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(bad.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn media_upload_and_serve_roundtrip() {
+        use base64::Engine as _;
+
+        // media_dir を実ディレクトリ（tempdir）に差し替えた AppState を作る。
+        let media_dir = tempfile::tempdir().expect("media tempdir");
+        let auth = Arc::new(FakeAuth {
+            user: SessionUser {
+                discord_id: "u".to_owned(),
+                username: "u".to_owned(),
+                role: Role::User,
+            },
+        });
+        let config = WebConfig {
+            media_dir: media_dir.path().to_path_buf(),
+            ..WebConfig::default()
+        };
+        let app = super::routes().with_state(AppState::new(auth, config, seed_db()));
+
+        // base64 "hello" を image/png としてアップロード。
+        let b64 = base64::engine::general_purpose::STANDARD.encode(b"hello");
+        let body = serde_json::json!({
+            "date": "2026-07-06",
+            "base64": b64,
+            "mimeType": "image/png",
+            "title": "写真"
+        });
+        let up = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/timeline/media")
+                    .header("cookie", "__Host-yuuka-session=good")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(up.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(up.into_body(), usize::MAX).await.unwrap();
+        let j: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(j["success"], serde_json::json!(true));
+        assert_eq!(j["record"]["type"], serde_json::json!("media"));
+        assert_eq!(j["record"]["media_type"], serde_json::json!("photo"));
+        let filename = j["record"]["media_path"].as_str().unwrap().to_owned();
+        assert!(filename.ends_with(".png"));
+
+        // 配信: 認証付きで 200・Content-Type + 本文一致。
+        let get = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/timeline/media/{filename}"))
+                    .header("cookie", "__Host-yuuka-session=good")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(get.status(), StatusCode::OK);
+        assert_eq!(
+            get.headers().get("content-type").unwrap(),
+            "image/png"
+        );
+        let served = axum::body::to_bytes(get.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(&served[..], b"hello");
+
+        // 未存在ファイルは 404。
+        let missing = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/timeline/media/nope.jpg")
+                    .header("cookie", "__Host-yuuka-session=good")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+
+        // 未認証は 401（配信も auth:user）。
+        let unauth = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/timeline/media/{filename}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(unauth.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]

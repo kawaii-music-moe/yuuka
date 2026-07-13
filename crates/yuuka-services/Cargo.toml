@@ -11,11 +11,12 @@ description = "yuuka 常駐サービス群（reminder/todo-recurrence/payment/bi
 yuuka-core.workspace = true
 yuuka-db.workspace = true
 yuuka-web.workspace = true
-# cron 横断走査を CronScan で持つドメイン crate（reminder/todo/schedule/personal）。
+# cron 横断走査を CronScan で持つドメイン crate（reminder/todo/schedule/personal/playbook）。
 yuuka-reminder.workspace = true
 yuuka-todo.workspace = true
 yuuka-schedule.workspace = true
 yuuka-personal.workspace = true
+yuuka-playbook.workspace = true
 tokio.workspace = true
 async-trait.workspace = true
 tracing.workspace = true

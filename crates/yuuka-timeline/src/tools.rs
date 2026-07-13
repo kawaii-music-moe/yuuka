@@ -6,17 +6,16 @@
 //! **wire 契約の非対称**: HTTP route の body は camelCase（`recordedAt`）だが、**tool 引数は
 //! snake_case**（Node の Gemini 宣言と一致）。ツール名は Node system prompt が参照する **bare 名**。
 //!
-//! 移植済み: addTimelineRecord（`TimelineRepo::add` に対応するプレーン記録＝memo/task_done/location）。
-//! これは routes.rs / dto.rs（M-8）が凍結した「timeline_records のコア INSERT」に一致する。
+//! 移植済み: addTimelineRecord（プレーン記録 memo/location に加え、cross-domain 副作用も対応）。
+//! - `type=expense`: `TimelineRepo::add_expense_record` で expenses へ二次登録し `expense_id` 連結
+//!   （Node `¥{amount} を記録しました。`・amount 必須・category は `expense_category ?? "その他"`）。
+//! - `type=task_done`: `TimelineRepo::add` がトランザクション内で紐付き todos を完了（Node `completeTodo`）。
 //!
-//! 未移植（対応 repo が無いため deferred）:
+//! 未移植（対応 repo が無い／他ドメイン依存で deferred）:
 //! - `listDayPlan` / `createDayPlanBlock` / `deleteDayPlanBlock`: 別表 `day_plan_blocks` を操作する
-//!   （`addDayPlanBlock`/`listDayPlanBlocks`/`deleteDayPlanBlock`）。当クレートに repo が無い。
-//!   `TimelineRepo::delete` は `timeline_records` の削除であり block 削除ではないため流用しない。
-//! - addTimelineRecord の cross-domain 副作用（`type=expense` の家計簿二重登録＝finance
-//!   `addExpenseRecord`／`type=media` の `saveMediaFile`／`type=task_done` の todos `completeTodo`）は
-//!   他ドメイン依存のため落とす。プレーン記録（todo_id 参照の passthrough 含む）のみを記録する。
-//!   支出の記録は finance の `addExpense` ツールを使う。
+//!   （route 側は移植済みだが tool 宣言は未移植）。
+//! - `type=media` の `saveMediaFile`（Discord 添付 URL 取得・保存）は media 機能（`/api/timeline/media*`）
+//!   と同時に移植（deferred）。
 
 use std::sync::Arc;
 
@@ -76,6 +75,15 @@ fn arg_str(args: &Value, key: &str) -> Option<String> {
         .map(str::to_owned)
 }
 
+/// 数値または数値文字列を f64 へ（Node `Number(args.amount)` 相当・金額用）。
+fn arg_f64(args: &Value, key: &str) -> Option<f64> {
+    let v = args.get(key)?;
+    if let Some(f) = v.as_f64() {
+        return Some(f);
+    }
+    v.as_str().and_then(|s| s.trim().parse::<f64>().ok())
+}
+
 /// 数値（`Math.trunc` 相当）または数値文字列を i64 へ（Gemini は number を f64 で送りうる）。
 fn arg_i64(args: &Value, key: &str) -> Option<i64> {
     let v = args.get(key)?;
@@ -107,19 +115,22 @@ impl Tool for AddTimelineRecordTool {
     fn declaration(&self) -> FunctionDeclaration {
         FunctionDeclaration {
             name: self.name.clone(),
-            description: "その日の出来事・記録をタイムラインに1件追加する（メモ・タスク完了・場所チェックイン等）。\
-                type は 'memo'（テキストメモ）/'task_done'（タスク完了の記録。todo_id で対象を指し示す）/\
-                'location'（場所・チェックイン）。支出の記録は addExpense を使う。"
+            description: "その日の出来事・記録をタイムラインに1件追加する。\
+                type は 'memo'（テキストメモ）/'expense'（支出。家計簿にも自動記録される。amount 必須）/\
+                'task_done'（タスク完了。todo_id で対象を指すとそのタスクも同時に完了になる）/\
+                'location'（場所・チェックイン）。"
                 .to_owned(),
             parameters_json_schema: json!({
                 "type": "object",
                 "properties": {
                     "date": { "type": "string", "description": "日付 'YYYY-MM-DD'" },
-                    "type": { "type": "string", "description": "'memo' | 'task_done' | 'location'" },
+                    "type": { "type": "string", "description": "'memo' | 'expense' | 'task_done' | 'location'" },
                     "title": { "type": "string", "description": "見出し（任意）" },
                     "content": { "type": "string", "description": "本文・メモ（任意）" },
                     "recorded_at": { "type": "string", "description": "記録日時 'YYYY-MM-DD HH:MM:SS'（省略=現在時刻）（任意）" },
-                    "todo_id": { "type": "number", "description": "type='task_done' の時、関連づけるタスクID（任意）" },
+                    "todo_id": { "type": "number", "description": "type='task_done' の時、完了するタスクID（任意）" },
+                    "amount": { "type": "number", "description": "type='expense' の時、金額（円・必須）" },
+                    "expense_category": { "type": "string", "description": "type='expense' の時、カテゴリ（食費/交通費/娯楽 等・省略時は「その他」）" },
                     "location": { "type": "string", "description": "場所名（任意）" }
                 },
                 "required": ["date", "type"]
@@ -135,8 +146,41 @@ impl Tool for AddTimelineRecordTool {
             return Ok(fail_payload("date / type は必須です。"));
         };
 
+        let repo = TimelineRepo::new(&self.db);
+        let scope = scope_of(ctx);
+
+        // type=expense: 家計簿（expenses）へ二次登録し expense_id を連結（Node addExpenseRecord）。
+        if r#type == "expense" {
+            let amount = match arg_f64(&args, "amount") {
+                Some(a) if a != 0.0 => a,
+                _ => return Ok(fail_payload("expense には amount が必要です。")),
+            };
+            let category = arg_str(&args, "expense_category").unwrap_or_else(|| "その他".to_owned());
+            let input = NewTimelineRecord {
+                date,
+                r#type,
+                recorded_at: arg_str(&args, "recorded_at"),
+                title: arg_str(&args, "title"),
+                content: None,
+                todo_id: None,
+                amount: None,
+                category: None,
+                location: arg_str(&args, "location"),
+            };
+            let record = repo
+                .add_expense_record(&scope, &input, amount, category)
+                .await
+                .map_err(exec_err)?;
+            // Node: `¥${amount} を記録しました。`（整数は "1500"・小数は "1500.5" と JS Number 表示に一致）。
+            return Ok(ToolOutcome::from_payload(ok_payload(
+                format!("¥{amount} を記録しました。"),
+                json!({ "record": record }),
+            )));
+        }
+
+        // memo/location/task_done: プレーン記録。task_done + todo_id は repo.add が todos を完了する。
         // 内部列（expense_id/expense_category/media_path/media_type）は DTO に存在せず設定不可（M-8）。
-        // expense 二重登録・media 保存・task_done の todo 完了は cross-domain のため deferred。
+        // media 保存（Discord 添付）は deferred。
         let new = NewTimelineRecord {
             date,
             r#type,
@@ -144,15 +188,12 @@ impl Tool for AddTimelineRecordTool {
             title: arg_str(&args, "title"),
             content: arg_str(&args, "content"),
             todo_id: arg_i64(&args, "todo_id"),
-            // amount は expense ブランチ専用（deferred）。プレーン記録では書かない（Node parity）。
             amount: None,
+            category: None,
             location: arg_str(&args, "location"),
         };
 
-        let record = TimelineRepo::new(&self.db)
-            .add(&scope_of(ctx), new)
-            .await
-            .map_err(exec_err)?;
+        let record = repo.add(&scope, new).await.map_err(exec_err)?;
 
         Ok(ToolOutcome::from_payload(ok_payload(
             "記録しました。",
@@ -172,37 +213,34 @@ mod tests {
 
     static SEQ: AtomicU64 = AtomicU64::new(0);
 
-    // lib.rs の #[cfg(test)] と同一の実効スキーマ（timeline_records）。
-    const RECORDS_DDL: &str = "CREATE TABLE timeline_records (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id TEXT NOT NULL,
-        bot_id TEXT NOT NULL DEFAULT 'system_default',
-        date TEXT NOT NULL,
-        recorded_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
-        type TEXT NOT NULL DEFAULT 'memo',
-        title TEXT,
-        content TEXT,
-        todo_id INTEGER,
-        expense_id INTEGER,
-        amount REAL,
-        expense_category TEXT,
-        media_path TEXT,
-        media_type TEXT,
-        location TEXT,
-        created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
-    );";
-
+    // 実効スキーマは `Db::open`（= run_migrations）が V17__baseline.sql を丸ごと適用して作る
+    // （timeline_records + cross-domain の expenses/todos を含む・部分 DDL は idx_todos_parent と
+    // 衝突するため使わない・lib.rs テストと同方針）。
     fn seed_db() -> Db {
         let seq = SEQ.fetch_add(1, Ordering::Relaxed);
         let path = std::env::temp_dir().join(format!(
             "yuuka_timeline_tools_{}_{seq}.sqlite",
             std::process::id()
         ));
+        let _ = std::fs::remove_file(&path);
         {
             let conn = Connection::open(&path).unwrap();
-            conn.execute_batch(RECORDS_DDL).unwrap();
+            drop(conn);
         }
-        Db::open(&path).unwrap()
+        let db = Db::open(&path).unwrap();
+        // expenses/todos は users への FK を張るため、テスト対象ユーザーを先に作る。
+        {
+            let conn = Connection::open(&path).unwrap();
+            for uid in ["userA", "userB"] {
+                conn.execute(
+                    "INSERT OR IGNORE INTO users (discord_id, username, password_hash, salt) \
+                     VALUES (?1, ?1, 'x', 'x')",
+                    rusqlite::params![uid],
+                )
+                .unwrap();
+            }
+        }
+        db
     }
 
     fn ctx() -> ToolContext {
@@ -260,22 +298,98 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn task_done_passes_todo_id_without_completing_todo() {
-        // task_done の todo 完了連携は deferred。プレーン記録として todo_id を passthrough する。
+    async fn task_done_completes_linked_todo() {
+        // task_done + todo_id: 記録を作りつつ紐付き todos を done に更新する（Node completeTodo）。
         let db = seed_db();
-        let tools = tools(db).unwrap();
+        // open な todo を 1 件仕込む（id=1）。
+        db.writer
+            .transaction(|tx| {
+                tx.execute(
+                    "INSERT INTO todos (id, user_id, bot_id, title, status) \
+                     VALUES (1, 'userA', 'system_default', 'やること', 'open')",
+                    [],
+                )
+                .map_err(yuuka_db::map_sqlite)?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+        let tools = tools(db.clone()).unwrap();
         let add = find(&tools, "addTimelineRecord");
 
         let out = add
             .call(
                 &ctx(),
-                json!({"date": "2026-07-06", "type": "task_done", "todo_id": 42}),
+                json!({"date": "2026-07-06", "type": "task_done", "todo_id": 1}),
             )
             .await
             .unwrap();
         assert_eq!(out.payload["success"], true);
         assert_eq!(out.payload["record"]["type"], "task_done");
-        assert_eq!(out.payload["record"]["todo_id"], 42);
+        assert_eq!(out.payload["record"]["todo_id"], 1);
+
+        // 紐付き todo が done になっている（silent 後退の解消）。
+        let status: String = db
+            .read
+            .read(|conn| {
+                conn.query_row("SELECT status FROM todos WHERE id = 1", [], |r| r.get(0))
+                    .map_err(yuuka_db::map_sqlite)
+            })
+            .await
+            .unwrap();
+        assert_eq!(status, "done");
+    }
+
+    #[tokio::test]
+    async fn expense_type_double_registers_to_expenses() {
+        // type=expense: expenses へ二次登録し expense_id を連結（Node addExpenseRecord）。
+        let db = seed_db();
+        let tools = tools(db.clone()).unwrap();
+        let add = find(&tools, "addTimelineRecord");
+
+        let out = add
+            .call(
+                &ctx(),
+                json!({
+                    "date": "2026-07-06",
+                    "type": "expense",
+                    "amount": 1500,
+                    "expense_category": "食費",
+                    "title": "ランチ"
+                }),
+            )
+            .await
+            .unwrap();
+        assert_eq!(out.payload["success"], true);
+        // Node: `¥{amount} を記録しました。`（整数は小数点なし）。
+        assert_eq!(out.payload["message"], "¥1500 を記録しました。");
+        assert_eq!(out.payload["record"]["type"], "expense");
+        assert_eq!(out.payload["record"]["expense_category"], "食費");
+        assert!(out.payload["record"]["expense_id"].is_i64());
+
+        // expenses に 1 行（source='timeline'・memo=title・amount）が入っている。
+        let (amount, source, memo): (i64, String, String) = db
+            .read
+            .read(|conn| {
+                conn.query_row(
+                    "SELECT amount, source, memo FROM expenses WHERE user_id = 'userA'",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                )
+                .map_err(yuuka_db::map_sqlite)
+            })
+            .await
+            .unwrap();
+        assert_eq!(amount, 1500);
+        assert_eq!(source, "timeline");
+        assert_eq!(memo, "ランチ");
+
+        // amount 欠落は fail（Node `expense には amount が必要です。`）。
+        let out = add
+            .call(&ctx(), json!({"date": "2026-07-06", "type": "expense"}))
+            .await
+            .unwrap();
+        assert_eq!(out.payload["success"], false);
     }
 
     #[tokio::test]

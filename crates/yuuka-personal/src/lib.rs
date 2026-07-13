@@ -5,11 +5,12 @@
 //!
 //! 参照スコープ = 連絡先のコア CRUD（list / save〔add|update〕 / delete）＋コンテキストノート
 //! （`/api/context-note` GET/POST・`context_notes` 表）＋クリップボード（`/api/clipboard` GET・
-//! `/api/clipboard/delete` POST・`clipboard_entries` 表）。誕生日リマインド cron
-//! （`listBirthdayContactsForDate` / `markBirthdayReminded`・全ユーザー横断）は [`cron`] に追加済み。
+//! `/api/clipboard/delete` POST・`clipboard_entries` 表）＋クリップボードの追加ツール
+//! （`addClipboardEntry`・[`tools`]・TTL 付き `ClipboardRepo::add`）。cron は誕生日リマインド
+//! （`listBirthdayContactsForDate` / `markBirthdayReminded`）と TTL 一括削除（`deleteExpired`・
+//! `yuuka-services` の `ClipboardCleanupService`）が全ユーザー横断で稼働。
 //! 以下は **deferred**（後続増分で追加）:
 //! - 連絡先の部分一致検索（`searchContacts`・`GET` 検索パラメータ）
-//! - クリップボードの追加（`addEntry`）と TTL 一括削除 cron（`deleteExpired`・全ユーザー横断）
 
 pub mod cron;
 pub mod dto;

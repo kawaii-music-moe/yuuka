@@ -6,8 +6,9 @@
 //! 本ルータは supervisor 側で共通レイヤ（CSRF/body 上限）配下にマージされる。
 //!
 //! 参照スコープ = コア CRUD の list/add に加え、予算上限（budget_limits）・支払い予定
-//! （planned_payments・消込含む）。receipt OCR（upload-receipt）と月次集計
-//! (total/breakdown/trend) は deferred。
+//! （planned_payments・消込含む）・月次集計（`GET /api/expenses` の total/incomeTotal/
+//! breakdown/trend）。receipt OCR（upload-receipt）は Gemini vision 経路の supervisor 層配線
+//! が必要なため deferred。
 
 use axum::extract::{Query, State};
 use axum::routing::{get, post};
@@ -28,6 +29,12 @@ use crate::repo::ExpenseRepo;
 struct BotQuery {
     #[serde(default, rename = "botId")]
     bot_id: Option<String>,
+    /// 集計対象の年（未指定は当月）。Node は `parseInt(query.year || now.getFullYear())`。
+    #[serde(default)]
+    year: Option<i64>,
+    /// 集計対象の月 1-12（未指定は当月）。Node は `parseInt(query.month || now.getMonth()+1)`。
+    #[serde(default)]
+    month: Option<i64>,
 }
 
 /// `GET /api/expenses/plans` の query（`botId` + `includePaid`）。
@@ -65,8 +72,23 @@ async fn list(
     Query(q): Query<BotQuery>,
 ) -> Result<Json<Envelope<ExpenseListData>>, ApiError> {
     let scope = resolve_scope(&user.0, &db, q.bot_id.as_deref()).await?;
-    let expenses = ExpenseRepo::new(&db).list(&scope).await?;
-    Ok(Json(Envelope::ok(ExpenseListData { expenses })))
+    let repo = ExpenseRepo::new(&db);
+    // 集計対象月: 未指定なら当月（Node の getFullYear/getMonth+1 = サーバローカル暦）。
+    let (cur_year, cur_month) = repo.current_year_month().await?;
+    let year = q.year.unwrap_or(cur_year);
+    let month = q.month.unwrap_or(cur_month);
+    let expenses = repo.list(&scope).await?;
+    let total = repo.monthly_total(&scope, "expense", year, month).await?;
+    let income_total = repo.monthly_total(&scope, "income", year, month).await?;
+    let breakdown = repo.monthly_category_breakdown(&scope, year, month).await?;
+    let trend = repo.monthly_trend(&scope, 6).await?;
+    Ok(Json(Envelope::ok(ExpenseListData {
+        expenses,
+        total,
+        income_total,
+        breakdown,
+        trend,
+    })))
 }
 
 async fn add(

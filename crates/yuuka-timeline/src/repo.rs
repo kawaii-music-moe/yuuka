@@ -96,10 +96,14 @@ impl<'a> TimelineRepo<'a> {
             .await
     }
 
-    /// 記録を作成し、作成後の行を返す（Node `addTimelineRecord`）。
+    /// 記録を作成し、作成後の行を返す（Node `addTimelineRecord`・プレーン記録経路）。
     ///
     /// `recorded_at` は未指定なら `datetime('now')`（**UTC**。Node は `new Date().toISOString()`
     /// ＝ UTC で入れるため localtime にすると +9h ずれる。`created_at` は Node 同様 localtime）。
+    ///
+    /// **cross-domain（task_done）**: `type=task_done` かつ `todo_id` 指定時は、同一トランザクション
+    /// 内で先に紐付き todos を `done` へ更新する（Node route/tool の `completeTodo`・状態無条件更新＝
+    /// `WHERE user_id AND bot_id AND id`。既に done でも冪等）。type=expense は [`Self::add_expense_record`]。
     ///
     /// # Errors
     /// 挿入失敗・作成後の取得失敗時 [`DbError`]。
@@ -109,9 +113,24 @@ impl<'a> TimelineRepo<'a> {
         input: NewTimelineRecord,
     ) -> Result<TimelineRecord, DbError> {
         let (uid, bid) = scope_keys(scope);
+        // Node: `type === "task_done" && typeof todoId === "number"` のときのみ completeTodo。
+        let complete_todo_id = if input.r#type == "task_done" {
+            input.todo_id
+        } else {
+            None
+        };
         let id = self
             .writer
             .transaction(move |tx| {
+                // task_done の紐付き todo を先に完了（Node completeTodo・無条件 UPDATE）。
+                if let Some(todo_id) = complete_todo_id {
+                    tx.execute(
+                        "UPDATE todos SET status = 'done', updated_at = datetime('now', 'localtime') \
+                         WHERE user_id = ?1 AND bot_id = ?2 AND id = ?3",
+                        params![uid, bid, todo_id],
+                    )
+                    .map_err(map_sqlite)?;
+                }
                 // 内部列 expense_id / expense_category / media_path / media_type は INSERT 対象外
                 // （列省略でデフォルト NULL）。クライアントからは設定不可（dto の M-8 注記）。
                 tx.execute(
@@ -142,6 +161,120 @@ impl<'a> TimelineRepo<'a> {
         self.get(scope, id)
             .await?
             .ok_or_else(|| DbError::Operation("inserted timeline record not found".to_owned()))
+    }
+
+    /// `type=expense` の記録を作成し、`expenses` にも二次登録する（Node `addExpenseRecord`）。
+    ///
+    /// 単一 writer トランザクションで原子的に: (1) `expenses` へ INSERT（`source='timeline'`・
+    /// `type='expense'`・`memo=title`・`date=input.date`・`time` は `recorded_at.slice(11,19)`
+    /// があればそれ、無ければ localtime）、(2) `timeline_records` へ INSERT（`type='expense'`・
+    /// `expense_id`=(1) の rowid・`expense_category`・`amount` を連結）。
+    /// finance/todo クレートを import せず（依存 DAG 維持）、[`crate::repo`] 内の raw SQL で束ねる
+    /// （finance `settle_plan` と同じ cross-table・単一 tx パターン）。
+    ///
+    /// `amount` は Node の `Number(b.amount)` 相当（route/tool が検証済みの非 0 値）。`expenses.amount`
+    /// は INTEGER 列だが SQLite の型親和性で損失なく整数化される（Node の格納と一致）。
+    ///
+    /// # Errors
+    /// 各 INSERT 失敗・作成後の取得失敗時 [`DbError`]。
+    pub async fn add_expense_record(
+        &self,
+        scope: &UserScope,
+        input: &NewTimelineRecord,
+        amount: f64,
+        category: String,
+    ) -> Result<TimelineRecord, DbError> {
+        let (uid, bid) = scope_keys(scope);
+        let date = input.date.clone();
+        let recorded_at = input.recorded_at.clone();
+        let title = input.title.clone();
+        let location = input.location.clone();
+        // Node: `expTime = recordedAt ? recordedAt.slice(11, 19) : undefined`（"HH:MM:SS"）。
+        // JS slice のセマンティクス（Some のとき必ず値・範囲外は空文字）に合わせる: 空文字は SQL の
+        // COALESCE では NULL 扱いにならず expenses.time="" として格納され Node と一致する。None（未指定）
+        // のみ localtime に落ちる。get(11..19)（<19 文字で None→localtime）だと Node と食い違うため回避。
+        let exp_time = recorded_at
+            .as_deref()
+            .map(|s| s.chars().skip(11).take(8).collect::<String>());
+        // expenses.amount は INTEGER 列で read 側が i64 固定のため、非整数（円は整数運用）は round して
+        // 整数を格納する（REAL 行が 1 件でも混ざると finance の list/get が i64 デコードで 500 に落ちる）。
+        // timeline_records.amount は REAL 列のため raw f64 のまま（Node の値と一致）。
+        let expense_amount = amount.round() as i64;
+        let id = self
+            .writer
+            .transaction(move |tx| {
+                // (1) expenses への二次登録（source='timeline'・memo=title・time は slice or localtime）。
+                tx.execute(
+                    "INSERT INTO expenses \
+                       (user_id, bot_id, type, amount, category, memo, date, time, source, created_at) \
+                     VALUES (?1, ?2, 'expense', ?3, ?4, ?5, ?6, \
+                             COALESCE(?7, time('now', 'localtime')), \
+                             'timeline', datetime('now', 'localtime'))",
+                    params![uid, bid, expense_amount, category, title, date, exp_time],
+                )
+                .map_err(map_sqlite)?;
+                let expense_id = tx.last_insert_rowid();
+                // (2) timeline_records（expense_id 連結・expense_category・content/todo_id/media は NULL）。
+                tx.execute(
+                    "INSERT INTO timeline_records \
+                       (user_id, bot_id, date, recorded_at, type, title, content, \
+                        todo_id, expense_id, amount, expense_category, media_path, media_type, \
+                        location, created_at) \
+                     VALUES (?1, ?2, ?3, \
+                             COALESCE(?4, datetime('now')), \
+                             'expense', ?5, NULL, NULL, ?6, ?7, ?8, NULL, NULL, ?9, \
+                             datetime('now', 'localtime'))",
+                    params![uid, bid, date, recorded_at, title, expense_id, amount, category, location],
+                )
+                .map_err(map_sqlite)?;
+                Ok(tx.last_insert_rowid())
+            })
+            .await?;
+        self.get(scope, id)
+            .await?
+            .ok_or_else(|| DbError::Operation("inserted expense timeline record not found".to_owned()))
+    }
+
+    /// `type=media` の記録を作成する（Node `addTimelineRecord` の mediaPath/mediaType 付き経路）。
+    ///
+    /// メディアファイルは呼び出し側（route/tool）が [`crate::media::save_media_base64`] 等で保存済みで、
+    /// ここでは `media_path`（ファイル名）/`media_type`（photo|video）を含めて 1 行 INSERT する。
+    ///
+    /// # Errors
+    /// 挿入失敗・作成後の取得失敗時 [`DbError`]。
+    pub async fn add_media_record(
+        &self,
+        scope: &UserScope,
+        input: &NewTimelineRecord,
+        media_path: String,
+        media_type: String,
+    ) -> Result<TimelineRecord, DbError> {
+        let (uid, bid) = scope_keys(scope);
+        let date = input.date.clone();
+        let recorded_at = input.recorded_at.clone();
+        let title = input.title.clone();
+        let content = input.content.clone();
+        let location = input.location.clone();
+        let id = self
+            .writer
+            .transaction(move |tx| {
+                tx.execute(
+                    "INSERT INTO timeline_records \
+                       (user_id, bot_id, date, recorded_at, type, title, content, \
+                        media_path, media_type, location, created_at) \
+                     VALUES (?1, ?2, ?3, \
+                             COALESCE(?4, datetime('now')), \
+                             'media', ?5, ?6, ?7, ?8, ?9, \
+                             datetime('now', 'localtime'))",
+                    params![uid, bid, date, recorded_at, title, content, media_path, media_type, location],
+                )
+                .map_err(map_sqlite)?;
+                Ok(tx.last_insert_rowid())
+            })
+            .await?;
+        self.get(scope, id)
+            .await?
+            .ok_or_else(|| DbError::Operation("inserted media timeline record not found".to_owned()))
     }
 
     /// 記録を削除する（削除できたら `true`。Node `deleteTimelineRecord`）。

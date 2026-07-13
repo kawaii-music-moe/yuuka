@@ -47,7 +47,7 @@
 
 ## 残作業ロードマップ
 
-- **[remaining-work.md](remaining-work.md)** — **本番投入までの ToDo 全集**（2026-07-14 実測に更新）。判定=経路 A（strangler カナリア）= GO・経路 B（単独ほぼ本番）は no-go／機械ゲート全緑（build/clippy -D/**test 386**/deny exit 0）／被覆率（Web ~37% [57/152]・ツール ~28% [24/87]・WS `/ws/chat` 実装済）／P0 データ安全〜P3 衛生の優先度別チェックリスト／strangler カナリアと単独本番の 2 経路。
+- **[remaining-work.md](remaining-work.md)** — **本番投入までの ToDo 全集**（2026-07-14 実測に更新）。判定=経路 A（strangler カナリア）= GO・経路 B（単独ほぼ本番）は no-go／機械ゲート全緑（build/clippy -D/**test 402**/deny exit 0）／被覆率（Web ~39% [59/152]・ツール ~31% [27/87]・WS `/ws/chat` 実装済）／縮退シーム（後退機能）5 件を 2026-07-14 に解消（finance 月次集計・timeline cross-domain/media・clipboard addEntry・playbook 実行エンジン）／P0 データ安全〜P3 衛生の優先度別チェックリスト／strangler カナリアと単独本番の 2 経路。
 
 ## 実装レビュー
 

@@ -8,11 +8,16 @@
 //! 方針（M-12・全ドメイン共通）: delete の該当無は Node パリティで **200 `{success:false}`**
 //! を返す（404 にしない・`deletedId` は返さない）。
 //!
-//! T1 参照スコープ = `timeline_records` のコア CRUD（day list / add / delete）＋
-//! `day_plan_blocks` の CRUD（plan add / update / delete・day list に blocks 同梱）。
-//! media 保存/配信・expense/task_done の cross-domain 副作用は deferred。
+//! 参照スコープ = `timeline_records` のコア CRUD（day list / add / delete）＋
+//! `day_plan_blocks` の CRUD（plan add / update / delete・day list に blocks 同梱）＋
+//! cross-domain 副作用（`type=expense` の expenses 二重登録・`type=task_done` の todos 完了）＋
+//! メディア（`POST /api/timeline/media` base64 アップロード・`GET /api/timeline/media/{filename}`
+//! 認証付き配信）。tool 経由の Discord 添付 URL からのメディア取得のみ deferred（reqwest 依存）。
 
-use axum::extract::{Query, State};
+use axum::body::Body;
+use axum::extract::{Path, Query, State};
+use axum::http::{header, StatusCode};
+use axum::response::Response;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Deserialize;
@@ -21,9 +26,10 @@ use yuuka_types::{EmptyData, Envelope};
 use yuuka_web::{resolve_scope, ApiError, AppState, AuthenticatedUser, Db, ScopedJson};
 
 use crate::dto::{
-    DayPlanBlockData, NewDayPlanBlock, NewTimelineRecord, TimelineDayData, TimelineRecordData,
-    UpdatePlanBlock,
+    DayPlanBlockData, NewDayPlanBlock, NewTimelineMedia, NewTimelineRecord, TimelineDayData,
+    TimelineRecordData, UpdatePlanBlock,
 };
+use crate::media;
 use crate::repo::TimelineRepo;
 
 #[derive(Debug, Deserialize)]
@@ -48,6 +54,8 @@ pub fn routes() -> Router<AppState> {
         .route("/api/timeline/plan/delete", post(plan_delete))
         .route("/api/timeline/record", post(add))
         .route("/api/timeline/record/delete", post(delete))
+        .route("/api/timeline/media", post(media_upload))
+        .route("/api/timeline/media/{filename}", get(media_serve))
 }
 
 async fn day(
@@ -128,7 +136,25 @@ async fn add(
         return Err(ApiError(WebError::Validation("type is required".to_owned())));
     }
     let scope = resolve_scope(&user.0, &db, bot_id.as_deref()).await?;
-    let record = TimelineRepo::new(&db).add(&scope, input).await?;
+    let repo = TimelineRepo::new(&db);
+
+    // Node parity: type=expense は expenses へ二重登録（amount 必須・category は既定「その他」）。
+    let record = if input.r#type == "expense" {
+        // Node: `amount = Number(b.amount)` が falsy（0/NaN/未指定）は 400。
+        let amount = input.amount.unwrap_or(0.0);
+        if amount == 0.0 {
+            return Err(ApiError(WebError::Validation("amount is required".to_owned())));
+        }
+        // Node: `typeof b.category === "string" ? b.category : "その他"`（空文字はそのまま採用）。
+        let category = input
+            .category
+            .clone()
+            .unwrap_or_else(|| "その他".to_owned());
+        repo.add_expense_record(&scope, &input, amount, category).await?
+    } else {
+        // task_done の todos 完了は repo.add がトランザクション内で処理する。
+        repo.add(&scope, input).await?
+    };
     Ok(Json(Envelope::ok(TimelineRecordData { record })))
 }
 
@@ -140,4 +166,77 @@ async fn delete(
     let scope = resolve_scope(&user.0, &db, bot_id.as_deref()).await?;
     let ok = TimelineRepo::new(&db).delete(&scope, input.id).await?;
     Ok(Json(Envelope::bare(ok)))
+}
+
+/// `POST /api/timeline/media` — base64 メディアを保存し `type=media` 記録を作る（Node media ハンドラ）。
+///
+/// 保存先は `config.media_dir`。MIME 不正・保存失敗は Node と同じく **400 `{success:false, message}`**
+/// （`saveMediaFile` の throw に対応）。`State<AppState>` から DB と media_dir の双方を取る。
+async fn media_upload(
+    user: AuthenticatedUser,
+    State(state): State<AppState>,
+    ScopedJson { bot_id, value: input }: ScopedJson<NewTimelineMedia>,
+) -> Result<Json<Envelope<TimelineRecordData>>, ApiError> {
+    // Node: `!date || !base64 || !mimeType`（空文字含む）は 400「date / base64 / mimeType が必要です。」
+    if input.date.trim().is_empty()
+        || input.base64.trim().is_empty()
+        || input.mime_type.trim().is_empty()
+    {
+        return Err(ApiError(WebError::Validation(
+            "date / base64 / mimeType are required".to_owned(),
+        )));
+    }
+    let scope = resolve_scope(&user.0, &state.db, bot_id.as_deref()).await?;
+    // メディア保存（MIME 検証・書き込み）。失敗は Node 同様 400（生の内部エラーは出さない）。
+    let media_path =
+        media::save_media_base64(&state.config.media_dir, &input.base64, &input.mime_type, &input.date)
+            .await
+            .map_err(|msg| ApiError(WebError::Validation(msg)))?;
+    let media_type = media::media_type_of(&input.mime_type).to_owned();
+    let record_fields = NewTimelineRecord {
+        date: input.date,
+        r#type: "media".to_owned(),
+        recorded_at: input.recorded_at,
+        title: input.title,
+        content: input.content,
+        todo_id: None,
+        amount: None,
+        category: None,
+        location: input.location,
+    };
+    let record = TimelineRepo::new(&state.db)
+        .add_media_record(&scope, &record_fields, media_path, media_type)
+        .await?;
+    Ok(Json(Envelope::ok(TimelineRecordData { record })))
+}
+
+/// `GET /api/timeline/media/{filename}` — 認証付きメディア配信（Node media 配信ハンドラ）。
+///
+/// path traversal 対策（[`media::resolve_media_path`]）で不正名/未存在は **404 "Not Found"**。存在時は
+/// `Content-Type`（拡張子から）+ `Cache-Control: private, max-age=86400` を付けてバイト列を返す。
+async fn media_serve(
+    _user: AuthenticatedUser,
+    State(state): State<AppState>,
+    Path(filename): Path<String>,
+) -> Response {
+    let Some(full) = media::resolve_media_path(&state.config.media_dir, &filename) else {
+        return not_found();
+    };
+    match tokio::fs::read(&full).await {
+        Ok(bytes) => Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, media::content_type_for(&filename))
+            .header(header::CACHE_CONTROL, "private, max-age=86400")
+            .body(Body::from(bytes))
+            .unwrap_or_else(|_| not_found()),
+        Err(_) => not_found(),
+    }
+}
+
+/// メディア未存在/不正名の 404（Node `ctx.res.writeHead(404); ctx.res.end("Not Found")`）。
+fn not_found() -> Response {
+    Response::builder()
+        .status(StatusCode::NOT_FOUND)
+        .body(Body::from("Not Found"))
+        .unwrap_or_default()
 }

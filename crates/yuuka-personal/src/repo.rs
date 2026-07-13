@@ -210,6 +210,76 @@ impl<'a> ClipboardRepo<'a> {
         }
     }
 
+    /// TTL 付きで一時メモを追加し、作成後の行を返す（Node `addEntry`）。
+    ///
+    /// `ttl_hours` は `None`＝無期限（`expires_at` NULL）、`Some(h)`＝`now + h 時間`（ローカル暦・
+    /// 秒精度）。Node は JS 側で `toDbDateTime(new Date(Date.now()+h*3600_000))` を計算するが、
+    /// ここでは SQLite の `datetime('now','localtime','+N seconds')` で同じローカル秒境界に合わせる
+    /// （chrono 非依存・秒精度は Node の `toDbDateTime` の切り捨てと一致）。
+    ///
+    /// # Errors
+    /// 挿入失敗・作成後の取得失敗時 [`DbError`]。
+    pub async fn add(
+        &self,
+        scope: &UserScope,
+        content: String,
+        ttl_hours: Option<f64>,
+    ) -> Result<ClipboardEntry, DbError> {
+        let (uid, bid) = scope_keys(scope);
+        // ttl_hours=Some → 秒へ変換して datetime 修飾子に（切り捨て＝Node の秒フォーマットと一致）。
+        let modifier = ttl_hours.map(|h| format!("+{} seconds", (h * 3600.0) as i64));
+        let id = self
+            .writer
+            .transaction(move |tx| {
+                match &modifier {
+                    Some(m) => tx.execute(
+                        "INSERT INTO clipboard_entries (user_id, bot_id, content, expires_at) \
+                         VALUES (?1, ?2, ?3, datetime('now', 'localtime', ?4))",
+                        params![uid, bid, content, m],
+                    ),
+                    None => tx.execute(
+                        "INSERT INTO clipboard_entries (user_id, bot_id, content, expires_at) \
+                         VALUES (?1, ?2, ?3, NULL)",
+                        params![uid, bid, content],
+                    ),
+                }
+                .map_err(map_sqlite)?;
+                Ok(tx.last_insert_rowid())
+            })
+            .await?;
+        self.get(scope, id)
+            .await?
+            .ok_or_else(|| DbError::Operation("inserted clipboard entry not found".to_owned()))
+    }
+
+    /// スコープ内の単一エントリを id で取得する（期限フィルタなし・作成直後の取得用）。
+    ///
+    /// # Errors
+    /// クエリ失敗時 [`DbError`]。
+    pub async fn get(
+        &self,
+        scope: &UserScope,
+        id: i64,
+    ) -> Result<Option<ClipboardEntry>, DbError> {
+        let (uid, bid) = scope_keys(scope);
+        self.read
+            .read(move |conn| {
+                let sql = format!(
+                    "SELECT {CLIPBOARD_COLUMNS} FROM clipboard_entries \
+                     WHERE id = ?1 AND user_id = ?2 AND bot_id = ?3"
+                );
+                let mut stmt = conn.prepare(&sql).map_err(map_sqlite)?;
+                let mut rows = stmt
+                    .query_map(params![id, uid, bid], row_to_clipboard)
+                    .map_err(map_sqlite)?;
+                match rows.next() {
+                    Some(row) => Ok(Some(row.map_err(map_sqlite)?)),
+                    None => Ok(None),
+                }
+            })
+            .await
+    }
+
     /// スコープ内の有効な（期限切れでない）エントリを新しい順で返す（Node `listEntries`）。
     ///
     /// `expires_at IS NULL OR expires_at > datetime('now','localtime')`（無期限＋未期限）を

@@ -5,10 +5,12 @@
 //! ルータは supervisor が共通レイヤ配下にマージする。
 //!
 //! スコープ = コア CRUD（list/save/delete、name キーの upsert）＋定期実行スケジュール
-//! （schedules の CRUD/toggle）と実行履歴（runs）。cron 実行エンジン本体（node-cron 相当の
-//! スケジューラ・executePlaybook）は別サービスとして deferred。cron 式の妥当性検証は
-//! croner がこのクレートの依存に無いため deferred（後述の routes.rs 参照）。
+//! （schedules の CRUD/toggle）と実行履歴（runs）＋ cron 横断走査 [`cron`]（全ユーザーの有効
+//! スケジュール列挙・run 記録・last_run 更新）。cron 式の due 判定と `executePlaybook` 本体は
+//! croner と会話エンジンを持つ `yuuka-services` の `PlaybookScheduleService` が担う（本 crate は
+//! croner 非依存を保つ）。route 層の cron 式の妥当性検証は依然 deferred（後述の routes.rs 参照）。
 
+pub mod cron;
 pub mod dto;
 pub mod repo;
 pub mod routes;
