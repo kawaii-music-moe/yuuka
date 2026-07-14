@@ -11,10 +11,13 @@
 //! 方針（M-12）: delete の該当無は Node パリティで **200 `{success:false}`**（404 にしない・
 //! `deletedId` は返さない）。save の該当無更新は Node 同様 404。
 
-use axum::extract::{Query, State};
+use axum::extract::{Path, Query, State};
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Deserialize;
+use serde_json::{json, Value};
 use yuuka_core::WebError;
 use yuuka_types::{EmptyData, Envelope};
 use yuuka_web::{resolve_scope, ApiError, AppState, AuthenticatedUser, Db, ScopedJson};
@@ -39,6 +42,8 @@ pub fn routes() -> Router<AppState> {
         .route("/api/personas", get(list))
         .route("/api/personas/save", post(save))
         .route("/api/personas/delete", post(delete))
+        .route("/api/personas/marketplace", get(marketplace_list))
+        .route("/api/personas/marketplace/{id}", get(marketplace_get))
 }
 
 async fn list(
@@ -99,4 +104,48 @@ async fn delete(
     let scope = resolve_scope(&user.0, &db, bot_id.as_deref()).await?;
     let ok = PersonaRepo::new(&db).delete(&scope, input.id).await?;
     Ok(Json(Envelope::bare(ok)))
+}
+
+// ─── マーケットプレイス（公開ペルソナの閲覧・auth:user だが owner を跨ぐ公開読み取り） ──────
+
+/// 公開ペルソナ一覧（Node `GET /api/personas/marketplace`＝`{success, personas}`）。
+/// `_user` は auth ゲートのためだけに取る（owner スコープはかけない＝全公開ペルソナを見せる）。
+async fn marketplace_list(
+    _user: AuthenticatedUser,
+    State(db): State<Db>,
+) -> Result<Json<Value>, ApiError> {
+    let personas = PersonaRepo::new(&db).list_public().await?;
+    Ok(Json(json!({ "success": true, "personas": personas })))
+}
+
+/// 公開ペルソナの全文プレビュー（Node `GET /api/personas/marketplace/:id`）。
+/// id が整数でない／非公開／不在はいずれも **404 `{success:false, message}`**（Node パリティ・
+/// `Number.isInteger` 不成立も未発見扱い）。
+async fn marketplace_get(
+    _user: AuthenticatedUser,
+    State(db): State<Db>,
+    Path(id): Path<String>,
+) -> Response {
+    let Ok(id) = id.parse::<i64>() else {
+        return not_found_public();
+    };
+    match PersonaRepo::new(&db).get_public(id).await {
+        Ok(Some(persona)) => {
+            (StatusCode::OK, Json(json!({ "success": true, "persona": persona }))).into_response()
+        }
+        Ok(None) => not_found_public(),
+        Err(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "success": false, "message": "内部エラーが発生しました。" })),
+        )
+            .into_response(),
+    }
+}
+
+fn not_found_public() -> Response {
+    (
+        StatusCode::NOT_FOUND,
+        Json(json!({ "success": false, "message": "公開ペルソナが見つかりません。" })),
+    )
+        .into_response()
 }

@@ -7,12 +7,32 @@
 //! 読みは [`ReadPool`]、書きは [`WriterHandle`]（BEGIN IMMEDIATE）へ送る。
 
 use rusqlite::{params, Row};
+use serde::Serialize;
 use yuuka_core::scope::ScopedRepo;
 use yuuka_core::{DbError, UserScope};
 use yuuka_db::{map_sqlite, ReadPool, WriterHandle};
 use yuuka_web::Db;
 
 use crate::dto::{Persona, SavePersona, PERSONA_MAX_LENGTH};
+
+/// マーケットプレイス一覧の 1 件（Node `PublicPersonaView`）。**公開ペルソナは owner を跨いで見せる**
+/// ため owner_id ではなく **owner_username**（`users` JOIN・不在は「不明」）を出す。prompt は公開扱い。
+#[derive(Debug, Clone, Serialize)]
+pub struct MarketplacePersona {
+    pub id: i64,
+    pub name: String,
+    pub prompt: String,
+    pub updated_at: String,
+    pub owner_username: String,
+}
+
+/// 公開ペルソナの全文プレビュー（Node marketplace/:id の `{id, name, prompt}`）。
+#[derive(Debug, Clone, Serialize)]
+pub struct MarketplacePreview {
+    pub id: i64,
+    pub name: String,
+    pub prompt: String,
+}
 
 /// 返却列（クリーンビュー・内部列 owner_id は含めない）。
 const PERSONA_COLUMNS: &str = "id, name, prompt, is_public, created_at, updated_at";
@@ -146,6 +166,76 @@ impl<'a> PersonaRepo<'a> {
         } else {
             Ok(None)
         }
+    }
+
+    /// 公開ペルソナ（`is_public = 1`）を更新日時降順で全件返す（Node `listPublicPersonas`・
+    /// **owner を跨ぐ公開読み取り**なのでスコープを取らない）。owner_username は `users` JOIN
+    /// （不在は「不明」）。
+    ///
+    /// # Errors
+    /// クエリ失敗時 [`DbError`]。
+    pub async fn list_public(&self) -> Result<Vec<MarketplacePersona>, DbError> {
+        self.read
+            .read(move |conn| {
+                let mut stmt = conn
+                    .prepare(
+                        "SELECT p.id, p.name, p.prompt, p.updated_at, \
+                            COALESCE(u.username, '不明') AS owner_username \
+                         FROM personas p \
+                         LEFT JOIN users u ON u.discord_id = p.owner_id \
+                         WHERE p.is_public = 1 \
+                         ORDER BY p.updated_at DESC",
+                    )
+                    .map_err(map_sqlite)?;
+                let rows = stmt
+                    .query_map([], |r| {
+                        Ok(MarketplacePersona {
+                            id: r.get(0)?,
+                            name: r.get(1)?,
+                            prompt: r.get(2)?,
+                            updated_at: r.get(3)?,
+                            owner_username: r.get(4)?,
+                        })
+                    })
+                    .map_err(map_sqlite)?;
+                let mut out = Vec::new();
+                for row in rows {
+                    out.push(row.map_err(map_sqlite)?);
+                }
+                Ok(out)
+            })
+            .await
+    }
+
+    /// 公開ペルソナ 1 件のプレビューを id で取る（`is_public = 1` のみ・無ければ `None`）。
+    /// Node `getPersonaById` + `is_public !== 1 → 404` を 1 クエリに畳み、非公開ペルソナは決して返さない。
+    ///
+    /// # Errors
+    /// クエリ失敗時 [`DbError`]。
+    pub async fn get_public(&self, id: i64) -> Result<Option<MarketplacePreview>, DbError> {
+        self.read
+            .read(move |conn| {
+                let mut stmt = conn
+                    .prepare(
+                        "SELECT id, name, prompt FROM personas \
+                         WHERE id = ?1 AND is_public = 1",
+                    )
+                    .map_err(map_sqlite)?;
+                let mut rows = stmt
+                    .query_map(params![id], |r| {
+                        Ok(MarketplacePreview {
+                            id: r.get(0)?,
+                            name: r.get(1)?,
+                            prompt: r.get(2)?,
+                        })
+                    })
+                    .map_err(map_sqlite)?;
+                match rows.next() {
+                    Some(row) => Ok(Some(row.map_err(map_sqlite)?)),
+                    None => Ok(None),
+                }
+            })
+            .await
     }
 
     /// 所有者本人のペルソナを削除する（削除できたら `true`）。
