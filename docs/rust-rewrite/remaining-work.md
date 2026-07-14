@@ -1,6 +1,7 @@
 # Rust 移行 — 残作業ロードマップ（本番投入までの ToDo 全集）
 
 - 最終更新: 2026-07-14（**P2-A/P2-B 18 増分セッション**: admin 15 + settings 6 Web-API（新規 `yuuka-admin`/`yuuka-settings`）+ **todo ツール 4 本 + todo タグ/ガイド 3 本 + finance ツール 9 本**を実装 + 敵対的パリティレビューで確定 0 HIGH。全ゲート緑 — build ✅ / clippy -D ✅ / **test 475** ✅ / deny exit0 ✅・新規依存なし。ルート 120/152・ツール 69/87・**bot 管理系 + Webhook Web-API 完了**）
+- 追記（2026-07-14v）: **リッチ返信 Embed ツール（showRichContent）実装**（新クレート `yuuka-richcontent`・Node `richContentModule.ts`/`utils/embeds.ts` パリティ）。commit `a435583`。**Embed 配管を新設**＝(1) core `ResponsePart::Embed(EmbedPart)` + `EmbedPart`/`EmbedFieldPart`、(2) engine `rich_parts_to_embeds`（`ResponsePart::Embed`→discord `RichEmbed`）を秘書/汎用モード両 `TurnReply.embeds` へ設定（従来 embeds 常時空を解消）、(3) ws `done_frame` が embeds を discord.js APIEmbed JSON（title/description/color 十進/fields/footer）へ直列化（desktop `model.rs Embed` 契約一致・従来 embeds 常時空を解消）。color マップ 11 種・title 必須・fields 最大25・name256/value1024 クリップ・rich_reply 無効時は非生成。exposure=core（capability=None・秘書+汎用モード両露出＝Node `richContentModule` 無条件 push）。空テキスト時 FALLBACK_TEXT は Node `gemini.ts:928-930`（embeds 有無に依らず適用）と一致。**敵対的パリティレビュー**（tool-parity/core-engine-plumbing/ws-desktop-discord の 3 次元×各指摘を独立検証）で**確定 0 件**。**意図的 divergence**（対応不要）: clip は char 単位（UTF-16 でなく・安全側・到達不能）/`setTimestamp()` は RichEmbed に該当フィールド無く非付与。**test 477→485**（richcontent 6 + plumbing 2）・全ゲート緑・新規依存なし。ツール 70→71/87。
 - 追記（2026-07-14u）: **会話ログ要約ツール（summarizeConversationTopic）実装**（新クレート `yuuka-conversation`・Node `conversationFunctions.ts`/`messageLogRepo.searchMessages` パリティ）。commit `a04a2f9`。FTS5（≥3 字・char-count 閾値）/LIKE（1-2 字・`\%_` エスケープ）/期間のみの 3 経路・全経路 `guild_id IS NULL` + user/bot スコープ（§3.12.3 プライバシー）・11→10 narrowed 判定・時系列 reverse・1000 字 truncate・message 文言 verbatim。能力ゲート `capability="memory"`・secretary のみ（Node `getGuildAssistantFunctionModules` は conversation 非露出＝guild-assistant=false）。`normalize_period` は `replacen(...,1)` で Node `.replace("T"," ")` 先頭のみ置換に一致。**test 475→477**・全ゲート緑・新規依存なし。ツール 69→70/87。
 - 追記（2026-07-14e）: **configureBriefing 実装**（yuuka-briefing 拡張・SSRF ガード付き朝報設定ツール）。commit `86ac68f`。**test 440→442**・全ゲート緑・新規依存なし。ツール 68→69/87。
 - 追記（2026-07-14f）: **配信設定 Web-API（deliveryRoutes 6 本）実装**（`yuuka-briefing::routes`）。commit `67e0805`。`GET/POST /api/briefing-config`・`POST /api/briefing/test`・`GET/POST /api/report-configs`・`POST /api/report-configs/test`。実配信は **DeliveryRunner シーム**（既定 NullDeliveryRunner＝未配信へ縮退・サービス本体は後続）。repo に find_briefing 追加 + BriefingPatch を target/weather/location のクリア対応へ拡張。**test 442→446**・全ゲート緑・新規依存なし（axum/serde を briefing へ追加のみ）。ルート 80→86/152。
@@ -44,12 +45,12 @@
 |---|---|
 | `cargo build --release --workspace` | ✅ exit 0 |
 | `cargo clippy --workspace --all-targets` | ✅ exit 0（ts-rs 良性 warning のみ） |
-| `cargo test --workspace` | ✅ **477 passed / 0 failed**（2026-07-14 P2-A/P2-B 増分 + conversation ツールで累積） |
+| `cargo test --workspace` | ✅ **485 passed / 0 failed**（2026-07-14 P2-A/P2-B 増分 + conversation/richcontent ツールで累積） |
 | `cargo deny check` | ✅ **exit 0**（新規依存なし＝既存クレートのみで実装） |
 | 保存時暗号層（Argon2id/AES-256-GCM） | ✅ **実装済**（P1-5・Node ゴールデンベクタでバイト単位パリティ・鍵ローテ起動時配線） |
 | 認証発行（login/setup/logout/register/users） | ✅ **実装済**（P1-1・セッション発行 + bcrypt + 招待 + 監査 + レート制限。**登録 DM は P1-3 で開通**・OAuth は残） |
 | HTTP ルート被覆 | 80 / 152 パス ≒ **53%**（認証 7 + `/api/me` + 9 ドメイン CRUD + 管理系 15 + **設定系 6**〔2026-07-14 settings〕） |
-| Gemini ツール被覆 | 70 / 87 native ≒ **80%**（動的 MCP 0。2026-07-14 に guild-assistant 9 + briefing 2 + credential add/update 2〔crypto 注入〕+ **conversation 1**含む多数を追加） |
+| Gemini ツール被覆 | 71 / 87 native ≒ **82%**（動的 MCP 0。2026-07-14 に conversation 1 + **richContent(showRichContent) 1**〔Embed 配管新設〕含む多数を追加。残 16 は browser 系 10〔chromium 非同梱で意図的 defer〕/ sendChart〔要チャート描画〕/ runBriefingNow〔weather/RSS HTTP〕/ organize・applyTaskPriorities・getRecentActionHistory〔Node 側で範囲外〕/ MCP 動的） |
 | チャットオーケストレーション（秘書ターン） | ✅ **実装済**（P1-2・`yuuka-orchestrator`・実 TurnProcessor・統合テスト緑） |
 | 汎用モード（guild/owner DM ターン） | ✅ **実装済**（P1-3・`process_guild`/`process_bot_dm`・Bot 専用キー + ギルド/DM 分離文脈・統合テスト緑。能力ゲート=全ツール露出は P2-B） |
 | WebSocket `/ws/chat`（デスクトップ会話） | ✅ **実装済**（P1-2・Bearer 認証 + ready/status/done・live 統合テスト緑。interaction/deferred は縮退） |
@@ -179,12 +180,12 @@
 - [x] todo: 13/13 完成（2026-07-14＝subtask/update/progress/detail/tags 2/guide + **editTodoTags/stopTodoRoutine**〔新 repo update_tags/stop_routine〕）。organizeTaskPriorities/applyTaskPriorities/getRecentActionHistory は Node 側で LLM/別基盤依存のため範囲外
 - [x] finance: 14/14 完成（2026-07-14＝月次集計2/予算3/支払い予定 list-add-settle-cancel4/findSettlementCandidates/**linkPlannedPaymentTodo/linkPlannedPaymentReminder**〔cross-domain＝同一DBへ直接SQL・link_todo/link_reminder repo〕）
 - [~] timeline: addTimelineRecord は expense/task_done の cross-domain 副作用に対応済み（2026-07-14）。**残**: createDayPlanBlock/listDayPlan/deleteDayPlanBlock（day_plan_blocks 操作）・tool 経由 media の Discord 添付 URL 取得（reqwest 依存）
-- [~] personal: clipboard(3) + **context-note 3（getContextNote/setContextNote/appendContextNote・2026-07-14＝既存 ContextNoteRepo へ配線・上限 10,000 文字検証・append は改行連結）**。**残**: searchContacts（list を in-tool フィルタ）
+- [x] personal: clipboard(3) + **context-note 3（getContextNote/setContextNote/appendContextNote・2026-07-14＝既存 ContextNoteRepo へ配線・上限 10,000 文字検証・append は改行連結）** + searchContacts（`SearchContactsTool`・name/relationship/notes/tags の LIKE 部分一致・実装済。※ `tools.rs` 冒頭コメントの「deferred」は stale）
 - [~] credential: **add/update 済**（2026-07-14＝`SystemCrypto::encrypt_for_user`・salt=users.salt・`build_tool_registry(db,crypto)` 注入・長さ検証/部分更新）。**残**: browserFillCredential（平文復号 + browser 依存）
 - [ ] browser 一式（searchWeb/fetchDynamicPage/takePageScreenshot/browserInteractive ~9）— 対応クレート無し
 - [ ] chart（sendChart）
 - [~] briefing（2026-07-14＝**configureReport/getBriefingConfig/configureBriefing**〔新 yuuka-briefing クレート・report/briefing 部分更新 upsert + 設定読取。configureBriefing は cron 検証 + add_news_feed の SSRF ガード〔内部/ループバック/リンクローカル/メタデータ拒否〕+ フィード add〔重複無視〕/remove〔部分一致〕+ weather_lat/lng/地名/キーワード部分更新〕）。**残**: runBriefingNow（サービス本体＝天気/RSS 取得の配信実行）
-- [ ] richContent（showRichContent・常時 on のコア）
+- [x] richContent（showRichContent・常時 on のコア）— 2026-07-14＝新クレート `yuuka-richcontent`・core（capability=None・両経路露出）・Embed 配管新設（core `ResponsePart::Embed`→engine `TurnReply.embeds`→Discord twilight / desktop APIEmbed JSON）。詳細は冒頭「2026-07-14v」
 - [x] botAssistant（2026-07-14＝**個人/共有ノート 6 + メンバー管理 3**〔addBotMember/listBotMembers/removeBotMember・extract_user_id メンション解析・remove は自己/owner のみ・yuuka-botassistant クレート〕）。
 - [x] conversation: **summarizeConversationTopic**（2026-07-14＝新クレート `yuuka-conversation`・cap=memory・秘書経路のみ。詳細は冒頭「2026-07-14u」）
 - [ ] **MCP 動的ツール**（`McpProvider` は未実装。`yuuka-tools/src/lib.rs` で deferred）
