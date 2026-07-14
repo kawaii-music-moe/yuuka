@@ -59,6 +59,7 @@ pub fn routes_with(crypto: Option<Arc<SystemCrypto>>) -> Router<AppState> {
         .route("/api/bots/assistant/gemini-key", post(set_gemini_key))
         .route("/api/bots/modules", get(get_modules).post(set_modules))
         .route("/api/bots/usage", get(get_usage))
+        .route("/api/bots/recommended-persona", post(set_recommended_persona))
         .route(
             "/api/admin/bot-attribute-settings",
             get(admin_get).post(admin_set),
@@ -690,6 +691,91 @@ async fn set_persona(
         Json(json!({ "success": ok, "message": message })),
     )
         .into_response()
+}
+
+// ─── POST /api/bots/recommended-persona（推奨ペルソナ設定・Bot 作成者のみ・公開ペルソナのみ §5.2.1） ──
+
+/// 推奨ペルソナを設定/解除する（Node `POST /api/bots/recommended-persona`）。**assistant/persona と別物**＝
+/// `bots.recommended_persona_id` を更新し、**Bot 作成者のみ**（admin バイパス無し・not-found も 403）・
+/// **公開ペルソナのみ**（他人の公開ペルソナも可）を許す。監査ログは Node が取らないため取らない。
+async fn set_recommended_persona(
+    user: AuthenticatedUser,
+    State(db): State<Db>,
+    Query(q): Query<BotIdQuery>,
+    Json(body): Json<Value>,
+) -> Response {
+    let uid = user.0.discord_id;
+    let bot_id = body
+        .get("botId")
+        .and_then(Value::as_str)
+        .or(q.bot_id.as_deref())
+        .unwrap_or("")
+        .to_owned();
+
+    // Bot 作成者のみ（Node `!bot || bot.user_id !== userId → 403`・admin バイパス無し・not-found も 403）。
+    let bot = match bot_repo::get_bot(&db, &bot_id).await {
+        Ok(Some(b)) => b,
+        Ok(None) => return forbidden_creator(),
+        Err(_) => return server_error(),
+    };
+    if bot.owner_id != uid {
+        return forbidden_creator();
+    }
+
+    // personaId: null/未指定/空文字は解除・それ以外は整数必須。
+    let persona_id: Option<i64> = match body.get("personaId") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(s)) if s.is_empty() => None,
+        Some(v) => match int_value(v) {
+            Some(id) => Some(id),
+            None => return bad_request("personaId が不正です。"),
+        },
+    };
+
+    if let Some(pid) = persona_id {
+        // 公開ペルソナのみ推奨に設定できる（Node `!persona || is_public !== 1 → 400`）。成功文言用に name も取る。
+        let name = match bot_repo::get_public_persona_name(&db, pid).await {
+            Ok(n) => n,
+            Err(_) => return server_error(),
+        };
+        let Some(name) = name else {
+            return bad_request("公開（is_public）ペルソナのみ推奨ペルソナに設定できます。");
+        };
+        if bot_repo::set_bot_recommended_persona(&db, &bot.id, Some(pid))
+            .await
+            .is_err()
+        {
+            return server_error();
+        }
+        return (
+            StatusCode::OK,
+            Json(json!({
+                "success": true,
+                "message": format!("推奨ペルソナを「{name}」に設定しました。")
+            })),
+        )
+            .into_response();
+    }
+
+    if bot_repo::set_bot_recommended_persona(&db, &bot.id, None)
+        .await
+        .is_err()
+    {
+        return server_error();
+    }
+    (
+        StatusCode::OK,
+        Json(json!({ "success": true, "message": "推奨ペルソナを解除しました。" })),
+    )
+        .into_response()
+}
+
+/// Node `!bot || bot.user_id !== userId → 403`（recommended-persona 専用文言・admin バイパス無し）。
+fn forbidden_creator() -> Response {
+    status_json(
+        StatusCode::FORBIDDEN,
+        "Botの作成者のみが推奨ペルソナを設定できます。",
+    )
 }
 
 /// `Number(x)` が整数か（数値の整数・整数文字列のみ・Node `Number.isInteger`）。
@@ -1739,5 +1825,94 @@ mod tests {
         assert_eq!(series[0]["responses"], serde_json::json!(1));
         assert_eq!(j["totals"]["requests"], serde_json::json!(1));
         assert_eq!(j["totals"]["responses"], serde_json::json!(1));
+    }
+
+    #[tokio::test]
+    async fn recommended_persona_route() {
+        // seed: bot b1（owner 所有）、persona 1=owner/private・2=other/public・3=other/private。
+        let app = app();
+
+        // 公開ペルソナ(2=Pub)を b1 の推奨に設定 → 200・成功文言に「Pub」。
+        let (st, j) = send(
+            &app,
+            "POST",
+            "/api/bots/recommended-persona",
+            "owner",
+            r#"{"botId":"b1","personaId":2}"#,
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(j["success"], serde_json::json!(true));
+        assert!(j["message"].as_str().unwrap().contains("「Pub」"));
+
+        // 非公開ペルソナ(1=owner/private) → 400「公開…のみ」。
+        let (st, j) = send(
+            &app,
+            "POST",
+            "/api/bots/recommended-persona",
+            "owner",
+            r#"{"botId":"b1","personaId":1}"#,
+        )
+        .await;
+        assert_eq!(st, StatusCode::BAD_REQUEST);
+        assert!(j["message"].as_str().unwrap().contains("公開"));
+
+        // 非作成者(other・admin バイパス無し) → 403 専用文言。
+        let (st, j) = send(
+            &app,
+            "POST",
+            "/api/bots/recommended-persona",
+            "other",
+            r#"{"botId":"b1","personaId":2}"#,
+        )
+        .await;
+        assert_eq!(st, StatusCode::FORBIDDEN);
+        assert!(j["message"].as_str().unwrap().contains("Botの作成者のみ"));
+
+        // admin も作成者でなければ 403（Node は admin バイパス無し）。
+        let (st, _) = send(
+            &app,
+            "POST",
+            "/api/bots/recommended-persona",
+            "admin",
+            r#"{"botId":"b1","personaId":2}"#,
+        )
+        .await;
+        assert_eq!(st, StatusCode::FORBIDDEN);
+
+        // 解除（personaId null）→ 200「解除しました」。
+        let (st, j) = send(
+            &app,
+            "POST",
+            "/api/bots/recommended-persona",
+            "owner",
+            r#"{"botId":"b1","personaId":null}"#,
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK);
+        assert!(j["message"].as_str().unwrap().contains("解除しました"));
+
+        // personaId 非整数 → 400「personaId が不正です。」。
+        let (st, j) = send(
+            &app,
+            "POST",
+            "/api/bots/recommended-persona",
+            "owner",
+            r#"{"botId":"b1","personaId":"x"}"#,
+        )
+        .await;
+        assert_eq!(st, StatusCode::BAD_REQUEST);
+        assert_eq!(j["message"], serde_json::json!("personaId が不正です。"));
+
+        // 未知 Bot → 403（not-found も 403・Node パリティ）。
+        let (st, _) = send(
+            &app,
+            "POST",
+            "/api/bots/recommended-persona",
+            "owner",
+            r#"{"botId":"ghost","personaId":2}"#,
+        )
+        .await;
+        assert_eq!(st, StatusCode::FORBIDDEN);
     }
 }

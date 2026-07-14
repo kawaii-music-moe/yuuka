@@ -1709,6 +1709,53 @@ pub async fn set_bot_persona(
         .await
 }
 
+/// 公開ペルソナ（`is_public = 1`）の `name` を返す（推奨ペルソナ設定の可否判定 + 成功文言用）。
+/// 非公開／不在は `None`（Node は getPersonaById + `is_public !== 1` を判定・ここは 1 クエリに畳む）。
+///
+/// # Errors
+/// 読み取り失敗時 [`DbError`]。
+pub async fn get_public_persona_name(
+    db: &Db,
+    persona_id: i64,
+) -> Result<Option<String>, DbError> {
+    db.read
+        .read(move |conn| {
+            conn.query_row(
+                "SELECT name FROM personas WHERE id = ?1 AND is_public = 1",
+                params![persona_id],
+                |r| r.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(map_sqlite)
+        })
+        .await
+}
+
+/// Bot の推奨ペルソナ（`recommended_persona_id`）を設定/解除する（Node `setRecommendedPersona`）。
+/// `Some(id)` で設定・`None` で解除。行が動けば `true`（`updated_at` も更新・Node と一致）。
+///
+/// # Errors
+/// 書き込み失敗時 [`DbError`]。
+pub async fn set_bot_recommended_persona(
+    db: &Db,
+    bot_id: &str,
+    persona_id: Option<i64>,
+) -> Result<bool, DbError> {
+    let bot_id = bot_id.to_owned();
+    db.writer
+        .transaction(move |tx| {
+            let n = tx
+                .execute(
+                    "UPDATE bots SET recommended_persona_id = ?1, \
+                     updated_at = datetime('now','localtime') WHERE id = ?2",
+                    params![persona_id, bot_id],
+                )
+                .map_err(map_sqlite)?;
+            Ok(n > 0)
+        })
+        .await
+}
+
 /// 公開ペルソナをユーザーのコピーとしてインポート（Node `importPersona`・独立コピー）。成功なら true。
 ///
 /// # Errors
