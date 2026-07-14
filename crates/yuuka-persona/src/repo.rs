@@ -238,6 +238,68 @@ impl<'a> PersonaRepo<'a> {
             .await
     }
 
+    /// (user, bot) の適用中ペルソナを設定する（Node `setActivePersonaForBot`）。`persona_id = None` は
+    /// **適用解除**（DELETE＝既定ペルソナへ）、`Some(id)` は upsert（`ON CONFLICT(user_id, bot_id)`）。
+    /// bot 単位（`scope.bot_id`）でスコープする（秘書ペルソナは Bot 単位で独立・v8）。呼び出し側で
+    /// 所有権（owner=user）を検証済み前提（FK: persona_id→personas・user_id→users）。
+    ///
+    /// # Errors
+    /// 書き込み失敗時 [`DbError`]。
+    pub async fn set_active(
+        &self,
+        scope: &UserScope,
+        persona_id: Option<i64>,
+    ) -> Result<(), DbError> {
+        let user = scope.user_id().as_str().to_owned();
+        let bot = scope.bot_id().as_str().to_owned();
+        self.writer
+            .transaction(move |tx| {
+                match persona_id {
+                    None => {
+                        tx.execute(
+                            "DELETE FROM bot_active_personas WHERE user_id = ?1 AND bot_id = ?2",
+                            params![user, bot],
+                        )
+                        .map_err(map_sqlite)?;
+                    }
+                    Some(pid) => {
+                        tx.execute(
+                            "INSERT INTO bot_active_personas (user_id, bot_id, persona_id, updated_at) \
+                             VALUES (?1, ?2, ?3, datetime('now', 'localtime')) \
+                             ON CONFLICT(user_id, bot_id) DO UPDATE SET \
+                               persona_id = excluded.persona_id, \
+                               updated_at = datetime('now', 'localtime')",
+                            params![user, bot, pid],
+                        )
+                        .map_err(map_sqlite)?;
+                    }
+                }
+                Ok(())
+            })
+            .await
+    }
+
+    /// (user, bot) の適用中ペルソナ id を読む（テスト/検証用・無ければ `None`）。
+    ///
+    /// # Errors
+    /// 読み取り失敗時 [`DbError`]。
+    pub async fn active_persona_id(&self, scope: &UserScope) -> Result<Option<i64>, DbError> {
+        let user = scope.user_id().as_str().to_owned();
+        let bot = scope.bot_id().as_str().to_owned();
+        self.read
+            .read(move |conn| {
+                conn.query_row(
+                    "SELECT persona_id FROM bot_active_personas \
+                     WHERE user_id = ?1 AND bot_id = ?2",
+                    params![user, bot],
+                    |r| r.get::<_, i64>(0),
+                )
+                .optional()
+                .map_err(map_sqlite)
+            })
+            .await
+    }
+
     /// 所有者本人のペルソナの公開フラグ（`is_public`）を設定する（Node `updatePersona({isPublic})`）。
     /// スコープ内に無ければ `false`。**非公開化（1→0）時は当該ペルソナを推奨に設定している Bot から
     /// 解除**する（`bots.recommended_persona_id = NULL`・§5.2.1）。読み取り・更新・解除を単一 writer Tx で。

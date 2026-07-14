@@ -609,6 +609,66 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn set_active_upsert_and_clear() {
+        let (db, path) = seed_db_at();
+        insert_user(&path, "u", "U");
+        let p1 = insert_persona(&path, "u", "One", "p1", 0);
+        let p2 = insert_persona(&path, "u", "Two", "p2", 0);
+        let repo = PersonaRepo::new(&db);
+
+        // 初期は未適用。
+        assert!(repo.active_persona_id(&scope("u")).await.unwrap().is_none());
+        // 適用 → p1。
+        repo.set_active(&scope("u"), Some(p1)).await.unwrap();
+        assert_eq!(repo.active_persona_id(&scope("u")).await.unwrap(), Some(p1));
+        // upsert → p2（PK(user,bot) なので 1 行が差し替わる）。
+        repo.set_active(&scope("u"), Some(p2)).await.unwrap();
+        assert_eq!(repo.active_persona_id(&scope("u")).await.unwrap(), Some(p2));
+        // 解除 → None。
+        repo.set_active(&scope("u"), None).await.unwrap();
+        assert!(repo.active_persona_id(&scope("u")).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn route_activate_persona() {
+        let (db, path) = seed_db_at();
+        insert_user(&path, "u", "U");
+        let mine = insert_persona(&path, "u", "Mine", "p", 0);
+        let others = insert_persona(&path, "other", "Theirs", "p2", 0);
+        let app = app_with(db.clone());
+
+        // 適用: 200「…を適用しました。」・active が mine になる。
+        let (st, j) = send_post(&app, "/api/personas/activate", &format!(r#"{{"id":{mine}}}"#)).await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(j["success"], serde_json::json!(true));
+        assert!(j["message"].as_str().unwrap().contains("適用しました"));
+        assert_eq!(
+            PersonaRepo::new(&db).active_persona_id(&scope("u")).await.unwrap(),
+            Some(mine)
+        );
+
+        // 他人のペルソナ → 403。
+        let (st, j) = send_post(&app, "/api/personas/activate", &format!(r#"{{"id":{others}}}"#)).await;
+        assert_eq!(st, StatusCode::FORBIDDEN);
+        assert!(j["message"].as_str().unwrap().contains("自分のペルソナのみ"));
+
+        // 解除（id null）→ 200「デフォルト…」・active None。
+        let (st, j) = send_post(&app, "/api/personas/activate", r#"{"id":null}"#).await;
+        assert_eq!(st, StatusCode::OK);
+        assert!(j["message"].as_str().unwrap().contains("デフォルト"));
+        assert!(PersonaRepo::new(&db)
+            .active_persona_id(&scope("u"))
+            .await
+            .unwrap()
+            .is_none());
+
+        // 非整数 id → 400「id が不正です。」。
+        let (st, j) = send_post(&app, "/api/personas/activate", r#"{"id":"abc"}"#).await;
+        assert_eq!(st, StatusCode::BAD_REQUEST);
+        assert_eq!(j["message"], serde_json::json!("id が不正です。"));
+    }
+
+    #[tokio::test]
     async fn route_requires_auth() {
         let resp = app()
             .oneshot(

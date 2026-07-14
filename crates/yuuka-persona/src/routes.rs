@@ -46,6 +46,7 @@ pub fn routes() -> Router<AppState> {
         .route("/api/personas/marketplace/{id}", get(marketplace_get))
         .route("/api/personas/import", post(import_persona))
         .route("/api/personas/publish", post(publish_persona))
+        .route("/api/personas/activate", post(activate_persona))
 }
 
 async fn list(
@@ -221,6 +222,76 @@ fn missing_id() -> Response {
         Json(json!({ "success": false, "message": "id は必須です。" })),
     )
         .into_response()
+}
+
+#[derive(Debug, Deserialize)]
+struct ActivateInput {
+    /// null/欠落/空文字 → 適用解除（既定へ）。それ以外は整数 id（Node `Number(id)`+`isInteger`）。
+    #[serde(default)]
+    id: Option<Value>,
+}
+
+/// (現在の Bot に対する) 適用中ペルソナを切り替える（Node `POST /api/personas/activate`・**bot 単位**）。
+/// null/空 → 解除、整数以外 → 400「id が不正です。」、他人のペルソナ → 403、成功 → 200 {message}。
+async fn activate_persona(
+    user: AuthenticatedUser,
+    State(db): State<Db>,
+    ScopedJson {
+        bot_id,
+        value: input,
+    }: ScopedJson<ActivateInput>,
+) -> Response {
+    let scope = match resolve_scope(&user.0, &db, bot_id.as_deref()).await {
+        Ok(s) => s,
+        Err(_) => return internal_error(),
+    };
+    let repo = PersonaRepo::new(&db);
+    // null/欠落/空文字は「適用解除（既定へ）」（Node `id != null && id !== "" ? Number(id) : null`）。
+    let cleared = match &input.id {
+        None | Some(Value::Null) => true,
+        Some(Value::String(s)) => s.is_empty(),
+        _ => false,
+    };
+    if cleared {
+        return match repo.set_active(&scope, None).await {
+            Ok(()) => (
+                StatusCode::OK,
+                Json(json!({ "success": true, "message": "デフォルトペルソナに戻しました。" })),
+            )
+                .into_response(),
+            Err(_) => internal_error(),
+        };
+    }
+    let Some(id) = as_int_id(input.id) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "success": false, "message": "id が不正です。" })),
+        )
+            .into_response();
+    };
+    // 自分のペルソナのみ適用できる（`get` は owner-scoped＝他人/不在は None → 403）。
+    let persona = match repo.get(&scope, id).await {
+        Ok(p) => p,
+        Err(_) => return internal_error(),
+    };
+    let Some(persona) = persona else {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({ "success": false, "message": "自分のペルソナのみ適用できます。" })),
+        )
+            .into_response();
+    };
+    match repo.set_active(&scope, Some(id)).await {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(json!({
+                "success": true,
+                "message": format!("ペルソナ「{}」を適用しました。", persona.name)
+            })),
+        )
+            .into_response(),
+        Err(_) => internal_error(),
+    }
 }
 
 #[derive(Debug, Deserialize)]
