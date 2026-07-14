@@ -135,6 +135,38 @@ impl<'a> TodoRepo<'a> {
             .await
     }
 
+    /// 未完了 ToDo に付いた全タグを（重複ありで）平坦に返す（Node `listAllTags` の集計元）。
+    ///
+    /// `tags` は JSON 配列列（例 `["買い物","緊急"]`）。行ごとに parse して連結する。集計（件数・
+    /// 並び）は呼び出し側で行う。
+    ///
+    /// # Errors
+    /// クエリ失敗時 [`DbError`]。
+    pub async fn open_tags(&self, scope: &UserScope) -> Result<Vec<String>, DbError> {
+        let (uid, bid) = scope_keys(scope);
+        self.read
+            .read(move |conn| {
+                let mut stmt = conn
+                    .prepare(
+                        "SELECT tags FROM todos \
+                         WHERE user_id = ?1 AND bot_id = ?2 AND status = 'open'",
+                    )
+                    .map_err(map_sqlite)?;
+                let rows = stmt
+                    .query_map(params![uid, bid], |row| row.get::<_, String>(0))
+                    .map_err(map_sqlite)?;
+                let mut out = Vec::new();
+                for row in rows {
+                    let raw = row.map_err(map_sqlite)?;
+                    // 破損した JSON は空扱い（握り潰さず空配列にフォールバック・集計を落とさない）。
+                    let tags: Vec<String> = serde_json::from_str(&raw).unwrap_or_default();
+                    out.extend(tags);
+                }
+                Ok(out)
+            })
+            .await
+    }
+
     /// todo を作成し、作成後の行を返す。
     ///
     /// # Errors

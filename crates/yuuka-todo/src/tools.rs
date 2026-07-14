@@ -62,10 +62,44 @@ pub fn tools(db: Db) -> Result<Vec<Arc<dyn Tool>>, ToolError> {
         }),
         Arc::new(GetTaskDetailTool {
             name: ToolName::checked("getTaskDetail".to_owned())?,
+            db: db.clone(),
+        }),
+        Arc::new(ListTodoTagsTool {
+            name: ToolName::checked("listTodoTags".to_owned())?,
+            db: db.clone(),
+        }),
+        Arc::new(ListTasksByTagTool {
+            name: ToolName::checked("listTasksByTag".to_owned())?,
             db,
+        }),
+        Arc::new(GetTaskUsageGuideTool {
+            name: ToolName::checked("getTaskUsageGuide".to_owned())?,
         }),
     ])
 }
+
+/// タスク管理の使い方ガイド本文（Node `TASK_USAGE_GUIDE_MD`・公開ページ `/tasks/guide` と同内容）。
+const TASK_USAGE_GUIDE_MD: &str = "## タスク管理の使い方\n\
+### 1. タスクの基本\n\
+「やること」を登録して、期限・優先度・進捗とともに管理できます。「〇〇をタスクに追加して」で登録、「〇〇終わった」で完了にできます。\n\
+- **期限・開始日**: 期限と開始日を設定でき、両方あるタスクはガントチャートにバーで表示されます。\n\
+- **優先度**: 🔴高 / 🟡中 / 🔵低。「タスクを整理して」でAIが優先度を提案します（確定は承認後）。\n\
+- **いつかやる**: 期限も開始日も決めていないタスクは「🕗 いつかやる」にまとまります。\n\
+### 2. サブタスクと進捗\n\
+- **サブタスク**: 大きなタスクを小さな手順に分解できます（1段まで）。親の進捗は「完了サブタスク数 ÷ 全体」で自動計算。\n\
+- **進捗**: サブタスクのないタスクは 0〜100% で更新でき、メモとともに履歴に残ります。\n\
+### 3. タグでグループ分け\n\
+- **自動タグ付け**: 追加・更新時に内容からAIが自動でタグを付けます。\n\
+- **手動修正**: 「#3のタグを『買い物』に変えて」「『緊急』タグを足して」「『仮』タグを外して」のように直せます。\n\
+- **グループ表示**: 「タスクをグループ別に見せて」でタグごとに確認できます（タグ無しは「未分類」）。\n\
+### 4. ルーチン（繰り返し）タスク\n\
+「毎週月曜の朝に〇〇」のように伝えると繰り返しタスクとして登録され、期日が来ると自動で次回ぶんへ更新されます。\n\
+- **終わり方を決めて登録**: 「年末まで毎週」（終了日）や「毎日5回だけ」（回数）を指定すると自動で止まります。\n\
+- **あとから終了**: 「もう毎週の〇〇はやらなくていい」で繰り返しを終了（タスク自体は単発として残ります）。\n\
+- **リマインド**: 期限が近づくと自動でDM／チャンネルに通知されます。\n\
+### 5. 表示モード\n\
+- **一覧**: 優先度・期限順。「全て / 未完了 / 完了済み」で絞り込み。\n\
+- **ガント**: 開始日〜期限をバーで時系列表示。";
 
 // ─── 共通ヘルパ ───────────────────────────────────────────────────────────────
 
@@ -703,6 +737,170 @@ impl Tool for GetTaskDetailTool {
     }
 }
 
+// ─── listTodoTags ────────────────────────────────────────────────────────────
+
+struct ListTodoTagsTool {
+    name: ToolName,
+    db: Db,
+}
+
+#[async_trait]
+impl Tool for ListTodoTagsTool {
+    fn declaration(&self) -> FunctionDeclaration {
+        FunctionDeclaration {
+            name: self.name.clone(),
+            description: "未完了タスクに付いているタグの一覧と、それぞれの件数を取り出す。\
+                「どんなタグがある？」等で呼ぶ。listTodos でタグ絞り込みに使うタグ名の確認にも使う。"
+                .to_owned(),
+            parameters_json_schema: json!({ "type": "object", "properties": {} }),
+            requires_confirmation: false,
+        }
+    }
+
+    async fn call(&self, ctx: &ToolContext, _args: Value) -> Result<ToolOutcome, ToolError> {
+        let all = TodoRepo::new(&self.db)
+            .open_tags(&scope_of(ctx))
+            .await
+            .map_err(exec_err)?;
+        // タグごとの件数を数え、件数降順→タグ名昇順で安定ソート。
+        let mut counts: std::collections::HashMap<String, i64> = std::collections::HashMap::new();
+        for tag in all {
+            *counts.entry(tag).or_insert(0) += 1;
+        }
+        if counts.is_empty() {
+            return Ok(ToolOutcome::from_payload(ok_payload(
+                "タグの付いた未完了ToDoはありません。",
+                json!({ "tags": [] }),
+            )));
+        }
+        let mut tags: Vec<(String, i64)> = counts.into_iter().collect();
+        tags.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        let lines: Vec<String> = tags.iter().map(|(t, c)| format!("🏷️ {t} ({c}件)")).collect();
+        let payload: Vec<Value> = tags
+            .iter()
+            .map(|(t, c)| json!({ "tag": t, "count": c }))
+            .collect();
+        Ok(ToolOutcome::from_payload(ok_payload(
+            format!(
+                "タグ一覧 ({}種類):\n{}\n特定タグのToDoは listTodos の tag 引数で絞り込めます。",
+                tags.len(),
+                lines.join("\n")
+            ),
+            json!({ "tags": payload }),
+        )))
+    }
+}
+
+// ─── listTasksByTag ──────────────────────────────────────────────────────────
+
+struct ListTasksByTagTool {
+    name: ToolName,
+    db: Db,
+}
+
+#[async_trait]
+impl Tool for ListTasksByTagTool {
+    fn declaration(&self) -> FunctionDeclaration {
+        FunctionDeclaration {
+            name: self.name.clone(),
+            description: "タスクをタグ（グループ）ごとにまとめて取り出す。\
+                「タグごとにまとめて」等で呼ぶ。1つのタスクが複数タグを持つ場合は各グループに現れる。\
+                タグの付いていないタスクは『未分類』グループにまとまる。"
+                .to_owned(),
+            parameters_json_schema: json!({
+                "type": "object",
+                "properties": {
+                    "status": { "type": "string", "description": "'open'（既定）|'done'|'all'" }
+                }
+            }),
+            requires_confirmation: false,
+        }
+    }
+
+    async fn call(&self, ctx: &ToolContext, args: Value) -> Result<ToolOutcome, ToolError> {
+        // status: open（既定）/done は絞り込み、all は無フィルタ。
+        let status = match args.get("status").and_then(Value::as_str) {
+            Some("done") => Some("done".to_owned()),
+            Some("all") => None,
+            _ => Some("open".to_owned()),
+        };
+        let todos = TodoRepo::new(&self.db)
+            .list_tree(&scope_of(ctx), status, None)
+            .await
+            .map_err(exec_err)?;
+        if todos.is_empty() {
+            return Ok(ToolOutcome::from_payload(ok_payload(
+                "該当するToDoはありません。",
+                json!({ "groups": [] }),
+            )));
+        }
+        const UNTAGGED: &str = "未分類";
+        // タグ→そのタグを持つトップレベル ToDo。タグ無しは「未分類」。
+        let mut buckets: std::collections::HashMap<String, Vec<&crate::dto::TodoWithSubtasks>> =
+            std::collections::HashMap::new();
+        for todo in &todos {
+            let keys: Vec<String> = if todo.tags.is_empty() {
+                vec![UNTAGGED.to_owned()]
+            } else {
+                todo.tags.clone()
+            };
+            for key in keys {
+                buckets.entry(key).or_default().push(todo);
+            }
+        }
+        // 未分類は末尾・それ以外は件数降順→タグ名昇順。
+        let mut groups: Vec<(String, Vec<&crate::dto::TodoWithSubtasks>)> =
+            buckets.into_iter().collect();
+        groups.sort_by(|a, b| match (a.0 == UNTAGGED, b.0 == UNTAGGED) {
+            (true, false) => std::cmp::Ordering::Greater,
+            (false, true) => std::cmp::Ordering::Less,
+            _ => b.1.len().cmp(&a.1.len()).then_with(|| a.0.cmp(&b.0)),
+        });
+        let lines: Vec<String> = groups
+            .iter()
+            .map(|(tag, items)| format!("🏷️ {tag} ({}件)", items.len()))
+            .collect();
+        let payload: Vec<Value> = groups
+            .iter()
+            .map(|(tag, items)| json!({ "tag": tag, "items": items }))
+            .collect();
+        Ok(ToolOutcome::from_payload(ok_payload(
+            format!("タグ別のToDo:\n{}", lines.join("\n")),
+            json!({ "groups": payload }),
+        )))
+    }
+}
+
+// ─── getTaskUsageGuide ───────────────────────────────────────────────────────
+
+struct GetTaskUsageGuideTool {
+    name: ToolName,
+}
+
+#[async_trait]
+impl Tool for GetTaskUsageGuideTool {
+    fn declaration(&self) -> FunctionDeclaration {
+        FunctionDeclaration {
+            name: self.name.clone(),
+            description: "タスク管理機能の「使い方」を案内する。「タスクの使い方教えて」等で呼ぶ。\
+                返る guide_markdown（使い方本文）と guide_url（詳しい説明ページ）を必ず両方ユーザーに伝える。\
+                本文はあなた自身の口調・人格に合わせて自然に言い換えて返すこと（要点は省略しない）。"
+                .to_owned(),
+            parameters_json_schema: json!({ "type": "object", "properties": {} }),
+            requires_confirmation: false,
+        }
+    }
+
+    async fn call(&self, _ctx: &ToolContext, _args: Value) -> Result<ToolOutcome, ToolError> {
+        // guide_url は BASE_URL 未取得（tools は config 非依存）のためサイト相対を返す（Node の
+        // baseUrl 未設定時のフォールバックと一致）。
+        Ok(ToolOutcome::from_payload(ok_payload(
+            "タスク機能の使い方ガイドです。guide_markdown の内容を、あなた自身の口調・人格に合わせて自然に言い換えてユーザーに伝え、最後に guide_url のリンクも必ず案内してください（要点は省略しないこと）。",
+            json!({ "guide_markdown": TASK_USAGE_GUIDE_MD, "guide_url": "/tasks/guide" }),
+        )))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -912,5 +1110,62 @@ mod tests {
         // 存在しないタスクの detail → fail。
         let out = detail.call(&ctx(), json!({"todo_id": 99999})).await.unwrap();
         assert_eq!(out.payload["success"], false);
+    }
+
+    #[tokio::test]
+    async fn tag_tools_and_usage_guide() {
+        let db = seed_db();
+        let seed = db.clone();
+        let tools = tools(db).unwrap();
+        let list_tags = find(&tools, "listTodoTags");
+        let by_tag = find(&tools, "listTasksByTag");
+        let guide = find(&tools, "getTaskUsageGuide");
+
+        // タグ付き ToDo を repo 直挿し（addTodo ツールは tags=[]・自動タグは deferred のため）。
+        let scope = scope_of(&ctx());
+        let repo = TodoRepo::new(&seed);
+        for (title, tags) in [
+            ("買い物", vec!["家事".to_owned(), "緊急".to_owned()]),
+            ("掃除", vec!["家事".to_owned()]),
+        ] {
+            repo.add(
+                &scope,
+                NewTodo {
+                    title: title.to_owned(),
+                    description: None,
+                    due_date: None,
+                    start_date: None,
+                    priority: None,
+                    tags,
+                    parent_id: None,
+                    repeat_rule: None,
+                    repeat_until: None,
+                    repeat_count: None,
+                },
+            )
+            .await
+            .unwrap();
+        }
+
+        // listTodoTags: 家事×2, 緊急×1（件数降順）。
+        let out = list_tags.call(&ctx(), json!({})).await.unwrap();
+        let tags = out.payload["tags"].as_array().unwrap();
+        assert_eq!(tags.len(), 2);
+        assert_eq!(tags[0]["tag"], "家事");
+        assert_eq!(tags[0]["count"], 2);
+
+        // listTasksByTag: 家事(2)が先頭・緊急(1)。
+        let out = by_tag.call(&ctx(), json!({})).await.unwrap();
+        let groups = out.payload["groups"].as_array().unwrap();
+        assert_eq!(groups[0]["tag"], "家事");
+        assert_eq!(groups[0]["items"].as_array().unwrap().len(), 2);
+
+        // getTaskUsageGuide: 本文とリンクを返す。
+        let out = guide.call(&ctx(), json!({})).await.unwrap();
+        assert!(out.payload["guide_markdown"]
+            .as_str()
+            .unwrap()
+            .contains("タスク管理の使い方"));
+        assert_eq!(out.payload["guide_url"], "/tasks/guide");
     }
 }
