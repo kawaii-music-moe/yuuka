@@ -592,6 +592,50 @@ impl<'a> ExpenseRepo<'a> {
             .await
     }
 
+    /// 支払い予定から ToDo を生成し、双方向に紐付ける（Node `linkPlannedPaymentTodo`）。
+    ///
+    /// 1 つの writer トランザクションで: (1) `todos` へ ToDo を挿入（`linked_payment_id`=plan_id）、
+    /// (2) `planned_payments.linked_todo_id` を挿入した ToDo id で更新する。返り値は ToDo id。
+    /// 内容（title/description/tags）は呼び出し側で組む（金額整形等を tool 層に置くため）。
+    ///
+    /// # Errors
+    /// 書き込み失敗時 [`DbError`]。
+    pub async fn link_todo(
+        &self,
+        scope: &UserScope,
+        plan_id: i64,
+        title: String,
+        description: String,
+        due_date: String,
+        tags: Vec<String>,
+    ) -> Result<i64, DbError> {
+        let (uid, bid) = scope_keys(scope);
+        let tags_json =
+            serde_json::to_string(&tags).map_err(|e| DbError::Operation(format!("tags: {e}")))?;
+        self.writer
+            .transaction(move |tx| {
+                tx.execute(
+                    "INSERT INTO todos \
+                       (user_id, bot_id, title, description, due_date, tags, linked_payment_id, \
+                        created_at, updated_at) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, \
+                             datetime('now', 'localtime'), datetime('now', 'localtime'))",
+                    params![uid, bid, title, description, due_date, tags_json, plan_id],
+                )
+                .map_err(map_sqlite)?;
+                let todo_id = tx.last_insert_rowid();
+                tx.execute(
+                    "UPDATE planned_payments \
+                     SET linked_todo_id = ?1, updated_at = datetime('now', 'localtime') \
+                     WHERE user_id = ?2 AND bot_id = ?3 AND id = ?4",
+                    params![todo_id, uid, bid, plan_id],
+                )
+                .map_err(map_sqlite)?;
+                Ok(todo_id)
+            })
+            .await
+    }
+
     /// pending の支払い予定を消込する（§3.4.3）。
     ///
     /// Node `plans/pay` の手順を1つの writer トランザクションで再現する:

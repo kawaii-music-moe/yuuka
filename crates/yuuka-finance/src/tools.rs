@@ -76,6 +76,10 @@ pub fn tools(db: Db) -> Result<Vec<Arc<dyn Tool>>, ToolError> {
         }),
         Arc::new(FindSettlementCandidatesTool {
             name: ToolName::checked("findSettlementCandidates".to_owned())?,
+            db: db.clone(),
+        }),
+        Arc::new(LinkPlannedPaymentTodoTool {
+            name: ToolName::checked("linkPlannedPaymentTodo".to_owned())?,
             db,
         }),
     ])
@@ -1109,6 +1113,92 @@ impl Tool for FindSettlementCandidatesTool {
     }
 }
 
+// ─── linkPlannedPaymentTodo ──────────────────────────────────────────────────
+
+struct LinkPlannedPaymentTodoTool {
+    name: ToolName,
+    db: Db,
+}
+
+#[async_trait]
+impl Tool for LinkPlannedPaymentTodoTool {
+    fn declaration(&self) -> FunctionDeclaration {
+        FunctionDeclaration {
+            name: self.name.clone(),
+            description: "支払い予定から「支払う」ToDo を生成して紐付ける。予定登録後に「ToDoにも追加する？」\
+                と聞かれてユーザーが希望した時に呼ぶ。この予定を消込すると ToDo も自動で完了になる。"
+                .to_owned(),
+            parameters_json_schema: json!({
+                "type": "object",
+                "properties": {
+                    "plan_id": { "type": "number", "description": "ToDo を生成する支払い予定のID" }
+                },
+                "required": ["plan_id"]
+            }),
+            requires_confirmation: false,
+        }
+    }
+
+    async fn call(&self, ctx: &ToolContext, args: Value) -> Result<ToolOutcome, ToolError> {
+        let Some(plan_id) = arg_int(&args, "plan_id") else {
+            return Ok(fail_payload("plan_id を指定してください。"));
+        };
+        let scope = scope_of(ctx);
+        let repo = ExpenseRepo::new(&self.db);
+        let Some(plan) = repo.get_plan(&scope, plan_id).await.map_err(exec_err)? else {
+            return Ok(fail_payload(format!(
+                "支払い予定 #{plan_id} が見つかりません。"
+            )));
+        };
+        if plan.status != "pending" {
+            let state = if plan.status == "settled" {
+                "消込済み"
+            } else {
+                "キャンセル済み"
+            };
+            return Ok(fail_payload(format!(
+                "支払い予定 #{plan_id} は{state}のためToDoを生成できません。"
+            )));
+        }
+        if let Some(tid) = plan.linked_todo_id {
+            return Ok(fail_payload(format!(
+                "支払い予定 #{plan_id} には既にToDo (#{tid}) が紐付いています。"
+            )));
+        }
+        // 内容は仕様固定（タグ = ["支払い", カテゴリ]・title/description は Node と同形）。
+        let title = format!("{}の支払い", plan.title);
+        let mut description = format!(
+            "支払い予定 #{}: {}（期日: {}）",
+            plan.id,
+            format_yen(plan.amount),
+            plan.due_date
+        );
+        if let Some(memo) = &plan.memo {
+            description.push('\n');
+            description.push_str(memo);
+        }
+        let tags = vec!["支払い".to_owned(), plan.category.clone()];
+        let todo_id = repo
+            .link_todo(
+                &scope,
+                plan.id,
+                title.clone(),
+                description,
+                plan.due_date.clone(),
+                tags,
+            )
+            .await
+            .map_err(exec_err)?;
+        Ok(ToolOutcome::from_payload(ok_payload(
+            format!(
+                "支払い予定「{}」からToDo「{title}」(#{todo_id}, 期限: {}, タグ: 支払い, {}) を生成して紐付けました📝 この予定を消込するとToDoも自動的に完了になります。",
+                plan.title, plan.due_date, plan.category
+            ),
+            json!({ "todo_id": todo_id, "plan_id": plan.id }),
+        )))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -1535,5 +1625,45 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(out.payload["candidates"].as_array().unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn link_planned_payment_todo() {
+        let db = seed_db();
+        let tools = tools(db).unwrap();
+        let add = find(&tools, "addPlannedPayment");
+        let link = find(&tools, "linkPlannedPaymentTodo");
+        let list = find(&tools, "listPlannedPayments");
+
+        let out = add
+            .call(&ctx(), json!({"title": "家賃", "amount": 80000, "category": "その他", "due_date": "2026-08-27"}))
+            .await
+            .unwrap();
+        let plan_id = out.payload["plan"]["id"].as_i64().unwrap();
+
+        // 不在 plan → fail。
+        let out = link.call(&ctx(), json!({"plan_id": 99999})).await.unwrap();
+        assert_eq!(out.payload["success"], false);
+
+        // 紐付け成功。
+        let out = link
+            .call(&ctx(), json!({"plan_id": plan_id}))
+            .await
+            .unwrap();
+        assert_eq!(out.payload["success"], true);
+        let todo_id = out.payload["todo_id"].as_i64().unwrap();
+        assert!(todo_id > 0);
+
+        // 予定に linked_todo_id が入る。
+        let out = list.call(&ctx(), json!({})).await.unwrap();
+        let plan = &out.payload["plans"][0];
+        assert_eq!(plan["linked_todo_id"].as_i64(), Some(todo_id));
+
+        // 二重紐付け → fail。
+        let out = link
+            .call(&ctx(), json!({"plan_id": plan_id}))
+            .await
+            .unwrap();
+        assert_eq!(out.payload["success"], false);
     }
 }
