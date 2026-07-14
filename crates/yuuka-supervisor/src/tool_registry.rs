@@ -62,6 +62,8 @@ fn all_domain_tools(
     // 選別されるため、秘書経路のスナップショットには現れない。
     all.extend(yuuka_botassistant::tools(db.clone())?);
     all.extend(yuuka_briefing::tools(db.clone())?);
+    // 会話ログ要約（秘書経路・memory 能力）。
+    all.extend(yuuka_conversation::tools(db.clone())?);
     // persona はツール関数を持たない（web 管理）。
     Ok(all)
 }
