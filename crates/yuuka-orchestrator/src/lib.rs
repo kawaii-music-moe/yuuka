@@ -14,6 +14,7 @@ pub mod guild_prompt;
 pub mod member_routes;
 pub mod message_log;
 pub mod persona;
+pub mod preset;
 pub mod share_routes;
 pub mod system_prompt;
 pub mod user;
