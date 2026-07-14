@@ -26,9 +26,64 @@ pub fn tools(db: Db) -> Result<Vec<Arc<dyn Tool>>, ToolError> {
         }),
         Arc::new(GetBriefingConfigTool {
             name: ToolName::checked("getBriefingConfig".to_owned())?,
+            db: db.clone(),
+        }),
+        Arc::new(ConfigureBriefingTool {
+            name: ToolName::checked("configureBriefing".to_owned())?,
             db,
         }),
     ])
+}
+
+/// SSRF ガード: 公開 http(s) URL らしいか（Node `isLikelyPublicHttpUrl`）。内部/ローカル/非 http(s) を拒否。
+fn is_likely_public_http_url(raw: &str) -> bool {
+    let Some(rest) = raw
+        .strip_prefix("http://")
+        .or_else(|| raw.strip_prefix("https://"))
+    else {
+        return false;
+    };
+    // authority = 最初の '/' '?' '#' まで。
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    if authority.contains('@') {
+        return false; // userinfo は拒否。
+    }
+    // ホスト（ポート除去・IPv6 は角括弧内）。
+    let host = if let Some(stripped) = authority.strip_prefix('[') {
+        stripped.split(']').next().unwrap_or("")
+    } else {
+        authority.rsplit_once(':').map_or(authority, |(h, _)| h)
+    }
+    .to_ascii_lowercase();
+    if host.is_empty() || host == "localhost" || host.ends_with(".localhost") {
+        return false;
+    }
+    if let Ok(v4) = host.parse::<std::net::Ipv4Addr>() {
+        return !is_blocked_ipv4(v4);
+    }
+    if let Ok(v6) = host.parse::<std::net::Ipv6Addr>() {
+        return !is_blocked_ipv6(v6);
+    }
+    // ドメイン名は公開扱い（DNS リバインドは実行時の fetch 側で別途対処）。
+    true
+}
+
+fn is_blocked_ipv4(ip: std::net::Ipv4Addr) -> bool {
+    let o = ip.octets();
+    ip.is_private()
+        || ip.is_loopback()
+        || ip.is_link_local()
+        || ip.is_unspecified()
+        || o[0] == 0 // 0.0.0.0/8 "this host"
+        || (o[0] == 192 && o[1] == 0 && o[2] == 0) // 192.0.0.0/24
+}
+
+fn is_blocked_ipv6(ip: std::net::Ipv6Addr) -> bool {
+    let seg0 = ip.segments()[0];
+    ip.is_loopback()
+        || ip.is_unspecified()
+        || (seg0 & 0xfe00) == 0xfc00 // fc00::/7 ULA
+        || (seg0 & 0xffc0) == 0xfe80 // fe80::/10 link-local
 }
 
 fn fail(message: impl Into<String>) -> ToolOutcome {
@@ -175,6 +230,103 @@ impl Tool for GetBriefingConfigTool {
     }
 }
 
+// ─── configureBriefing ───────────────────────────────────────────────────────
+
+struct ConfigureBriefingTool {
+    name: ToolName,
+    db: Db,
+}
+
+#[async_trait]
+impl Tool for ConfigureBriefingTool {
+    fn declaration(&self) -> FunctionDeclaration {
+        FunctionDeclaration {
+            name: self.name.clone(),
+            description: "朝の自動ブリーフィング（天気・ニュース）を設定する。有効/無効・配信時刻\
+                （cron）・地点（緯度経度/地名）・ニュースフィード（RSS の追加/削除）・キーワードを変える。\
+                指定した項目だけ更新する。フィードは http(s) の公開URLのみ。"
+                .to_owned(),
+            parameters_json_schema: json!({
+                "type": "object",
+                "properties": {
+                    "enabled": { "type": "boolean", "description": "有効にするか（任意）" },
+                    "schedule_cron": { "type": "string", "description": "配信時刻の cron 式（例 '0 7 * * *'・任意）" },
+                    "latitude": { "type": "number", "description": "天気の緯度（任意）" },
+                    "longitude": { "type": "number", "description": "天気の経度（任意）" },
+                    "location_name": { "type": "string", "description": "地名（任意）" },
+                    "add_news_feed": { "type": "string", "description": "追加する RSS フィードURL（http(s) 公開URLのみ・任意）" },
+                    "remove_news_feed": { "type": "string", "description": "削除するフィード（URL の部分一致・任意）" },
+                    "news_keywords": { "type": "array", "items": { "type": "string" }, "description": "ニュース絞り込みキーワード（任意・全置換）" }
+                }
+            }),
+            requires_confirmation: false,
+        }
+    }
+
+    async fn call(&self, ctx: &ToolContext, args: Value) -> Result<ToolOutcome, ToolError> {
+        if let Some(cron) = arg_str(&args, "schedule_cron") {
+            if !is_valid_cron_basic(&cron) {
+                return Ok(fail("schedule_cron のcron式が不正です。"));
+            }
+        }
+        // SSRF: 追加フィードは公開 http(s) URL のみ。
+        let add_feed = arg_str(&args, "add_news_feed");
+        if let Some(url) = &add_feed {
+            if !is_likely_public_http_url(url) {
+                return Ok(fail(
+                    "add_news_feed は http(s) の公開URLのみ指定できます（内部アドレスは不可）。",
+                ));
+            }
+        }
+        let remove_feed = arg_str(&args, "remove_news_feed");
+
+        // フィードの add/remove を現在値へ適用。
+        let feeds = if add_feed.is_some() || remove_feed.is_some() {
+            let mut feeds = repo::get_briefing(&self.db, ctx.user_id.as_str(), ctx.bot_id.as_str())
+                .await
+                .map_err(exec_err)?
+                .news_feeds;
+            if let Some(url) = add_feed {
+                if !feeds.contains(&url) {
+                    feeds.push(url);
+                }
+            }
+            if let Some(target) = remove_feed {
+                feeds.retain(|f| !f.contains(&target));
+            }
+            Some(feeds)
+        } else {
+            None
+        };
+
+        let patch = repo::BriefingPatch {
+            enabled: args.get("enabled").map(|v| v.as_bool() == Some(true)),
+            schedule_cron: arg_str(&args, "schedule_cron"),
+            weather_lat: args.get("latitude").and_then(Value::as_f64),
+            weather_lng: args.get("longitude").and_then(Value::as_f64),
+            location_name: arg_str(&args, "location_name"),
+            news_feeds: feeds,
+            news_keywords: args
+                .get("news_keywords")
+                .and_then(Value::as_array)
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|v| v.as_str().map(str::to_owned))
+                        .collect()
+                }),
+        };
+        let updated =
+            repo::upsert_briefing(&self.db, ctx.user_id.as_str(), ctx.bot_id.as_str(), patch)
+                .await
+                .map_err(exec_err)?;
+        Ok(ToolOutcome::from_payload(json!({
+            "success": true,
+            "message": "朝報の設定を更新しました🌅",
+            "config": briefing_view(&updated),
+        })))
+    }
+}
+
 fn briefing_view(c: &BriefingConfig) -> Value {
     json!({
         "enabled": c.enabled,
@@ -310,5 +462,103 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(out.payload["reports"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn ssrf_guard_rejects_internal_urls() {
+        assert!(is_likely_public_http_url("https://example.com/feed.xml"));
+        assert!(is_likely_public_http_url("http://news.example.co.jp/rss"));
+        // 非 http(s)・内部・ローカル・メタデータは拒否。
+        assert!(!is_likely_public_http_url("ftp://example.com"));
+        assert!(!is_likely_public_http_url("http://localhost/rss"));
+        assert!(!is_likely_public_http_url("http://127.0.0.1/rss"));
+        assert!(!is_likely_public_http_url("http://10.0.0.5/rss"));
+        assert!(!is_likely_public_http_url("http://192.168.1.1/rss"));
+        assert!(!is_likely_public_http_url(
+            "http://169.254.169.254/latest/meta-data"
+        ));
+        assert!(!is_likely_public_http_url("http://user:pw@example.com/rss"));
+        assert!(!is_likely_public_http_url("http://[::1]/rss"));
+    }
+
+    #[tokio::test]
+    async fn configure_briefing_feeds_and_partial() {
+        let db = seed_db();
+        let tools = tools(db).unwrap();
+        let configure = find(&tools, "configureBriefing");
+        let get = find(&tools, "getBriefingConfig");
+
+        // 不正 cron → fail。
+        assert_eq!(
+            configure
+                .call(&ctx(), json!({"schedule_cron": "bad"}))
+                .await
+                .unwrap()
+                .payload["success"],
+            false
+        );
+        // 内部フィード → SSRF で fail。
+        assert_eq!(
+            configure
+                .call(&ctx(), json!({"add_news_feed": "http://10.0.0.1/rss"}))
+                .await
+                .unwrap()
+                .payload["success"],
+            false
+        );
+
+        // 有効化 + 地名 + 公開フィード追加。
+        let out = configure
+            .call(
+                &ctx(),
+                json!({"enabled": true, "location_name": "東京", "add_news_feed": "https://example.com/a.xml"}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(out.payload["success"], true);
+        assert_eq!(out.payload["config"]["enabled"], true);
+        assert_eq!(out.payload["config"]["location"], "東京");
+        assert_eq!(
+            out.payload["config"]["news_feeds"],
+            json!(["https://example.com/a.xml"])
+        );
+
+        // フィード追加（2件目）+ enabled は保持（部分更新）。
+        let out = configure
+            .call(
+                &ctx(),
+                json!({"add_news_feed": "https://example.com/b.xml"}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(out.payload["config"]["enabled"], true);
+        assert_eq!(
+            out.payload["config"]["news_feeds"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+
+        // 部分一致で削除。
+        let out = configure
+            .call(&ctx(), json!({"remove_news_feed": "a.xml"}))
+            .await
+            .unwrap();
+        assert_eq!(
+            out.payload["config"]["news_feeds"],
+            json!(["https://example.com/b.xml"])
+        );
+
+        // getBriefingConfig に反映。
+        let out = get.call(&ctx(), json!({})).await.unwrap();
+        assert_eq!(out.payload["briefing"]["enabled"], true);
+        assert_eq!(
+            out.payload["briefing"]["news_feeds"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
     }
 }

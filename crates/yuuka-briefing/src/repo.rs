@@ -11,15 +11,30 @@ use yuuka_db::map_sqlite;
 use yuuka_web::Db;
 
 /// briefing 設定の読み取りビュー（Node `getBriefingConfig` の主要フィールド）。
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct BriefingConfig {
     pub enabled: bool,
     pub schedule_cron: String,
     pub target_type: String,
     pub target_id: Option<String>,
+    pub weather_lat: Option<f64>,
+    pub weather_lng: Option<f64>,
     pub location_name: Option<String>,
     pub news_feeds: Vec<String>,
     pub news_keywords: Vec<String>,
+}
+
+/// briefing 設定の部分更新（present なフィールドのみ現在値へ重ねる・Node `key in obj` 意味論）。
+#[derive(Debug, Default)]
+pub struct BriefingPatch {
+    pub enabled: Option<bool>,
+    pub schedule_cron: Option<String>,
+    pub weather_lat: Option<f64>,
+    pub weather_lng: Option<f64>,
+    pub location_name: Option<String>,
+    /// `Some` のときのみ `news_feeds` 列を更新する（add/remove 適用後の全体）。
+    pub news_feeds: Option<Vec<String>>,
+    pub news_keywords: Option<Vec<String>>,
 }
 
 /// report 設定 1 件（Node `ReportConfigRecord`）。
@@ -42,8 +57,8 @@ pub async fn get_briefing(db: &Db, user_id: &str, bot_id: &str) -> Result<Briefi
         .read(move |conn| {
             let mut stmt = conn
                 .prepare(
-                    "SELECT enabled, schedule_cron, target_type, target_id, location_name, \
-                            news_feeds, news_keywords \
+                    "SELECT enabled, schedule_cron, target_type, target_id, weather_lat, \
+                            weather_lng, location_name, news_feeds, news_keywords \
                      FROM briefing_configs WHERE user_id = ?1 AND bot_id = ?2",
                 )
                 .map_err(map_sqlite)?;
@@ -54,9 +69,11 @@ pub async fn get_briefing(db: &Db, user_id: &str, bot_id: &str) -> Result<Briefi
                         schedule_cron: row.get(1)?,
                         target_type: row.get(2)?,
                         target_id: row.get(3)?,
-                        location_name: row.get(4)?,
-                        news_feeds: parse_json_array(&row.get::<_, String>(5)?),
-                        news_keywords: parse_json_array(&row.get::<_, String>(6)?),
+                        weather_lat: row.get(4)?,
+                        weather_lng: row.get(5)?,
+                        location_name: row.get(6)?,
+                        news_feeds: parse_json_array(&row.get::<_, String>(7)?),
+                        news_keywords: parse_json_array(&row.get::<_, String>(8)?),
                     })
                 })
                 .map_err(map_sqlite)?;
@@ -70,6 +87,80 @@ pub async fn get_briefing(db: &Db, user_id: &str, bot_id: &str) -> Result<Briefi
             }
         })
         .await
+}
+
+/// briefing 設定を部分更新で upsert する（Node `upsertBriefingConfig`＝現在値に patch を重ねる）。
+/// 返り値は更新後の設定。
+///
+/// # Errors
+/// 書き込み・取得失敗時 [`DbError`]。
+pub async fn upsert_briefing(
+    db: &Db,
+    user_id: &str,
+    bot_id: &str,
+    patch: BriefingPatch,
+) -> Result<BriefingConfig, DbError> {
+    // 現在値（無ければ既定）に patch を重ねる。
+    let mut cfg = get_briefing(db, user_id, bot_id).await?;
+    if let Some(v) = patch.enabled {
+        cfg.enabled = v;
+    }
+    if let Some(v) = patch.schedule_cron {
+        cfg.schedule_cron = v;
+    }
+    if patch.weather_lat.is_some() {
+        cfg.weather_lat = patch.weather_lat;
+    }
+    if patch.weather_lng.is_some() {
+        cfg.weather_lng = patch.weather_lng;
+    }
+    if let Some(v) = patch.location_name {
+        cfg.location_name = Some(v);
+    }
+    if let Some(v) = patch.news_feeds {
+        cfg.news_feeds = v;
+    }
+    if let Some(v) = patch.news_keywords {
+        cfg.news_keywords = v;
+    }
+    let out = cfg.clone();
+
+    let (u, b) = (user_id.to_owned(), bot_id.to_owned());
+    let feeds_json = serde_json::to_string(&cfg.news_feeds).unwrap_or_else(|_| "[]".to_owned());
+    let kw_json = serde_json::to_string(&cfg.news_keywords).unwrap_or_else(|_| "[]".to_owned());
+    db.writer
+        .transaction(move |tx| {
+            tx.execute(
+                "INSERT INTO briefing_configs \
+                   (user_id, bot_id, enabled, schedule_cron, target_type, target_id, \
+                    weather_lat, weather_lng, location_name, news_feeds, news_keywords) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11) \
+                 ON CONFLICT(user_id, bot_id) DO UPDATE SET \
+                   enabled = excluded.enabled, schedule_cron = excluded.schedule_cron, \
+                   target_type = excluded.target_type, target_id = excluded.target_id, \
+                   weather_lat = excluded.weather_lat, weather_lng = excluded.weather_lng, \
+                   location_name = excluded.location_name, news_feeds = excluded.news_feeds, \
+                   news_keywords = excluded.news_keywords, \
+                   updated_at = datetime('now', 'localtime')",
+                params![
+                    u,
+                    b,
+                    i64::from(cfg.enabled),
+                    cfg.schedule_cron,
+                    cfg.target_type,
+                    cfg.target_id,
+                    cfg.weather_lat,
+                    cfg.weather_lng,
+                    cfg.location_name,
+                    feeds_json,
+                    kw_json,
+                ],
+            )
+            .map_err(map_sqlite)?;
+            Ok(())
+        })
+        .await?;
+    Ok(out)
 }
 
 /// report 設定一覧を type 昇順で返す（Node `getReportConfigs`）。
