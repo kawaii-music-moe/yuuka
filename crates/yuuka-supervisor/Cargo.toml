@@ -45,6 +45,7 @@ thiserror.workspace = true
 async-trait.workspace = true
 serde.workspace = true                 # /ws/chat フレームの Deserialize/Serialize
 serde_json.workspace = true            # フレーム JSON 直列化
+chrono.workspace = true                # デスクトップ配布バイナリの built_at（mtime → ISO8601）
 futures-util = "0.3"                    # WebSocket の split（Sink/Stream 分離）
 base64.workspace = true                 # 受信ファイル（rich reply）の base64 化
 getrandom.workspace = true              # messageId 生成

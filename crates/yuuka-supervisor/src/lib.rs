@@ -11,6 +11,7 @@ use std::path::Path;
 use axum::Router;
 use yuuka_web::{apply_common_layers, framework_routes, mount_static, AppState};
 
+pub mod desktop_dist;
 pub mod discord;
 pub mod services;
 pub mod supervisor;
@@ -54,7 +55,8 @@ pub fn build_app(
         .merge(yuuka_persona::routes())
         .merge(yuuka_briefing::routes())
         .merge(yuuka_auth::device_routes())
-        .merge(yuuka_orchestrator::member_request_routes());
+        .merge(yuuka_orchestrator::member_request_routes())
+        .merge(desktop_dist::routes());
     let routes = match dist_dir {
         Some(dir) => mount_static(routes, dir),
         None => routes,
