@@ -113,3 +113,137 @@ async fn write_note(
         })
         .await
 }
+
+// ─── 利用メンバー管理（bot_members・Node `botMemberFunctions`） ────────────────
+
+/// Bot の所有者（作成者）の Discord ID を返す（無ければ `None`・Node `getBotById(botId).user_id`）。
+///
+/// # Errors
+/// 読み取り失敗時 [`DbError`]。
+pub async fn bot_owner(db: &Db, bot_id: &str) -> Result<Option<String>, DbError> {
+    let bot_id = bot_id.to_owned();
+    db.read
+        .read(move |conn| {
+            let mut stmt = conn
+                .prepare("SELECT user_id FROM bots WHERE id = ?1")
+                .map_err(map_sqlite)?;
+            let mut rows = stmt
+                .query_map(params![bot_id], |row| row.get::<_, String>(0))
+                .map_err(map_sqlite)?;
+            match rows.next() {
+                Some(v) => Ok(Some(v.map_err(map_sqlite)?)),
+                None => Ok(None),
+            }
+        })
+        .await
+}
+
+/// 指定ユーザーが当該ギルドの利用メンバーか（Node `isBotMember`）。
+///
+/// # Errors
+/// 読み取り失敗時 [`DbError`]。
+pub async fn is_member(
+    db: &Db,
+    bot_id: &str,
+    guild_id: &str,
+    user_id: &str,
+) -> Result<bool, DbError> {
+    let (b, g, u) = (bot_id.to_owned(), guild_id.to_owned(), user_id.to_owned());
+    db.read
+        .read(move |conn| {
+            conn.query_row(
+                "SELECT EXISTS(SELECT 1 FROM bot_members \
+                 WHERE bot_id = ?1 AND guild_id = ?2 AND user_id = ?3)",
+                params![b, g, u],
+                |row| row.get::<_, bool>(0),
+            )
+            .map_err(map_sqlite)
+        })
+        .await
+}
+
+/// 利用メンバーを追加する（Node `addBotMember`・`INSERT OR IGNORE`）。追加できたら `true`。
+///
+/// # Errors
+/// 書き込み失敗時 [`DbError`]。
+pub async fn add_member(
+    db: &Db,
+    bot_id: &str,
+    guild_id: &str,
+    user_id: &str,
+    added_by: &str,
+) -> Result<bool, DbError> {
+    let (b, g, u, by) = (
+        bot_id.to_owned(),
+        guild_id.to_owned(),
+        user_id.to_owned(),
+        added_by.to_owned(),
+    );
+    db.writer
+        .transaction(move |tx| {
+            let n = tx
+                .execute(
+                    "INSERT OR IGNORE INTO bot_members (bot_id, guild_id, user_id, added_by) \
+                     VALUES (?1, ?2, ?3, ?4)",
+                    params![b, g, u, by],
+                )
+                .map_err(map_sqlite)?;
+            Ok(n > 0)
+        })
+        .await
+}
+
+/// 利用メンバーを削除する（Node `removeBotMember`）。削除できたら `true`。
+///
+/// # Errors
+/// 書き込み失敗時 [`DbError`]。
+pub async fn remove_member(
+    db: &Db,
+    bot_id: &str,
+    guild_id: &str,
+    user_id: &str,
+) -> Result<bool, DbError> {
+    let (b, g, u) = (bot_id.to_owned(), guild_id.to_owned(), user_id.to_owned());
+    db.writer
+        .transaction(move |tx| {
+            let n = tx
+                .execute(
+                    "DELETE FROM bot_members \
+                     WHERE bot_id = ?1 AND guild_id = ?2 AND user_id = ?3",
+                    params![b, g, u],
+                )
+                .map_err(map_sqlite)?;
+            Ok(n > 0)
+        })
+        .await
+}
+
+/// 当該ギルドの利用メンバー（`(user_id, created_at)`）を追加日時昇順で返す（Node `listBotMembers`）。
+///
+/// # Errors
+/// 読み取り失敗時 [`DbError`]。
+pub async fn list_members(
+    db: &Db,
+    bot_id: &str,
+    guild_id: &str,
+) -> Result<Vec<(String, String)>, DbError> {
+    let (b, g) = (bot_id.to_owned(), guild_id.to_owned());
+    db.read
+        .read(move |conn| {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT user_id, created_at FROM bot_members \
+                     WHERE bot_id = ?1 AND guild_id = ?2 ORDER BY created_at ASC, user_id ASC",
+                )
+                .map_err(map_sqlite)?;
+            let rows = stmt
+                .query_map(params![b, g], |row| Ok((row.get(0)?, row.get(1)?)))
+                .map_err(map_sqlite)?;
+            let mut out = Vec::new();
+            for row in rows {
+                out.push(row.map_err(map_sqlite)?);
+            }
+            Ok(out)
+        })
+        .await
+}

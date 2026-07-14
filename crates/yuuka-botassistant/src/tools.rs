@@ -209,7 +209,203 @@ impl Tool for NoteTool {
     }
 }
 
-/// このクレートが公開する guild-assistant ツール一式（6 本）。
+// ─── 利用メンバー管理（core・guild スコープ必須） ────────────────────────────
+
+/// メンバー管理ツールの露出（Node は core モジュール＝能力不問・guild スコープ必須）。
+fn member_exposure() -> ToolExposure {
+    ToolExposure {
+        capability: None,
+        secretary: false,
+        guild_assistant: true,
+        requires_guild: true,
+    }
+}
+
+/// `ctx.guild_id` を必須で取り出す（Node `requireGuild`）。無ければ専用エラー文言。
+fn require_guild(ctx: &ToolContext) -> Result<&str, ToolOutcome> {
+    ctx.guild_id
+        .as_ref()
+        .map(yuuka_core::GuildId::as_str)
+        .ok_or_else(|| fail("この機能はサーバー（ギルド）内の会話でのみ利用できます。"))
+}
+
+/// メンション（`<@id>`/`<@!id>`）または生 ID（5〜25 桁）からユーザー ID を取り出す
+/// （Node `extractUserId`）。
+fn extract_user_id(v: Option<&Value>) -> Option<String> {
+    let raw = v.and_then(Value::as_str).unwrap_or("").trim();
+    // `<@...>` / `<@!...>` の内側を取り出す。
+    let candidate = match raw.strip_prefix("<@").and_then(|s| s.strip_suffix('>')) {
+        Some(inner) => inner.strip_prefix('!').unwrap_or(inner),
+        None => raw,
+    };
+    if (5..=25).contains(&candidate.len()) && candidate.bytes().all(|b| b.is_ascii_digit()) {
+        Some(candidate.to_owned())
+    } else {
+        None
+    }
+}
+
+const BAD_USER_ID: &str =
+    "ユーザーIDを認識できませんでした。メンション（<@...>）またはユーザーIDの数字で指定してください。";
+
+struct AddBotMemberTool {
+    name: ToolName,
+    db: Db,
+}
+
+#[async_trait]
+impl Tool for AddBotMemberTool {
+    fn exposure(&self) -> ToolExposure {
+        member_exposure()
+    }
+    fn declaration(&self) -> FunctionDeclaration {
+        FunctionDeclaration {
+            name: self.name.clone(),
+            description: "このサーバーで Bot を利用できるメンバーを追加する。メンション（<@...>）\
+                またはユーザーIDで指定する。"
+                .to_owned(),
+            parameters_json_schema: json!({
+                "type": "object",
+                "properties": {
+                    "user_id": { "type": "string", "description": "追加するユーザー（メンション <@...> または数字ID）" }
+                },
+                "required": ["user_id"]
+            }),
+            requires_confirmation: false,
+        }
+    }
+    async fn call(&self, ctx: &ToolContext, args: Value) -> Result<ToolOutcome, ToolError> {
+        let guild = match require_guild(ctx) {
+            Ok(g) => g,
+            Err(e) => return Ok(e),
+        };
+        let Some(target) = extract_user_id(args.get("user_id")) else {
+            return Ok(fail(BAD_USER_ID));
+        };
+        let bot = ctx.bot_id.as_str();
+        if repo::is_member(&self.db, bot, guild, &target)
+            .await
+            .map_err(exec_err)?
+        {
+            return Ok(ToolOutcome::from_payload(
+                json!({ "success": true, "message": "そのユーザーは既に利用メンバーです。" }),
+            ));
+        }
+        let added = repo::add_member(&self.db, bot, guild, &target, ctx.user_id.as_str())
+            .await
+            .map_err(exec_err)?;
+        let message = if added {
+            format!("<@{target}> を利用メンバーに追加しました。メンションで利用できるようになったことを伝えてください。")
+        } else {
+            "メンバーの追加に失敗しました。".to_owned()
+        };
+        Ok(ToolOutcome::from_payload(
+            json!({ "success": added, "message": message }),
+        ))
+    }
+}
+
+struct ListBotMembersTool {
+    name: ToolName,
+    db: Db,
+}
+
+#[async_trait]
+impl Tool for ListBotMembersTool {
+    fn exposure(&self) -> ToolExposure {
+        member_exposure()
+    }
+    fn declaration(&self) -> FunctionDeclaration {
+        FunctionDeclaration {
+            name: self.name.clone(),
+            description: "このサーバーで Bot を利用できるメンバー一覧を取得する。".to_owned(),
+            parameters_json_schema: json!({ "type": "object", "properties": {} }),
+            requires_confirmation: false,
+        }
+    }
+    async fn call(&self, ctx: &ToolContext, _args: Value) -> Result<ToolOutcome, ToolError> {
+        let guild = match require_guild(ctx) {
+            Ok(g) => g,
+            Err(e) => return Ok(e),
+        };
+        let bot = ctx.bot_id.as_str();
+        let members = repo::list_members(&self.db, bot, guild)
+            .await
+            .map_err(exec_err)?;
+        let owner = repo::bot_owner(&self.db, bot).await.map_err(exec_err)?;
+        let owner_label = owner.map(|o| format!("<@{o}>（Bot作成者・常に利用可）"));
+        let member_views: Vec<Value> = members
+            .iter()
+            .map(|(uid, created)| json!({ "user": format!("<@{uid}>"), "added_at": created }))
+            .collect();
+        Ok(ToolOutcome::from_payload(json!({
+            "success": true,
+            "owner": owner_label,
+            "members": member_views,
+            "count": members.len(),
+        })))
+    }
+}
+
+struct RemoveBotMemberTool {
+    name: ToolName,
+    db: Db,
+}
+
+#[async_trait]
+impl Tool for RemoveBotMemberTool {
+    fn exposure(&self) -> ToolExposure {
+        member_exposure()
+    }
+    fn declaration(&self) -> FunctionDeclaration {
+        FunctionDeclaration {
+            name: self.name.clone(),
+            description: "このサーバーの Bot 利用メンバーを外す。本人の自己削除、または Bot 作成者\
+                のみが実行できる。"
+                .to_owned(),
+            parameters_json_schema: json!({
+                "type": "object",
+                "properties": {
+                    "user_id": { "type": "string", "description": "外すユーザー（メンション <@...> または数字ID）" }
+                },
+                "required": ["user_id"]
+            }),
+            requires_confirmation: false,
+        }
+    }
+    async fn call(&self, ctx: &ToolContext, args: Value) -> Result<ToolOutcome, ToolError> {
+        let guild = match require_guild(ctx) {
+            Ok(g) => g,
+            Err(e) => return Ok(e),
+        };
+        let Some(target) = extract_user_id(args.get("user_id")) else {
+            return Ok(fail(BAD_USER_ID));
+        };
+        let bot = ctx.bot_id.as_str();
+        // 権限: 本人の自己削除 or Bot 作成者のみ。
+        let owner = repo::bot_owner(&self.db, bot).await.map_err(exec_err)?;
+        let is_self = target == ctx.user_id.as_str();
+        let is_owner = owner.as_deref() == Some(ctx.user_id.as_str());
+        if !is_self && !is_owner {
+            return Ok(fail(
+                "他のメンバーを削除できるのはBot作成者のみです。本人が「私を外して」と依頼するか、作成者に依頼してください。",
+            ));
+        }
+        let removed = repo::remove_member(&self.db, bot, guild, &target)
+            .await
+            .map_err(exec_err)?;
+        let message = if removed {
+            format!("<@{target}> を利用メンバーから外しました。")
+        } else {
+            "メンバーの削除に失敗しました。".to_owned()
+        };
+        Ok(ToolOutcome::from_payload(
+            json!({ "success": removed, "message": message }),
+        ))
+    }
+}
+
+/// このクレートが公開する guild-assistant ツール一式（ノート 6 + メンバー管理 3）。
 ///
 /// # Errors
 /// ツール名が Gemini 制約に反する場合 [`ToolError`]（コンパイル時定数なので通常発生しない）。
@@ -220,7 +416,19 @@ pub fn tools(db: Db) -> Result<Vec<Arc<dyn Tool>>, ToolError> {
         NoteTool::make("appendMyNote", db.clone(), Target::My, Op::Append)?,
         NoteTool::make("getGuildNote", db.clone(), Target::Guild, Op::Get)?,
         NoteTool::make("setGuildNote", db.clone(), Target::Guild, Op::Set)?,
-        NoteTool::make("appendGuildNote", db, Target::Guild, Op::Append)?,
+        NoteTool::make("appendGuildNote", db.clone(), Target::Guild, Op::Append)?,
+        Arc::new(AddBotMemberTool {
+            name: ToolName::checked("addBotMember".to_owned())?,
+            db: db.clone(),
+        }),
+        Arc::new(ListBotMembersTool {
+            name: ToolName::checked("listBotMembers".to_owned())?,
+            db: db.clone(),
+        }),
+        Arc::new(RemoveBotMemberTool {
+            name: ToolName::checked("removeBotMember".to_owned())?,
+            db,
+        }),
     ])
 }
 
@@ -286,7 +494,24 @@ mod tests {
             let conn = Connection::open(&path).unwrap();
             conn.execute_batch(NOTES_DDL).unwrap();
         }
-        Db::open(&path).unwrap()
+        let db = Db::open(&path).unwrap();
+        // bot_members は bots への FK を張る。所有者ユーザーと system_default bot を seed する
+        // （bot_owner('system_default') = 'owner' になり、メンバー FK も満たされる）。
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute(
+                "INSERT OR IGNORE INTO users (discord_id, username, password_hash, salt) \
+                 VALUES ('owner', 'owner', 'x', 'x')",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT OR IGNORE INTO bots (id, user_id, name) VALUES ('system_default', 'owner', 'sd')",
+                [],
+            )
+            .unwrap();
+        }
+        db
     }
 
     fn guild_ctx() -> ToolContext {
@@ -307,7 +532,7 @@ mod tests {
     #[test]
     fn exposure_is_guild_assistant_memory_only() {
         let tools = tools(seed_db()).unwrap();
-        assert_eq!(tools.len(), 6);
+        assert_eq!(tools.len(), 9);
         let get_my = find(&tools, "getMyNote");
         let get_guild = find(&tools, "getGuildNote");
 
@@ -390,5 +615,80 @@ mod tests {
         other_guild.guild_id = Some(GuildId::new("g2"));
         let out = get.call(&other_guild, json!({})).await.unwrap();
         assert_eq!(out.payload["content"], "");
+    }
+
+    #[tokio::test]
+    async fn member_management_add_list_remove() {
+        let db = seed_db();
+        let tools = tools(db).unwrap();
+        let add = find(&tools, "addBotMember");
+        let list = find(&tools, "listBotMembers");
+        let remove = find(&tools, "removeBotMember");
+
+        // ユーザーID 認識不可 → fail。
+        let out = add
+            .call(&guild_ctx(), json!({"user_id": "not-an-id"}))
+            .await
+            .unwrap();
+        assert_eq!(out.payload["success"], false);
+        // メンション形式で追加。
+        let out = add
+            .call(&guild_ctx(), json!({"user_id": "<@123456789012345>"}))
+            .await
+            .unwrap();
+        assert_eq!(out.payload["success"], true);
+        // 既にメンバー → success:true「既に利用メンバーです。」。
+        let out = add
+            .call(&guild_ctx(), json!({"user_id": "123456789012345"}))
+            .await
+            .unwrap();
+        assert_eq!(out.payload["success"], true);
+        assert_eq!(
+            out.payload["message"],
+            "そのユーザーは既に利用メンバーです。"
+        );
+
+        // 一覧に 1 件 + owner ラベル。
+        let out = list.call(&guild_ctx(), json!({})).await.unwrap();
+        assert_eq!(out.payload["count"], 1);
+        assert_eq!(out.payload["members"][0]["user"], "<@123456789012345>");
+        assert!(out.payload["owner"].as_str().unwrap().contains("<@owner>"));
+
+        // 削除権限: 非owner・非本人（u1）が他人を外す → fail。
+        let out = remove
+            .call(&guild_ctx(), json!({"user_id": "123456789012345"}))
+            .await
+            .unwrap();
+        assert_eq!(out.payload["success"], false);
+        // owner なら他人を外せる。
+        let mut owner_ctx = guild_ctx();
+        owner_ctx.user_id = UserId::new("owner");
+        let out = remove
+            .call(&owner_ctx, json!({"user_id": "123456789012345"}))
+            .await
+            .unwrap();
+        assert_eq!(out.payload["success"], true);
+        let out = list.call(&guild_ctx(), json!({})).await.unwrap();
+        assert_eq!(out.payload["count"], 0);
+
+        // guild スコープ無しは fail。
+        let mut no_guild = guild_ctx();
+        no_guild.guild_id = None;
+        let out = list.call(&no_guild, json!({})).await.unwrap();
+        assert_eq!(out.payload["success"], false);
+    }
+
+    #[test]
+    fn member_tools_are_core_guild_only() {
+        let tools = tools(seed_db()).unwrap();
+        let add = find(&tools, "addBotMember");
+        // core（能力不問）だが guild スコープ必須・秘書経路では非露出。
+        let mut sec = ToolContext::new(BotId::system_default(), UserId::new("u1"));
+        sec.capabilities = CapabilitySet::from_granted(vec!["secretary".to_owned()]);
+        assert!(!add.exposure().is_visible(&sec));
+        assert!(add.exposure().is_visible(&guild_ctx())); // 能力不問で可視
+        let mut no_guild = guild_ctx();
+        no_guild.guild_id = None;
+        assert!(!add.exposure().is_visible(&no_guild)); // guild 必須
     }
 }

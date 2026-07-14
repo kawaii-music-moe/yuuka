@@ -1,6 +1,6 @@
 # Rust 移行 — 残作業ロードマップ（本番投入までの ToDo 全集）
 
-- 最終更新: 2026-07-14（**P2-A/P2-B 15 増分セッション**: admin 15 + settings 6 Web-API（新規 `yuuka-admin`/`yuuka-settings`）+ **todo ツール 4 本 + todo タグ/ガイド 3 本 + finance ツール 9 本**を実装 + 敵対的パリティレビューで確定 0 HIGH。全ゲート緑 — build ✅ / clippy -D ✅ / **test 436** ✅ / deny exit0 ✅・新規依存なし。ルート 80/152・ツール 61/87） 
+- 最終更新: 2026-07-14（**P2-A/P2-B 16 増分セッション**: admin 15 + settings 6 Web-API（新規 `yuuka-admin`/`yuuka-settings`）+ **todo ツール 4 本 + todo タグ/ガイド 3 本 + finance ツール 9 本**を実装 + 敵対的パリティレビューで確定 0 HIGH。全ゲート緑 — build ✅ / clippy -D ✅ / **test 438** ✅ / deny exit0 ✅・新規依存なし。ルート 80/152・ツール 64/87） 
 - 対象ブランチ: `feature/rust-rewrite`（未 push・HEAD=`b77506d` の上に未コミット差分）
 - git HEAD: `b77506d`（P2 ドメイン Web-API 拡張）+ 本セッションの縮退シーム解消差分（未コミット）
 - 前提資料: [review-2026-07-06-fix-policy.md](review-2026-07-06-fix-policy.md)（修正方針の唯一の基準）・[review-2026-07-09-batch4-6.md](review-2026-07-09-batch4-6.md)・[PLAN.md](PLAN.md) §11（移行ロードマップ）
@@ -32,7 +32,7 @@
 | 保存時暗号層（Argon2id/AES-256-GCM） | ✅ **実装済**（P1-5・Node ゴールデンベクタでバイト単位パリティ・鍵ローテ起動時配線） |
 | 認証発行（login/setup/logout/register/users） | ✅ **実装済**（P1-1・セッション発行 + bcrypt + 招待 + 監査 + レート制限。**登録 DM は P1-3 で開通**・OAuth は残） |
 | HTTP ルート被覆 | 80 / 152 パス ≒ **53%**（認証 7 + `/api/me` + 9 ドメイン CRUD + 管理系 15 + **設定系 6**〔2026-07-14 settings〕） |
-| Gemini ツール被覆 | 61 / 87 native ≒ **72%**（動的 MCP 0。2026-07-14 に todo 9 + finance 12 + personal 4 + timeline 3 + **guild-assistant ノート 6**〔汎用モード初〕を追加。todo/finance/schedule/reminder/timeline/personal 完成） |
+| Gemini ツール被覆 | 64 / 87 native ≒ **74%**（動的 MCP 0。2026-07-14 に **guild-assistant 9**〔ノート6+メンバー管理3〕含む多数を追加。secretary 6 ドメイン + guild-assistant 9/10 完成） |
 | チャットオーケストレーション（秘書ターン） | ✅ **実装済**（P1-2・`yuuka-orchestrator`・実 TurnProcessor・統合テスト緑） |
 | 汎用モード（guild/owner DM ターン） | ✅ **実装済**（P1-3・`process_guild`/`process_bot_dm`・Bot 専用キー + ギルド/DM 分離文脈・統合テスト緑。能力ゲート=全ツール露出は P2-B） |
 | WebSocket `/ws/chat`（デスクトップ会話） | ✅ **実装済**（P1-2・Bearer 認証 + ready/status/done・live 統合テスト緑。interaction/deferred は縮退） |
@@ -168,7 +168,7 @@
 - [ ] chart（sendChart）
 - [ ] briefing（configureBriefing/getBriefingConfig/runBriefingNow/configureReport）
 - [ ] richContent（showRichContent・常時 on のコア）
-- [~] botAssistant（2026-07-14＝**個人/共有ノート 6**〔get/set/appendMyNote・GuildNote・新 yuuka-botassistant クレート・`Tool::exposure`=guild_assistant+memory 能力・汎用モードで自動選別〕）。**残**: メンバー管理（addBotMember/listBotMembers/removeBotMember）
+- [~] botAssistant（2026-07-14＝**個人/共有ノート 6 + メンバー管理 3**〔addBotMember/listBotMembers/removeBotMember・extract_user_id メンション解析・remove は自己/owner のみ・yuuka-botassistant クレート〕）。**残**: summarizeConversationTopic（LLM 側）
 - [ ] **MCP 動的ツール**（`McpProvider` は未実装。`yuuka-tools/src/lib.rs` で deferred）
 - [~] **capability ゲート適用**: 済（2026-07-10b）＝経路（秘書/汎用モード）× 能力集合で `NativeProvider.list()` を絞り込み（`ToolExposure`/`ctx.mode`+`ctx.capabilities`・Node `parseCapabilities`+`getFunctionModulesForCapabilities`/`getGuildAssistantFunctionModules` パリティ）。**残**: ユーザー別 `enabledModules`（`resolveEnabledModulesForUser`＝`bot_user_modules`/`bots.enabled_modules` の selectable モジュール絞り込み・Node の第 2 次元）が未移植＝module 選択 UI 設定に連動（本項の完了はこの実装で）。
 
