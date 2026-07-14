@@ -116,6 +116,76 @@ pub async fn revoke_all_for_user(db: &Db, user_id: &str) -> Result<(), yuuka_cor
         .await
 }
 
+/// 端末管理一覧の 1 行（`GET /api/devices` 用・`token_hash` は current 判定にのみ使う）。
+#[derive(Debug, Clone)]
+pub struct DesktopTokenInfo {
+    pub id: i64,
+    pub device_name: Option<String>,
+    pub token_hash: String,
+    pub created_at: String,
+    pub last_used_at: Option<String>,
+}
+
+/// 本人の**未失効**デスクトップトークンを列挙する（Node `listDesktopTokensForUser`）。
+/// 並びは `COALESCE(last_used_at, created_at) DESC`（最近使った端末が先頭）。
+///
+/// # Errors
+/// 読み取り失敗時 [`DbError`](yuuka_core::DbError)。
+pub async fn list_for_user(
+    db: &Db,
+    user_id: &str,
+) -> Result<Vec<DesktopTokenInfo>, yuuka_core::DbError> {
+    let uid = user_id.to_owned();
+    db.read
+        .read(move |conn| {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT id, device_name, token_hash, created_at, last_used_at \
+                     FROM desktop_tokens WHERE user_id = ?1 AND revoked = 0 \
+                     ORDER BY COALESCE(last_used_at, created_at) DESC",
+                )
+                .map_err(map_sqlite)?;
+            let rows = stmt
+                .query_map(params![uid], |row| {
+                    Ok(DesktopTokenInfo {
+                        id: row.get(0)?,
+                        device_name: row.get(1)?,
+                        token_hash: row.get(2)?,
+                        created_at: row.get(3)?,
+                        last_used_at: row.get(4)?,
+                    })
+                })
+                .map_err(map_sqlite)?;
+            let mut out = Vec::new();
+            for row in rows {
+                out.push(row.map_err(map_sqlite)?);
+            }
+            Ok(out)
+        })
+        .await
+}
+
+/// 端末単位の失効（本人スコープ・**soft delete** `revoked = 1`・Node `revokeDesktopToken`）。
+/// 失効できたら `true`（既に失効/他人/未存在は `false`）。
+///
+/// # Errors
+/// 書き込み失敗時 [`DbError`](yuuka_core::DbError)。
+pub async fn revoke(db: &Db, id: i64, user_id: &str) -> Result<bool, yuuka_core::DbError> {
+    let uid = user_id.to_owned();
+    db.writer
+        .transaction(move |tx| {
+            let n = tx
+                .execute(
+                    "UPDATE desktop_tokens SET revoked = 1 \
+                     WHERE id = ?1 AND user_id = ?2 AND revoked = 0",
+                    params![id, uid],
+                )
+                .map_err(map_sqlite)?;
+            Ok(n > 0)
+        })
+        .await
+}
+
 #[cfg(test)]
 mod tests {
     use super::verify;

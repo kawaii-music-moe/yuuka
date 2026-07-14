@@ -10,6 +10,7 @@
 //! 縮退（Bearer は SQLite なので動作）＝制約2（常時稼働・自己復帰）。
 
 mod desktop;
+mod device;
 mod session;
 
 pub mod audit;
@@ -22,6 +23,7 @@ pub mod token;
 pub mod users;
 
 pub use desktop::revoke_all_for_user as revoke_all_desktop_tokens;
+pub use device::routes as device_routes;
 pub use pending::{
     NullRegistrationDm, PendingRegistration, PendingStore, RegistrationDm, VerifyResult,
 };
