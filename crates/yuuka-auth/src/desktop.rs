@@ -95,6 +95,32 @@ fn parse_role(raw: &str) -> Role {
     }
 }
 
+/// 長命デスクトップトークンを 1 本登録する（Node `addDesktopToken`）。生トークンの `sha256hex` と
+/// `device_name` を保存し、新規行の id を返す（生トークンは呼び出し側だけが保持・サーバは hash のみ）。
+///
+/// # Errors
+/// 書き込み失敗時 [`DbError`](yuuka_core::DbError)。
+pub async fn add_desktop_token(
+    db: &Db,
+    user_id: &str,
+    token_hash: &str,
+    device_name: Option<&str>,
+) -> Result<i64, yuuka_core::DbError> {
+    let (user_id, token_hash) = (user_id.to_owned(), token_hash.to_owned());
+    let device_name = device_name.map(str::to_owned);
+    db.writer
+        .transaction(move |tx| {
+            tx.execute(
+                "INSERT INTO desktop_tokens (user_id, token_hash, device_name) \
+                 VALUES (?1, ?2, ?3)",
+                params![user_id, token_hash, device_name],
+            )
+            .map_err(map_sqlite)?;
+            Ok(tx.last_insert_rowid())
+        })
+        .await
+}
+
 /// あるユーザーの全デスクトップトークンを物理削除する（Node `revokeAllDesktopTokensForUser`）。
 ///
 /// パスワード変更時に全端末を強制再ログインさせるために呼ぶ（`DELETE FROM desktop_tokens

@@ -159,6 +159,16 @@ async fn run() -> Result<(), String> {
     // 400 に縮退・list/delete は暗号非依存で動作）。
     let credential_routes = yuuka_credential::routes_with(crypto.clone());
 
+    // デバイスフロー（RFC 8628）ルータ。device_code の一時状態はインメモリ store（web 再起動を跨ぐよう
+    // main で 1 度だけ生成し注入）。承認 URL ベースは base_url（末尾スラッシュ除去）or http://host:port。
+    let verification_base = cfg
+        .base_url
+        .as_deref()
+        .map(|b| b.trim_end_matches('/').to_owned())
+        .unwrap_or_else(|| format!("http://{}:{}", cfg.host, cfg.port));
+    let device_auth_routes =
+        yuuka_auth::device_auth_routes(yuuka_auth::DeviceAuthStore::new(verification_base));
+
     let auth_runtime = Arc::new(AuthRuntime::new(
         sessions,
         cfg.session_ttl_days,
@@ -189,6 +199,7 @@ async fn run() -> Result<(), String> {
         webhook_routes,
         bot_attribute_routes,
         credential_routes,
+        device_auth_routes,
         ws_routes: chat_ws_routes,
         addr,
         dist_dir,
@@ -417,6 +428,8 @@ struct WebService {
     bot_attribute_routes: Router<AppState>,
     /// credential ルータ（register 暗号化 crypto を `Extension` で内包済み・`/api/credentials*`）。
     credential_routes: Router<AppState>,
+    /// デバイスフロー ルータ（device_code の一時状態 store を `Extension` で内包済み・`/api/auth/device/*`）。
+    device_auth_routes: Router<AppState>,
     /// 会話 WS ルータ（`ChatEngine` を `Extension` で内包済み・`/ws/chat`）。
     ws_routes: Router<AppState>,
     addr: SocketAddr,
@@ -438,6 +451,7 @@ impl SupervisedService for WebService {
             self.webhook_routes.clone(),
             self.bot_attribute_routes.clone(),
             self.credential_routes.clone(),
+            self.device_auth_routes.clone(),
             self.ws_routes.clone(),
             self.dist_dir.as_deref(),
         );

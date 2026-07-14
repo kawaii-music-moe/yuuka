@@ -142,6 +142,8 @@ async fn ws_chat_ready_then_msg_returns_done() {
         axum::Router::new(),
         // credential ルータ（本テストでは不要・空ルータ）。
         axum::Router::new(),
+        // デバイスフロー ルータ（本テストでは不要・空ルータ）。
+        axum::Router::new(),
         ws_routes(engine, 20),
         None,
     );
@@ -206,6 +208,8 @@ async fn ws_chat_rejects_cookie_only_auth() {
         axum::Router::new(),
         axum::Router::new(),
         // credential ルータ（本テストでは不要・空ルータ）。
+        axum::Router::new(),
+        // デバイスフロー ルータ（本テストでは不要・空ルータ）。
         axum::Router::new(),
         ws_routes(engine, 20),
         None,

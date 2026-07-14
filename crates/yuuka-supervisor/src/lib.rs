@@ -44,6 +44,7 @@ pub fn build_app(
     webhook_routes: Router<AppState>,
     bot_attribute_routes: Router<AppState>,
     credential_routes: Router<AppState>,
+    device_auth_routes: Router<AppState>,
     ws_routes: Router<AppState>,
     dist_dir: Option<&Path>,
 ) -> Router {
@@ -54,6 +55,7 @@ pub fn build_app(
         .merge(webhook_routes)
         .merge(bot_attribute_routes)
         .merge(credential_routes)
+        .merge(device_auth_routes)
         .merge(ws_routes)
         .merge(yuuka_todo::routes())
         .merge(yuuka_finance::routes())
@@ -178,6 +180,8 @@ mod tests {
             yuuka_orchestrator::bot_attribute_routes(),
             // credential ルータ（暗号なし）を merge して検証する。
             yuuka_credential::routes(),
+            // デバイスフロー ルータ（空 store）を merge して検証する。
+            yuuka_auth::device_auth_routes(yuuka_auth::DeviceAuthStore::new(String::new())),
             // WS ルータは merge 検証には不要（ChatEngine 構築を避け空ルータを渡す）。
             axum::Router::new(),
             None,

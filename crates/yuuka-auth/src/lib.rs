@@ -11,6 +11,7 @@
 
 mod desktop;
 mod device;
+mod device_auth;
 mod session;
 
 pub mod audit;
@@ -24,6 +25,7 @@ pub mod users;
 
 pub use desktop::revoke_all_for_user as revoke_all_desktop_tokens;
 pub use device::routes as device_routes;
+pub use device_auth::{device_auth_routes, DeviceAuthStore};
 pub use pending::{
     NullRegistrationDm, PendingRegistration, PendingStore, RegistrationDm, VerifyResult,
 };
@@ -37,7 +39,7 @@ use yuuka_types::SessionUser;
 use yuuka_web::{AuthBackend, Db};
 
 /// Node のデスクトップトークン既定 TTL（日）。`DESKTOP_TOKEN_TTL_DAYS` 相当（既定 90）。
-const DESKTOP_TOKEN_TTL_DAYS: i64 = 90;
+pub(crate) const DESKTOP_TOKEN_TTL_DAYS: i64 = 90;
 
 /// 生トークン文字列(UTF-8) の SHA-256 を**小文字 hex**で返す（Node `sha256Hex` と一致）。
 #[must_use]
