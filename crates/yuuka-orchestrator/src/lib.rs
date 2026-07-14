@@ -7,6 +7,7 @@
 //!
 //! DAG: `orchestrator → {gemini, tools, discord(DTO), crypto, web(Db), db, core}`。
 
+pub mod bot_attr_routes;
 pub mod bot_repo;
 pub mod bot_routes;
 pub mod discord_ports;
@@ -20,6 +21,7 @@ pub mod share_routes;
 pub mod system_prompt;
 pub mod user;
 
+pub use bot_attr_routes::routes as bot_attribute_routes;
 pub use bot_routes::{
     routes as bot_management_routes, routes_with as bot_management_routes_with, BotViewRuntime,
     NullBotViewRuntime,

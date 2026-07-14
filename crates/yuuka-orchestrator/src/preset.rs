@@ -159,7 +159,7 @@ fn display_name_key(preset: BotPresetId) -> String {
 }
 
 /// `system_settings` の 1 値を読む（未登録は `None`・Node `getSystemSetting`）。
-async fn get_system_setting(db: &Db, key: &str) -> Result<Option<String>, DbError> {
+pub(crate) async fn get_system_setting(db: &Db, key: &str) -> Result<Option<String>, DbError> {
     let key = key.to_owned();
     db.read
         .read(move |conn| {
@@ -178,7 +178,7 @@ async fn get_system_setting(db: &Db, key: &str) -> Result<Option<String>, DbErro
 }
 
 /// `system_settings` を upsert する（Node `setSystemSetting`＝`INSERT OR REPLACE`）。
-async fn set_system_setting(db: &Db, key: &str, value: &str) -> Result<(), DbError> {
+pub(crate) async fn set_system_setting(db: &Db, key: &str, value: &str) -> Result<(), DbError> {
     let (key, value) = (key.to_owned(), value.to_owned());
     db.writer
         .transaction(move |tx| {
