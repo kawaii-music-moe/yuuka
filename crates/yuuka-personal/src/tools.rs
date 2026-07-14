@@ -47,6 +47,10 @@ pub fn tools(db: Db) -> Result<Vec<Arc<dyn Tool>>, ToolError> {
             name: ToolName::checked("deleteContact".to_owned())?,
             db: db.clone(),
         }),
+        Arc::new(SearchContactsTool {
+            name: ToolName::checked("searchContacts".to_owned())?,
+            db: db.clone(),
+        }),
         Arc::new(AddClipboardEntryTool {
             name: ToolName::checked("addClipboardEntry".to_owned())?,
             db: db.clone(),
@@ -532,6 +536,54 @@ impl Tool for DeleteClipboardEntryTool {
     }
 }
 
+// ─── searchContacts ──────────────────────────────────────────────────────────
+
+struct SearchContactsTool {
+    name: ToolName,
+    db: Db,
+}
+
+#[async_trait]
+impl Tool for SearchContactsTool {
+    fn declaration(&self) -> FunctionDeclaration {
+        FunctionDeclaration {
+            name: self.name.clone(),
+            description: "連絡先をキーワードで検索する（名前・関係・メモ・タグの部分一致）。\
+                更新・削除の前にその人の ID を調べる時にも使う。"
+                .to_owned(),
+            parameters_json_schema: json!({
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string", "description": "探す手がかりの言葉（名前・呼び方・特徴の一部）" }
+                },
+                "required": ["query"]
+            }),
+            requires_confirmation: false,
+        }
+    }
+
+    async fn call(&self, ctx: &ToolContext, args: Value) -> Result<ToolOutcome, ToolError> {
+        let query = args
+            .get("query")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_owned();
+        if query.is_empty() {
+            return Ok(fail_payload("検索キーワードが空です。"));
+        }
+        let contacts = ContactRepo::new(&self.db)
+            .search(&scope_of(ctx), &query)
+            .await
+            .map_err(exec_err)?;
+        Ok(ToolOutcome::from_payload(json!({
+            "success": true,
+            "count": contacts.len(),
+            "contacts": contacts,
+        })))
+    }
+}
+
 /// 整数を 3 桁区切りにする（Node `Number.toLocaleString()` の桁区切り・上限メッセージ用）。
 fn format_thousands(n: usize) -> String {
     let digits = n.to_string();
@@ -988,5 +1040,44 @@ mod tests {
         let ctx_b = ToolContext::new(BotId::system_default(), UserId::new("userB"));
         let out = get.call(&ctx_b, json!({})).await.unwrap();
         assert_eq!(out.payload["content"], "");
+    }
+
+    #[tokio::test]
+    async fn search_contacts_matches_fields() {
+        let db = seed_db();
+        let tools = tools(db).unwrap();
+        let add = find(&tools, "addContact");
+        let search = find(&tools, "searchContacts");
+
+        add.call(&ctx(), json!({"name": "田中太郎", "relationship": "同僚", "notes": "野球好き"}))
+            .await
+            .unwrap();
+        add.call(&ctx(), json!({"name": "佐藤花子", "relationship": "友人"}))
+            .await
+            .unwrap();
+
+        // 空クエリ → fail。
+        let out = search.call(&ctx(), json!({"query": "  "})).await.unwrap();
+        assert_eq!(out.payload["success"], false);
+
+        // 名前で一致。
+        let out = search.call(&ctx(), json!({"query": "田中"})).await.unwrap();
+        assert_eq!(out.payload["count"], 1);
+        assert_eq!(out.payload["contacts"][0]["name"], "田中太郎");
+        // メモで一致。
+        let out = search.call(&ctx(), json!({"query": "野球"})).await.unwrap();
+        assert_eq!(out.payload["count"], 1);
+        // 関係で一致（両者は関係が異なるので 1 件ずつ）。
+        let out = search.call(&ctx(), json!({"query": "友人"})).await.unwrap();
+        assert_eq!(out.payload["count"], 1);
+        assert_eq!(out.payload["contacts"][0]["name"], "佐藤花子");
+        // 該当なし。
+        let out = search.call(&ctx(), json!({"query": "存在しない"})).await.unwrap();
+        assert_eq!(out.payload["count"], 0);
+
+        // 別ユーザーには漏れない。
+        let ctx_b = ToolContext::new(BotId::system_default(), UserId::new("userB"));
+        let out = search.call(&ctx_b, json!({"query": "田中"})).await.unwrap();
+        assert_eq!(out.payload["count"], 0);
     }
 }

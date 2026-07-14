@@ -62,6 +62,40 @@ impl<'a> ContactRepo<'a> {
             .await
     }
 
+    /// `query` を含む連絡先を氏名昇順で返す（Node `searchContacts`）。
+    ///
+    /// `name`/`relationship`/`notes`/`tags` を `LIKE %query%`（`%`/`_` はエスケープ）で検索する
+    /// （SQLite LIKE と同じ大小文字扱い＝ASCII のみ非区別・パリティ）。
+    ///
+    /// # Errors
+    /// クエリ失敗時 [`DbError`]。
+    pub async fn search(&self, scope: &UserScope, query: &str) -> Result<Vec<Contact>, DbError> {
+        let (uid, bid) = scope_keys(scope);
+        // `%`/`_` をエスケープして部分一致パターンにする（Node と同一）。
+        let escaped = query.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
+        let like = format!("%{escaped}%");
+        self.read
+            .read(move |conn| {
+                let sql = format!(
+                    "SELECT {CONTACT_COLUMNS} FROM contacts \
+                     WHERE user_id = ?1 AND bot_id = ?2 \
+                       AND (name LIKE ?3 ESCAPE '\\' OR relationship LIKE ?3 ESCAPE '\\' \
+                            OR notes LIKE ?3 ESCAPE '\\' OR tags LIKE ?3 ESCAPE '\\') \
+                     ORDER BY name ASC, id ASC"
+                );
+                let mut stmt = conn.prepare(&sql).map_err(map_sqlite)?;
+                let rows = stmt
+                    .query_map(params![uid, bid, like], row_to_contact)
+                    .map_err(map_sqlite)?;
+                let mut out = Vec::new();
+                for row in rows {
+                    out.push(row.map_err(map_sqlite)?);
+                }
+                Ok(out)
+            })
+            .await
+    }
+
     /// スコープ内の単一連絡先を取得する（無ければ `None`）。
     ///
     /// # Errors
