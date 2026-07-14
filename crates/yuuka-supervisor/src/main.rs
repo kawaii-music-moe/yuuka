@@ -94,8 +94,8 @@ async fn run() -> Result<(), String> {
 
     // 4.6) 会話エンジン（ChatEngine）— `/ws/chat`（デスクトップ）を駆動する（P1-2）。ツールレジストリ +
     //      暗号（Gemini キー復号）+ DB を保持。crypto 未設定でも構築でき、キー未設定ユーザーは ⚠️ 応答。
-    let tool_registry =
-        build_tool_registry(&db).map_err(|e| format!("build tool registry: {e}"))?;
+    let tool_registry = build_tool_registry(&db, crypto.clone())
+        .map_err(|e| format!("build tool registry: {e}"))?;
     let chat_engine = Arc::new(ChatEngine::with_real_gemini(
         db.clone(),
         crypto.clone(),

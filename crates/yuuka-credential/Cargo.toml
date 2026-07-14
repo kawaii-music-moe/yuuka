@@ -9,6 +9,7 @@ description = "yuuka credential ドメイン（Repo + DTO + route・機密フェ
 
 [dependencies]
 yuuka-core.workspace = true
+yuuka-crypto.workspace = true
 yuuka-db.workspace = true
 yuuka-types.workspace = true
 yuuka-web.workspace = true
@@ -23,6 +24,7 @@ async-trait.workspace = true
 tokio.workspace = true
 tower = { workspace = true, features = ["util"] }
 tempfile = "3"
+secrecy.workspace = true
 
 [lints]
 workspace = true

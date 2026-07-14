@@ -1,6 +1,6 @@
 # Rust 移行 — 残作業ロードマップ（本番投入までの ToDo 全集）
 
-- 最終更新: 2026-07-14（**P2-A/P2-B 17 増分セッション**: admin 15 + settings 6 Web-API（新規 `yuuka-admin`/`yuuka-settings`）+ **todo ツール 4 本 + todo タグ/ガイド 3 本 + finance ツール 9 本**を実装 + 敵対的パリティレビューで確定 0 HIGH。全ゲート緑 — build ✅ / clippy -D ✅ / **test 439** ✅ / deny exit0 ✅・新規依存なし。ルート 80/152・ツール 66/87） 
+- 最終更新: 2026-07-14（**P2-A/P2-B 18 増分セッション**: admin 15 + settings 6 Web-API（新規 `yuuka-admin`/`yuuka-settings`）+ **todo ツール 4 本 + todo タグ/ガイド 3 本 + finance ツール 9 本**を実装 + 敵対的パリティレビューで確定 0 HIGH。全ゲート緑 — build ✅ / clippy -D ✅ / **test 440** ✅ / deny exit0 ✅・新規依存なし。ルート 80/152・ツール 68/87） 
 - 対象ブランチ: `feature/rust-rewrite`（未 push・HEAD=`b77506d` の上に未コミット差分）
 - git HEAD: `b77506d`（P2 ドメイン Web-API 拡張）+ 本セッションの縮退シーム解消差分（未コミット）
 - 前提資料: [review-2026-07-06-fix-policy.md](review-2026-07-06-fix-policy.md)（修正方針の唯一の基準）・[review-2026-07-09-batch4-6.md](review-2026-07-09-batch4-6.md)・[PLAN.md](PLAN.md) §11（移行ロードマップ）
@@ -32,7 +32,7 @@
 | 保存時暗号層（Argon2id/AES-256-GCM） | ✅ **実装済**（P1-5・Node ゴールデンベクタでバイト単位パリティ・鍵ローテ起動時配線） |
 | 認証発行（login/setup/logout/register/users） | ✅ **実装済**（P1-1・セッション発行 + bcrypt + 招待 + 監査 + レート制限。**登録 DM は P1-3 で開通**・OAuth は残） |
 | HTTP ルート被覆 | 80 / 152 パス ≒ **53%**（認証 7 + `/api/me` + 9 ドメイン CRUD + 管理系 15 + **設定系 6**〔2026-07-14 settings〕） |
-| Gemini ツール被覆 | 66 / 87 native ≒ **76%**（動的 MCP 0。2026-07-14 に guild-assistant 9 + **briefing/report 設定 2**〔configureReport/getBriefingConfig〕含む多数を追加） |
+| Gemini ツール被覆 | 68 / 87 native ≒ **78%**（動的 MCP 0。2026-07-14 に guild-assistant 9 + briefing 2 + **credential add/update 2**〔crypto 注入〕含む多数を追加） |
 | チャットオーケストレーション（秘書ターン） | ✅ **実装済**（P1-2・`yuuka-orchestrator`・実 TurnProcessor・統合テスト緑） |
 | 汎用モード（guild/owner DM ターン） | ✅ **実装済**（P1-3・`process_guild`/`process_bot_dm`・Bot 専用キー + ギルド/DM 分離文脈・統合テスト緑。能力ゲート=全ツール露出は P2-B） |
 | WebSocket `/ws/chat`（デスクトップ会話） | ✅ **実装済**（P1-2・Bearer 認証 + ready/status/done・live 統合テスト緑。interaction/deferred は縮退） |
@@ -163,7 +163,7 @@
 - [x] finance: 14/14 完成（2026-07-14＝月次集計2/予算3/支払い予定 list-add-settle-cancel4/findSettlementCandidates/**linkPlannedPaymentTodo/linkPlannedPaymentReminder**〔cross-domain＝同一DBへ直接SQL・link_todo/link_reminder repo〕）
 - [~] timeline: addTimelineRecord は expense/task_done の cross-domain 副作用に対応済み（2026-07-14）。**残**: createDayPlanBlock/listDayPlan/deleteDayPlanBlock（day_plan_blocks 操作）・tool 経由 media の Discord 添付 URL 取得（reqwest 依存）
 - [~] personal: clipboard(3) + **context-note 3（getContextNote/setContextNote/appendContextNote・2026-07-14＝既存 ContextNoteRepo へ配線・上限 10,000 文字検証・append は改行連結）**。**残**: searchContacts（list を in-tool フィルタ）/summarizeConversationTopic（LLM 側）
-- [ ] credential: add/update/browserFillCredential（暗号層依存）
+- [~] credential: **add/update 済**（2026-07-14＝`SystemCrypto::encrypt_for_user`・salt=users.salt・`build_tool_registry(db,crypto)` 注入・長さ検証/部分更新）。**残**: browserFillCredential（平文復号 + browser 依存）
 - [ ] browser 一式（searchWeb/fetchDynamicPage/takePageScreenshot/browserInteractive ~9）— 対応クレート無し
 - [ ] chart（sendChart）
 - [~] briefing（2026-07-14＝**configureReport/getBriefingConfig**〔新 yuuka-briefing クレート・report 部分更新 upsert + 設定読取〕）。**残**: configureBriefing（SSRF ガード + フィード配列）/runBriefingNow（サービス本体＝天気/RSS）

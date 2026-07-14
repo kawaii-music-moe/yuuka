@@ -115,6 +115,105 @@ impl<'a> CredentialRepo<'a> {
             })
             .await
     }
+
+    /// ユーザーの暗号化 salt（`users.salt` hex）を返す（無ければ `None`・ユーザー鍵導出に使う）。
+    ///
+    /// # Errors
+    /// 読み取り失敗時 [`DbError`]。
+    pub async fn user_salt(&self, user_id: &str) -> Result<Option<String>, DbError> {
+        let uid = user_id.to_owned();
+        self.read
+            .read(move |conn| {
+                let mut stmt = conn
+                    .prepare("SELECT salt FROM users WHERE discord_id = ?1")
+                    .map_err(map_sqlite)?;
+                let mut rows = stmt
+                    .query_map(params![uid], |row| row.get::<_, String>(0))
+                    .map_err(map_sqlite)?;
+                match rows.next() {
+                    Some(v) => Ok(Some(v.map_err(map_sqlite)?)),
+                    None => Ok(None),
+                }
+            })
+            .await
+    }
+
+    /// 認証情報を保存する（Node `saveCredential`＝upsert・暗号文/iv/tag は呼び出し側で暗号化済み）。
+    /// service_name は正規化して保存する。
+    ///
+    /// # Errors
+    /// 書き込み失敗時 [`DbError`]。
+    pub async fn save(
+        &self,
+        scope: &UserScope,
+        service_name: &str,
+        username: String,
+        url: Option<String>,
+        enc: yuuka_crypto::Encrypted,
+    ) -> Result<(), DbError> {
+        let uid = scope_user(scope);
+        let svc = normalize_service_name(service_name);
+        let yuuka_crypto::Encrypted {
+            encrypted,
+            iv,
+            auth_tag,
+        } = enc;
+        self.writer
+            .transaction(move |tx| {
+                tx.execute(
+                    "INSERT INTO credentials \
+                       (user_id, service_name, url, username, encrypted_password, iv, auth_tag, updated_at) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, datetime('now', 'localtime')) \
+                     ON CONFLICT(user_id, service_name) DO UPDATE SET \
+                       url = excluded.url, username = excluded.username, \
+                       encrypted_password = excluded.encrypted_password, iv = excluded.iv, \
+                       auth_tag = excluded.auth_tag, updated_at = datetime('now', 'localtime')",
+                    params![uid, svc, url, username, encrypted, iv, auth_tag],
+                )
+                .map_err(map_sqlite)?;
+                Ok(())
+            })
+            .await
+    }
+
+    /// 更新の部分マージ用に、暗号化列を含む現在値を取得する（無ければ `None`）。
+    ///
+    /// # Errors
+    /// 読み取り失敗時 [`DbError`]。
+    #[allow(clippy::type_complexity)]
+    pub async fn get_full(
+        &self,
+        scope: &UserScope,
+        service_name: &str,
+    ) -> Result<Option<(String, Option<String>, String, String, String)>, DbError> {
+        let uid = scope_user(scope);
+        let svc = normalize_service_name(service_name);
+        self.read
+            .read(move |conn| {
+                let mut stmt = conn
+                    .prepare(
+                        "SELECT username, url, encrypted_password, iv, auth_tag FROM credentials \
+                         WHERE user_id = ?1 AND service_name = ?2",
+                    )
+                    .map_err(map_sqlite)?;
+                let mut rows = stmt
+                    .query_map(params![uid, svc], |row| {
+                        Ok((
+                            row.get(0)?,
+                            row.get(1)?,
+                            row.get(2)?,
+                            row.get(3)?,
+                            row.get(4)?,
+                        ))
+                    })
+                    .map_err(map_sqlite)?;
+                match rows.next() {
+                    Some(v) => Ok(Some(v.map_err(map_sqlite)?)),
+                    None => Ok(None),
+                }
+            })
+            .await
+    }
 }
 
 /// サービス名の正規化（trim + 小文字化）。Node `normalizeServiceName` と同一。

@@ -8,6 +8,7 @@
 use std::sync::Arc;
 
 use yuuka_core::{Tool, ToolError};
+use yuuka_crypto::SystemCrypto;
 use yuuka_tools::{NativeProvider, ToolRegistry};
 use yuuka_web::Db;
 
@@ -15,9 +16,12 @@ use yuuka_web::Db;
 ///
 /// # Errors
 /// ドメインの `tools(db)` 構築失敗、または名前重複時に [`ToolError`]。
-pub fn build_native_provider(db: &Db) -> Result<NativeProvider, ToolError> {
+pub fn build_native_provider(
+    db: &Db,
+    crypto: Option<Arc<SystemCrypto>>,
+) -> Result<NativeProvider, ToolError> {
     let mut provider = NativeProvider::new();
-    for tool in all_domain_tools(db)? {
+    for tool in all_domain_tools(db, crypto)? {
         provider.register(tool)?;
     }
     Ok(provider)
@@ -27,8 +31,11 @@ pub fn build_native_provider(db: &Db) -> Result<NativeProvider, ToolError> {
 ///
 /// # Errors
 /// [`build_native_provider`] と同じ。
-pub fn build_tool_registry(db: &Db) -> Result<ToolRegistry, ToolError> {
-    let provider = build_native_provider(db)?;
+pub fn build_tool_registry(
+    db: &Db,
+    crypto: Option<Arc<SystemCrypto>>,
+) -> Result<ToolRegistry, ToolError> {
+    let provider = build_native_provider(db, crypto)?;
     Ok(ToolRegistry::new().with_provider(Arc::new(provider)))
 }
 
@@ -38,7 +45,10 @@ pub fn build_tool_registry(db: &Db) -> Result<ToolRegistry, ToolError> {
 ///
 /// # Errors
 /// いずれかのドメインの `tools(db)` が失敗した場合 [`ToolError`]。
-fn all_domain_tools(db: &Db) -> Result<Vec<Arc<dyn Tool>>, ToolError> {
+fn all_domain_tools(
+    db: &Db,
+    crypto: Option<Arc<SystemCrypto>>,
+) -> Result<Vec<Arc<dyn Tool>>, ToolError> {
     let mut all: Vec<Arc<dyn Tool>> = Vec::new();
     all.extend(yuuka_todo::tools(db.clone())?);
     all.extend(yuuka_finance::tools(db.clone())?);
@@ -46,7 +56,7 @@ fn all_domain_tools(db: &Db) -> Result<Vec<Arc<dyn Tool>>, ToolError> {
     all.extend(yuuka_timeline::tools(db.clone())?);
     all.extend(yuuka_reminder::tools(db.clone())?);
     all.extend(yuuka_personal::tools(db.clone())?);
-    all.extend(yuuka_credential::tools(db.clone())?);
+    all.extend(yuuka_credential::tools(db.clone(), crypto)?);
     all.extend(yuuka_playbook::tools(db.clone())?);
     // guild-assistant（汎用モード）ツール。露出は Tool::exposure（guild_assistant + memory 能力）で
     // 選別されるため、秘書経路のスナップショットには現れない。
@@ -103,7 +113,7 @@ mod tests {
     fn registry_aggregates_all_domains_without_name_collision() {
         let db = seed_db();
         // build_native_provider が Ok = 全ドメイン横断で重複ツール名が無いことの保証。
-        let provider = build_native_provider(&db).unwrap();
+        let provider = build_native_provider(&db, None).unwrap();
         let decls = provider.list(&ctx());
         let names: Vec<String> = decls.iter().map(|d| d.name.to_string()).collect();
 
@@ -158,7 +168,7 @@ mod tests {
         // ★Phase 2 全鎖の統合検証: gemini FC ループ → RegistrySnapshot → NativeProvider →
         //   yuuka-todo の addTodo ツール → TodoRepo → 実 SQLite。
         let db = seed_db();
-        let registry = build_tool_registry(&db).unwrap();
+        let registry = build_tool_registry(&db, None).unwrap();
         let snapshot = registry.snapshot(&ctx());
 
         let resp = |v: serde_json::Value| -> GenerateContentResponse {
