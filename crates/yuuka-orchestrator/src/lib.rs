@@ -21,7 +21,9 @@ pub mod share_routes;
 pub mod system_prompt;
 pub mod user;
 
-pub use bot_attr_routes::routes as bot_attribute_routes;
+pub use bot_attr_routes::{
+    routes as bot_attribute_routes, routes_with as bot_attribute_routes_with,
+};
 pub use bot_routes::{
     routes as bot_management_routes, routes_with as bot_management_routes_with, BotViewRuntime,
     NullBotViewRuntime,

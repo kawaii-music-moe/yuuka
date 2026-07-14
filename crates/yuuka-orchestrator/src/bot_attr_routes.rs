@@ -5,17 +5,24 @@
 //! **残（別増分）**: usage（利用量集計）・modules（enabled_modules）・assistant-*（gemini-key/persona/
 //! guilds/members/roles/guild-note〔暗号・ギルド設定サブシステム〕）。
 
-use axum::extract::{Query, State};
+use std::sync::Arc;
+
+use axum::extract::{Extension, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::{json, Value};
+use yuuka_crypto::SystemCrypto;
 use yuuka_web::{AdminUser, AppState, AuthenticatedUser, Db};
 
-use crate::bot_repo;
+use crate::bot_repo::{self, EncryptedTriplet};
 use crate::preset::{self, BotPresetId};
+
+/// Gemini キー暗号化用 crypto（省略可・Extension で運ぶ newtype）。
+#[derive(Clone)]
+struct AttrCrypto(Option<Arc<SystemCrypto>>);
 
 /// レート制限既定値（Node `RATE_LIMIT_DEFAULTS`・`system_settings` キーと既定値）。
 const RATE_LIMITS: [(&str, &str, i64); 3] = [
@@ -30,8 +37,13 @@ struct BotIdQuery {
     bot_id: Option<String>,
 }
 
-/// Bot 属性ルータ（`AppState` 上でマージされる）。
+/// Bot 属性ルータ（既定 crypto なし・`AppState` 上でマージされる）。
 pub fn routes() -> Router<AppState> {
+    routes_with(None)
+}
+
+/// crypto を注入して Bot 属性ルータを組む（Gemini キー暗号化・main で SystemCrypto を渡す）。
+pub fn routes_with(crypto: Option<Arc<SystemCrypto>>) -> Router<AppState> {
     Router::new()
         .route("/api/bots/presets", get(list_presets))
         .route("/api/bots/attributes", post(change_attributes))
@@ -43,10 +55,102 @@ pub fn routes() -> Router<AppState> {
         .route("/api/bots/assistant/guilds", post(set_guild))
         .route("/api/bots/assistant/members", post(set_member))
         .route("/api/bots/assistant/roles", post(set_role))
+        .route("/api/bots/assistant/gemini-key", post(set_gemini_key))
         .route(
             "/api/admin/bot-attribute-settings",
             get(admin_get).post(admin_set),
         )
+        .layer(Extension(AttrCrypto(crypto)))
+}
+
+// ─── POST /api/bots/assistant/gemini-key（Bot 専用 Gemini キー・owner/Admin） ─
+
+async fn set_gemini_key(
+    user: AuthenticatedUser,
+    State(db): State<Db>,
+    Extension(AttrCrypto(crypto)): Extension<AttrCrypto>,
+    Json(body): Json<Value>,
+) -> Response {
+    let uid = user.0.discord_id;
+    let bot = match owned_bot_from_body(&db, &uid, &body).await {
+        Ok(b) => b,
+        Err(resp) => return resp,
+    };
+    let api_key = body.get("apiKey").and_then(Value::as_str).unwrap_or("");
+
+    // 空欄はクリア（キー未設定の Bot は応答停止）。
+    if api_key.trim().is_empty() {
+        if let Err(_e) = bot_repo::update_bot_gemini_key(&db, &bot.id, None).await {
+            return server_error();
+        }
+        // 監査: target=bot.id・detail="cleared"（Node addAuditLog の 3/4 引数）。
+        yuuka_auth::audit::add_audit_log(
+            &db,
+            &uid,
+            "bot.gemini_key_change",
+            Some(&bot.id),
+            Some("cleared"),
+        )
+        .await;
+        return ok_message(
+            "Bot専用APIキーを削除しました。キーが設定されるまでこのBotは応答しません。",
+        );
+    }
+    // マスク済み（未変更）。
+    if api_key.starts_with("••••") {
+        return ok_message("APIキーは変更されていません。");
+    }
+    // 形式検証。
+    if !is_likely_gemini_key(api_key.trim()) {
+        return bad_request(
+            "Gemini APIキーの形式が正しくありません。「AIza」で始まるキーを入力してください（Google AI Studio で取得）。",
+        );
+    }
+    // 暗号化して保存。
+    let Some(crypto) = crypto.as_deref() else {
+        return server_error();
+    };
+    let enc = match crypto.encrypt_text(api_key.trim()) {
+        Ok(e) => EncryptedTriplet {
+            encrypted: e.encrypted,
+            iv: e.iv,
+            tag: e.auth_tag,
+        },
+        Err(_) => return server_error(),
+    };
+    if let Err(_e) = bot_repo::update_bot_gemini_key(&db, &bot.id, Some(enc)).await {
+        return server_error();
+    }
+    yuuka_auth::audit::add_audit_log(
+        &db,
+        &uid,
+        "bot.gemini_key_change",
+        Some(&bot.id),
+        Some("updated"),
+    )
+    .await;
+    ok_message("Bot専用のGemini APIキーを保存しました。")
+}
+
+/// Gemini API キーらしさ（Node `isLikelyGeminiKey` = `^AIza[0-9A-Za-z_-]{30,}$`）。
+fn is_likely_gemini_key(value: &str) -> bool {
+    match value.strip_prefix("AIza") {
+        Some(rest) => {
+            rest.len() >= 30
+                && rest
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+        }
+        None => false,
+    }
+}
+
+fn ok_message(message: &str) -> Response {
+    (
+        StatusCode::OK,
+        Json(json!({ "success": true, "message": message })),
+    )
+        .into_response()
 }
 
 /// `action === "remove" ? remove : add`（Node）。
@@ -1187,5 +1291,69 @@ mod tests {
         let role0 = &j["roles"].as_array().unwrap()[0];
         assert_eq!(role0["role_id"], r);
         assert_eq!(role0["role_name"], "VIP");
+    }
+
+    #[tokio::test]
+    async fn gemini_key_set_clear_validate() {
+        use secrecy::SecretString;
+        use yuuka_crypto::SystemCrypto;
+        let crypto = Arc::new(SystemCrypto::new(SecretString::from("test-secret-xyz")).unwrap());
+        let state = AppState::new(Arc::new(FakeAuth), WebConfig::default(), seed_db());
+        let app = super::routes_with(Some(crypto)).with_state(state);
+
+        // 形式不正 → 400。
+        let (st, _) = send(
+            &app,
+            "POST",
+            "/api/bots/assistant/gemini-key",
+            "owner",
+            r#"{"botId":"b1","apiKey":"notavalidkey"}"#,
+        )
+        .await;
+        assert_eq!(st, StatusCode::BAD_REQUEST);
+        // マスク済み → 未変更。
+        let (st, j) = send(
+            &app,
+            "POST",
+            "/api/bots/assistant/gemini-key",
+            "owner",
+            r#"{"botId":"b1","apiKey":"••••abcd"}"#,
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(j["message"], "APIキーは変更されていません。");
+        // 正規キー → 保存。
+        let key = format!("AIza{}", "a".repeat(35));
+        let (st, j) = send(
+            &app,
+            "POST",
+            "/api/bots/assistant/gemini-key",
+            "owner",
+            &format!(r#"{{"botId":"b1","apiKey":"{key}"}}"#),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(j["message"], "Bot専用のGemini APIキーを保存しました。");
+        // 空欄 → クリア。
+        let (st, j) = send(
+            &app,
+            "POST",
+            "/api/bots/assistant/gemini-key",
+            "owner",
+            r#"{"botId":"b1","apiKey":"  "}"#,
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK);
+        assert!(j["message"].as_str().unwrap().contains("削除しました"));
+        // 非所有者 403。
+        let (st, _) = send(
+            &app,
+            "POST",
+            "/api/bots/assistant/gemini-key",
+            "other",
+            &format!(r#"{{"botId":"b1","apiKey":"{key}"}}"#),
+        )
+        .await;
+        assert_eq!(st, StatusCode::FORBIDDEN);
     }
 }

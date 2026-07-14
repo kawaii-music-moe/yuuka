@@ -432,6 +432,34 @@ pub async fn bot_gemini(db: &Db, bot_id: &str) -> Result<Option<EncryptedTriplet
         .await
 }
 
+/// Bot 専用 Gemini キーの暗号 3 列を更新する（`None` で解除＝NULL・Node `updateBotGeminiKey`）。
+///
+/// # Errors
+/// 書き込み失敗時 [`DbError`]。
+pub async fn update_bot_gemini_key(
+    db: &Db,
+    bot_id: &str,
+    enc: Option<EncryptedTriplet>,
+) -> Result<(), DbError> {
+    let bot_id = bot_id.to_owned();
+    let (e, iv, tag) = match enc {
+        Some(t) => (Some(t.encrypted), Some(t.iv), Some(t.tag)),
+        None => (None, None, None),
+    };
+    db.writer
+        .transaction(move |tx| {
+            tx.execute(
+                "UPDATE bots SET gemini_api_key_encrypted = ?1, gemini_api_key_iv = ?2, \
+                    gemini_api_key_tag = ?3, updated_at = datetime('now','localtime') \
+                 WHERE id = ?4",
+                params![e, iv, tag, bot_id],
+            )
+            .map_err(map_sqlite)?;
+            Ok(())
+        })
+        .await
+}
+
 /// Discord プロフィール（名前・アバター・application id）を DB へ同期（Node `updateBotDiscordProfile`・
 /// `COALESCE` で未指定は据え置き）。書き込みは writer actor 上。
 ///

@@ -31,12 +31,18 @@ pub use ws::ws_routes;
 /// ルータ（それぞれ `Extension` で依存を内包済み）。web の再起動毎に呼ばれるので、呼び出し側で 1 度
 /// 組んだものを clone して渡す（`Router` は安価に clone 可能）。`dist_dir` を渡すと SPA
 /// （`dist/public`）を `fallback_service` として載せる（未指定は API のみ）。
+///
+/// 引数は state + dist_dir と、`Extension` で依存を内包済みの pre-built ルータ群（auth/admin/settings/
+/// webhook/bot-attribute/ws）。crypto/runtime を State へ入れると全 `AppState` 構築へ波及するため、
+/// これらは main 側で組んで渡す配線関数（引数数の lint は本質的な配線都合として許容）。
+#[allow(clippy::too_many_arguments)]
 pub fn build_app(
     state: AppState,
     auth_routes: Router<AppState>,
     admin_routes: Router<AppState>,
     settings_routes: Router<AppState>,
     webhook_routes: Router<AppState>,
+    bot_attribute_routes: Router<AppState>,
     ws_routes: Router<AppState>,
     dist_dir: Option<&Path>,
 ) -> Router {
@@ -45,6 +51,7 @@ pub fn build_app(
         .merge(admin_routes)
         .merge(settings_routes)
         .merge(webhook_routes)
+        .merge(bot_attribute_routes)
         .merge(ws_routes)
         .merge(yuuka_todo::routes())
         .merge(yuuka_finance::routes())
@@ -60,7 +67,6 @@ pub fn build_app(
         .merge(yuuka_orchestrator::member_request_routes())
         .merge(yuuka_orchestrator::bot_share_routes())
         .merge(yuuka_orchestrator::bot_management_routes())
-        .merge(yuuka_orchestrator::bot_attribute_routes())
         .merge(desktop_dist::routes());
     let routes = match dist_dir {
         Some(dir) => mount_static(routes, dir),
@@ -167,6 +173,8 @@ mod tests {
             yuuka_settings::routes(settings_runtime),
             // Webhook ルータ（Null プロセッサ・暗号なし）を merge して検証する。
             yuuka_webhook::routes(),
+            // Bot 属性ルータ（暗号なし）を merge して検証する。
+            yuuka_orchestrator::bot_attribute_routes(),
             // WS ルータは merge 検証には不要（ChatEngine 構築を避け空ルータを渡す）。
             axum::Router::new(),
             None,
