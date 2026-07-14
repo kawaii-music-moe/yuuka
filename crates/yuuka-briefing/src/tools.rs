@@ -36,7 +36,7 @@ pub fn tools(db: Db) -> Result<Vec<Arc<dyn Tool>>, ToolError> {
 }
 
 /// SSRF ガード: 公開 http(s) URL らしいか（Node `isLikelyPublicHttpUrl`）。内部/ローカル/非 http(s) を拒否。
-fn is_likely_public_http_url(raw: &str) -> bool {
+pub(crate) fn is_likely_public_http_url(raw: &str) -> bool {
     let Some(rest) = raw
         .strip_prefix("http://")
         .or_else(|| raw.strip_prefix("https://"))
@@ -95,7 +95,7 @@ fn exec_err(e: yuuka_core::DbError) -> ToolError {
 }
 
 /// 最小 cron 妥当性（5 フィールド・空でない・Node `cron.validate` の簡約）。
-fn is_valid_cron_basic(rule: &str) -> bool {
+pub(crate) fn is_valid_cron_basic(rule: &str) -> bool {
     let fields: Vec<&str> = rule.split_whitespace().collect();
     fields.len() == 5 && fields.iter().all(|f| !f.is_empty())
 }
@@ -302,9 +302,13 @@ impl Tool for ConfigureBriefingTool {
         let patch = repo::BriefingPatch {
             enabled: args.get("enabled").map(|v| v.as_bool() == Some(true)),
             schedule_cron: arg_str(&args, "schedule_cron"),
-            weather_lat: args.get("latitude").and_then(Value::as_f64),
-            weather_lng: args.get("longitude").and_then(Value::as_f64),
-            location_name: arg_str(&args, "location_name"),
+            // tool は配信先を触らない（Web-API 側のみ設定可）。
+            target_type: None,
+            target_id: None,
+            // 緯度経度/地名は present のときのみ設定（tool ではクリアは未対応）。
+            weather_lat: args.get("latitude").and_then(Value::as_f64).map(Some),
+            weather_lng: args.get("longitude").and_then(Value::as_f64).map(Some),
+            location_name: arg_str(&args, "location_name").map(Some),
             news_feeds: feeds,
             news_keywords: args
                 .get("news_keywords")

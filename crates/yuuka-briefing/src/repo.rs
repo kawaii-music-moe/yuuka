@@ -29,9 +29,15 @@ pub struct BriefingConfig {
 pub struct BriefingPatch {
     pub enabled: Option<bool>,
     pub schedule_cron: Option<String>,
-    pub weather_lat: Option<f64>,
-    pub weather_lng: Option<f64>,
-    pub location_name: Option<String>,
+    /// `Some`=配信先種別を設定（'dm'/'channel'）・`None`=触らない。
+    pub target_type: Option<String>,
+    /// `Some(inner)`=`target_id` 列を設定（`inner=None` は NULL）・`None`=触らない。
+    pub target_id: Option<Option<String>>,
+    /// `Some(inner)`=`weather_lat` 列を設定（`inner=None` は NULL）・`None`=触らない。
+    pub weather_lat: Option<Option<f64>>,
+    pub weather_lng: Option<Option<f64>>,
+    /// `Some(inner)`=`location_name` 列を設定（`inner=None` は NULL）・`None`=触らない。
+    pub location_name: Option<Option<String>>,
     /// `Some` のときのみ `news_feeds` 列を更新する（add/remove 適用後の全体）。
     pub news_feeds: Option<Vec<String>>,
     pub news_keywords: Option<Vec<String>>,
@@ -48,10 +54,30 @@ pub struct ReportConfig {
 }
 
 /// briefing 設定を返す（未設定は既定値・Node `getBriefingConfig` は行が無ければ defaults）。
+/// tool 側（configureBriefing の部分マージ・getBriefingConfig）で使う。
 ///
 /// # Errors
 /// 読み取り失敗時 [`DbError`]。
 pub async fn get_briefing(db: &Db, user_id: &str, bot_id: &str) -> Result<BriefingConfig, DbError> {
+    Ok(find_briefing(db, user_id, bot_id)
+        .await?
+        .unwrap_or_else(|| BriefingConfig {
+            schedule_cron: "0 7 * * *".to_owned(),
+            target_type: "dm".to_owned(),
+            ..BriefingConfig::default()
+        }))
+}
+
+/// briefing 設定の行を取得する（**行が無ければ `None`**・既定値へ畳まない）。
+/// Web `GET /api/briefing-config` は未設定を `config: null` で返すため生の有無が要る。
+///
+/// # Errors
+/// 読み取り失敗時 [`DbError`]。
+pub async fn find_briefing(
+    db: &Db,
+    user_id: &str,
+    bot_id: &str,
+) -> Result<Option<BriefingConfig>, DbError> {
     let (u, b) = (user_id.to_owned(), bot_id.to_owned());
     db.read
         .read(move |conn| {
@@ -78,12 +104,8 @@ pub async fn get_briefing(db: &Db, user_id: &str, bot_id: &str) -> Result<Briefi
                 })
                 .map_err(map_sqlite)?;
             match rows.next() {
-                Some(v) => Ok(v.map_err(map_sqlite)?),
-                None => Ok(BriefingConfig {
-                    schedule_cron: "0 7 * * *".to_owned(),
-                    target_type: "dm".to_owned(),
-                    ..BriefingConfig::default()
-                }),
+                Some(v) => Ok(Some(v.map_err(map_sqlite)?)),
+                None => Ok(None),
             }
         })
         .await
@@ -108,14 +130,20 @@ pub async fn upsert_briefing(
     if let Some(v) = patch.schedule_cron {
         cfg.schedule_cron = v;
     }
-    if patch.weather_lat.is_some() {
-        cfg.weather_lat = patch.weather_lat;
+    if let Some(v) = patch.target_type {
+        cfg.target_type = v;
     }
-    if patch.weather_lng.is_some() {
-        cfg.weather_lng = patch.weather_lng;
+    if let Some(v) = patch.target_id {
+        cfg.target_id = v;
+    }
+    if let Some(v) = patch.weather_lat {
+        cfg.weather_lat = v;
+    }
+    if let Some(v) = patch.weather_lng {
+        cfg.weather_lng = v;
     }
     if let Some(v) = patch.location_name {
-        cfg.location_name = Some(v);
+        cfg.location_name = v;
     }
     if let Some(v) = patch.news_feeds {
         cfg.news_feeds = v;
