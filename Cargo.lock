@@ -3220,6 +3220,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "yuuka-briefing"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "rusqlite",
+ "serde_json",
+ "tokio",
+ "yuuka-core",
+ "yuuka-db",
+ "yuuka-types",
+ "yuuka-web",
+]
+
+[[package]]
 name = "yuuka-core"
 version = "0.1.0"
 dependencies = [
@@ -3519,6 +3533,7 @@ dependencies = [
  "yuuka-admin",
  "yuuka-auth",
  "yuuka-botassistant",
+ "yuuka-briefing",
  "yuuka-core",
  "yuuka-credential",
  "yuuka-crypto",

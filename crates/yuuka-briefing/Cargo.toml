@@ -1,0 +1,23 @@
+[package]
+name = "yuuka-briefing"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "yuuka briefing/report 配信設定ツール（DB 設定・Node briefingFunctions パリティ）"
+
+[dependencies]
+yuuka-core.workspace = true
+yuuka-db.workspace = true
+yuuka-types.workspace = true
+yuuka-web.workspace = true
+rusqlite.workspace = true
+serde_json.workspace = true
+async-trait.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+
+[lints]
+workspace = true
