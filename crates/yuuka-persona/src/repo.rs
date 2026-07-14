@@ -390,10 +390,11 @@ impl<'a> PersonaRepo<'a> {
         }
     }
 
-    /// 所有者本人のペルソナを削除する（削除できたら `true`）。
+    /// 所有者本人のペルソナを削除し、**適用中・推奨設定も掃除する**（Node `deletePersona`）。
     ///
-    /// Node は `bot_active_personas` の適用解除・Bot 推奨設定解除も同時に行うが、
-    /// それらはコア CRUD 外のため本スライスでは personas 行の削除のみを行う（deferred）。
+    /// `bot_active_personas`（適用中）は FK `ON DELETE CASCADE` で自動掃除されるが、
+    /// `bots.recommended_persona_id` は **FK が無い**ため明示的に `NULL` へ解除する。削除・解除を
+    /// 単一 writer Tx で原子的に行う（削除できたら `true`・該当無は `false`）。
     ///
     /// # Errors
     /// 削除失敗時 [`DbError`]。
@@ -407,7 +408,18 @@ impl<'a> PersonaRepo<'a> {
                         params![id, owner],
                     )
                     .map_err(map_sqlite)?;
-                Ok(n > 0)
+                if n == 0 {
+                    return Ok(false);
+                }
+                // bot_active_personas は FK ON DELETE CASCADE で自動掃除（foreign_keys=ON）。
+                // bots.recommended_persona_id は FK 無しのため明示的に解除する（Node §）。
+                tx.execute(
+                    "UPDATE bots SET recommended_persona_id = NULL \
+                     WHERE recommended_persona_id = ?1",
+                    params![id],
+                )
+                .map_err(map_sqlite)?;
+                Ok(true)
             })
             .await
     }

@@ -609,6 +609,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn delete_cascades_active_and_recommended() {
+        let (db, path) = seed_db_at();
+        insert_user(&path, "u", "U");
+        let pid = insert_persona(&path, "u", "P", "prompt", 1);
+        // このペルソナを推奨した Bot ＋ 適用中状態を作る。
+        {
+            let conn = rusqlite::Connection::open(&path).unwrap();
+            conn.execute(
+                "INSERT INTO bots (id, user_id, name, recommended_persona_id) \
+                 VALUES ('b1', 'u', 'B', ?1)",
+                rusqlite::params![pid],
+            )
+            .unwrap();
+        }
+        let repo = PersonaRepo::new(&db);
+        repo.set_active(&scope("u"), Some(pid)).await.unwrap();
+        assert_eq!(repo.active_persona_id(&scope("u")).await.unwrap(), Some(pid));
+        assert_eq!(recommended(&path, "b1"), Some(pid));
+
+        // 削除で: personas 行削除 + bot_active_personas（FK cascade）+ bots.recommended（明示解除）。
+        assert!(repo.delete(&scope("u"), pid).await.unwrap());
+        assert!(
+            repo.active_persona_id(&scope("u")).await.unwrap().is_none(),
+            "適用中は FK ON DELETE CASCADE で消える"
+        );
+        assert_eq!(recommended(&path, "b1"), None, "推奨は明示解除される");
+    }
+
+    #[tokio::test]
     async fn set_active_upsert_and_clear() {
         let (db, path) = seed_db_at();
         insert_user(&path, "u", "U");
