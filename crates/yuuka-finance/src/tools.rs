@@ -19,7 +19,7 @@ use yuuka_core::tool::FunctionDeclaration;
 use yuuka_core::{DbError, Tool, ToolContext, ToolError, ToolName, ToolOutcome, UserScope};
 use yuuka_web::Db;
 
-use crate::dto::NewExpense;
+use crate::dto::{NewExpense, NewPlannedPayment};
 use crate::repo::ExpenseRepo;
 
 /// このドメインが公開する Native ツール一式を作る。
@@ -56,9 +56,40 @@ pub fn tools(db: Db) -> Result<Vec<Arc<dyn Tool>>, ToolError> {
         }),
         Arc::new(DeleteBudgetLimitTool {
             name: ToolName::checked("deleteBudgetLimit".to_owned())?,
+            db: db.clone(),
+        }),
+        Arc::new(ListPlannedPaymentsTool {
+            name: ToolName::checked("listPlannedPayments".to_owned())?,
+            db: db.clone(),
+        }),
+        Arc::new(AddPlannedPaymentTool {
+            name: ToolName::checked("addPlannedPayment".to_owned())?,
+            db: db.clone(),
+        }),
+        Arc::new(SettlePlannedPaymentTool {
+            name: ToolName::checked("settlePlannedPayment".to_owned())?,
+            db: db.clone(),
+        }),
+        Arc::new(CancelPlannedPaymentTool {
+            name: ToolName::checked("cancelPlannedPayment".to_owned())?,
             db,
         }),
     ])
+}
+
+/// 最小 cron 妥当性（5 フィールド・空でない）。厳密な croner 検証は簡約（todo tools と同方針）。
+fn is_valid_cron_basic(rule: &str) -> bool {
+    let fields: Vec<&str> = rule.split_whitespace().collect();
+    fields.len() == 5 && fields.iter().all(|f| !f.is_empty())
+}
+
+/// 支払い予定 1 件の状態絵文字。
+fn plan_status_emoji(status: &str) -> &'static str {
+    match status {
+        "settled" => "✅",
+        "cancelled" => "🚫",
+        _ => "📅",
+    }
 }
 
 /// 支出カテゴリの許容一覧（Node `expenseRepo.CATEGORIES`）。setBudgetLimit の検証に使う。
@@ -660,6 +691,294 @@ impl Tool for DeleteBudgetLimitTool {
     }
 }
 
+// ─── listPlannedPayments ─────────────────────────────────────────────────────
+
+struct ListPlannedPaymentsTool {
+    name: ToolName,
+    db: Db,
+}
+
+#[async_trait]
+impl Tool for ListPlannedPaymentsTool {
+    fn declaration(&self) -> FunctionDeclaration {
+        FunctionDeclaration {
+            name: self.name.clone(),
+            description: "登録済みの支払い予定（未消込/消込済み/キャンセル）を一覧する。\
+                「今後の支払いは？」等で呼ぶ。status で絞り込める（既定は未消込）。\
+                新しい支払い予定を登録したい時は addPlannedPayment を使う。"
+                .to_owned(),
+            parameters_json_schema: json!({
+                "type": "object",
+                "properties": {
+                    "status": { "type": "string", "description": "'pending'（既定・未消込）|'settled'|'cancelled'|'all'" }
+                }
+            }),
+            requires_confirmation: false,
+        }
+    }
+
+    async fn call(&self, ctx: &ToolContext, args: Value) -> Result<ToolOutcome, ToolError> {
+        // 既知ステータスのみ採用、それ以外（未指定・不正値）は "pending"（Node parity）。
+        let raw = args.get("status").and_then(Value::as_str).unwrap_or("pending");
+        let status = if matches!(raw, "settled" | "cancelled" | "all") {
+            raw
+        } else {
+            "pending"
+        };
+        let scope = scope_of(ctx);
+        let repo = ExpenseRepo::new(&self.db);
+        // include_paid=false は pending のみ、true は全ステータス。個別ステータスは全件から絞る。
+        let mut plans = repo
+            .list_plans(&scope, status != "pending")
+            .await
+            .map_err(exec_err)?;
+        if status == "settled" || status == "cancelled" {
+            plans.retain(|p| p.status == status);
+        }
+        if plans.is_empty() {
+            let message = if status == "pending" {
+                "未消込の支払い予定はありません。"
+            } else {
+                "該当する支払い予定はありません。"
+            };
+            return Ok(ToolOutcome::from_payload(ok_payload(
+                message,
+                json!({ "plans": [] }),
+            )));
+        }
+        let lines: Vec<String> = plans
+            .iter()
+            .map(|p| {
+                let repeat = if p.repeat_rule.is_some() { " 🔁" } else { "" };
+                format!(
+                    "{} #{} {} {}（{}・期日 {}）{repeat}",
+                    plan_status_emoji(&p.status),
+                    p.id,
+                    p.title,
+                    format_yen(p.amount),
+                    p.category,
+                    p.due_date,
+                )
+            })
+            .collect();
+        Ok(ToolOutcome::from_payload(ok_payload(
+            format!("支払い予定 ({}件):\n{}", plans.len(), lines.join("\n")),
+            json!({ "plans": plans }),
+        )))
+    }
+}
+
+// ─── addPlannedPayment ───────────────────────────────────────────────────────
+
+struct AddPlannedPaymentTool {
+    name: ToolName,
+    db: Db,
+}
+
+#[async_trait]
+impl Tool for AddPlannedPaymentTool {
+    fn declaration(&self) -> FunctionDeclaration {
+        FunctionDeclaration {
+            name: self.name.clone(),
+            description: format!(
+                "将来の支払い予定を登録する。「27日に家賃8万円の支払いがある」等で呼ぶ。\
+                 カテゴリは次から選ぶ: {}。毎回くり返す支払いは repeat_rule（cron式・例 '0 0 27 * *'=毎月27日）を指定する。",
+                category_list()
+            ),
+            parameters_json_schema: json!({
+                "type": "object",
+                "properties": {
+                    "title": { "type": "string", "description": "支払いの名前（例: 家賃, Netflix）" },
+                    "amount": { "type": "number", "description": "予定の金額。円単位の1以上の整数（例: 80000）" },
+                    "category": { "type": "string", "description": format!("カテゴリ。次のどれか: {}", category_list()) },
+                    "due_date": { "type": "string", "description": "支払いの期日。形式 YYYY-MM-DD" },
+                    "memo": { "type": "string", "description": "メモ（任意）" },
+                    "repeat_rule": { "type": "string", "description": "繰り返しの cron 式（例 '0 0 27 * *'=毎月27日・任意）" }
+                },
+                "required": ["title", "amount", "category", "due_date"]
+            }),
+            requires_confirmation: false,
+        }
+    }
+
+    async fn call(&self, ctx: &ToolContext, args: Value) -> Result<ToolOutcome, ToolError> {
+        let Some(title) = arg_str(&args, "title") else {
+            return Ok(fail_payload("title（支払いの概要）を指定してください。"));
+        };
+        let Some(amount) = arg_int(&args, "amount").filter(|n| *n > 0) else {
+            return Ok(fail_payload("amount は1以上の整数（円）で指定してください。"));
+        };
+        let category = arg_str(&args, "category");
+        if !category.as_deref().is_some_and(|c| CATEGORIES.contains(&c)) {
+            let raw = args.get("category").and_then(Value::as_str).unwrap_or("");
+            return Ok(fail_payload(format!(
+                "無効なカテゴリです: {raw}。有効なカテゴリ: {}",
+                category_list()
+            )));
+        }
+        let Some(due_date) = arg_str(&args, "due_date").filter(|d| is_ymd(d)) else {
+            return Ok(fail_payload("due_date は YYYY-MM-DD 形式で指定してください。"));
+        };
+        let repeat_rule = arg_str(&args, "repeat_rule");
+        if let Some(rule) = &repeat_rule {
+            if !is_valid_cron_basic(rule) {
+                return Ok(fail_payload(format!(
+                    "repeat_rule のcron式が不正です: {rule}（例: '0 0 27 * *' = 毎月27日）"
+                )));
+            }
+        }
+
+        let input = NewPlannedPayment {
+            title,
+            amount,
+            category: category.unwrap_or_default(),
+            due_date: Some(due_date.clone()),
+            planned_date: None,
+            description: arg_str(&args, "memo"),
+            repeat_rule,
+        };
+        let plan = ExpenseRepo::new(&self.db)
+            .add_plan(&scope_of(ctx), input, due_date)
+            .await
+            .map_err(exec_err)?;
+        let repeat = if plan.repeat_rule.is_some() {
+            "・毎回くり返し"
+        } else {
+            ""
+        };
+        Ok(ToolOutcome::from_payload(ok_payload(
+            format!(
+                "支払い予定「{}」({}, {}, 期日: {}{repeat}) を登録しました。",
+                plan.title,
+                format_yen(plan.amount),
+                plan.category,
+                plan.due_date,
+            ),
+            json!({ "plan": plan }),
+        )))
+    }
+}
+
+// ─── settlePlannedPayment ────────────────────────────────────────────────────
+
+struct SettlePlannedPaymentTool {
+    name: ToolName,
+    db: Db,
+}
+
+#[async_trait]
+impl Tool for SettlePlannedPaymentTool {
+    fn declaration(&self) -> FunctionDeclaration {
+        FunctionDeclaration {
+            name: self.name.clone(),
+            description: "支払い予定を「支払い済み」にして家計簿に実支出として記帳する（消込）。\
+                「家賃払った」等で呼ぶ。紐付く未完了 ToDo があれば自動で完了になる。\
+                まだ払っていない予定を取り消すだけなら cancelPlannedPayment を使う。"
+                .to_owned(),
+            parameters_json_schema: json!({
+                "type": "object",
+                "properties": {
+                    "plan_id": { "type": "number", "description": "消込する支払い予定のID（#のあとの番号）" }
+                },
+                "required": ["plan_id"]
+            }),
+            requires_confirmation: false,
+        }
+    }
+
+    async fn call(&self, ctx: &ToolContext, args: Value) -> Result<ToolOutcome, ToolError> {
+        let Some(plan_id) = arg_int(&args, "plan_id") else {
+            return Ok(fail_payload("plan_id を指定してください。"));
+        };
+        let scope = scope_of(ctx);
+        let repo = ExpenseRepo::new(&self.db);
+        let Some(plan) = repo.get_plan(&scope, plan_id).await.map_err(exec_err)? else {
+            return Ok(fail_payload(format!("支払い予定 #{plan_id} が見つかりません。")));
+        };
+        if plan.status != "pending" {
+            let state = if plan.status == "settled" {
+                "消込済み"
+            } else {
+                "キャンセル済み"
+            };
+            return Ok(fail_payload(format!("支払い予定 #{plan_id} は既に{state}です。")));
+        }
+        // 予定内容で新規記帳 + 消込 + 紐付き ToDo 自動完了（expense_id 指定での既存記録紐付けは deferred）。
+        let (expense_id, completed) = repo.settle_plan(&scope, &plan).await.map_err(exec_err)?;
+        let expense = repo.get(&scope, expense_id).await.map_err(exec_err)?;
+        let todo_note = if completed > 0 {
+            format!(" 紐付きToDo {completed} 件を自動的に完了にしました✅")
+        } else {
+            String::new()
+        };
+        Ok(ToolOutcome::from_payload(ok_payload(
+            format!(
+                "支払い予定「{}」({}) を消込しました✅ 支出 {} を新規記帳しました (ID: #{expense_id})。{todo_note}",
+                plan.title,
+                format_yen(plan.amount),
+                format_yen(plan.amount),
+            ),
+            json!({ "expense": expense, "completed_todos": completed }),
+        )))
+    }
+}
+
+// ─── cancelPlannedPayment ────────────────────────────────────────────────────
+
+struct CancelPlannedPaymentTool {
+    name: ToolName,
+    db: Db,
+}
+
+#[async_trait]
+impl Tool for CancelPlannedPaymentTool {
+    fn declaration(&self) -> FunctionDeclaration {
+        FunctionDeclaration {
+            name: self.name.clone(),
+            description: "まだ支払っていない支払い予定を取り消す（キャンセル）。\
+                「来月の予定はもういらない」等で呼ぶ。実際に支払った時は settlePlannedPayment を使う。"
+                .to_owned(),
+            parameters_json_schema: json!({
+                "type": "object",
+                "properties": {
+                    "plan_id": { "type": "number", "description": "取り消す支払い予定のID（#のあとの番号）" }
+                },
+                "required": ["plan_id"]
+            }),
+            requires_confirmation: false,
+        }
+    }
+
+    async fn call(&self, ctx: &ToolContext, args: Value) -> Result<ToolOutcome, ToolError> {
+        let Some(plan_id) = arg_int(&args, "plan_id") else {
+            return Ok(fail_payload("plan_id を指定してください。"));
+        };
+        let scope = scope_of(ctx);
+        let repo = ExpenseRepo::new(&self.db);
+        let Some(plan) = repo.get_plan(&scope, plan_id).await.map_err(exec_err)? else {
+            return Ok(fail_payload(format!("支払い予定 #{plan_id} が見つかりません。")));
+        };
+        if plan.status != "pending" {
+            let state = if plan.status == "settled" {
+                "消込済み"
+            } else {
+                "キャンセル済み"
+            };
+            return Ok(fail_payload(format!("支払い予定 #{plan_id} は既に{state}です。")));
+        }
+        // NOTE: 紐付きリマインドの期日前キャンセル（linked_reminder_id）は cross-domain のため deferred。
+        if !repo.cancel_plan(&scope, plan_id).await.map_err(exec_err)? {
+            return Ok(fail_payload(format!(
+                "支払い予定 #{plan_id} のキャンセルに失敗しました。"
+            )));
+        }
+        Ok(ToolOutcome::from_payload(ok_payload(
+            format!("支払い予定「{}」をキャンセルしました。", plan.title),
+            json!({}),
+        )))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -696,6 +1015,38 @@ mod tests {
         PRIMARY KEY (user_id, bot_id, category)
     );";
 
+    // planned_payments を FK 無しで先に作る（V17 の users FK を避ける）。
+    const PLANNED_PAYMENTS_DDL: &str = "CREATE TABLE planned_payments (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id TEXT NOT NULL,
+        bot_id TEXT NOT NULL DEFAULT 'system_default',
+        title TEXT NOT NULL,
+        amount INTEGER NOT NULL,
+        category TEXT NOT NULL,
+        memo TEXT,
+        due_date TEXT NOT NULL,
+        repeat_rule TEXT,
+        status TEXT NOT NULL DEFAULT 'pending',
+        settled_expense_id INTEGER,
+        linked_todo_id INTEGER,
+        linked_reminder_id INTEGER,
+        created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+    );";
+
+    // settle_plan が紐付き ToDo を自動完了するため todos を用意（FK 無し・migration の index が参照
+    // する列を欠かさないよう V17 全列を持つ・todo crate テストと同一 DDL）。
+    const TODOS_DDL: &str = "CREATE TABLE todos (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id TEXT NOT NULL,
+        bot_id TEXT NOT NULL DEFAULT 'system_default',
+        title TEXT NOT NULL, description TEXT, due_date TEXT, start_date TEXT,
+        priority TEXT, tags TEXT NOT NULL DEFAULT '[]', status TEXT NOT NULL DEFAULT 'open',
+        progress INTEGER NOT NULL DEFAULT 0, parent_id INTEGER, linked_payment_id INTEGER,
+        due_reminded INTEGER NOT NULL DEFAULT 0, repeat_rule TEXT, repeat_until TEXT,
+        repeat_count INTEGER, created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime')));";
+
     fn seed_db() -> Db {
         let seq = SEQ.fetch_add(1, Ordering::Relaxed);
         let path = std::env::temp_dir().join(format!(
@@ -706,6 +1057,8 @@ mod tests {
             let conn = Connection::open(&path).unwrap();
             conn.execute_batch(EXPENSES_DDL).unwrap();
             conn.execute_batch(BUDGET_LIMITS_DDL).unwrap();
+            conn.execute_batch(PLANNED_PAYMENTS_DDL).unwrap();
+            conn.execute_batch(TODOS_DDL).unwrap();
         }
         Db::open(&path).unwrap()
     }
@@ -894,5 +1247,57 @@ mod tests {
         assert_eq!(out.payload["success"], true);
         let out = del_budget.call(&ctx(), json!({"category": "食費"})).await.unwrap();
         assert_eq!(out.payload["success"], false);
+    }
+
+    #[tokio::test]
+    async fn planned_payment_lifecycle() {
+        let db = seed_db();
+        let tools = tools(db).unwrap();
+        let add = find(&tools, "addPlannedPayment");
+        let list = find(&tools, "listPlannedPayments");
+        let settle = find(&tools, "settlePlannedPayment");
+        let cancel = find(&tools, "cancelPlannedPayment");
+
+        // 追加: 検証（無効カテゴリ / 期日形式 / 金額）。
+        let out = add.call(&ctx(), json!({"title": "家賃", "amount": 80000, "category": "宇宙", "due_date": "2026-08-27"})).await.unwrap();
+        assert_eq!(out.payload["success"], false);
+        let out = add.call(&ctx(), json!({"title": "家賃", "amount": 80000, "category": "その他", "due_date": "8/27"})).await.unwrap();
+        assert_eq!(out.payload["success"], false);
+        // 正常追加 2 件。
+        let out = add.call(&ctx(), json!({"title": "家賃", "amount": 80000, "category": "その他", "due_date": "2026-08-27"})).await.unwrap();
+        assert_eq!(out.payload["success"], true);
+        let pay1 = out.payload["plan"]["id"].as_i64().unwrap();
+        let out = add.call(&ctx(), json!({"title": "サブスク", "amount": 1000, "category": "娯楽", "due_date": "2026-08-01", "repeat_rule": "0 0 1 * *"})).await.unwrap();
+        assert_eq!(out.payload["success"], true);
+        let pay2 = out.payload["plan"]["id"].as_i64().unwrap();
+
+        // 未消込一覧に 2 件。
+        let out = list.call(&ctx(), json!({})).await.unwrap();
+        assert_eq!(out.payload["plans"].as_array().unwrap().len(), 2);
+
+        // 消込: 支出が新規記帳される。
+        let out = settle.call(&ctx(), json!({"plan_id": pay1})).await.unwrap();
+        assert_eq!(out.payload["success"], true);
+        assert_eq!(out.payload["expense"]["amount"], 80000);
+        // 二重消込は不可（既に消込済み）。
+        let out = settle.call(&ctx(), json!({"plan_id": pay1})).await.unwrap();
+        assert_eq!(out.payload["success"], false);
+
+        // キャンセル: pending のみ。
+        let out = cancel.call(&ctx(), json!({"plan_id": pay2})).await.unwrap();
+        assert_eq!(out.payload["success"], true);
+        let out = cancel.call(&ctx(), json!({"plan_id": pay2})).await.unwrap();
+        assert_eq!(out.payload["success"], false);
+        // 存在しない ID。
+        let out = settle.call(&ctx(), json!({"plan_id": 99999})).await.unwrap();
+        assert_eq!(out.payload["success"], false);
+
+        // 未消込一覧は 0 件（1 件消込・1 件キャンセル）、all では 2 件。
+        let out = list.call(&ctx(), json!({})).await.unwrap();
+        assert_eq!(out.payload["plans"].as_array().unwrap().len(), 0);
+        let out = list.call(&ctx(), json!({"status": "all"})).await.unwrap();
+        assert_eq!(out.payload["plans"].as_array().unwrap().len(), 2);
+        let out = list.call(&ctx(), json!({"status": "settled"})).await.unwrap();
+        assert_eq!(out.payload["plans"].as_array().unwrap().len(), 1);
     }
 }
