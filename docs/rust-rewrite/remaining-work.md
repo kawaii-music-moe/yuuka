@@ -1,7 +1,8 @@
 # Rust 移行 — 残作業ロードマップ（本番投入までの ToDo 全集）
 
-- 最終更新: 2026-07-14（**P2-A/P2-B 18 増分セッション**: admin 15 + settings 6 Web-API（新規 `yuuka-admin`/`yuuka-settings`）+ **todo ツール 4 本 + todo タグ/ガイド 3 本 + finance ツール 9 本**を実装 + 敵対的パリティレビューで確定 0 HIGH。全ゲート緑 — build ✅ / clippy -D ✅ / **test 442** ✅ / deny exit0 ✅・新規依存なし。ルート 80/152・ツール 69/87）
+- 最終更新: 2026-07-14（**P2-A/P2-B 18 増分セッション**: admin 15 + settings 6 Web-API（新規 `yuuka-admin`/`yuuka-settings`）+ **todo ツール 4 本 + todo タグ/ガイド 3 本 + finance ツール 9 本**を実装 + 敵対的パリティレビューで確定 0 HIGH。全ゲート緑 — build ✅ / clippy -D ✅ / **test 446** ✅ / deny exit0 ✅・新規依存なし。ルート 86/152・ツール 69/87）
 - 追記（2026-07-14e）: **configureBriefing 実装**（yuuka-briefing 拡張・SSRF ガード付き朝報設定ツール）。commit `86ac68f`。**test 440→442**・全ゲート緑・新規依存なし。ツール 68→69/87。
+- 追記（2026-07-14f）: **配信設定 Web-API（deliveryRoutes 6 本）実装**（`yuuka-briefing::routes`）。commit `67e0805`。`GET/POST /api/briefing-config`・`POST /api/briefing/test`・`GET/POST /api/report-configs`・`POST /api/report-configs/test`。実配信は **DeliveryRunner シーム**（既定 NullDeliveryRunner＝未配信へ縮退・サービス本体は後続）。repo に find_briefing 追加 + BriefingPatch を target/weather/location のクリア対応へ拡張。**test 442→446**・全ゲート緑・新規依存なし（axum/serde を briefing へ追加のみ）。ルート 80→86/152。
 - 対象ブランチ: `feature/rust-rewrite`（未 push・HEAD=`b77506d` の上に未コミット差分）
 - git HEAD: `b77506d`（P2 ドメイン Web-API 拡張）+ 本セッションの縮退シーム解消差分（未コミット）
 - 前提資料: [review-2026-07-06-fix-policy.md](review-2026-07-06-fix-policy.md)（修正方針の唯一の基準）・[review-2026-07-09-batch4-6.md](review-2026-07-09-batch4-6.md)・[PLAN.md](PLAN.md) §11（移行ロードマップ）
