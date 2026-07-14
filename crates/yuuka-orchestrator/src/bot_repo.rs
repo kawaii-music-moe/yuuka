@@ -182,6 +182,194 @@ pub async fn list_bot_ids_for_user(db: &Db, user_id: &str) -> Result<Vec<String>
         .await
 }
 
+/// Bot 管理ビュー用の詳細行（Node `BotRecord` の Web 応答に必要な列）。
+///
+/// `token_enc`（暗号 3 列）は application_id 導出（トークン先頭セグメントの base64url）にのみ使い、
+/// **応答 JSON には決して出さない**（view 層で復号→app-id を出すだけ・§6.4 機密フェイルクローズ）。
+#[derive(Debug, Clone)]
+pub struct BotDetail {
+    pub id: String,
+    pub user_id: String,
+    pub name: String,
+    pub recommended_persona_id: Option<i64>,
+    pub persona_id: Option<i64>,
+    pub capabilities: String,
+    pub discord_username: Option<String>,
+    pub discord_avatar_url: Option<String>,
+    pub discord_application_id: Option<String>,
+    pub suspended: bool,
+    pub created_at: String,
+    pub updated_at: String,
+    pub has_token: bool,
+    pub has_gemini_key: bool,
+    /// 復号用の Discord トークン暗号 3 列（app-id 導出専用・非公開）。
+    pub token_enc: Option<EncryptedTriplet>,
+}
+
+/// `BotDetail` の SELECT 列（列順は [`map_bot_detail`] と一致）。
+const BOT_DETAIL_SELECT: &str = "SELECT id, user_id, name, recommended_persona_id, persona_id, \
+     capabilities, discord_username, discord_avatar_url, discord_application_id, suspended, \
+     created_at, updated_at, discord_token_encrypted, discord_token_iv, discord_token_tag, \
+     gemini_api_key_encrypted FROM bots";
+
+fn map_bot_detail(r: &rusqlite::Row<'_>) -> rusqlite::Result<BotDetail> {
+    let token_encrypted: Option<String> = r.get(12)?;
+    let token_iv: Option<String> = r.get(13)?;
+    let token_tag: Option<String> = r.get(14)?;
+    let gemini_encrypted: Option<String> = r.get(15)?;
+    let has_token = token_encrypted.as_deref().is_some_and(|s| !s.is_empty());
+    let has_gemini_key = gemini_encrypted.as_deref().is_some_and(|s| !s.is_empty());
+    let token_enc = match (token_encrypted, token_iv, token_tag) {
+        (Some(encrypted), Some(iv), Some(tag)) if !encrypted.is_empty() => {
+            Some(EncryptedTriplet { encrypted, iv, tag })
+        }
+        _ => None,
+    };
+    Ok(BotDetail {
+        id: r.get(0)?,
+        user_id: r.get(1)?,
+        name: r.get(2)?,
+        recommended_persona_id: r.get(3)?,
+        persona_id: r.get(4)?,
+        capabilities: r.get::<_, Option<String>>(5)?.unwrap_or_default(),
+        discord_username: r.get(6)?,
+        discord_avatar_url: r.get(7)?,
+        discord_application_id: r.get(8)?,
+        suspended: r.get::<_, i64>(9)? != 0,
+        created_at: r.get(10)?,
+        updated_at: r.get(11)?,
+        has_token,
+        has_gemini_key,
+        token_enc,
+    })
+}
+
+/// 詳細行を 1 件引く（作成直後の返却・Node `getBotById` の Web 応答用）。
+///
+/// # Errors
+/// 読み取り失敗時 [`DbError`]。
+pub async fn get_bot_detail(db: &Db, bot_id: &str) -> Result<Option<BotDetail>, DbError> {
+    let bot_id = bot_id.to_owned();
+    db.read
+        .read(move |conn| {
+            conn.query_row(
+                &format!("{BOT_DETAIL_SELECT} WHERE id = ?1"),
+                params![bot_id],
+                map_bot_detail,
+            )
+            .optional()
+            .map_err(map_sqlite)
+        })
+        .await
+}
+
+/// ユーザーがアクセス可能な Bot の詳細一覧（owner + system_default + 共有 active・Node `listBotsForUser`）。
+///
+/// # Errors
+/// 読み取り失敗時 [`DbError`]。
+pub async fn list_bots_for_user(db: &Db, user_id: &str) -> Result<Vec<BotDetail>, DbError> {
+    let user_id = user_id.to_owned();
+    db.read
+        .read(move |conn| {
+            // 列順は BOT_DETAIL_SELECT / map_bot_detail と一致（b.* 別名版）。
+            let sql = "SELECT DISTINCT b.id, b.user_id, b.name, b.recommended_persona_id, \
+                        b.persona_id, b.capabilities, b.discord_username, b.discord_avatar_url, \
+                        b.discord_application_id, b.suspended, b.created_at, b.updated_at, \
+                        b.discord_token_encrypted, b.discord_token_iv, b.discord_token_tag, \
+                        b.gemini_api_key_encrypted \
+                 FROM bots b \
+                 LEFT JOIN bot_shares s ON s.bot_id = b.id AND s.shared_user_id = ?1 \
+                    AND s.status = 'active' \
+                 WHERE b.user_id = ?1 OR b.id = 'system_default' OR s.id IS NOT NULL \
+                 ORDER BY b.created_at ASC";
+            let mut stmt = conn.prepare(sql).map_err(map_sqlite)?;
+            let rows = stmt
+                .query_map(params![user_id], map_bot_detail)
+                .map_err(map_sqlite)?;
+            let mut out = Vec::new();
+            for row in rows {
+                out.push(row.map_err(map_sqlite)?);
+            }
+            Ok(out)
+        })
+        .await
+}
+
+/// Bot を作成する（Node `createBot`＝最小 INSERT・残りは既定）。作成後の詳細行を返す。
+///
+/// # Errors
+/// 書き込み・取得失敗時 [`DbError`]。
+pub async fn create_bot(
+    db: &Db,
+    bot_id: &str,
+    user_id: &str,
+    name: &str,
+) -> Result<BotDetail, DbError> {
+    let (bid, uid, nm) = (bot_id.to_owned(), user_id.to_owned(), name.to_owned());
+    db.writer
+        .transaction(move |tx| {
+            tx.execute(
+                "INSERT INTO bots (id, user_id, name) VALUES (?1, ?2, ?3)",
+                params![bid, uid, nm],
+            )
+            .map_err(map_sqlite)?;
+            tx.query_row(
+                &format!("{BOT_DETAIL_SELECT} WHERE id = ?1"),
+                params![bid],
+                map_bot_detail,
+            )
+            .map_err(map_sqlite)
+        })
+        .await
+}
+
+/// Bot を削除する（Node `deleteBot`）。行が消えたら `true`。
+///
+/// # Errors
+/// 書き込み失敗時 [`DbError`]。
+pub async fn delete_bot(db: &Db, bot_id: &str) -> Result<bool, DbError> {
+    let bot_id = bot_id.to_owned();
+    db.writer
+        .transaction(move |tx| {
+            let n = tx
+                .execute("DELETE FROM bots WHERE id = ?1", params![bot_id])
+                .map_err(map_sqlite)?;
+            Ok(n > 0)
+        })
+        .await
+}
+
+/// Bot プロフィール（名前 + 任意のアバター）を更新する（Node `updateBotProfile`）。行が動けば `true`。
+/// `avatar_url` が `None` のときは既存アバターを保持（`COALESCE`）。
+///
+/// # Errors
+/// 書き込み失敗時 [`DbError`]。
+pub async fn update_bot_profile(
+    db: &Db,
+    bot_id: &str,
+    name: &str,
+    avatar_url: Option<&str>,
+) -> Result<bool, DbError> {
+    let (bid, nm, avatar) = (
+        bot_id.to_owned(),
+        name.to_owned(),
+        avatar_url.map(str::to_owned),
+    );
+    db.writer
+        .transaction(move |tx| {
+            let n = tx
+                .execute(
+                    "UPDATE bots SET name = ?1, \
+                        discord_avatar_url = COALESCE(?2, discord_avatar_url), \
+                        updated_at = datetime('now','localtime') WHERE id = ?3",
+                    params![nm, avatar, bid],
+                )
+                .map_err(map_sqlite)?;
+            Ok(n > 0)
+        })
+        .await
+}
+
 /// 暗号化された 3 列（enc/iv/tag）を持つ設定（Discord トークン / Bot 専用 Gemini キー共通）。
 #[derive(Debug, Clone)]
 pub struct EncryptedTriplet {
@@ -1110,4 +1298,96 @@ async fn exists2(db: &Db, sql: &'static str, a: String, b: String) -> Result<boo
                 .map_err(map_sqlite)
         })
         .await
+}
+
+#[cfg(test)]
+mod crud_tests {
+    use super::*;
+
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+    fn seed_db() -> Db {
+        let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "yuuka_botcrud_test_{}_{seq}.sqlite",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        {
+            let conn = rusqlite::Connection::open(&path).expect("create empty");
+            drop(conn);
+        }
+        let db = Db::open(&path).expect("open");
+        {
+            let conn = rusqlite::Connection::open(&path).expect("seed conn");
+            for uid in ["owner", "sharee", "stranger"] {
+                conn.execute(
+                    "INSERT OR IGNORE INTO users (discord_id, username, password_hash, salt) \
+                     VALUES (?1, ?1, 'x', 'x')",
+                    params![uid],
+                )
+                .expect("seed user");
+            }
+        }
+        db
+    }
+
+    #[tokio::test]
+    async fn create_update_delete_roundtrip() {
+        let db = seed_db();
+        let created = create_bot(&db, "b1", "owner", "MyBot").await.unwrap();
+        assert_eq!(created.name, "MyBot");
+        assert_eq!(created.user_id, "owner");
+        assert!(!created.has_token);
+        assert!(!created.has_gemini_key);
+        assert!(created.token_enc.is_none());
+        // 既定 capabilities は秘書相当。
+        assert!(created.capabilities.contains("secretary"));
+
+        // プロフィール更新（アバターは None で保持）。
+        assert!(update_bot_profile(&db, "b1", "Renamed", None)
+            .await
+            .unwrap());
+        let d = get_bot_detail(&db, "b1").await.unwrap().unwrap();
+        assert_eq!(d.name, "Renamed");
+        assert!(d.discord_avatar_url.is_none());
+        // アバター設定。
+        assert!(
+            update_bot_profile(&db, "b1", "Renamed", Some("https://cdn/x.png"))
+                .await
+                .unwrap()
+        );
+        let d = get_bot_detail(&db, "b1").await.unwrap().unwrap();
+        assert_eq!(d.discord_avatar_url.as_deref(), Some("https://cdn/x.png"));
+
+        // 削除。
+        assert!(delete_bot(&db, "b1").await.unwrap());
+        assert!(get_bot_detail(&db, "b1").await.unwrap().is_none());
+        // 二重削除は false。
+        assert!(!delete_bot(&db, "b1").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn list_for_user_includes_owned_and_active_shares() {
+        let db = seed_db();
+        create_bot(&db, "b_owned", "owner", "Owned").await.unwrap();
+        create_bot(&db, "b_other", "stranger", "Other")
+            .await
+            .unwrap();
+        // b_other を sharee へ active 共有（公開 API 経由: 招待→承認）。
+        create_share_invite(&db, "b_other", "stranger", "sharee")
+            .await
+            .unwrap();
+        accept_share(&db, "b_other", "sharee").await.unwrap();
+
+        // owner: 自分の b_owned のみ（b_other は非共有）。
+        let owner_bots = list_bots_for_user(&db, "owner").await.unwrap();
+        assert!(owner_bots.iter().any(|b| b.id == "b_owned"));
+        assert!(!owner_bots.iter().any(|b| b.id == "b_other"));
+
+        // sharee: active 共有の b_other が見える。
+        let sharee_bots = list_bots_for_user(&db, "sharee").await.unwrap();
+        assert!(sharee_bots.iter().any(|b| b.id == "b_other"));
+        assert!(!sharee_bots.iter().any(|b| b.id == "b_owned"));
+    }
 }
