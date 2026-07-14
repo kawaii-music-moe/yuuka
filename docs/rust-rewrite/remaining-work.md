@@ -1,6 +1,7 @@
 # Rust 移行 — 残作業ロードマップ（本番投入までの ToDo 全集）
 
-- 最終更新: 2026-07-14（**P2-A/P2-B 18 増分セッション**: admin 15 + settings 6 Web-API（新規 `yuuka-admin`/`yuuka-settings`）+ **todo ツール 4 本 + todo タグ/ガイド 3 本 + finance ツール 9 本**を実装 + 敵対的パリティレビューで確定 0 HIGH。全ゲート緑 — build ✅ / clippy -D ✅ / **test 440** ✅ / deny exit0 ✅・新規依存なし。ルート 80/152・ツール 68/87） 
+- 最終更新: 2026-07-14（**P2-A/P2-B 18 増分セッション**: admin 15 + settings 6 Web-API（新規 `yuuka-admin`/`yuuka-settings`）+ **todo ツール 4 本 + todo タグ/ガイド 3 本 + finance ツール 9 本**を実装 + 敵対的パリティレビューで確定 0 HIGH。全ゲート緑 — build ✅ / clippy -D ✅ / **test 442** ✅ / deny exit0 ✅・新規依存なし。ルート 80/152・ツール 69/87）
+- 追記（2026-07-14e）: **configureBriefing 実装**（yuuka-briefing 拡張・SSRF ガード付き朝報設定ツール）。commit `86ac68f`。**test 440→442**・全ゲート緑・新規依存なし。ツール 68→69/87。
 - 対象ブランチ: `feature/rust-rewrite`（未 push・HEAD=`b77506d` の上に未コミット差分）
 - git HEAD: `b77506d`（P2 ドメイン Web-API 拡張）+ 本セッションの縮退シーム解消差分（未コミット）
 - 前提資料: [review-2026-07-06-fix-policy.md](review-2026-07-06-fix-policy.md)（修正方針の唯一の基準）・[review-2026-07-09-batch4-6.md](review-2026-07-09-batch4-6.md)・[PLAN.md](PLAN.md) §11（移行ロードマップ）
@@ -166,7 +167,7 @@
 - [~] credential: **add/update 済**（2026-07-14＝`SystemCrypto::encrypt_for_user`・salt=users.salt・`build_tool_registry(db,crypto)` 注入・長さ検証/部分更新）。**残**: browserFillCredential（平文復号 + browser 依存）
 - [ ] browser 一式（searchWeb/fetchDynamicPage/takePageScreenshot/browserInteractive ~9）— 対応クレート無し
 - [ ] chart（sendChart）
-- [~] briefing（2026-07-14＝**configureReport/getBriefingConfig**〔新 yuuka-briefing クレート・report 部分更新 upsert + 設定読取〕）。**残**: configureBriefing（SSRF ガード + フィード配列）/runBriefingNow（サービス本体＝天気/RSS）
+- [~] briefing（2026-07-14＝**configureReport/getBriefingConfig/configureBriefing**〔新 yuuka-briefing クレート・report/briefing 部分更新 upsert + 設定読取。configureBriefing は cron 検証 + add_news_feed の SSRF ガード〔内部/ループバック/リンクローカル/メタデータ拒否〕+ フィード add〔重複無視〕/remove〔部分一致〕+ weather_lat/lng/地名/キーワード部分更新〕）。**残**: runBriefingNow（サービス本体＝天気/RSS 取得の配信実行）
 - [ ] richContent（showRichContent・常時 on のコア）
 - [~] botAssistant（2026-07-14＝**個人/共有ノート 6 + メンバー管理 3**〔addBotMember/listBotMembers/removeBotMember・extract_user_id メンション解析・remove は自己/owner のみ・yuuka-botassistant クレート〕）。**残**: summarizeConversationTopic（LLM 側）
 - [ ] **MCP 動的ツール**（`McpProvider` は未実装。`yuuka-tools/src/lib.rs` で deferred）
