@@ -39,10 +39,94 @@ pub fn routes() -> Router<AppState> {
             "/api/bots/assistant/guild-note",
             get(guild_note_get).post(guild_note_set),
         )
+        .route("/api/bots/assistant/persona", post(set_persona))
         .route(
             "/api/admin/bot-attribute-settings",
             get(admin_get).post(admin_set),
         )
+}
+
+// ─── POST /api/bots/assistant/persona（Bot 単位ペルソナ・owner/Admin） ───────
+
+async fn set_persona(
+    user: AuthenticatedUser,
+    State(db): State<Db>,
+    Query(q): Query<BotIdQuery>,
+    Json(body): Json<Value>,
+) -> Response {
+    let uid = user.0.discord_id;
+    let bot_id = body
+        .get("botId")
+        .and_then(Value::as_str)
+        .or(q.bot_id.as_deref())
+        .unwrap_or("")
+        .to_owned();
+    let bot = match require_owned_bot(&db, &uid, &bot_id).await {
+        Ok(b) => b,
+        Err(resp) => return resp,
+    };
+
+    // personaId: null/未指定/空文字は解除・それ以外は整数必須。
+    let raw = body.get("personaId");
+    let persona_id: Option<i64> = match raw {
+        None | Some(Value::Null) => None,
+        Some(Value::String(s)) if s.is_empty() => None,
+        Some(v) => match int_value(v) {
+            Some(id) => Some(id),
+            None => return bad_request("personaId が不正です。"),
+        },
+    };
+
+    // 設定時は owner 所有 or 公開のみ許可。
+    if let Some(pid) = persona_id {
+        let meta = match bot_repo::get_persona_owner_public(&db, pid).await {
+            Ok(m) => m,
+            Err(_) => return server_error(),
+        };
+        let allowed = meta.is_some_and(|(owner, is_public)| owner == bot.owner_id || is_public);
+        if !allowed {
+            return status_json(
+                StatusCode::FORBIDDEN,
+                "Bot作成者が所有するペルソナ、または公開ペルソナのみ設定できます。",
+            );
+        }
+    }
+
+    let ok = match bot_repo::set_bot_persona(&db, &bot.id, persona_id).await {
+        Ok(v) => v,
+        Err(_) => return server_error(),
+    };
+    if ok {
+        yuuka_auth::audit::add_audit_log(
+            &db,
+            &uid,
+            "bot.persona_change",
+            Some(&bot.id),
+            Some(&persona_id.map_or_else(|| "cleared".to_owned(), |id| id.to_string())),
+        )
+        .await;
+    }
+    let message = if !ok {
+        "ペルソナの設定に失敗しました。"
+    } else if persona_id.is_none() {
+        "ペルソナ設定を解除しました（デフォルトに戻ります）。"
+    } else {
+        "Botのペルソナを設定しました。"
+    };
+    (
+        StatusCode::OK,
+        Json(json!({ "success": ok, "message": message })),
+    )
+        .into_response()
+}
+
+/// `Number(x)` が整数か（数値の整数・整数文字列のみ・Node `Number.isInteger`）。
+fn int_value(v: &Value) -> Option<i64> {
+    match v {
+        Value::Number(n) => n.as_i64(),
+        Value::String(s) => s.trim().parse::<i64>().ok(),
+        _ => None,
+    }
 }
 
 /// ギルド共有ノートの最大長（Node `BOT_NOTE_MAX_LENGTH`）。
@@ -458,6 +542,13 @@ mod tests {
                 [],
             )
             .expect("seed bot");
+            // owner 所有ペルソナ(1)・他人の公開ペルソナ(2)・他人の非公開ペルソナ(3)。
+            conn.execute(
+                "INSERT INTO personas (id, owner_id, name, is_public) VALUES \
+                 (1, 'owner', 'Mine', 0), (2, 'other', 'Pub', 1), (3, 'other', 'Priv', 0)",
+                [],
+            )
+            .expect("seed personas");
         }
         db
     }
@@ -688,5 +779,87 @@ mod tests {
         assert_eq!(format_commas(10_000), "10,000");
         assert_eq!(format_commas(12_345), "12,345");
         assert_eq!(format_commas(1_234_567), "1,234,567");
+    }
+
+    #[tokio::test]
+    async fn set_persona_ownership_and_clear() {
+        let app = app();
+        // 不正 personaId → 400。
+        let (st, _) = send(
+            &app,
+            "POST",
+            "/api/bots/assistant/persona",
+            "owner",
+            r#"{"botId":"b1","personaId":"abc"}"#,
+        )
+        .await;
+        assert_eq!(st, StatusCode::BAD_REQUEST);
+        // 他人の非公開ペルソナ(3) → 403。
+        let (st, _) = send(
+            &app,
+            "POST",
+            "/api/bots/assistant/persona",
+            "owner",
+            r#"{"botId":"b1","personaId":3}"#,
+        )
+        .await;
+        assert_eq!(st, StatusCode::FORBIDDEN);
+        // 存在しないペルソナ → 403。
+        let (st, _) = send(
+            &app,
+            "POST",
+            "/api/bots/assistant/persona",
+            "owner",
+            r#"{"botId":"b1","personaId":999}"#,
+        )
+        .await;
+        assert_eq!(st, StatusCode::FORBIDDEN);
+
+        // owner 所有(1) → 設定成功。
+        let (st, j) = send(
+            &app,
+            "POST",
+            "/api/bots/assistant/persona",
+            "owner",
+            r#"{"botId":"b1","personaId":1}"#,
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(j["success"], true);
+        assert_eq!(j["message"], "Botのペルソナを設定しました。");
+        // 他人の公開(2) → 許可。
+        let (st, _) = send(
+            &app,
+            "POST",
+            "/api/bots/assistant/persona",
+            "owner",
+            r#"{"botId":"b1","personaId":2}"#,
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK);
+        // 解除（null）。
+        let (st, j) = send(
+            &app,
+            "POST",
+            "/api/bots/assistant/persona",
+            "owner",
+            r#"{"botId":"b1","personaId":null}"#,
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(
+            j["message"],
+            "ペルソナ設定を解除しました（デフォルトに戻ります）。"
+        );
+        // 非所有者は 403。
+        let (st, _) = send(
+            &app,
+            "POST",
+            "/api/bots/assistant/persona",
+            "other",
+            r#"{"botId":"b1","personaId":1}"#,
+        )
+        .await;
+        assert_eq!(st, StatusCode::FORBIDDEN);
     }
 }

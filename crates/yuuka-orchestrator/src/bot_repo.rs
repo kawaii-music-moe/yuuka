@@ -1271,6 +1271,51 @@ pub async fn get_public_persona(
         .await
 }
 
+/// ペルソナの `(owner_id, is_public)` を引く（設定可否判定用・Node `getPersonaById` の必要列）。
+///
+/// # Errors
+/// 読み取り失敗時 [`DbError`]。
+pub async fn get_persona_owner_public(
+    db: &Db,
+    persona_id: i64,
+) -> Result<Option<(String, bool)>, DbError> {
+    db.read
+        .read(move |conn| {
+            conn.query_row(
+                "SELECT owner_id, is_public FROM personas WHERE id = ?1",
+                params![persona_id],
+                |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? != 0)),
+            )
+            .optional()
+            .map_err(map_sqlite)
+        })
+        .await
+}
+
+/// Bot 単位ペルソナを設定/解除する（Node `setBotPersona`・`persona_id` を更新）。行が動けば `true`。
+///
+/// # Errors
+/// 書き込み失敗時 [`DbError`]。
+pub async fn set_bot_persona(
+    db: &Db,
+    bot_id: &str,
+    persona_id: Option<i64>,
+) -> Result<bool, DbError> {
+    let bot_id = bot_id.to_owned();
+    db.writer
+        .transaction(move |tx| {
+            let n = tx
+                .execute(
+                    "UPDATE bots SET persona_id = ?1, updated_at = datetime('now','localtime') \
+                     WHERE id = ?2",
+                    params![persona_id, bot_id],
+                )
+                .map_err(map_sqlite)?;
+            Ok(n > 0)
+        })
+        .await
+}
+
 /// 公開ペルソナをユーザーのコピーとしてインポート（Node `importPersona`・独立コピー）。成功なら true。
 ///
 /// # Errors
