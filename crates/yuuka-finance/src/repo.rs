@@ -549,6 +549,53 @@ impl<'a> ExpenseRepo<'a> {
             .await
     }
 
+    /// 実支払い（金額/カテゴリ/日付）に一致しそうな **pending** 予定を返す（Node
+    /// `findSettlementCandidates`）。カテゴリ一致・金額 ±10%（floor0.9〜ceil1.1）・期日 ±7 日、
+    /// 近さ順（期日差→金額差）。`date` 省略時は当日。
+    ///
+    /// # Errors
+    /// クエリ失敗時 [`DbError`]。
+    pub async fn find_settlement_candidates(
+        &self,
+        scope: &UserScope,
+        amount: i64,
+        category: String,
+        date: Option<String>,
+    ) -> Result<Vec<PlannedPayment>, DbError> {
+        let (uid, bid) = scope_keys(scope);
+        // Node: Math.floor(amount*0.9) / Math.ceil(amount*1.1)。
+        let lower = ((amount as f64) * 0.9).floor() as i64;
+        let upper = ((amount as f64) * 1.1).ceil() as i64;
+        self.read
+            .read(move |conn| {
+                // ?3 は「照合基準日（省略時は当日）」を 3 箇所で再利用する。
+                let sql = format!(
+                    "SELECT {PLAN_COLUMNS} FROM planned_payments \
+                     WHERE user_id = ?1 AND bot_id = ?2 AND status = 'pending' \
+                       AND category = ?4 AND amount BETWEEN ?5 AND ?6 \
+                       AND date(due_date) BETWEEN \
+                           date(COALESCE(?3, date('now','localtime')), '-7 days') AND \
+                           date(COALESCE(?3, date('now','localtime')), '+7 days') \
+                     ORDER BY ABS(julianday(date(due_date)) \
+                                  - julianday(date(COALESCE(?3, date('now','localtime'))))) ASC, \
+                              ABS(amount - ?7) ASC"
+                );
+                let mut stmt = conn.prepare(&sql).map_err(map_sqlite)?;
+                let rows = stmt
+                    .query_map(
+                        params![uid, bid, date, category, lower, upper, amount],
+                        row_to_plan,
+                    )
+                    .map_err(map_sqlite)?;
+                let mut out = Vec::new();
+                for row in rows {
+                    out.push(row.map_err(map_sqlite)?);
+                }
+                Ok(out)
+            })
+            .await
+    }
+
     /// pending の支払い予定を消込する（§3.4.3）。
     ///
     /// Node `plans/pay` の手順を1つの writer トランザクションで再現する:

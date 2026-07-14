@@ -72,6 +72,10 @@ pub fn tools(db: Db) -> Result<Vec<Arc<dyn Tool>>, ToolError> {
         }),
         Arc::new(CancelPlannedPaymentTool {
             name: ToolName::checked("cancelPlannedPayment".to_owned())?,
+            db: db.clone(),
+        }),
+        Arc::new(FindSettlementCandidatesTool {
+            name: ToolName::checked("findSettlementCandidates".to_owned())?,
             db,
         }),
     ])
@@ -979,6 +983,82 @@ impl Tool for CancelPlannedPaymentTool {
     }
 }
 
+// ─── findSettlementCandidates ────────────────────────────────────────────────
+
+struct FindSettlementCandidatesTool {
+    name: ToolName,
+    db: Db,
+}
+
+#[async_trait]
+impl Tool for FindSettlementCandidatesTool {
+    fn declaration(&self) -> FunctionDeclaration {
+        FunctionDeclaration {
+            name: self.name.clone(),
+            description: "実際に払った支払いに一致しそうな未消込の支払い予定を探す（消込候補）。\
+                「〇〇を払った、予定にあった？」等で呼ぶ。カテゴリ一致・金額±10%・期日±7日で照合する。\
+                候補が見つかったら settlePlannedPayment で消込する。"
+                .to_owned(),
+            parameters_json_schema: json!({
+                "type": "object",
+                "properties": {
+                    "amount": { "type": "number", "description": "実際に払った金額。円単位の1以上の整数" },
+                    "category": { "type": "string", "description": "実際に払ったもののカテゴリ" },
+                    "date": { "type": "string", "description": "実際に払った日 'YYYY-MM-DD'。省略=今日" }
+                },
+                "required": ["amount", "category"]
+            }),
+            requires_confirmation: false,
+        }
+    }
+
+    async fn call(&self, ctx: &ToolContext, args: Value) -> Result<ToolOutcome, ToolError> {
+        let Some(amount) = arg_int(&args, "amount").filter(|n| *n > 0) else {
+            return Ok(fail_payload("amount は1以上の整数（円）で指定してください。"));
+        };
+        let Some(category) = arg_str(&args, "category") else {
+            return Ok(fail_payload("category を指定してください。"));
+        };
+        let date = arg_str(&args, "date");
+        if let Some(d) = &date {
+            if !is_ymd(d) {
+                return Ok(fail_payload("date は YYYY-MM-DD 形式で指定してください。"));
+            }
+        }
+        let candidates = ExpenseRepo::new(&self.db)
+            .find_settlement_candidates(&scope_of(ctx), amount, category, date)
+            .await
+            .map_err(exec_err)?;
+        if candidates.is_empty() {
+            return Ok(ToolOutcome::from_payload(ok_payload(
+                "条件に合う消込候補は見つかりませんでした。",
+                json!({ "candidates": [] }),
+            )));
+        }
+        let lines: Vec<String> = candidates
+            .iter()
+            .map(|p| {
+                format!(
+                    "#{} {} {}（{}・期日 {}）",
+                    p.id,
+                    p.title,
+                    format_yen(p.amount),
+                    p.category,
+                    p.due_date
+                )
+            })
+            .collect();
+        Ok(ToolOutcome::from_payload(ok_payload(
+            format!(
+                "消込候補が{}件見つかりました:\n{}\n設定済みなら settlePlannedPayment で消込できます。",
+                candidates.len(),
+                lines.join("\n")
+            ),
+            json!({ "candidates": candidates }),
+        )))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -1299,5 +1379,51 @@ mod tests {
         assert_eq!(out.payload["plans"].as_array().unwrap().len(), 2);
         let out = list.call(&ctx(), json!({"status": "settled"})).await.unwrap();
         assert_eq!(out.payload["plans"].as_array().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn settlement_candidates_match_by_category_amount_date() {
+        let db = seed_db();
+        let tools = tools(db).unwrap();
+        let add = find(&tools, "addPlannedPayment");
+        let candidates = find(&tools, "findSettlementCandidates");
+
+        // 家賃 80000（期日 2026-08-27）。
+        add.call(&ctx(), json!({"title": "家賃", "amount": 80000, "category": "その他", "due_date": "2026-08-27"}))
+            .await
+            .unwrap();
+        // 別カテゴリの予定（マッチしない）。
+        add.call(&ctx(), json!({"title": "娯楽費", "amount": 80000, "category": "娯楽", "due_date": "2026-08-27"}))
+            .await
+            .unwrap();
+
+        // amount 必須検証。
+        let out = candidates.call(&ctx(), json!({"category": "その他"})).await.unwrap();
+        assert_eq!(out.payload["success"], false);
+        // category 必須。
+        let out = candidates.call(&ctx(), json!({"amount": 80000})).await.unwrap();
+        assert_eq!(out.payload["success"], false);
+
+        // カテゴリ一致・金額 ±10%（78000 は 80000 の -2.5%）・期日 ±7日 → 1件（娯楽は除外）。
+        let out = candidates
+            .call(&ctx(), json!({"amount": 78000, "category": "その他", "date": "2026-08-25"}))
+            .await
+            .unwrap();
+        assert_eq!(out.payload["candidates"].as_array().unwrap().len(), 1);
+        assert_eq!(out.payload["candidates"][0]["title"], "家賃");
+
+        // 金額が離れすぎ（50000 は 80000 の -37%）→ 0件。
+        let out = candidates
+            .call(&ctx(), json!({"amount": 50000, "category": "その他", "date": "2026-08-25"}))
+            .await
+            .unwrap();
+        assert_eq!(out.payload["candidates"].as_array().unwrap().len(), 0);
+
+        // 期日が離れすぎ（1ヶ月後）→ 0件。
+        let out = candidates
+            .call(&ctx(), json!({"amount": 80000, "category": "その他", "date": "2026-09-30"}))
+            .await
+            .unwrap();
+        assert_eq!(out.payload["candidates"].as_array().unwrap().len(), 0);
     }
 }
