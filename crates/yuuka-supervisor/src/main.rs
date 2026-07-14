@@ -123,6 +123,18 @@ async fn run() -> Result<(), String> {
     }
     // 登録コード DM は Discord Messenger 経由（P1-1 の `NullRegistrationDm` を差し替え）。デフォルト Bot
     // が未起動（トークン未登録）なら送信は false を返し `/api/register` は 502 に縮退する（従来と同挙動）。
+    // 管理ルータ（/api/admin/*）。セッション一括失効は auth と同一ストアを共有（ロール変更/削除の
+    // 即時反映）、デフォルト Bot トークン暗号化は同じ crypto を使う。runtime 効果（Bot 再起動/停止/
+    // 稼働状態）は Discord gateway 未配線のため NullBotRuntime へ縮退する（DB 効果は常に完全に働く）。
+    let admin_runtime = Arc::new(yuuka_admin::AdminRuntime::new(
+        sessions.clone(),
+        crypto.clone(),
+        Arc::new(yuuka_admin::NullBotRuntime),
+        cfg.privacy_policy_url.clone(),
+        cfg.terms_url.clone(),
+    ));
+    let admin_routes = yuuka_admin::routes(admin_runtime);
+
     let auth_runtime = Arc::new(AuthRuntime::new(
         sessions,
         cfg.session_ttl_days,
@@ -145,6 +157,7 @@ async fn run() -> Result<(), String> {
     let web = Arc::new(WebService {
         state,
         auth_routes,
+        admin_routes,
         ws_routes: chat_ws_routes,
         addr,
         dist_dir,
@@ -359,6 +372,8 @@ struct WebService {
     state: AppState,
     /// 認証発行ルータ（`AuthRuntime` を `Extension` で内包済み・再起動毎に clone して merge）。
     auth_routes: Router<AppState>,
+    /// 管理ルータ（`AdminRuntime` を `Extension` で内包済み・`/api/admin/*`）。
+    admin_routes: Router<AppState>,
     /// 会話 WS ルータ（`ChatEngine` を `Extension` で内包済み・`/ws/chat`）。
     ws_routes: Router<AppState>,
     addr: SocketAddr,
@@ -375,6 +390,7 @@ impl SupervisedService for WebService {
         let app = build_app(
             self.state.clone(),
             self.auth_routes.clone(),
+            self.admin_routes.clone(),
             self.ws_routes.clone(),
             self.dist_dir.as_deref(),
         );

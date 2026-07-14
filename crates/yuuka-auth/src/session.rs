@@ -177,6 +177,38 @@ impl SessionStore {
         self.memory_remove(&hash);
     }
 
+    /// あるユーザーの発行済み全セッションを失効させる（Node `destroyAllSessionsForUser`）。
+    ///
+    /// ロール変更・ユーザー削除の即時反映に使う（陳腐化したセッション内ロールを断つ）。Redis と
+    /// in-memory の双方から、`user_sessions:{id}` セットの全 token_hash に対応する `session:{hash}`
+    /// を削除し、セット自体も除く。Redis 失敗は best-effort（`warn` のみ・in-memory は常に処理）。
+    pub async fn destroy_all_for_user(&self, discord_id: &str) {
+        let user_key = format!("user_sessions:{discord_id}");
+        if let Some(cm) = &self.redis {
+            let mut cm = cm.clone();
+            match cm.smembers::<_, Vec<String>>(&user_key).await {
+                Ok(hashes) => {
+                    if !hashes.is_empty() {
+                        let keys: Vec<String> =
+                            hashes.iter().map(|h| format!("session:{h}")).collect();
+                        let _: Result<i64, _> = cm.del(keys).await;
+                    }
+                    let _: Result<i64, _> = cm.del(&user_key).await;
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "Redis の全セッション失効に失敗");
+                }
+            }
+        }
+        // in-memory 側も常に失効（Redis 縮退中に発行された分の救済）。
+        let mut mem = self.memory();
+        if let Some(set) = mem.user_sessions.remove(discord_id) {
+            for hash in set {
+                mem.sessions.remove(&hash);
+            }
+        }
+    }
+
     fn memory(&self) -> MutexGuard<'_, MemoryStore> {
         self.memory.lock().unwrap_or_else(PoisonError::into_inner)
     }
@@ -290,6 +322,30 @@ mod tests {
         store.destroy(&token).await;
         let got = store.get(&hash, 3600).await.expect("no backend err");
         assert!(got.is_none(), "失効後は解決できない");
+    }
+
+    #[tokio::test]
+    async fn destroy_all_for_user_revokes_every_session() {
+        let store = memory_only();
+        // 同一ユーザーで 2 セッション発行。
+        let t1 = store.create(&user(), 3600).await.expect("issued t1");
+        let t2 = store.create(&user(), 3600).await.expect("issued t2");
+        store.destroy_all_for_user("123").await;
+        for t in [t1, t2] {
+            let hash = crate::sha256_hex(&t);
+            let got = store.get(&hash, 3600).await.expect("no backend err");
+            assert!(got.is_none(), "一括失効後は解決できない");
+        }
+        // 別ユーザーのセッションは残る。
+        let other = SessionUser {
+            discord_id: "999".to_owned(),
+            username: "z".to_owned(),
+            role: Role::User,
+        };
+        let t3 = store.create(&other, 3600).await.expect("issued t3");
+        store.destroy_all_for_user("123").await;
+        let hash = crate::sha256_hex(&t3);
+        assert!(store.get(&hash, 3600).await.expect("no err").is_some());
     }
 
     #[tokio::test]

@@ -33,11 +33,13 @@ pub use ws::ws_routes;
 pub fn build_app(
     state: AppState,
     auth_routes: Router<AppState>,
+    admin_routes: Router<AppState>,
     ws_routes: Router<AppState>,
     dist_dir: Option<&Path>,
 ) -> Router {
     let routes = framework_routes()
         .merge(auth_routes)
+        .merge(admin_routes)
         .merge(ws_routes)
         .merge(yuuka_todo::routes())
         .merge(yuuka_finance::routes())
@@ -129,9 +131,18 @@ mod tests {
             std::sync::Arc::new(yuuka_auth::NullRegistrationDm),
             Vec::new(),
         ));
+        // 管理ルータ（in-memory セッション・NullBotRuntime・暗号なし）を組んで merge を検証する。
+        let admin_runtime = std::sync::Arc::new(yuuka_admin::AdminRuntime::new(
+            yuuka_auth::SessionStore::in_memory(),
+            None,
+            std::sync::Arc::new(yuuka_admin::NullBotRuntime),
+            String::new(),
+            String::new(),
+        ));
         super::build_app(
             AppState::new(Arc::new(FakeAuth), WebConfig::default(), test_db()),
             yuuka_auth::routes(runtime),
+            yuuka_admin::routes(admin_runtime),
             // WS ルータは merge 検証には不要（ChatEngine 構築を避け空ルータを渡す）。
             axum::Router::new(),
             None,

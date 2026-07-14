@@ -29,6 +29,7 @@ members = [
     "crates/yuuka-credential",
     "crates/yuuka-playbook",
     "crates/yuuka-persona",
+    "crates/yuuka-admin",
     "xtask",
 ]
 exclude = [
@@ -143,4 +144,5 @@ yuuka-personal   = { path = "crates/yuuka-personal" }
 yuuka-credential = { path = "crates/yuuka-credential" }
 yuuka-playbook   = { path = "crates/yuuka-playbook" }
 yuuka-persona    = { path = "crates/yuuka-persona" }
+yuuka-admin      = { path = "crates/yuuka-admin" }
 yuuka-services   = { path = "crates/yuuka-services" }
