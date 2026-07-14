@@ -3362,6 +3362,7 @@ dependencies = [
  "axum",
  "base64",
  "chrono",
+ "getrandom 0.2.17",
  "rusqlite",
  "secrecy",
  "serde",
