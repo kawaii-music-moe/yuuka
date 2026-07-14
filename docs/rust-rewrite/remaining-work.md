@@ -1,6 +1,7 @@
 # Rust 移行 — 残作業ロードマップ（本番投入までの ToDo 全集）
 
 - 最終更新: 2026-07-14（**P2-A/P2-B 18 増分セッション**: admin 15 + settings 6 Web-API（新規 `yuuka-admin`/`yuuka-settings`）+ **todo ツール 4 本 + todo タグ/ガイド 3 本 + finance ツール 9 本**を実装 + 敵対的パリティレビューで確定 0 HIGH。全ゲート緑 — build ✅ / clippy -D ✅ / **test 475** ✅ / deny exit0 ✅・新規依存なし。ルート 120/152・ツール 69/87・**bot 管理系 + Webhook Web-API 完了**）
+- 追記（2026-07-15a）: **認証情報アクセス制御の配線 + 敵対的レビュー是正**（M-10 消費側完了）。commit `d2a7c5b`（feat）+ `767e265`（fix）。**配線 6 点 + crypto 注入**: (1) `CredentialAccessRepo::grant_to_owner_bots`（Node `grantCredentialToOwnerBots`＝owner 所有 Bot ∪ system_default へ冪等付与・**単一 writer Tx で原子的**・owner_id 分離キー）、(2) `routes_with(crypto)` + `CredentialCrypto` Extension（webhook 同方式）＋**新 `POST /api/credentials/register`**（`secretService.registerCredential` パリティ＝raw 必須検証→正規化→salt→暗号化→保存→owner-Bot 付与・失敗は 400 `{success,message}`）、(3) GET `/api/credentials` を `list_credential_names_for_bot` で**許可フィルタ**（未許可 service 非露出）、(4) delete 成功時に `delete_all_grants` 掃除、(5) tool listCredentialServices 許可フィルタ、(6) tool addCredential は保存後に応対 Bot へ grant・deleteCredential は削除後に掃除。`check_field_lengths` を pub(crate) 共有化・`credential_routes = routes_with(crypto)` を build_app/WebService へ貫通。**FK 依存（bot_credential_access.bot_id→bots・foreign_keys=ON）は Node と同一**＝system_default Bot 行は admin セットアップ生成の既存不変（新規退行ではない）。**敵対的パリティレビュー**（4 次元×各指摘を独立ソース検証）で確定 7 件→**5 件是正**: [HIGH] add/update パスワード trim をやめ `arg_password`（サイレント資格情報破損の是正・Node `asOptionalPassword`）/[MED] update `url=""` を URL 削除扱い（`arg_url_update`・Node 別パーサ）/[LOW] delete ガードを raw 空文字のみ 400 + 日本語文言・addCredential 成功文言 full 化。**意図的 divergence 2 件**（是正せず）: register の DB 障害 500/502（クレート横断 DbError→5xx 規約・Node は 400）/crypto 未設定・不正 salt の汎用文言（サーバ構成非露出の安全側）。**test 488→492**・全ゲート緑（build/clippy-D/test/deny）・新規依存なし。ツール 71/87・ルート +1（register）。
 - 追記（2026-07-14w）: **認証情報 Bot 許可リポジトリ層（`bot_credential_access`）実装**（M-10 の DB 基盤）。commit `92be802`。Node `credentialAccessRepo.ts` の 6 関数を `CredentialAccessRepo`（`crates/yuuka-credential/src/access.rs`）へ 1:1 移植（SQL バイト単位パリティ）＝grant〔INSERT OR IGNORE 冪等〕/revoke/list_bot_ids_for_credential/list_credential_names_for_bot/is_granted〔ランタイムゲート〕/delete_all_grants。service_name は `normalize_service_name`（trim+小文字化）で照合・保存、owner_id を全クエリ必須キーに（§12.2 契約5）。単体テスト 3。**残（後続増分で配線）**: register ルートの owner-Bot 一括付与 / GET `/api/credentials` の許可フィルタ / delete の grant 掃除 / addCredential ツールの応対 Bot 付与。**test 485→488**・全ゲート緑・新規依存なし。
 - 追記（2026-07-14v）: **リッチ返信 Embed ツール（showRichContent）実装**（新クレート `yuuka-richcontent`・Node `richContentModule.ts`/`utils/embeds.ts` パリティ）。commit `a435583`。**Embed 配管を新設**＝(1) core `ResponsePart::Embed(EmbedPart)` + `EmbedPart`/`EmbedFieldPart`、(2) engine `rich_parts_to_embeds`（`ResponsePart::Embed`→discord `RichEmbed`）を秘書/汎用モード両 `TurnReply.embeds` へ設定（従来 embeds 常時空を解消）、(3) ws `done_frame` が embeds を discord.js APIEmbed JSON（title/description/color 十進/fields/footer）へ直列化（desktop `model.rs Embed` 契約一致・従来 embeds 常時空を解消）。color マップ 11 種・title 必須・fields 最大25・name256/value1024 クリップ・rich_reply 無効時は非生成。exposure=core（capability=None・秘書+汎用モード両露出＝Node `richContentModule` 無条件 push）。空テキスト時 FALLBACK_TEXT は Node `gemini.ts:928-930`（embeds 有無に依らず適用）と一致。**敵対的パリティレビュー**（tool-parity/core-engine-plumbing/ws-desktop-discord の 3 次元×各指摘を独立検証）で**確定 0 件**。**意図的 divergence**（対応不要）: clip は char 単位（UTF-16 でなく・安全側・到達不能）/`setTimestamp()` は RichEmbed に該当フィールド無く非付与。**test 477→485**（richcontent 6 + plumbing 2）・全ゲート緑・新規依存なし。ツール 70→71/87。
 - 追記（2026-07-14u）: **会話ログ要約ツール（summarizeConversationTopic）実装**（新クレート `yuuka-conversation`・Node `conversationFunctions.ts`/`messageLogRepo.searchMessages` パリティ）。commit `a04a2f9`。FTS5（≥3 字・char-count 閾値）/LIKE（1-2 字・`\%_` エスケープ）/期間のみの 3 経路・全経路 `guild_id IS NULL` + user/bot スコープ（§3.12.3 プライバシー）・11→10 narrowed 判定・時系列 reverse・1000 字 truncate・message 文言 verbatim。能力ゲート `capability="memory"`・secretary のみ（Node `getGuildAssistantFunctionModules` は conversation 非露出＝guild-assistant=false）。`normalize_period` は `replacen(...,1)` で Node `.replace("T"," ")` 先頭のみ置換に一致。**test 475→477**・全ゲート緑・新規依存なし。ツール 69→70/87。
@@ -46,7 +47,7 @@
 |---|---|
 | `cargo build --release --workspace` | ✅ exit 0 |
 | `cargo clippy --workspace --all-targets` | ✅ exit 0（ts-rs 良性 warning のみ） |
-| `cargo test --workspace` | ✅ **488 passed / 0 failed**（2026-07-14 P2-A/P2-B 増分 + conversation/richcontent ツール + credential-access repo で累積） |
+| `cargo test --workspace` | ✅ **492 passed / 0 failed**（2026-07-15 認証情報アクセス制御配線 + 敵対的レビュー是正で累積） |
 | `cargo deny check` | ✅ **exit 0**（新規依存なし＝既存クレートのみで実装） |
 | 保存時暗号層（Argon2id/AES-256-GCM） | ✅ **実装済**（P1-5・Node ゴールデンベクタでバイト単位パリティ・鍵ローテ起動時配線） |
 | 認証発行（login/setup/logout/register/users） | ✅ **実装済**（P1-1・セッション発行 + bcrypt + 招待 + 監査 + レート制限。**登録 DM は P1-3 で開通**・OAuth は残） |
@@ -170,7 +171,7 @@
   - [~] finance（8/9）: budget-limits / plans/* / **月次集計（total・incomeTotal・breakdown・trend）**（2026-07-14）を追加。**残**: upload-receipt（receipt OCR = Gemini vision + supervisor 層配線が必要・deferred）
   - [x] timeline（8/8）: plan/*・**media（`/api/timeline/media*` base64 アップロード + 認証付き配信）**・**cross-domain 副作用（`type=expense`→expenses 二重登録・`type=task_done`→todos 完了）**（2026-07-14）を追加
   - [x] personal（6/6）: clipboard（GET/delete）/ context-note に加え **`addClipboardEntry` ツール**（2026-07-14）。TTL 一括削除 cron（`deleteExpired`）は `ClipboardCleanupService` で稼働済み
-  - [ ] credential（2/3）: register（作成 = P1-5 暗号層に依存）
+  - [x] credential（3/3）: register 実装済（2026-07-15a・crypto 注入 `routes_with`・owner-Bot 一括付与・GET 許可フィルタ・delete 掃除）
   - [x] playbook（8/8）: runs / schedules/* に加え **cron 実行エンジン（`PlaybookScheduleService`・EveryMinute tick・due 判定 + run 記録 + 通知）**（2026-07-14）。**マクロ定期実行が実際に走る**（`YUUKA_RUST_CRON=1` 時・P2-C 参照）。route 層の cron 式妥当性検証のみ deferred
   - （schedule 3/3・reminder は完了）
 
@@ -182,7 +183,7 @@
 - [x] finance: 14/14 完成（2026-07-14＝月次集計2/予算3/支払い予定 list-add-settle-cancel4/findSettlementCandidates/**linkPlannedPaymentTodo/linkPlannedPaymentReminder**〔cross-domain＝同一DBへ直接SQL・link_todo/link_reminder repo〕）
 - [~] timeline: addTimelineRecord は expense/task_done の cross-domain 副作用に対応済み（2026-07-14）。**残**: createDayPlanBlock/listDayPlan/deleteDayPlanBlock（day_plan_blocks 操作）・tool 経由 media の Discord 添付 URL 取得（reqwest 依存）
 - [x] personal: clipboard(3) + **context-note 3（getContextNote/setContextNote/appendContextNote・2026-07-14＝既存 ContextNoteRepo へ配線・上限 10,000 文字検証・append は改行連結）** + searchContacts（`SearchContactsTool`・name/relationship/notes/tags の LIKE 部分一致・実装済。※ `tools.rs` 冒頭コメントの「deferred」は stale）
-- [~] credential: **add/update 済**（2026-07-14＝`SystemCrypto::encrypt_for_user`・salt=users.salt・`build_tool_registry(db,crypto)` 注入・長さ検証/部分更新）。**残**: browserFillCredential（平文復号 + browser 依存）
+- [~] credential: **add/update/list/delete 済 + 許可配線済**（2026-07-15a＝`SystemCrypto::encrypt_for_user`・salt=users.salt・`build_tool_registry(db,crypto)` 注入・長さ検証/部分更新。list は `bot_credential_access` 許可フィルタ・add は応対 Bot へ grant・delete は grant 掃除。**パスワードは trim せず保存**〔`arg_password`〕・`url=""` は URL 削除〔`arg_url_update`〕）。**残**: browserFillCredential（平文復号 + browser 依存）
 - [ ] browser 一式（searchWeb/fetchDynamicPage/takePageScreenshot/browserInteractive ~9）— 対応クレート無し
 - [ ] chart（sendChart）
 - [~] briefing（2026-07-14＝**configureReport/getBriefingConfig/configureBriefing**〔新 yuuka-briefing クレート・report/briefing 部分更新 upsert + 設定読取。configureBriefing は cron 検証 + add_news_feed の SSRF ガード〔内部/ループバック/リンクローカル/メタデータ拒否〕+ フィード add〔重複無視〕/remove〔部分一致〕+ weather_lat/lng/地名/キーワード部分更新〕）。**残**: runBriefingNow（サービス本体＝天気/RSS 取得の配信実行）
@@ -217,7 +218,7 @@
   - [ ] M-7 priority 正規化 + float `2.0` 受理幅
   - [ ] M-8 finance amount 検証
   - [x] M-9 reminder `trigger_at` 正規化 — 済（2026-07-12・B4）。`datetime::to_db_datetime` を repo 境界 + tool/web route で適用。**残**: 過去日時の拒否・繰り返しの次回自動前進は未移植（低・own-user・cron next は上位 crate 依存）
-  - [~] M-10 credential 許可フィルタ（bot_credential_access）— **repo 層済**（2026-07-14w・`CredentialAccessRepo` 6 メソッド・`92be802`）。**残**: register/GET フィルタ/delete 掃除/addCredential 付与の配線（route・tool・crypto 注入）
+  - [x] M-10 credential 許可フィルタ（bot_credential_access）— **配線完了**（2026-07-15a・`d2a7c5b`/`767e265`）。repo 6 メソッド（`92be802`）に加え register の owner-Bot 一括付与 + `grant_to_owner_bots` / GET 許可フィルタ / delete 掃除 / addCredential 応対 Bot 付与 / deleteCredential 掃除 / crypto 注入を配線。敵対的レビューで確定 5 件是正（パスワード非 trim 等）
   - [ ] M-11 persona 適用中の delete 拒否
 - [x] **P3-4 README 冒頭の古い記述を修正** — 済（[README.md](README.md) の「実装はまだ開始していない」を Phase 0〜5 着地の現況＋remaining-work.md 参照に更新）。
 - [x] **P3-5 `/api/me` の DB 再取得 + 404 分岐** — 済（`yuuka-web/src/routes.rs`：セッション解決後に `SELECT username, role FROM users WHERE discord_id` を read pool で再取得し、消失時 404 `{success:false,message:"ユーザーが見つかりません。"}`＝Node parity。role は DB 権威。テスト `me_returns_404_when_user_deleted_from_db` 追加・既存 200 テストは users 行を seed）。
