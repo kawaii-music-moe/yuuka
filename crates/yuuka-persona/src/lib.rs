@@ -410,6 +410,106 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn import_public_copies_and_rejects_non_public() {
+        let (db, path) = seed_db_at();
+        let pub_id = insert_persona(&path, "alice", "Shared", "shared-prompt", 1);
+        let priv_id = insert_persona(&path, "bob", "Secret", "secret", 0);
+        let repo = PersonaRepo::new(&db);
+
+        // 公開ペルソナを userX の所有として独立コピー（is_public=0）。
+        let copied = repo
+            .import_public(&scope("userX"), pub_id)
+            .await
+            .unwrap()
+            .expect("imported");
+        assert_eq!(copied.name, "Shared");
+        assert_eq!(copied.prompt, "shared-prompt");
+        assert!(!copied.is_public);
+        assert_ne!(copied.id, pub_id, "独立コピー＝別 id");
+        // userX の一覧に出る（自分の所有になった）。
+        assert_eq!(repo.list(&scope("userX")).await.unwrap().len(), 1);
+        // 元ソースは残る（コピーであって移動でない）。
+        assert!(repo.get_public(pub_id).await.unwrap().is_some());
+
+        // 非公開/不在はコピーできない（None）。
+        assert!(repo
+            .import_public(&scope("userX"), priv_id)
+            .await
+            .unwrap()
+            .is_none());
+        assert!(repo
+            .import_public(&scope("userX"), 9999)
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn route_import_persona() {
+        let (db, path) = seed_db_at();
+        let pub_id = insert_persona(&path, "alice", "Shared", "shared-prompt", 1);
+        let priv_id = insert_persona(&path, "bob", "Secret", "secret", 0);
+        let app = app_with(db);
+
+        // 成功: 200 {persona, message}。応答 persona は自分の所有コピー（is_public=false）。
+        let ok = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/personas/import")
+                    .header("cookie", "__Host-yuuka-session=good")
+                    .header("content-type", "application/json")
+                    .body(Body::from(format!(r#"{{"id":{pub_id}}}"#)))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(ok.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(ok.into_body(), usize::MAX).await.unwrap();
+        let j: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(j["success"], serde_json::json!(true));
+        assert_eq!(j["persona"]["name"], serde_json::json!("Shared"));
+        assert_eq!(j["persona"]["is_public"], serde_json::json!(false));
+        assert!(j["message"].as_str().unwrap().contains("インポートしました"));
+        assert!(j["persona"]["owner_id"].is_null());
+
+        // id 欠落 → 400「id は必須です。」。
+        let bad = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/personas/import")
+                    .header("cookie", "__Host-yuuka-session=good")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(bad.status(), StatusCode::BAD_REQUEST);
+        let bytes = axum::body::to_bytes(bad.into_body(), usize::MAX).await.unwrap();
+        let j: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(j["message"], serde_json::json!("id は必須です。"));
+
+        // 非公開 id → 404。
+        let priv_resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/personas/import")
+                    .header("cookie", "__Host-yuuka-session=good")
+                    .header("content-type", "application/json")
+                    .body(Body::from(format!(r#"{{"id":{priv_id}}}"#)))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(priv_resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
     async fn route_requires_auth() {
         let resp = app()
             .oneshot(

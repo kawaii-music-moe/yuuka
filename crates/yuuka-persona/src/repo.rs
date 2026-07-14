@@ -6,7 +6,7 @@
 //! 所有権には関与しない（適用中ペルソナ `bot_active_personas` はコア CRUD 外＝deferred）。
 //! 読みは [`ReadPool`]、書きは [`WriterHandle`]（BEGIN IMMEDIATE）へ送る。
 
-use rusqlite::{params, Row};
+use rusqlite::{params, OptionalExtension, Row};
 use serde::Serialize;
 use yuuka_core::scope::ScopedRepo;
 use yuuka_core::{DbError, UserScope};
@@ -236,6 +236,46 @@ impl<'a> PersonaRepo<'a> {
                 }
             })
             .await
+    }
+
+    /// 公開ペルソナ（`is_public = 1`）を呼び出し元の所有として**独立コピー**する（Node `importPersona`）。
+    /// コピーは `is_public = 0`（既定）。ソースが非公開/不在なら `None`。読み取り + 挿入を単一 writer Tx で
+    /// 原子的に行う（read→insert 間にソースが非公開化される競合を排除・Node の別クエリ実装より堅牢）。
+    ///
+    /// # Errors
+    /// 書き込み・作成後取得失敗時 [`DbError`]。
+    pub async fn import_public(
+        &self,
+        scope: &UserScope,
+        source_id: i64,
+    ) -> Result<Option<Persona>, DbError> {
+        let owner = owner_id(scope);
+        let new_id = self
+            .writer
+            .transaction(move |tx| {
+                let src: Option<(String, String)> = tx
+                    .query_row(
+                        "SELECT name, prompt FROM personas WHERE id = ?1 AND is_public = 1",
+                        params![source_id],
+                        |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+                    )
+                    .optional()
+                    .map_err(map_sqlite)?;
+                let Some((name, prompt)) = src else {
+                    return Ok(None);
+                };
+                tx.execute(
+                    "INSERT INTO personas (owner_id, name, prompt) VALUES (?1, ?2, ?3)",
+                    params![owner, name, prompt],
+                )
+                .map_err(map_sqlite)?;
+                Ok(Some(tx.last_insert_rowid()))
+            })
+            .await?;
+        match new_id {
+            Some(id) => self.get(scope, id).await,
+            None => Ok(None),
+        }
     }
 
     /// 所有者本人のペルソナを削除する（削除できたら `true`）。

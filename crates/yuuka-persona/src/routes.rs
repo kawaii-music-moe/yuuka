@@ -44,6 +44,7 @@ pub fn routes() -> Router<AppState> {
         .route("/api/personas/delete", post(delete))
         .route("/api/personas/marketplace", get(marketplace_list))
         .route("/api/personas/marketplace/{id}", get(marketplace_get))
+        .route("/api/personas/import", post(import_persona))
 }
 
 async fn list(
@@ -134,11 +135,7 @@ async fn marketplace_get(
             (StatusCode::OK, Json(json!({ "success": true, "persona": persona }))).into_response()
         }
         Ok(None) => not_found_public(),
-        Err(_) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "success": false, "message": "内部エラーが発生しました。" })),
-        )
-            .into_response(),
+        Err(_) => internal_error(),
     }
 }
 
@@ -146,6 +143,76 @@ fn not_found_public() -> Response {
     (
         StatusCode::NOT_FOUND,
         Json(json!({ "success": false, "message": "公開ペルソナが見つかりません。" })),
+    )
+        .into_response()
+}
+
+#[derive(Debug, Deserialize)]
+struct ImportInput {
+    /// Node `Number(ctx.body.id)` 相当に寛容に受ける（数値 or 数値文字列・整数以外は 400）。
+    #[serde(default)]
+    id: Option<Value>,
+}
+
+/// JSON 値から整数 id を取り出す（Node `Number(x)` + `Number.isInteger`＝整数 JSON 数値 or 整数文字列）。
+fn as_int_id(v: Option<Value>) -> Option<i64> {
+    match v {
+        Some(Value::Number(n)) => n.as_i64(),
+        Some(Value::String(s)) => s.trim().parse::<i64>().ok(),
+        _ => None,
+    }
+}
+
+/// 公開ペルソナを自分の所有として独立コピーする（Node `POST /api/personas/import`）。
+/// id が整数でない → 400「id は必須です。」・非公開/不在 → 404・成功 → 200 {persona, message}。
+async fn import_persona(
+    user: AuthenticatedUser,
+    State(db): State<Db>,
+    ScopedJson {
+        bot_id,
+        value: input,
+    }: ScopedJson<ImportInput>,
+) -> Response {
+    let Some(id) = as_int_id(input.id) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "success": false, "message": "id は必須です。" })),
+        )
+            .into_response();
+    };
+    // persona は owner=user 単位（bot_id は不使用だが共通の解決経路を通す）。
+    let scope = match resolve_scope(&user.0, &db, bot_id.as_deref()).await {
+        Ok(s) => s,
+        Err(_) => return internal_error(),
+    };
+    match PersonaRepo::new(&db).import_public(&scope, id).await {
+        Ok(Some(persona)) => {
+            let message = format!(
+                "ペルソナ「{}」をインポートしました。「適用」すると会話に反映されます。",
+                persona.name
+            );
+            (
+                StatusCode::OK,
+                Json(json!({ "success": true, "persona": persona, "message": message })),
+            )
+                .into_response()
+        }
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({
+                "success": false,
+                "message": "公開ペルソナが見つかりません（非公開化された可能性があります）。"
+            })),
+        )
+            .into_response(),
+        Err(_) => internal_error(),
+    }
+}
+
+fn internal_error() -> Response {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(json!({ "success": false, "message": "内部エラーが発生しました。" })),
     )
         .into_response()
 }
