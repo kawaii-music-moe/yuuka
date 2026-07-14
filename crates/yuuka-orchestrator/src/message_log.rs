@@ -22,6 +22,85 @@ pub struct ContextEntry {
     pub content: String,
 }
 
+/// 利用量サマリの 1 日ぶん（Node `getBotUsageSeries` の `series` 要素・`requests`=user 発話数・
+/// `responses`=assistant 応答数）。
+#[derive(Debug, Clone)]
+pub struct UsagePoint {
+    pub date: String,
+    pub requests: i64,
+    pub responses: i64,
+}
+
+/// Bot 利用量の時系列（連続日付・欠損 0 補完済み）＋合計（Node `getBotUsageSeries` の戻り）。
+#[derive(Debug, Clone)]
+pub struct BotUsageSeries {
+    pub series: Vec<UsagePoint>,
+    pub total_requests: i64,
+    pub total_responses: i64,
+}
+
+/// Bot 単位の利用量を直近 `days` 日ぶん集計する（Node `getBotUsageSeries`・**bot_id 単位の
+/// 読み取り専用クエリ**＝コスト可視化用に user_id 全件走査の明示的例外）。`days` は `[1, 90]` に
+/// クランプする。連続日付列は SQLite の `date('now','localtime')` から生成し（WHERE と同一基準で
+/// TZ ドリフトを避ける）、ログの無い日は 0 補完する。role が `user`/`assistant` 以外は数えない。
+///
+/// # Errors
+/// 読み取り失敗時 [`DbError`]。
+pub async fn get_bot_usage_series(
+    db: &Db,
+    bot_id: &str,
+    days: i64,
+) -> Result<BotUsageSeries, DbError> {
+    let bot_id = bot_id.to_owned();
+    let clamped = days.clamp(1, 90);
+    db.read
+        .read(move |conn| {
+            // 再帰 CTE で「今日〜今日-(clamped-1)」の連続 local 日付を作り、LEFT JOIN で 0 補完集計する。
+            // 予約語（offset 等）を避けた別名を使う。
+            let mut stmt = conn
+                .prepare(
+                    "WITH RECURSIVE offsets(k) AS ( \
+                       SELECT 0 UNION ALL SELECT k + 1 FROM offsets WHERE k < ?1 - 1 \
+                     ), \
+                     days_list(day) AS ( \
+                       SELECT date('now', 'localtime', '-' || k || ' days') FROM offsets \
+                     ) \
+                     SELECT days_list.day AS day, \
+                       COALESCE(SUM(CASE WHEN ml.role = 'user' THEN 1 ELSE 0 END), 0) AS requests, \
+                       COALESCE(SUM(CASE WHEN ml.role = 'assistant' THEN 1 ELSE 0 END), 0) AS responses \
+                     FROM days_list \
+                     LEFT JOIN message_logs ml \
+                       ON date(ml.created_at) = days_list.day AND ml.bot_id = ?2 \
+                     GROUP BY days_list.day \
+                     ORDER BY days_list.day ASC",
+                )
+                .map_err(map_sqlite)?;
+            let rows = stmt
+                .query_map(params![clamped, bot_id], |r| {
+                    Ok(UsagePoint {
+                        date: r.get::<_, String>(0)?,
+                        requests: r.get::<_, i64>(1)?,
+                        responses: r.get::<_, i64>(2)?,
+                    })
+                })
+                .map_err(map_sqlite)?;
+            let mut series = Vec::new();
+            let (mut total_requests, mut total_responses) = (0_i64, 0_i64);
+            for row in rows {
+                let p = row.map_err(map_sqlite)?;
+                total_requests += p.requests;
+                total_responses += p.responses;
+                series.push(p);
+            }
+            Ok(BotUsageSeries {
+                series,
+                total_requests,
+                total_responses,
+            })
+        })
+        .await
+}
+
 /// 秘書コンテキストのリセット境界キー（Node `contextFloorKey`）。
 fn context_floor_key(user_id: &str, bot_id: &str) -> String {
     format!("context_floor:{bot_id}:{user_id}")
@@ -265,4 +344,86 @@ pub async fn clear_context(db: &Db, user_id: &str, bot_id: &str) -> Result<(), D
             Ok(())
         })
         .await
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    use super::get_bot_usage_series;
+    use yuuka_web::Db;
+
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+
+    fn seed_db() -> (Db, std::path::PathBuf) {
+        let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "yuuka_msglog_test_{}_{seq}.sqlite",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        {
+            let conn = rusqlite::Connection::open(&path).expect("create empty");
+            drop(conn);
+        }
+        let db = Db::open(&path).expect("open");
+        (db, path)
+    }
+
+    /// `created_at` を `day_offset` 日前に明示して message_logs へ 1 行入れる。
+    fn insert_log(path: &std::path::Path, bot_id: &str, role: &str, day_offset: i64) {
+        let conn = rusqlite::Connection::open(path).expect("open");
+        conn.execute(
+            "INSERT INTO message_logs (user_id, bot_id, role, content, created_at) \
+             VALUES ('u', ?1, ?2, 'c', datetime('now', 'localtime', ?3))",
+            rusqlite::params![bot_id, role, format!("-{day_offset} days")],
+        )
+        .expect("insert log");
+    }
+
+    #[tokio::test]
+    async fn usage_series_gap_fills_totals_and_scopes_to_bot() {
+        let (db, path) = seed_db();
+        // 今日: user×2, assistant×1。昨日: user×1。3日前: 範囲外(days=3=今日含む3日)。
+        insert_log(&path, "b1", "user", 0);
+        insert_log(&path, "b1", "user", 0);
+        insert_log(&path, "b1", "assistant", 0);
+        insert_log(&path, "b1", "user", 1);
+        insert_log(&path, "b1", "user", 3);
+        // 別 Bot のログは混ざらない。
+        insert_log(&path, "other", "user", 0);
+        // user/assistant 以外の role は数えない。
+        insert_log(&path, "b1", "system", 0);
+
+        let s = get_bot_usage_series(&db, "b1", 3).await.unwrap();
+        assert_eq!(s.series.len(), 3, "連続3日ぶん(欠損0補完)");
+        // 昇順: [今日-2, 今日-1(昨日), 今日]。
+        assert_eq!(s.series[0].requests, 0);
+        assert_eq!(s.series[0].responses, 0);
+        assert_eq!(s.series[1].requests, 1); // 昨日: user×1
+        assert_eq!(s.series[2].requests, 2); // 今日: user×2
+        assert_eq!(s.series[2].responses, 1); // 今日: assistant×1
+        assert_eq!(s.total_requests, 3); // 範囲外(3日前)・別Bot・system は除外
+        assert_eq!(s.total_responses, 1);
+
+        // ログ無し Bot は全 0・長さは days。
+        let z = get_bot_usage_series(&db, "system_default", 5).await.unwrap();
+        assert_eq!(z.series.len(), 5);
+        assert_eq!(z.total_requests, 0);
+        assert_eq!(z.total_responses, 0);
+
+        // days クランプ: 0→1、200→90。
+        assert_eq!(
+            get_bot_usage_series(&db, "b1", 0).await.unwrap().series.len(),
+            1
+        );
+        assert_eq!(
+            get_bot_usage_series(&db, "b1", 200)
+                .await
+                .unwrap()
+                .series
+                .len(),
+            90
+        );
+    }
 }

@@ -58,11 +58,85 @@ pub fn routes_with(crypto: Option<Arc<SystemCrypto>>) -> Router<AppState> {
         .route("/api/bots/assistant/roles", post(set_role))
         .route("/api/bots/assistant/gemini-key", post(set_gemini_key))
         .route("/api/bots/modules", get(get_modules).post(set_modules))
+        .route("/api/bots/usage", get(get_usage))
         .route(
             "/api/admin/bot-attribute-settings",
             get(admin_get).post(admin_set),
         )
         .layer(Extension(AttrCrypto(crypto)))
+}
+
+// ─── GET /api/bots/usage（API 利用量サマリ・アクセス権のある全ユーザー・読み取り専用） ──
+
+#[derive(Debug, Deserialize)]
+struct UsageQuery {
+    #[serde(default, rename = "botId")]
+    bot_id: Option<String>,
+    /// 日数（文字列で受け、JS `parseInt` 相当で寛容に解釈する）。
+    #[serde(default)]
+    days: Option<String>,
+}
+
+/// JS `parseInt(s, 10)` の先頭数値抽出（trim → 任意符号 → 先頭連続数字）。数字が無ければ `None`（NaN）。
+fn parse_int_prefix(s: &str) -> Option<i64> {
+    let mut chars = s.trim().chars().peekable();
+    let mut sign = 1_i64;
+    match chars.peek() {
+        Some('+') => {
+            chars.next();
+        }
+        Some('-') => {
+            sign = -1;
+            chars.next();
+        }
+        _ => {}
+    }
+    let digits: String = chars.take_while(char::is_ascii_digit).collect();
+    if digits.is_empty() {
+        return None;
+    }
+    digits.parse::<i64>().ok().map(|n| sign * n)
+}
+
+async fn get_usage(
+    user: AuthenticatedUser,
+    State(db): State<Db>,
+    Query(q): Query<UsageQuery>,
+) -> Response {
+    // botId をアクセス認可つきで解決（未指定・アクセス不可は system_default へフォールバック＝
+    // 他人の Bot の利用量を覗かせない・Node `resolveBotId`）。書き込みは無いので owner 限定にしない。
+    let bot_id = match yuuka_web::resolve_scope(&user.0, &db, q.bot_id.as_deref()).await {
+        Ok(scope) => scope.bot_id().as_str().to_owned(),
+        Err(_) => return server_error(),
+    };
+    // days = parseInt(days || "14"); 有限>0 なら min(,90)、それ以外は 14（Node）。
+    let days = match q.days.as_deref().and_then(parse_int_prefix) {
+        Some(n) if n > 0 => n.min(90),
+        _ => 14,
+    };
+    let usage = match crate::message_log::get_bot_usage_series(&db, &bot_id, days).await {
+        Ok(u) => u,
+        Err(_) => return server_error(),
+    };
+    let rate_limits = match rate_limits_json(&db).await {
+        Ok(v) => v,
+        Err(_) => return server_error(),
+    };
+    let series: Vec<Value> = usage
+        .series
+        .iter()
+        .map(|p| {
+            json!({ "date": p.date, "requests": p.requests, "responses": p.responses })
+        })
+        .collect();
+    Json(json!({
+        "success": true,
+        "days": days,
+        "series": series,
+        "totals": { "requests": usage.total_requests, "responses": usage.total_responses },
+        "rate_limits": rate_limits,
+    }))
+    .into_response()
 }
 
 // ─── GET/POST /api/bots/modules（有効モジュール・アクセス権のある全ユーザー） ──
@@ -1587,5 +1661,83 @@ mod tests {
         let (_st, j) = send(&app, "GET", "/api/bots/modules?botId=b1", "owner", "").await;
         assert_eq!(j["has_override"], false);
         assert_eq!(j["all_enabled"], true);
+    }
+
+    #[tokio::test]
+    async fn usage_route_shape_days_clamp_and_auth() {
+        let app = app();
+        // 既定 days=14・ログ無し system_default（未指定 botId）→ 全0・rate_limits あり。
+        let (st, j) = send(&app, "GET", "/api/bots/usage", "owner", "").await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(j["success"], serde_json::json!(true));
+        assert_eq!(j["days"], serde_json::json!(14));
+        assert_eq!(j["series"].as_array().unwrap().len(), 14);
+        assert_eq!(j["totals"]["requests"], serde_json::json!(0));
+        assert_eq!(j["totals"]["responses"], serde_json::json!(0));
+        assert!(j["rate_limits"].is_object());
+        let p0 = &j["series"][0];
+        assert!(p0["date"].is_string());
+        assert!(p0["requests"].is_number() && p0["responses"].is_number());
+
+        // days=5 → 長さ5。
+        let (_, j) = send(&app, "GET", "/api/bots/usage?days=5", "owner", "").await;
+        assert_eq!(j["days"], serde_json::json!(5));
+        assert_eq!(j["series"].as_array().unwrap().len(), 5);
+        // days>90 → 90 にクランプ。
+        let (_, j) = send(&app, "GET", "/api/bots/usage?days=365", "owner", "").await;
+        assert_eq!(j["days"], serde_json::json!(90));
+        assert_eq!(j["series"].as_array().unwrap().len(), 90);
+        // 非数値 days → 14（Node parseInt NaN フォールバック）。
+        let (_, j) = send(&app, "GET", "/api/bots/usage?days=abc", "owner", "").await;
+        assert_eq!(j["days"], serde_json::json!(14));
+
+        // 認証必須（不明トークン → 401）。
+        let (st, _) = send(&app, "GET", "/api/bots/usage", "nobody", "").await;
+        assert_eq!(st, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn usage_route_surfaces_real_counts() {
+        // message_logs を持つ DB を組み、route が実カウントを返すことを確認する。
+        let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "yuuka_botattr_usage_{}_{seq}.sqlite",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        {
+            let conn = rusqlite::Connection::open(&path).expect("create empty");
+            drop(conn);
+        }
+        let db = Db::open(&path).expect("open");
+        {
+            let conn = rusqlite::Connection::open(&path).expect("seed conn");
+            conn.execute(
+                "INSERT OR IGNORE INTO users (discord_id, username, password_hash, salt, role) \
+                 VALUES ('owner', 'owner', 'x', 'x', 'user')",
+                [],
+            )
+            .expect("seed user");
+            // 未指定 botId → system_default 宛の今日ぶん（user×1, assistant×1）。
+            for role in ["user", "assistant"] {
+                conn.execute(
+                    "INSERT INTO message_logs (user_id, bot_id, role, content) \
+                     VALUES ('owner', 'system_default', ?1, 'c')",
+                    rusqlite::params![role],
+                )
+                .expect("seed log");
+            }
+        }
+        let app = super::routes()
+            .with_state(AppState::new(Arc::new(FakeAuth), WebConfig::default(), db));
+
+        let (st, j) = send(&app, "GET", "/api/bots/usage?days=1", "owner", "").await;
+        assert_eq!(st, StatusCode::OK);
+        let series = j["series"].as_array().unwrap();
+        assert_eq!(series.len(), 1);
+        assert_eq!(series[0]["requests"], serde_json::json!(1));
+        assert_eq!(series[0]["responses"], serde_json::json!(1));
+        assert_eq!(j["totals"]["requests"], serde_json::json!(1));
+        assert_eq!(j["totals"]["responses"], serde_json::json!(1));
     }
 }
