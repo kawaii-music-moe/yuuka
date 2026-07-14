@@ -185,6 +185,55 @@ impl<'a> CredentialAccessRepo<'a> {
             .await
     }
 
+    /// 登録した認証情報を「owner 本人の全 Bot ＋ 共有秘書（system_default）」へ利用許可する。
+    ///
+    /// Node `credentialRoutes.grantCredentialToOwnerBots`（register ルート）パリティ:
+    /// `listBotsOwnedBy(owner)`（system_default 以外の所有 Bot）∪ `{system_default}` の各 Bot へ
+    /// 冪等付与する。付与は全て owner 本人のスコープなのでクロステナント露出は起きない
+    /// （system_default は「発話者 = owner の会話」でのみ当該許可が効く）。所有 Bot 取得と付与を
+    /// 単一書き込みトランザクションで原子的に行う（部分適用を避ける）。`service_name` は正規化する。
+    ///
+    /// # Errors
+    /// 書き込み失敗時 [`DbError`]。
+    pub async fn grant_to_owner_bots(
+        &self,
+        owner_id: &str,
+        service_name: &str,
+    ) -> Result<(), DbError> {
+        let (oid, svc) = (owner_id.to_owned(), normalize_service_name(service_name));
+        self.writer
+            .transaction(move |tx| {
+                // owner 本人が所有する Bot（system_default 以外）を集める。
+                let mut bot_ids: Vec<String> = {
+                    let mut stmt = tx
+                        .prepare(
+                            "SELECT id FROM bots WHERE user_id = ?1 AND id != 'system_default'",
+                        )
+                        .map_err(map_sqlite)?;
+                    let rows = stmt
+                        .query_map(params![oid], |r| r.get::<_, String>(0))
+                        .map_err(map_sqlite)?;
+                    let mut out = Vec::new();
+                    for row in rows {
+                        out.push(row.map_err(map_sqlite)?);
+                    }
+                    out
+                };
+                // 共有秘書は常に付与対象（Node `.add("system_default")`）。
+                bot_ids.push("system_default".to_owned());
+                for bot_id in &bot_ids {
+                    tx.execute(
+                        "INSERT OR IGNORE INTO bot_credential_access (bot_id, owner_id, service_name) \
+                         VALUES (?1, ?2, ?3)",
+                        params![bot_id, oid, svc],
+                    )
+                    .map_err(map_sqlite)?;
+                }
+                Ok(())
+            })
+            .await
+    }
+
     /// 認証情報削除時に、その許可を全て掃除する（credentials への DB FK が無いため明示的に呼ぶ・
     /// Node `deleteAllGrantsForCredential`）。
     ///
@@ -230,12 +279,14 @@ mod tests {
         let db = Db::open(&path).expect("open");
         {
             let conn = rusqlite::Connection::open(&path).expect("seed conn");
-            conn.execute(
-                "INSERT OR IGNORE INTO users (discord_id, username, password_hash, salt) \
-                 VALUES ('owner', 'owner', 'x', 'x')",
-                [],
-            )
-            .expect("seed user");
+            for uid in ["owner", "stranger"] {
+                conn.execute(
+                    "INSERT OR IGNORE INTO users (discord_id, username, password_hash, salt) \
+                     VALUES (?1, ?1, 'x', 'x')",
+                    rusqlite::params![uid],
+                )
+                .expect("seed user");
+            }
             for bot in ["system_default", "b1"] {
                 conn.execute(
                     "INSERT OR IGNORE INTO bots (id, user_id, name) VALUES (?1, 'owner', 'n')",
@@ -243,6 +294,12 @@ mod tests {
                 )
                 .expect("seed bot");
             }
+            // 他ユーザー所有 Bot（grant_to_owner_bots が跨がないことの検証用）。
+            conn.execute(
+                "INSERT OR IGNORE INTO bots (id, user_id, name) VALUES ('foreign', 'stranger', 'n')",
+                [],
+            )
+            .expect("seed foreign bot");
         }
         db
     }
@@ -283,6 +340,30 @@ mod tests {
             .unwrap();
         names.sort();
         assert_eq!(names, vec!["github".to_owned(), "gitlab".to_owned()]);
+    }
+
+    #[tokio::test]
+    async fn grant_to_owner_bots_covers_owned_and_system_default_only() {
+        let db = seed_db();
+        let repo = CredentialAccessRepo::new(&db);
+        // owner の全 Bot（b1）＋ system_default へ冪等付与。正規化される。
+        repo.grant_to_owner_bots("owner", "  GitHub ").await.unwrap();
+        let mut bots = repo
+            .list_bot_ids_for_credential("owner", "github")
+            .await
+            .unwrap();
+        bots.sort();
+        assert_eq!(bots, vec!["b1".to_owned(), "system_default".to_owned()]);
+        // 他ユーザー所有 Bot（foreign）は付与されない（クロステナント露出しない）。
+        assert!(!bots.contains(&"foreign".to_owned()));
+        assert!(!repo.is_granted("foreign", "owner", "github").await.unwrap());
+        // 冪等: 再実行しても重複しない。
+        repo.grant_to_owner_bots("owner", "github").await.unwrap();
+        let bots2 = repo
+            .list_bot_ids_for_credential("owner", "github")
+            .await
+            .unwrap();
+        assert_eq!(bots2.len(), 2);
     }
 
     #[tokio::test]

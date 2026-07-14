@@ -29,7 +29,8 @@ use yuuka_web::Db;
 
 use yuuka_crypto::SystemCrypto;
 
-use crate::repo::CredentialRepo;
+use crate::access::CredentialAccessRepo;
+use crate::repo::{check_field_lengths, CredentialRepo};
 
 /// このドメインが公開する Native ツール一式を作る。
 ///
@@ -60,40 +61,6 @@ pub fn tools(db: Db, crypto: Option<Arc<SystemCrypto>>) -> Result<Vec<Arc<dyn To
             crypto,
         }),
     ])
-}
-
-/// 認証情報のフィールド長上限（Node `secretService`）。
-const MAX_SERVICE_NAME: usize = 128;
-const MAX_USERNAME: usize = 256;
-const MAX_PASSWORD: usize = 1024;
-const MAX_URL: usize = 2048;
-
-/// フィールド長を検証する（超過時はエラー文言を返す・Node `assertFieldLengths`）。
-fn check_lengths(
-    service: &str,
-    username: Option<&str>,
-    password: Option<&str>,
-    url: Option<&str>,
-) -> Option<String> {
-    if service.chars().count() > MAX_SERVICE_NAME {
-        return Some(format!(
-            "サービス名が長すぎます（最大{MAX_SERVICE_NAME}文字）。"
-        ));
-    }
-    if username.is_some_and(|u| u.chars().count() > MAX_USERNAME) {
-        return Some(format!(
-            "ユーザー名が長すぎます（最大{MAX_USERNAME}文字）。"
-        ));
-    }
-    if password.is_some_and(|p| p.chars().count() > MAX_PASSWORD) {
-        return Some(format!(
-            "パスワードが長すぎます（最大{MAX_PASSWORD}文字）。"
-        ));
-    }
-    if url.is_some_and(|u| u.chars().count() > MAX_URL) {
-        return Some(format!("URLが長すぎます（最大{MAX_URL}文字）。"));
-    }
-    None
 }
 
 /// ユーザー鍵でパスワードを暗号化する（crypto 未設定/ salt 無しは `Err(fail 文言)`）。
@@ -184,10 +151,21 @@ impl Tool for ListCredentialServicesTool {
     }
 
     async fn call(&self, ctx: &ToolContext, _args: Value) -> Result<ToolOutcome, ToolError> {
-        let services = CredentialRepo::new(&self.db)
+        // v5: 応対 Bot へ利用許可済み（bot_credential_access）の service だけ返す（HTTP GET・
+        // browserFillCredential の isCredentialGrantedToBot ゲートと一致・未許可 service は露出しない）。
+        let granted: std::collections::HashSet<String> = CredentialAccessRepo::new(&self.db)
+            .list_credential_names_for_bot(ctx.bot_id.as_str(), ctx.user_id.as_str())
+            .await
+            .map_err(exec_err)?
+            .into_iter()
+            .collect();
+        let services: Vec<_> = CredentialRepo::new(&self.db)
             .list(&scope_of(ctx))
             .await
-            .map_err(exec_err)?;
+            .map_err(exec_err)?
+            .into_iter()
+            .filter(|s| granted.contains(&s.service_name))
+            .collect();
 
         if services.is_empty() {
             return Ok(ToolOutcome::from_payload(ok_payload(
@@ -264,6 +242,12 @@ impl Tool for DeleteCredentialTool {
             .map_err(exec_err)?;
 
         if deleted {
+            // v5: 削除に伴い全 Bot の利用許可も掃除する（credentials への DB FK が無いため明示的に。
+            // 残すと同名再登録時に意図せず許可が復活する・Node deleteCredential）。grant 側で正規化。
+            CredentialAccessRepo::new(&self.db)
+                .delete_all_grants(ctx.user_id.as_str(), &service_name)
+                .await
+                .map_err(exec_err)?;
             // 成功メッセージは正規化名（Node `serviceName.trim().toLowerCase()` と一致）。
             Ok(ToolOutcome::from_payload(ok_payload(
                 format!(
@@ -322,7 +306,7 @@ impl Tool for AddCredentialTool {
             ));
         };
         let url = arg_str(&args, "url");
-        if let Some(msg) = check_lengths(&service, Some(&username), Some(&password), url.as_deref())
+        if let Some(msg) = check_field_lengths(&service, Some(&username), Some(&password), url.as_deref())
         {
             return Ok(fail_payload(msg));
         }
@@ -333,6 +317,12 @@ impl Tool for AddCredentialTool {
             };
         CredentialRepo::new(&self.db)
             .save(&scope_of(ctx), &service, username, url, enc)
+            .await
+            .map_err(exec_err)?;
+        // v5: 会話から登録した認証情報は、いま応対している（秘書）Bot 自身へ即時に利用許可する（UX 維持・
+        // Node addCredential）。他 Bot への共有は統合管理ページで行う。grant は正規化・冪等。
+        CredentialAccessRepo::new(&self.db)
+            .grant(ctx.bot_id.as_str(), ctx.user_id.as_str(), &service)
             .await
             .map_err(exec_err)?;
         Ok(ToolOutcome::from_payload(ok_payload(
@@ -387,7 +377,7 @@ impl Tool for UpdateCredentialTool {
                 "更新する項目（username / password / url）を1つ以上指定してください。",
             ));
         }
-        if let Some(msg) = check_lengths(
+        if let Some(msg) = check_field_lengths(
             &service,
             username.as_deref(),
             password.as_deref(),
@@ -501,6 +491,18 @@ mod tests {
         .unwrap();
     }
 
+    /// 利用許可を直挿しする（FK を切って users/bots seed を省く・list フィルタ検証用）。
+    fn grant_at(path: &std::path::Path, bot_id: &str, owner_id: &str, service_name: &str) {
+        let conn = Connection::open(path).unwrap();
+        conn.execute_batch("PRAGMA foreign_keys=OFF").unwrap();
+        conn.execute(
+            "INSERT OR IGNORE INTO bot_credential_access (bot_id, owner_id, service_name) \
+             VALUES (?1, ?2, ?3)",
+            params![bot_id, owner_id, service_name],
+        )
+        .unwrap();
+    }
+
     fn ctx(user: &str) -> ToolContext {
         ToolContext::new(BotId::system_default(), UserId::new(user))
     }
@@ -517,6 +519,9 @@ mod tests {
         let (db, path) = seed_db_at();
         insert_at(&path, "userA", "github", "alice", "https://gh.test");
         insert_at(&path, "userA", "aws", "alice2", "");
+        // 応対 Bot（ctx=system_default）へ両 service を許可（未許可は list に出ない）。
+        grant_at(&path, "system_default", "userA", "github");
+        grant_at(&path, "system_default", "userA", "aws");
         let tools = tools(db, None).unwrap();
 
         // 宣言名は bare（Node system prompt と一致）。
@@ -585,6 +590,9 @@ mod tests {
         let (db, path) = seed_db_at();
         insert_at(&path, "userA", "github", "alice", "");
         insert_at(&path, "userB", "aws", "bob", "");
+        // 各 owner の service を応対 Bot（system_default）へ許可。
+        grant_at(&path, "system_default", "userA", "github");
+        grant_at(&path, "system_default", "userB", "aws");
         let tools = tools(db, None).unwrap();
         let list = find(&tools, "listCredentialServices");
 
@@ -609,7 +617,8 @@ mod tests {
     #[tokio::test]
     async fn add_update_credential_with_crypto() {
         let (db, path) = seed_db_at();
-        // user_salt が引けるよう users 行に salt を seed。
+        // user_salt が引けるよう users 行に salt を seed。add の応対 Bot 付与（writer=FK 有効）が
+        // 通るよう bots(system_default) も seed する（FK: bot_id→bots, owner_id→users）。
         let salt = yuuka_crypto::generate_user_salt().unwrap();
         {
             let conn = rusqlite::Connection::open(&path).unwrap();
@@ -617,6 +626,11 @@ mod tests {
                 "INSERT OR IGNORE INTO users (discord_id, username, password_hash, salt) \
                  VALUES ('userA', 'userA', 'x', ?1)",
                 rusqlite::params![salt],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT OR IGNORE INTO bots (id, user_id, name) VALUES ('system_default', 'userA', 'sd')",
+                [],
             )
             .unwrap();
         }

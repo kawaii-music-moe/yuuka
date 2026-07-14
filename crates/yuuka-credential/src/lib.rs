@@ -22,7 +22,7 @@ pub mod routes;
 pub mod tools;
 
 pub use access::CredentialAccessRepo;
-pub use routes::routes;
+pub use routes::{routes, routes_with};
 pub use tools::tools;
 
 use std::path::Path;
@@ -149,6 +149,13 @@ mod tests {
     }
 
     fn app_with(db: Db) -> axum::Router {
+        app_with_crypto(db, None)
+    }
+
+    fn app_with_crypto(
+        db: Db,
+        crypto: Option<Arc<yuuka_crypto::SystemCrypto>>,
+    ) -> axum::Router {
         let auth = Arc::new(FakeAuth {
             user: SessionUser {
                 discord_id: "u".to_owned(),
@@ -157,13 +164,15 @@ mod tests {
             },
         });
         let state = AppState::new(auth, WebConfig::default(), db);
-        super::routes().with_state(state)
+        super::routes_with(crypto).with_state(state)
     }
 
     #[tokio::test]
     async fn route_list_returns_clean_view() {
         let (db, path) = seed_db_at();
         insert_at(&path, "u", "github", "alice");
+        // v5: 応対 Bot（未指定 → system_default）へ許可済みの service だけ返る。
+        grant_at(&path, "system_default", "u", "github");
         let app = app_with(db);
 
         let list = app
@@ -194,10 +203,40 @@ mod tests {
         assert!(j["credentials"][0]["user_id"].is_null());
     }
 
+    /// GET 一覧は応対 Bot へ許可済み（bot_credential_access）の service だけ返す（未許可は除外）。
+    #[tokio::test]
+    async fn route_list_filters_ungranted() {
+        let (db, path) = seed_db_at();
+        insert_at(&path, "u", "github", "alice");
+        insert_at(&path, "u", "aws", "alice2");
+        // github だけ許可（aws は未許可 → 一覧に出ない）。
+        grant_at(&path, "system_default", "u", "github");
+        let app = app_with(db);
+
+        let list = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/credentials")
+                    .header("cookie", "__Host-yuuka-session=good")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let bytes = axum::body::to_bytes(list.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let j: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let arr = j["credentials"].as_array().unwrap();
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["service_name"], serde_json::json!("github"));
+    }
+
     #[tokio::test]
     async fn route_delete_then_list_empty() {
         let (db, path) = seed_db_at();
         insert_at(&path, "u", "github", "alice");
+        grant_at(&path, "system_default", "u", "github");
         let app = app_with(db);
 
         let del = app
@@ -214,6 +253,8 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(del.status(), StatusCode::OK);
+        // 削除に伴い利用許可も掃除される（同名再登録時の許可復活を防ぐ）。
+        assert!(granted_bots(&path, "u", "github").is_empty());
 
         let list = app
             .oneshot(
@@ -275,6 +316,102 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
 
+    /// register: 暗号化保存 + owner 本人の全 Bot(system_default,b1) へ付与 + GET 一覧へ反映。
+    /// 必須欠落は Node と同じ 400 `{success:false}`。
+    #[tokio::test]
+    async fn route_register_encrypts_and_grants_to_owner_bots() {
+        let (db, path) = seed_db_at();
+        // register は writer 経由で保存/付与するため FK 有効。users("u", salt) + 所有 Bot を seed。
+        let salt = yuuka_crypto::generate_user_salt().unwrap();
+        {
+            let conn = rusqlite::Connection::open(&path).unwrap();
+            conn.execute(
+                "INSERT OR IGNORE INTO users (discord_id, username, password_hash, salt) \
+                 VALUES ('u','u','x',?1)",
+                params![salt],
+            )
+            .unwrap();
+            for bot in ["system_default", "b1"] {
+                conn.execute(
+                    "INSERT OR IGNORE INTO bots (id, user_id, name) VALUES (?1, 'u', 'n')",
+                    params![bot],
+                )
+                .unwrap();
+            }
+        }
+        let crypto =
+            Arc::new(yuuka_crypto::SystemCrypto::new(secrecy::SecretString::from("master-secret")).unwrap());
+        let app = app_with_crypto(db, Some(crypto));
+
+        // 必須欠落 → 400 {success:false, message}。
+        let bad = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/credentials/register")
+                    .header("cookie", "__Host-yuuka-session=good")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"serviceName":"GitHub"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(bad.status(), StatusCode::BAD_REQUEST);
+        let bytes = axum::body::to_bytes(bad.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let j: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(j["success"], serde_json::json!(false));
+
+        // 正常登録 → 200 success:true・正規化(github)保存・owner 全 Bot へ付与。
+        let ok = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/credentials/register")
+                    .header("cookie", "__Host-yuuka-session=good")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"serviceName":"  GitHub ","username":"me","password":"pw","url":"https://gh.test"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(ok.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(ok.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let j: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(j["success"], serde_json::json!(true));
+        assert_eq!(
+            granted_bots(&path, "u", "github"),
+            vec!["b1".to_owned(), "system_default".to_owned()]
+        );
+
+        // GET 一覧へ反映（system_default へ許可済み）。暗号化列は出ない。
+        let list = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/credentials")
+                    .header("cookie", "__Host-yuuka-session=good")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let bytes = axum::body::to_bytes(list.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let j: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let arr = j["credentials"].as_array().unwrap();
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["service_name"], serde_json::json!("github"));
+        assert!(arr[0]["encrypted_password"].is_null());
+    }
+
     // ── テスト用ヘルパ（seed パスを明示保持して直挿しする） ─────────────────
 
     fn seed_db_at() -> (Db, std::path::PathBuf) {
@@ -301,5 +438,33 @@ mod tests {
             params![user_id, service_name, "https://ex.test", username],
         )
         .expect("insert credential");
+    }
+
+    /// 利用許可を直挿しする（FK を切って users/bots seed を省く・GET 一覧フィルタ検証用）。
+    fn grant_at(path: &std::path::Path, bot_id: &str, owner_id: &str, service_name: &str) {
+        let conn = rusqlite::Connection::open(path).expect("open");
+        conn.execute_batch("PRAGMA foreign_keys=OFF")
+            .expect("fk off");
+        conn.execute(
+            "INSERT OR IGNORE INTO bot_credential_access (bot_id, owner_id, service_name) \
+             VALUES (?1, ?2, ?3)",
+            params![bot_id, owner_id, service_name],
+        )
+        .expect("insert grant");
+    }
+
+    /// owner×service に紐づく許可 Bot 一覧を直読みする（delete の掃除・register の付与を検証する）。
+    fn granted_bots(path: &std::path::Path, owner_id: &str, service_name: &str) -> Vec<String> {
+        let conn = rusqlite::Connection::open(path).expect("open");
+        let mut stmt = conn
+            .prepare(
+                "SELECT bot_id FROM bot_credential_access \
+                 WHERE owner_id = ?1 AND service_name = ?2 ORDER BY bot_id",
+            )
+            .expect("prepare");
+        let rows = stmt
+            .query_map(params![owner_id, service_name], |r| r.get::<_, String>(0))
+            .expect("query");
+        rows.map(|r| r.expect("row")).collect()
     }
 }

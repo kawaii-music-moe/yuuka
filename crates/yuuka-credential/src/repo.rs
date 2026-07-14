@@ -221,6 +221,41 @@ pub(crate) fn normalize_service_name(service_name: &str) -> String {
     service_name.trim().to_lowercase()
 }
 
+/// 認証情報フィールド長の上限（DoS・肥大化対策・Node `secretService` `assertFieldLengths`）。
+pub(crate) const MAX_SERVICE_NAME: usize = 128;
+pub(crate) const MAX_USERNAME: usize = 256;
+pub(crate) const MAX_PASSWORD: usize = 1024;
+pub(crate) const MAX_URL: usize = 2048;
+
+/// フィールド長を検証する（超過時はユーザー向けエラー文言・Node `assertFieldLengths` パリティ）。
+/// route（register）と tool（add/update）で共有する。文字数（`chars().count()`）で判定する。
+pub(crate) fn check_field_lengths(
+    service: &str,
+    username: Option<&str>,
+    password: Option<&str>,
+    url: Option<&str>,
+) -> Option<String> {
+    if service.chars().count() > MAX_SERVICE_NAME {
+        return Some(format!(
+            "サービス名が長すぎます（最大{MAX_SERVICE_NAME}文字）。"
+        ));
+    }
+    if username.is_some_and(|u| u.chars().count() > MAX_USERNAME) {
+        return Some(format!(
+            "ユーザー名が長すぎます（最大{MAX_USERNAME}文字）。"
+        ));
+    }
+    if password.is_some_and(|p| p.chars().count() > MAX_PASSWORD) {
+        return Some(format!(
+            "パスワードが長すぎます（最大{MAX_PASSWORD}文字）。"
+        ));
+    }
+    if url.is_some_and(|u| u.chars().count() > MAX_URL) {
+        return Some(format!("URLが長すぎます（最大{MAX_URL}文字）。"));
+    }
+    None
+}
+
 /// スコープから所有 String の user_id を取り出す（`spawn_blocking` の `'static` クロージャ用）。
 fn scope_user(scope: &UserScope) -> String {
     scope.user_id().as_str().to_owned()

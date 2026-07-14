@@ -155,6 +155,10 @@ async fn run() -> Result<(), String> {
     // Bot 属性ルータ（Gemini キー暗号化に crypto を注入）。
     let bot_attribute_routes = yuuka_orchestrator::bot_attribute_routes_with(crypto.clone());
 
+    // credential ルータ（register の保存時ユーザー鍵暗号化に crypto を注入・crypto 未設定なら register は
+    // 400 に縮退・list/delete は暗号非依存で動作）。
+    let credential_routes = yuuka_credential::routes_with(crypto.clone());
+
     let auth_runtime = Arc::new(AuthRuntime::new(
         sessions,
         cfg.session_ttl_days,
@@ -184,6 +188,7 @@ async fn run() -> Result<(), String> {
         settings_routes,
         webhook_routes,
         bot_attribute_routes,
+        credential_routes,
         ws_routes: chat_ws_routes,
         addr,
         dist_dir,
@@ -410,6 +415,8 @@ struct WebService {
     webhook_routes: Router<AppState>,
     /// Bot 属性ルータ（crypto を `Extension` で内包済み・`/api/bots/attributes` + `/api/bots/assistant/*`）。
     bot_attribute_routes: Router<AppState>,
+    /// credential ルータ（register 暗号化 crypto を `Extension` で内包済み・`/api/credentials*`）。
+    credential_routes: Router<AppState>,
     /// 会話 WS ルータ（`ChatEngine` を `Extension` で内包済み・`/ws/chat`）。
     ws_routes: Router<AppState>,
     addr: SocketAddr,
@@ -430,6 +437,7 @@ impl SupervisedService for WebService {
             self.settings_routes.clone(),
             self.webhook_routes.clone(),
             self.bot_attribute_routes.clone(),
+            self.credential_routes.clone(),
             self.ws_routes.clone(),
             self.dist_dir.as_deref(),
         );
