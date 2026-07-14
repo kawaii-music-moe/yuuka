@@ -16,8 +16,7 @@ use crate::dto::{
 };
 
 /// 返却列（クリーンビュー・内部列 user_id/bot_id は含めない）。
-const EXPENSE_COLUMNS: &str =
-    "id, type, amount, category, memo, date, time, source, created_at";
+const EXPENSE_COLUMNS: &str = "id, type, amount, category, memo, date, time, source, created_at";
 
 /// 支払い予定の返却列（クリーンビュー・内部列 user_id/bot_id は含めない）。
 const PLAN_COLUMNS: &str = "id, title, amount, category, memo, due_date, repeat_rule, status, \
@@ -337,10 +336,7 @@ impl<'a> ExpenseRepo<'a> {
     ///
     /// # Errors
     /// クエリ失敗時 [`DbError`]。
-    pub async fn list_budget_limits(
-        &self,
-        scope: &UserScope,
-    ) -> Result<Vec<BudgetLimit>, DbError> {
+    pub async fn list_budget_limits(&self, scope: &UserScope) -> Result<Vec<BudgetLimit>, DbError> {
         let (uid, bid) = scope_keys(scope);
         self.read
             .read(move |conn| {

@@ -42,7 +42,11 @@ pub fn to_db_datetime(input: &str) -> Option<String> {
     }
     // オフセット無し → 区切りを空白へ揃え（先頭 `T` 1 個のみ）、秒/小数秒の有無を許容して解釈。
     let normalized = v.replacen('T', " ", 1);
-    for fmt in ["%Y-%m-%d %H:%M:%S%.f", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"] {
+    for fmt in [
+        "%Y-%m-%d %H:%M:%S%.f",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d %H:%M",
+    ] {
         if let Ok(dt) = NaiveDateTime::parse_from_str(&normalized, fmt) {
             return Some(dt.format(DB_FMT).to_string());
         }
@@ -102,7 +106,10 @@ mod tests {
         // 正規化後は cron の `<= datetime('now','localtime')` 字句比較が正しく効く。
         let trigger = to_db_datetime("2026-07-12T09:00:00").unwrap();
         let now = "2026-07-12 15:00:00"; // 実時刻は trigger より後。
-        assert!(trigger.as_str() <= now, "正規化後は字句比較が時系列と一致する");
+        assert!(
+            trigger.as_str() <= now,
+            "正規化後は字句比較が時系列と一致する"
+        );
     }
 
     #[test]
@@ -124,7 +131,10 @@ mod tests {
             let out = to_db_datetime(input).expect("tz-suffixed input should normalize");
             assert_eq!(out.len(), 19, "DB 形式は 19 桁: {out}");
             assert_eq!(out.as_bytes().get(10), Some(&b' '), "10 桁目は空白: {out}");
-            assert!(!out.contains('T') && !out.contains('Z'), "T/Z を含まない: {out}");
+            assert!(
+                !out.contains('T') && !out.contains('Z'),
+                "T/Z を含まない: {out}"
+            );
         }
     }
 

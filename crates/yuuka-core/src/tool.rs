@@ -293,7 +293,8 @@ mod exposure_tests {
     fn ctx(mode: TurnMode, caps: &[&str], guild: bool) -> ToolContext {
         let mut c = ToolContext::new(BotId::new("b"), UserId::new("u"));
         c.mode = mode;
-        c.capabilities = CapabilitySet::from_granted(caps.iter().map(|s| (*s).to_owned()).collect());
+        c.capabilities =
+            CapabilitySet::from_granted(caps.iter().map(|s| (*s).to_owned()).collect());
         if guild {
             c.guild_id = Some(GuildId::new("g"));
         }
@@ -306,7 +307,11 @@ mod exposure_tests {
         // 秘書経路 + secretary 能力 → 可視。
         assert!(ex.is_visible(&ctx(TurnMode::Secretary, &["secretary"], false)));
         // 秘書経路だが secretary 能力なし（mcp_assistant プリセット等）→ 不可視。
-        assert!(!ex.is_visible(&ctx(TurnMode::Secretary, &["persona", "memory", "mcp"], false)));
+        assert!(!ex.is_visible(&ctx(
+            TurnMode::Secretary,
+            &["persona", "memory", "mcp"],
+            false
+        )));
         // 汎用モード経路 → 秘書ツールは能力があっても一切露出しない。
         assert!(!ex.is_visible(&ctx(TurnMode::GuildAssistant, &["secretary"], true)));
     }

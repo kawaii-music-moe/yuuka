@@ -121,7 +121,9 @@ impl PendingStore {
 
     fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, PendingEntry>> {
         // ロック毒化しても中身を回収して継続（panic を伝播させない・絶対制約1）。
-        self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+        self.inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 }
 
@@ -219,17 +221,29 @@ mod tests {
         let _code = store.create("123", reg()).expect("code");
         // 5 回まで CodeMismatch（保持）。6 回目は TooManyAttempts（破棄）。
         for _ in 0..5 {
-            assert!(matches!(store.verify("123", "000000"), VerifyResult::CodeMismatch));
+            assert!(matches!(
+                store.verify("123", "000000"),
+                VerifyResult::CodeMismatch
+            ));
         }
-        assert!(matches!(store.verify("123", "000000"), VerifyResult::TooManyAttempts));
+        assert!(matches!(
+            store.verify("123", "000000"),
+            VerifyResult::TooManyAttempts
+        ));
         // 破棄後は NotFound。
-        assert!(matches!(store.verify("123", "000000"), VerifyResult::NotFound));
+        assert!(matches!(
+            store.verify("123", "000000"),
+            VerifyResult::NotFound
+        ));
     }
 
     #[test]
     fn not_found_for_unknown_id() {
         let store = PendingStore::new();
-        assert!(matches!(store.verify("nope", "000000"), VerifyResult::NotFound));
+        assert!(matches!(
+            store.verify("nope", "000000"),
+            VerifyResult::NotFound
+        ));
     }
 
     #[test]

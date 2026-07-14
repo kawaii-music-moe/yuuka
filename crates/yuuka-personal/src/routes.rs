@@ -68,12 +68,17 @@ async fn list(
 async fn save(
     user: AuthenticatedUser,
     State(db): State<Db>,
-    ScopedJson { bot_id, value: mut input }: ScopedJson<NewContact>,
+    ScopedJson {
+        bot_id,
+        value: mut input,
+    }: ScopedJson<NewContact>,
 ) -> Result<Json<Envelope<ContactData>>, ApiError> {
     // 氏名は必須（空白のみは不可）。前後空白は Node 同様に除去する。
     input.name = input.name.trim().to_owned();
     if input.name.is_empty() {
-        return Err(ApiError(WebError::Validation("name is required".to_owned())));
+        return Err(ApiError(WebError::Validation(
+            "name is required".to_owned(),
+        )));
     }
     // 誕生日は 'YYYY-MM-DD' または '--MM-DD'。空文字は None に正規化。
     input.birthday = normalize_optional(input.birthday);
@@ -104,7 +109,10 @@ async fn save(
 async fn delete(
     user: AuthenticatedUser,
     State(db): State<Db>,
-    ScopedJson { bot_id, value: input }: ScopedJson<IdInput>,
+    ScopedJson {
+        bot_id,
+        value: input,
+    }: ScopedJson<IdInput>,
 ) -> Result<Json<Envelope<EmptyData>>, ApiError> {
     let scope = resolve_scope(&user.0, &db, bot_id.as_deref()).await?;
     let ok = ContactRepo::new(&db).delete(&scope, input.id).await?;
@@ -136,7 +144,10 @@ async fn context_note_get(
 async fn context_note_set(
     user: AuthenticatedUser,
     State(db): State<Db>,
-    ScopedJson { bot_id, value: input }: ScopedJson<SetContextNote>,
+    ScopedJson {
+        bot_id,
+        value: input,
+    }: ScopedJson<SetContextNote>,
 ) -> Result<Json<Envelope<EmptyData>>, ApiError> {
     let len = input.content.chars().count();
     if len > CONTEXT_NOTE_MAX_LENGTH {
@@ -171,7 +182,10 @@ async fn clipboard_list(
 async fn clipboard_delete(
     user: AuthenticatedUser,
     State(db): State<Db>,
-    ScopedJson { bot_id, value: input }: ScopedJson<IdInput>,
+    ScopedJson {
+        bot_id,
+        value: input,
+    }: ScopedJson<IdInput>,
 ) -> Result<Json<Envelope<EmptyData>>, ApiError> {
     let scope = resolve_scope(&user.0, &db, bot_id.as_deref()).await?;
     let ok = ClipboardRepo::new(&db).delete(&scope, input.id).await?;

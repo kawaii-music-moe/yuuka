@@ -159,7 +159,10 @@ async fn run() -> Result<(), String> {
     let dist = PathBuf::from(DIST_DIR);
     let dist_dir = dist.is_dir().then_some(dist);
     if dist_dir.is_none() {
-        tracing::warn!(dir = DIST_DIR, "SPA ディレクトリが無いため静的配信を無効化（API のみ）");
+        tracing::warn!(
+            dir = DIST_DIR,
+            "SPA ディレクトリが無いため静的配信を無効化（API のみ）"
+        );
     }
 
     // 6) web を supervised task として登録し、JoinSet 監督ループを駆動する。
@@ -259,7 +262,11 @@ impl yuuka_services::PlaybookRunner for PlaybookRunnerAdapter {
             ..Default::default()
         };
         let status: yuuka_discord::StatusSink = Arc::new(|_| {});
-        match self.engine.secretary_turn(bot_id, user_id, msg, &status).await {
+        match self
+            .engine
+            .secretary_turn(bot_id, user_id, msg, &status)
+            .await
+        {
             Ok(reply) => Ok(reply.text),
             Err(e) => Err(e.to_string()),
         }
@@ -430,8 +437,7 @@ impl SupervisedService for WebService {
 /// telemetry（tracing）初期化。`RUST_LOG` で制御、既定は info。
 fn init_telemetry() {
     use tracing_subscriber::{fmt, EnvFilter};
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("info"));
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
     // 二重初期化（テスト等）でも panic させない。
     let _ = fmt().with_env_filter(filter).try_init();
 }

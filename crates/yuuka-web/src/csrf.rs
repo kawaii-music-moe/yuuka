@@ -42,7 +42,10 @@ pub async fn csrf_guard(
 }
 
 fn is_state_changing(m: &Method) -> bool {
-    matches!(*m, Method::POST | Method::DELETE | Method::PUT | Method::PATCH)
+    matches!(
+        *m,
+        Method::POST | Method::DELETE | Method::PUT | Method::PATCH
+    )
 }
 
 fn header_str<'a>(req: &'a Request, name: &str) -> Option<&'a str> {

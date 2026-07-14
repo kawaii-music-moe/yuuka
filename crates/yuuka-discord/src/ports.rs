@@ -475,7 +475,8 @@ pub trait RateLimiter: Send + Sync {
 pub fn rate_limit_message(exceeded: RateExceeded) -> String {
     match exceeded {
         RateExceeded::UserMinute => {
-            "⏳ 利用ペースが上限に達しました。1分ほど時間をおいてから再度お試しください。".to_owned()
+            "⏳ 利用ペースが上限に達しました。1分ほど時間をおいてから再度お試しください。"
+                .to_owned()
         }
         RateExceeded::UserDay => {
             "⏳ 本日のあなたの利用回数が上限に達しました。明日また利用できます。".to_owned()

@@ -84,7 +84,11 @@ async fn advance_after_send(
             Some(next) => repo.reschedule_repeat(ctx.cross, reminder.id, next).await,
             // cron 式が壊れている場合は無限再送を防ぐため単発扱い（送信済み）。
             None => {
-                tracing::error!(id = reminder.id, rule = rule, "❌ repeat_rule 解釈失敗のため単発扱い");
+                tracing::error!(
+                    id = reminder.id,
+                    rule = rule,
+                    "❌ repeat_rule 解釈失敗のため単発扱い"
+                );
                 repo.mark_sent(ctx.cross, reminder.id).await
             }
         },
@@ -214,8 +218,14 @@ mod tests {
 
     #[test]
     fn display_datetime_drops_seconds() {
-        assert_eq!(format_display_datetime(Some("2026-07-08 09:30:15")), "2026-07-08 09:30");
-        assert_eq!(format_display_datetime(Some("2026-07-08T09:30:15")), "2026-07-08 09:30");
+        assert_eq!(
+            format_display_datetime(Some("2026-07-08 09:30:15")),
+            "2026-07-08 09:30"
+        );
+        assert_eq!(
+            format_display_datetime(Some("2026-07-08T09:30:15")),
+            "2026-07-08 09:30"
+        );
         assert_eq!(format_display_datetime(Some("2026-07-08")), "2026-07-08");
         assert_eq!(format_display_datetime(None), "未設定");
         assert_eq!(format_display_datetime(Some("  ")), "未設定");
@@ -319,9 +329,11 @@ mod tests {
             .db
             .read
             .read(|conn| {
-                conn.query_row("SELECT status, trigger_at FROM reminders WHERE id=1", [], |r| {
-                    Ok((r.get(0)?, r.get(1)?))
-                })
+                conn.query_row(
+                    "SELECT status, trigger_at FROM reminders WHERE id=1",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
                 .map_err(map_sqlite)
             })
             .await

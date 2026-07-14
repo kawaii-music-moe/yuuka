@@ -18,7 +18,9 @@ use twilight_model::guild::PartialMember;
 use twilight_model::user::{CurrentUser, User};
 use yuuka_core::{BotId, DiscordError};
 
-use crate::interaction::{button_custom_id, decide, invoker_id, parse_custom_id, respond, InteractionDeps};
+use crate::interaction::{
+    button_custom_id, decide, invoker_id, parse_custom_id, respond, InteractionDeps,
+};
 use crate::message_flow::{handle_message, FlowDeps, RuntimeBot};
 use crate::ports::BotStatus;
 use crate::presence::build_presence;
@@ -147,7 +149,12 @@ async fn on_ready(
     // Discord プロフィールを DB へ同期。
     let avatar = current_user_avatar_url(user);
     flow.directory
-        .update_profile(&cfg.bot_id, &user.name, &avatar, &bot_user_id.get().to_string())
+        .update_profile(
+            &cfg.bot_id,
+            &user.name,
+            &avatar,
+            &bot_user_id.get().to_string(),
+        )
         .await;
 
     // 起動時は idle プレゼンス（現行 `setBotStatus(client, "idle")`）。

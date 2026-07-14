@@ -4,7 +4,7 @@
 //! 通常の `UserScope` 経路から隔離するため [`CrossUserAccess`] 証憑を要求する。返す
 //! [`DueSchedule`] は通知に必要な内部列（`user_id`/`bot_id`）を含む。
 
-use rusqlite::{Row, params};
+use rusqlite::{params, Row};
 use yuuka_core::{CrossUserAccess, DbError};
 use yuuka_db::map_sqlite;
 
@@ -57,8 +57,11 @@ impl ScheduleRepo<'_> {
     pub async fn mark_reminded(&self, _cron: CrossUserAccess, id: i64) -> Result<(), DbError> {
         self.writer
             .execute(move |conn| {
-                conn.execute("UPDATE schedules SET reminded = 1 WHERE id = ?1", params![id])
-                    .map_err(map_sqlite)?;
+                conn.execute(
+                    "UPDATE schedules SET reminded = 1 WHERE id = ?1",
+                    params![id],
+                )
+                .map_err(map_sqlite)?;
                 Ok(())
             })
             .await

@@ -68,14 +68,19 @@ impl Config {
         // config.yaml があれば mapping として読む（無ければ空＝env/既定のみ）。壊れた
         // YAML はパース失敗＝致命（§5.6）。未知キーは Mapping なので自然に許容される。
         let yaml: Mapping = match std::fs::read_to_string(path) {
-            Ok(raw) => serde_yaml::from_str(&raw).map_err(|source| ConfigError::Parse { source })?,
+            Ok(raw) => {
+                serde_yaml::from_str(&raw).map_err(|source| ConfigError::Parse { source })?
+            }
             Err(_) => Mapping::new(),
         };
 
         // getSetting(KEY) = yaml[KEY] ?? env[KEY]（Node `config.ts` と同一優先順）。
         let get = |key: &str| get_setting(&yaml, key);
 
-        let host = parse_field("HOST", &get("HOST").unwrap_or_else(|| "127.0.0.1".to_owned()))?;
+        let host = parse_field(
+            "HOST",
+            &get("HOST").unwrap_or_else(|| "127.0.0.1".to_owned()),
+        )?;
         let port = parse_field("PORT", &get("PORT").unwrap_or_else(|| "3000".to_owned()))?;
         let db_path = PathBuf::from(get("DB_PATH").unwrap_or_else(|| "./data/yuuka.db".to_owned()));
         let session_ttl_days = parse_field(
@@ -173,10 +178,12 @@ fn non_empty(v: Option<String>) -> Option<String> {
 
 /// 単一値の型付きパース（失敗は [`ConfigError::InvalidValue`]）。
 fn parse_field<T: std::str::FromStr>(field: &'static str, raw: &str) -> Result<T, ConfigError> {
-    raw.trim().parse::<T>().map_err(|_| ConfigError::InvalidValue {
-        field,
-        reason: format!("could not parse value {raw:?}"),
-    })
+    raw.trim()
+        .parse::<T>()
+        .map_err(|_| ConfigError::InvalidValue {
+            field,
+            reason: format!("could not parse value {raw:?}"),
+        })
 }
 
 /// カンマ区切りの文字列リストをパースする（`getSettingArray` 相当：split(',')→trim→空除去）。
@@ -246,7 +253,10 @@ mod tests {
         assert!(!cfg.is_https_deployment());
         // P1-1: 招待コード（YAML 配列→カンマ結合→分割）と admin ID（カンマ区切り・trim）を取り込む。
         assert_eq!(cfg.invite_codes, vec!["a".to_owned(), "b".to_owned()]);
-        assert_eq!(cfg.admin_discord_ids, vec!["111".to_owned(), "222".to_owned()]);
+        assert_eq!(
+            cfg.admin_discord_ids,
+            vec!["111".to_owned(), "222".to_owned()]
+        );
     }
 
     #[test]

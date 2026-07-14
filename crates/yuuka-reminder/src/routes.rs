@@ -56,7 +56,10 @@ async fn list(
 async fn add(
     user: AuthenticatedUser,
     State(db): State<Db>,
-    ScopedJson { bot_id, value: input }: ScopedJson<NewReminder>,
+    ScopedJson {
+        bot_id,
+        value: input,
+    }: ScopedJson<NewReminder>,
 ) -> Result<Json<Envelope<ReminderData>>, ApiError> {
     if input.message.trim().is_empty() {
         return Err(ApiError(WebError::Validation(
@@ -83,7 +86,10 @@ async fn add(
 async fn cancel(
     user: AuthenticatedUser,
     State(db): State<Db>,
-    ScopedJson { bot_id, value: input }: ScopedJson<ReminderIdInput>,
+    ScopedJson {
+        bot_id,
+        value: input,
+    }: ScopedJson<ReminderIdInput>,
 ) -> Result<Json<Envelope<ReminderData>>, ApiError> {
     let scope = resolve_scope(&user.0, &db, bot_id.as_deref()).await?;
     let repo = ReminderRepo::new(&db);
@@ -101,14 +107,23 @@ async fn cancel(
 async fn delete(
     user: AuthenticatedUser,
     State(db): State<Db>,
-    ScopedJson { bot_id, value: input }: ScopedJson<ReminderIdInput>,
+    ScopedJson {
+        bot_id,
+        value: input,
+    }: ScopedJson<ReminderIdInput>,
 ) -> Result<Json<Envelope<ReminderData>>, ApiError> {
     let scope = resolve_scope(&user.0, &db, bot_id.as_deref()).await?;
     // 削除前の行を返す（Node に delete route は無いが CRUD 完備・{success, reminder}）。
-    let Some(reminder) = ReminderRepo::new(&db).get(&scope, input.reminder_id).await? else {
+    let Some(reminder) = ReminderRepo::new(&db)
+        .get(&scope, input.reminder_id)
+        .await?
+    else {
         return Err(ApiError(WebError::NotFound));
     };
-    if ReminderRepo::new(&db).delete(&scope, input.reminder_id).await? {
+    if ReminderRepo::new(&db)
+        .delete(&scope, input.reminder_id)
+        .await?
+    {
         Ok(Json(Envelope::ok(ReminderData { reminder })))
     } else {
         Err(ApiError(WebError::NotFound))

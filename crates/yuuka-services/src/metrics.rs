@@ -40,7 +40,10 @@ impl MetricsRegistry {
 
     /// レイテンシ標本を記録する（ms・現行 `recordLatency`）。上限超で最古を捨てる。
     pub fn record_latency(&self, kind: &str, ms: u64) {
-        let mut l = self.latencies.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut l = self
+            .latencies
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
         let q = l.entry(kind.to_owned()).or_default();
         q.push_back(ms);
         while q.len() > MAX_SAMPLES {
@@ -52,7 +55,10 @@ impl MetricsRegistry {
     #[must_use]
     pub fn snapshot_line(&self) -> String {
         let counters = self.counters.lock().unwrap_or_else(PoisonError::into_inner);
-        let latencies = self.latencies.lock().unwrap_or_else(PoisonError::into_inner);
+        let latencies = self
+            .latencies
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
 
         let mut counter_parts: Vec<String> =
             counters.iter().map(|(k, v)| format!("{k}={v}")).collect();
@@ -65,7 +71,11 @@ impl MetricsRegistry {
                 sorted.sort_unstable();
                 let count = sorted.len();
                 let sum: u64 = sorted.iter().sum();
-                let avg = if count == 0 { 0 } else { (sum + (count as u64) / 2) / count as u64 };
+                let avg = if count == 0 {
+                    0
+                } else {
+                    (sum + (count as u64) / 2) / count as u64
+                };
                 format!(
                     "{kind}(count={count},p50={},p95={},avg={avg})",
                     percentile(&sorted, 50),

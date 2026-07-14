@@ -69,9 +69,9 @@ where
     S: Clone + Send + Sync + 'static,
 {
     let router = router
-        .layer(axum::middleware::from_fn(move |req: Request, next: Next| {
-            csrf::csrf_guard(allowed_host.clone(), req, next)
-        }))
+        .layer(axum::middleware::from_fn(
+            move |req: Request, next: Next| csrf::csrf_guard(allowed_host.clone(), req, next),
+        ))
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
         .layer(SetResponseHeaderLayer::overriding(
             X_CONTENT_TYPE_OPTIONS,
@@ -137,7 +137,10 @@ mod tests {
     /// 一意な一時 DB パスを払い出す。
     fn fresh_db_path() -> std::path::PathBuf {
         let seq = TEST_DB_SEQ.fetch_add(1, Ordering::Relaxed);
-        std::env::temp_dir().join(format!("yuuka_web_test_{}_{seq}.sqlite", std::process::id()))
+        std::env::temp_dir().join(format!(
+            "yuuka_web_test_{}_{seq}.sqlite",
+            std::process::id()
+        ))
     }
 
     /// テスト用の一時 DB を用意する（本番の open は CREATE しないため先に seed する）。
@@ -241,7 +244,11 @@ mod tests {
             )
             .await
             .expect("response");
-        assert_eq!(resp.status(), StatusCode::OK, "Redis 断でも Bearer で認証成立");
+        assert_eq!(
+            resp.status(),
+            StatusCode::OK,
+            "Redis 断でも Bearer で認証成立"
+        );
     }
 
     #[tokio::test]
@@ -299,7 +306,9 @@ mod tests {
             .expect("response");
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
         assert_eq!(
-            resp.headers().get("x-content-type-options").map(|v| v.as_bytes()),
+            resp.headers()
+                .get("x-content-type-options")
+                .map(|v| v.as_bytes()),
             Some(&b"nosniff"[..])
         );
         let j = body_json(resp).await;
@@ -324,7 +333,10 @@ mod tests {
         assert_eq!(j["success"], serde_json::json!(true));
         assert_eq!(j["user"]["discordId"], serde_json::json!("123"));
         assert_eq!(j["user"]["role"], serde_json::json!("user"));
-        assert_eq!(j["termsUrl"], serde_json::json!("https://example.test/terms"));
+        assert_eq!(
+            j["termsUrl"],
+            serde_json::json!("https://example.test/terms")
+        );
     }
 
     #[tokio::test]
@@ -350,7 +362,10 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
         let j = body_json(resp).await;
         assert_eq!(j["success"], serde_json::json!(false));
-        assert_eq!(j["message"], serde_json::json!("ユーザーが見つかりません。"));
+        assert_eq!(
+            j["message"],
+            serde_json::json!("ユーザーが見つかりません。")
+        );
     }
 
     #[tokio::test]
@@ -422,10 +437,13 @@ mod tests {
     async fn csrf_blocks_cross_site_cookie_post() {
         // Cookie 認証 × POST × cross-site → 403。
         assert_eq!(
-            csrf_status(HOST, &[
-                ("cookie", "__Host-yuuka-session=t"),
-                ("sec-fetch-site", "cross-site"),
-            ])
+            csrf_status(
+                HOST,
+                &[
+                    ("cookie", "__Host-yuuka-session=t"),
+                    ("sec-fetch-site", "cross-site"),
+                ]
+            )
             .await,
             StatusCode::FORBIDDEN
         );
@@ -435,10 +453,13 @@ mod tests {
     async fn csrf_allows_same_origin_and_missing_and_bearer() {
         // same-origin は許可。
         assert_eq!(
-            csrf_status(HOST, &[
-                ("cookie", "__Host-yuuka-session=t"),
-                ("sec-fetch-site", "same-origin"),
-            ])
+            csrf_status(
+                HOST,
+                &[
+                    ("cookie", "__Host-yuuka-session=t"),
+                    ("sec-fetch-site", "same-origin"),
+                ]
+            )
             .await,
             StatusCode::OK
         );
@@ -449,29 +470,38 @@ mod tests {
         );
         // Origin hostname が allowed_host（base_url 由来）と不一致 → 403。
         assert_eq!(
-            csrf_status(HOST, &[
-                ("cookie", "__Host-yuuka-session=t"),
-                ("origin", "https://evil.example"),
-            ])
+            csrf_status(
+                HOST,
+                &[
+                    ("cookie", "__Host-yuuka-session=t"),
+                    ("origin", "https://evil.example"),
+                ]
+            )
             .await,
             StatusCode::FORBIDDEN
         );
         // Origin hostname が allowed_host と一致 → 許可（Host ヘッダには依存しない）。
         assert_eq!(
-            csrf_status(HOST, &[
-                ("cookie", "__Host-yuuka-session=t"),
-                ("host", "attacker-controlled.example"),
-                ("origin", "https://yuuka.example"),
-            ])
+            csrf_status(
+                HOST,
+                &[
+                    ("cookie", "__Host-yuuka-session=t"),
+                    ("host", "attacker-controlled.example"),
+                    ("origin", "https://yuuka.example"),
+                ]
+            )
             .await,
             StatusCode::OK
         );
         // Bearer（非空・非 ambient）は cross-site でも対象外 → 許可。
         assert_eq!(
-            csrf_status(HOST, &[
-                ("authorization", "Bearer tok"),
-                ("sec-fetch-site", "cross-site"),
-            ])
+            csrf_status(
+                HOST,
+                &[
+                    ("authorization", "Bearer tok"),
+                    ("sec-fetch-site", "cross-site"),
+                ]
+            )
             .await,
             StatusCode::OK
         );
@@ -486,21 +516,27 @@ mod tests {
     async fn csrf_same_site_still_validates_origin() {
         // #2: Sec-Fetch-Site=same-site は allowlist 検証へ委ねる。悪意サブドメイン Origin → 403。
         assert_eq!(
-            csrf_status(HOST, &[
-                ("cookie", "__Host-yuuka-session=t"),
-                ("sec-fetch-site", "same-site"),
-                ("origin", "https://evil.yuuka.example"),
-            ])
+            csrf_status(
+                HOST,
+                &[
+                    ("cookie", "__Host-yuuka-session=t"),
+                    ("sec-fetch-site", "same-site"),
+                    ("origin", "https://evil.yuuka.example"),
+                ]
+            )
             .await,
             StatusCode::FORBIDDEN
         );
         // same-site でも Origin が allowed_host と一致すれば許可。
         assert_eq!(
-            csrf_status(HOST, &[
-                ("cookie", "__Host-yuuka-session=t"),
-                ("sec-fetch-site", "same-site"),
-                ("origin", "https://yuuka.example"),
-            ])
+            csrf_status(
+                HOST,
+                &[
+                    ("cookie", "__Host-yuuka-session=t"),
+                    ("sec-fetch-site", "same-site"),
+                    ("origin", "https://yuuka.example"),
+                ]
+            )
             .await,
             StatusCode::OK
         );
@@ -510,11 +546,14 @@ mod tests {
     async fn csrf_empty_bearer_is_not_exempt() {
         // #3: 空 Bearer（スキームのみ）は Bearer 扱いしない → Cookie 認証の cross-site は 403 のまま。
         assert_eq!(
-            csrf_status(HOST, &[
-                ("cookie", "__Host-yuuka-session=t"),
-                ("authorization", "Bearer "),
-                ("sec-fetch-site", "cross-site"),
-            ])
+            csrf_status(
+                HOST,
+                &[
+                    ("cookie", "__Host-yuuka-session=t"),
+                    ("authorization", "Bearer "),
+                    ("sec-fetch-site", "cross-site"),
+                ]
+            )
             .await,
             StatusCode::FORBIDDEN
         );
@@ -524,18 +563,24 @@ mod tests {
     async fn csrf_localhost_default_when_no_base_url() {
         // base_url 未設定（allowed_host=None）は localhost 群を許可、他は 403。
         assert_eq!(
-            csrf_status(None, &[
-                ("cookie", "__Host-yuuka-session=t"),
-                ("origin", "http://localhost:5173"),
-            ])
+            csrf_status(
+                None,
+                &[
+                    ("cookie", "__Host-yuuka-session=t"),
+                    ("origin", "http://localhost:5173"),
+                ]
+            )
             .await,
             StatusCode::OK
         );
         assert_eq!(
-            csrf_status(None, &[
-                ("cookie", "__Host-yuuka-session=t"),
-                ("origin", "https://evil.example"),
-            ])
+            csrf_status(
+                None,
+                &[
+                    ("cookie", "__Host-yuuka-session=t"),
+                    ("origin", "https://evil.example"),
+                ]
+            )
             .await,
             StatusCode::FORBIDDEN
         );

@@ -191,8 +191,8 @@
 
 ## P3 — 品質 / 運用衛生
 
-- [ ] **P3-1 CI ゲートの新設**: build + clippy(-D warnings) + test + `cargo deny` + `gen-types --check`(drift) + `cargo fmt --check` を CI 化（現状ローカル手動のみ）。
-- [ ] **P3-2 `cargo fmt` 差分の解消**（2026-07-09 実測で ~193 hunk・ほぼ全 crate に及ぶ）。**P3-1 の CI ゲート新設と同一コミットで一括正規化する**（部分 fmt は別種の不整合を生むため単発の workspace 全体 `cargo fmt --all` を推奨）。
+- [x] **P3-1 CI ゲートの新設** — 済（2026-07-14・`.github/workflows/rust-ci.yml`＝fmt --check + clippy -D + build --release + test + cargo-deny。push[develop/main/feature/rust-rewrite] + PR で起動）。**残**: `gen-types --check` drift（xtask に cargo alias 未整備・別途）
+- [x] **P3-2 `cargo fmt` 差分の解消** — 済（2026-07-14・`cargo fmt --all` で 103 ファイル一括正規化・P3-1 CI と同一コミット。以後 CI の fmt --check で常時緑を強制）
 - [ ] **P3-3 残レビュー指摘 M-7〜M-11（fail-closed）**:
   - [ ] M-7 priority 正規化 + float `2.0` 受理幅
   - [ ] M-8 finance amount 検証

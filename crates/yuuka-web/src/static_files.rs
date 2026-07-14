@@ -303,7 +303,13 @@ mod tests {
             .unwrap();
         let text = String::from_utf8_lossy(&bytes);
         assert!(text.contains("\"success\":false"), "body={text}");
-        assert!(text.contains("APIエンドポイントが見つかりません"), "body={text}");
-        assert!(!text.contains("SPA-SHELL"), "API 404 が index を返している: {text}");
+        assert!(
+            text.contains("APIエンドポイントが見つかりません"),
+            "body={text}"
+        );
+        assert!(
+            !text.contains("SPA-SHELL"),
+            "API 404 が index を返している: {text}"
+        );
     }
 }

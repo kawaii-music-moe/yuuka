@@ -17,7 +17,7 @@ mod embedded {
 /// DB スキーマのマイグレーションを実行する。
 ///
 /// 起動時に `WriterHandle` の単一コネクションから呼ばれ、必要な DDL を適用する。
-/// 
+///
 /// # Errors
 /// マイグレーション実行に失敗した場合 [`DbError::Migration`]。
 pub fn run_migrations(conn: &mut Connection) -> Result<(), DbError> {

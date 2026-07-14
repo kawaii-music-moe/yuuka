@@ -43,7 +43,9 @@ impl CronService for ClipboardCleanupService {
 
     async fn tick(&self, ctx: &ServiceContext) {
         match delete_expired(ctx).await {
-            Ok(n) if n > 0 => tracing::info!(removed = n, "🧹 [Clipboard] 期限切れメモを削除しました"),
+            Ok(n) if n > 0 => {
+                tracing::info!(removed = n, "🧹 [Clipboard] 期限切れメモを削除しました")
+            }
             Ok(_) => {}
             Err(e) => tracing::error!(error = %e, "[Clipboard] クリーンアップに失敗しました"),
         }

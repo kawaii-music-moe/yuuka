@@ -129,7 +129,9 @@ fn display_date_time(value: &str) -> String {
     let sep = norm.as_bytes().get(10).copied();
     let time = norm.get(11..16);
     if let (Some(date), Some(sep), Some(time)) = (date, sep, time) {
-        if matches_mask(date, "dddd-dd-dd") && sep.is_ascii_whitespace() && matches_mask(time, "dd:dd")
+        if matches_mask(date, "dddd-dd-dd")
+            && sep.is_ascii_whitespace()
+            && matches_mask(time, "dd:dd")
         {
             return format!("{date} {time}");
         }
@@ -353,7 +355,11 @@ impl Tool for ListRemindersTool {
         let msg = format!(
             "リマインド一覧 ({}件{}):\n{}",
             reminders.len(),
-            if include_all { "" } else { "、送信待ちのみ" },
+            if include_all {
+                ""
+            } else {
+                "、送信待ちのみ"
+            },
             lines.join("\n"),
         );
         let entries: Vec<Value> = reminders.iter().map(reminder_entry).collect();
@@ -509,7 +515,10 @@ mod tests {
 
         // cancel。
         let cancel = find(&tools, "cancelReminder");
-        let out = cancel.call(&ctx(), json!({"reminder_id": id})).await.unwrap();
+        let out = cancel
+            .call(&ctx(), json!({"reminder_id": id}))
+            .await
+            .unwrap();
         assert_eq!(out.payload["success"], true);
         assert_eq!(out.payload["reminder"]["status"], "cancelled");
 
@@ -517,12 +526,18 @@ mod tests {
         let out = list.call(&ctx(), json!({})).await.unwrap();
         assert_eq!(out.payload["reminders"].as_array().unwrap().len(), 0);
         // include_all では残る（cancelled）。
-        let out = list.call(&ctx(), json!({"include_all": true})).await.unwrap();
+        let out = list
+            .call(&ctx(), json!({"include_all": true}))
+            .await
+            .unwrap();
         assert_eq!(out.payload["reminders"].as_array().unwrap().len(), 1);
         assert_eq!(out.payload["reminders"][0]["status"], "cancelled");
 
         // 二重キャンセル（実在するが pending でない）→ success:false。
-        let out = cancel.call(&ctx(), json!({"reminder_id": id})).await.unwrap();
+        let out = cancel
+            .call(&ctx(), json!({"reminder_id": id}))
+            .await
+            .unwrap();
         assert_eq!(out.payload["success"], false);
         // 不在 ID も success:false。
         let out = cancel

@@ -83,10 +83,12 @@ mod tests {
         // （単一真実源の空洞化・B-1）。この test がその漏れをテスト時に捕捉する。
         let mut expected = ts_derived_types(include_str!("dto.rs"));
         expected.extend(ts_derived_types(include_str!("envelope.rs")));
-        assert!(!expected.is_empty(), "source scan found no TS-deriving types");
+        assert!(
+            !expected.is_empty(),
+            "source scan found no TS-deriving types"
+        );
 
-        let dir =
-            std::env::temp_dir().join(format!("yuuka_types_complete_{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("yuuka_types_complete_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         export_all(&dir).expect("export bindings");
         let gen = dir.join("generated");
@@ -111,8 +113,22 @@ mod tests {
 
         // 機密を示唆する断片（部分一致）。allow は「機密の有無を示す存在フラグ」で値ではない。
         let forbidden = [
-            "token", "secret", "password", "passwd", "hash", "cipher", "ciphertext", "encrypted",
-            "salt", "apikey", "api_key", "privatekey", "private_key", "credential", "_iv", "_tag",
+            "token",
+            "secret",
+            "password",
+            "passwd",
+            "hash",
+            "cipher",
+            "ciphertext",
+            "encrypted",
+            "salt",
+            "apikey",
+            "api_key",
+            "privatekey",
+            "private_key",
+            "credential",
+            "_iv",
+            "_tag",
             "refresh",
         ];
         let allow = ["has_token", "has_gemini_key", "hastoken", "hasgeminikey"];
@@ -164,7 +180,13 @@ mod tests {
         export_all(&dir).expect("export bindings");
 
         let gen = dir.join("generated");
-        for name in ["Role.ts", "SessionUser.ts", "BotSummary.ts", "MeData.ts", "Envelope.ts"] {
+        for name in [
+            "Role.ts",
+            "SessionUser.ts",
+            "BotSummary.ts",
+            "MeData.ts",
+            "Envelope.ts",
+        ] {
             assert!(gen.join(name).exists(), "missing generated file: {name}");
         }
         // SessionUser は camelCase 生成（discordId）であること。

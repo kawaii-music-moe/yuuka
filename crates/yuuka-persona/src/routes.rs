@@ -19,9 +19,7 @@ use yuuka_core::WebError;
 use yuuka_types::{EmptyData, Envelope};
 use yuuka_web::{resolve_scope, ApiError, AppState, AuthenticatedUser, Db, ScopedJson};
 
-use crate::dto::{
-    Persona, PersonaData, PersonaListData, SavePersona, PERSONA_MAX_LENGTH,
-};
+use crate::dto::{Persona, PersonaData, PersonaListData, SavePersona, PERSONA_MAX_LENGTH};
 use crate::repo::PersonaRepo;
 
 #[derive(Debug, Deserialize)]
@@ -61,10 +59,15 @@ async fn list(
 async fn save(
     user: AuthenticatedUser,
     State(db): State<Db>,
-    ScopedJson { bot_id, value: input }: ScopedJson<SavePersona>,
+    ScopedJson {
+        bot_id,
+        value: input,
+    }: ScopedJson<SavePersona>,
 ) -> Result<Json<Envelope<PersonaData>>, ApiError> {
     if input.name.trim().is_empty() {
-        return Err(ApiError(WebError::Validation("name is required".to_owned())));
+        return Err(ApiError(WebError::Validation(
+            "name is required".to_owned(),
+        )));
     }
     // Node は `prompt.length`（UTF-16 code unit 数）で判定する。`chars().count()`
     // だと非BMP文字（絵文字等）を過小評価し過剰許容になるため、UTF-16 単位で数える。
@@ -88,7 +91,10 @@ async fn save(
 async fn delete(
     user: AuthenticatedUser,
     State(db): State<Db>,
-    ScopedJson { bot_id, value: input }: ScopedJson<IdInput>,
+    ScopedJson {
+        bot_id,
+        value: input,
+    }: ScopedJson<IdInput>,
 ) -> Result<Json<Envelope<EmptyData>>, ApiError> {
     let scope = resolve_scope(&user.0, &db, bot_id.as_deref()).await?;
     let ok = PersonaRepo::new(&db).delete(&scope, input.id).await?;

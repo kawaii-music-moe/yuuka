@@ -142,7 +142,11 @@ mod tests {
         assert_eq!(all[0].status, "cancelled");
 
         // 既に pending でないので二重キャンセルは None。
-        assert!(repo.cancel(&scope("u"), created.id).await.unwrap().is_none());
+        assert!(repo
+            .cancel(&scope("u"), created.id)
+            .await
+            .unwrap()
+            .is_none());
     }
 
     #[tokio::test]

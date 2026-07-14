@@ -51,7 +51,10 @@ async fn list(
 async fn delete(
     user: AuthenticatedUser,
     State(db): State<Db>,
-    ScopedJson { bot_id, value: input }: ScopedJson<DeleteCredential>,
+    ScopedJson {
+        bot_id,
+        value: input,
+    }: ScopedJson<DeleteCredential>,
 ) -> Result<Json<Envelope<EmptyData>>, ApiError> {
     if input.service_name.trim().is_empty() {
         return Err(ApiError(WebError::Validation(

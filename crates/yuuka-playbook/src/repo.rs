@@ -198,7 +198,10 @@ impl<'a> PlaybookRepo<'a> {
     ///
     /// # Errors
     /// クエリ失敗時 [`DbError`]。
-    pub async fn list_schedules(&self, scope: &UserScope) -> Result<Vec<PlaybookSchedule>, DbError> {
+    pub async fn list_schedules(
+        &self,
+        scope: &UserScope,
+    ) -> Result<Vec<PlaybookSchedule>, DbError> {
         let uid = scope.user_id().as_str().to_owned();
         self.read
             .read(move |conn| {
@@ -236,7 +239,11 @@ impl<'a> PlaybookRepo<'a> {
     ) -> Result<Option<PlaybookSchedule>, DbError> {
         let (uid, bid) = scope_keys(scope);
         // Node `findPlaybooks(userId, botId).some(p => p.name === playbookName)` 相当の存在検証。
-        if self.get(scope, input.playbook_name.clone()).await?.is_none() {
+        if self
+            .get(scope, input.playbook_name.clone())
+            .await?
+            .is_none()
+        {
             return Ok(None);
         }
         let name_for_get = input.playbook_name.clone();
@@ -419,7 +426,9 @@ fn row_to_playbook(row: &Row) -> rusqlite::Result<Playbook> {
         name: row.get("name")?,
         title: row.get("title")?,
         keywords,
-        description: row.get::<_, Option<String>>("description")?.unwrap_or_default(),
+        description: row
+            .get::<_, Option<String>>("description")?
+            .unwrap_or_default(),
         steps: row.get::<_, Option<String>>("steps")?.unwrap_or_default(),
     })
 }
@@ -431,7 +440,9 @@ fn row_to_schedule(row: &Row) -> rusqlite::Result<PlaybookSchedule> {
         bot_id: row.get("bot_id")?,
         playbook_name: row.get("playbook_name")?,
         cron_expression: row.get("cron_expression")?,
-        description: row.get::<_, Option<String>>("description")?.unwrap_or_default(),
+        description: row
+            .get::<_, Option<String>>("description")?
+            .unwrap_or_default(),
         enabled: row.get::<_, i64>("enabled")? == 1,
         last_run_at: row.get("last_run_at")?,
         next_run_at: row.get("next_run_at")?,

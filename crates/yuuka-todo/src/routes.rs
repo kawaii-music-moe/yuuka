@@ -17,9 +17,7 @@ use yuuka_core::WebError;
 use yuuka_types::{EmptyData, Envelope};
 use yuuka_web::{resolve_scope, ApiError, AppState, AuthenticatedUser, Db, ScopedJson};
 
-use crate::dto::{
-    NewTodo, TaskData, TaskDetailData, TaskListData, TodoProgress, TodoUpdate,
-};
+use crate::dto::{NewTodo, TaskData, TaskDetailData, TaskListData, TodoProgress, TodoUpdate};
 use crate::repo::TodoRepo;
 
 #[derive(Debug, Deserialize)]

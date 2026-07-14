@@ -471,10 +471,7 @@ mod tests {
         let out = list.call(&ctx(), json!({})).await.unwrap();
         assert_eq!(out.payload["success"], true);
         assert_eq!(out.payload["count"], 0);
-        assert_eq!(
-            out.payload["message"],
-            "登録済みのマクロはありません。"
-        );
+        assert_eq!(out.payload["message"], "登録済みのマクロはありません。");
 
         // 無し・query 有り。
         let out = list.call(&ctx(), json!({"query": "x"})).await.unwrap();
@@ -492,12 +489,9 @@ mod tests {
         let save = find(&tools, "savePlaybook");
         let list = find(&tools, "findPlaybooks");
 
-        save.call(
-            &ctx(),
-            json!({"name": "pb", "title": "t", "steps": "s"}),
-        )
-        .await
-        .unwrap();
+        save.call(&ctx(), json!({"name": "pb", "title": "t", "steps": "s"}))
+            .await
+            .unwrap();
 
         // 別ユーザーには見えない。
         let ctx_b = ToolContext::new(BotId::system_default(), UserId::new("userB"));

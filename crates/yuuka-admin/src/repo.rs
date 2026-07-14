@@ -151,7 +151,10 @@ pub async fn delete_user(db: &Db, discord_id: &str) -> Result<bool, DbError> {
     db.writer
         .transaction(move |tx| {
             let n = tx
-                .execute("DELETE FROM users WHERE discord_id = ?1", params![discord_id])
+                .execute(
+                    "DELETE FROM users WHERE discord_id = ?1",
+                    params![discord_id],
+                )
                 .map_err(map_sqlite)?;
             Ok(n > 0)
         })
@@ -485,8 +488,10 @@ mod tests {
     /// （users/bots/invite_codes/audit_logs/system_settings）を作る。返り値はハンドルとパス。
     fn fresh_db() -> (Db, PathBuf) {
         let seq = SEQ.fetch_add(1, Ordering::Relaxed);
-        let path = std::env::temp_dir()
-            .join(format!("yuuka_admin_test_{}_{seq}.sqlite", std::process::id()));
+        let path = std::env::temp_dir().join(format!(
+            "yuuka_admin_test_{}_{seq}.sqlite",
+            std::process::id()
+        ));
         let _ = std::fs::remove_file(&path);
         // Rust は存在しない DB を作らない（P0-4）。raw 接続で空ファイルを作ってから migrate する。
         drop(Connection::open(&path).expect("create db file"));
@@ -711,14 +716,19 @@ mod tests {
 
         // 再 upsert（トークン更新）は suspended=0 に戻し、行は 1 件のまま。
         raw(&path)
-            .execute("UPDATE bots SET suspended = 1 WHERE id = 'system_default'", [])
+            .execute(
+                "UPDATE bots SET suspended = 1 WHERE id = 'system_default'",
+                [],
+            )
             .unwrap();
         let enc2 = Encrypted {
             encrypted: "dd".to_owned(),
             iv: "ee".to_owned(),
             auth_tag: "ff".to_owned(),
         };
-        upsert_default_bot_token(&db, "admin1", &enc2).await.unwrap();
+        upsert_default_bot_token(&db, "admin1", &enc2)
+            .await
+            .unwrap();
         let bots = list_all_bots(&db).await.unwrap();
         let count = bots.iter().filter(|b| b.id == "system_default").count();
         assert_eq!(count, 1);

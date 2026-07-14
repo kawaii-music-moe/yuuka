@@ -11,7 +11,9 @@ use yuuka_core::{DbError, UserScope};
 use yuuka_db::{map_sqlite, ReadPool, WriterHandle};
 use yuuka_web::Db;
 
-use crate::dto::{DayPlanBlock, NewDayPlanBlock, NewTimelineRecord, TimelineRecord, UpdatePlanBlock};
+use crate::dto::{
+    DayPlanBlock, NewDayPlanBlock, NewTimelineRecord, TimelineRecord, UpdatePlanBlock,
+};
 
 /// 返却列（クリーンビュー・内部列 user_id/bot_id は含めない）。
 const RECORD_COLUMNS: &str = "id, date, recorded_at, type, title, content, todo_id, expense_id, \
@@ -230,9 +232,9 @@ impl<'a> TimelineRepo<'a> {
                 Ok(tx.last_insert_rowid())
             })
             .await?;
-        self.get(scope, id)
-            .await?
-            .ok_or_else(|| DbError::Operation("inserted expense timeline record not found".to_owned()))
+        self.get(scope, id).await?.ok_or_else(|| {
+            DbError::Operation("inserted expense timeline record not found".to_owned())
+        })
     }
 
     /// `type=media` の記録を作成する（Node `addTimelineRecord` の mediaPath/mediaType 付き経路）。
@@ -266,15 +268,25 @@ impl<'a> TimelineRepo<'a> {
                              COALESCE(?4, datetime('now')), \
                              'media', ?5, ?6, ?7, ?8, ?9, \
                              datetime('now', 'localtime'))",
-                    params![uid, bid, date, recorded_at, title, content, media_path, media_type, location],
+                    params![
+                        uid,
+                        bid,
+                        date,
+                        recorded_at,
+                        title,
+                        content,
+                        media_path,
+                        media_type,
+                        location
+                    ],
                 )
                 .map_err(map_sqlite)?;
                 Ok(tx.last_insert_rowid())
             })
             .await?;
-        self.get(scope, id)
-            .await?
-            .ok_or_else(|| DbError::Operation("inserted media timeline record not found".to_owned()))
+        self.get(scope, id).await?.ok_or_else(|| {
+            DbError::Operation("inserted media timeline record not found".to_owned())
+        })
     }
 
     /// 記録を削除する（削除できたら `true`。Node `deleteTimelineRecord`）。
@@ -429,7 +441,8 @@ impl<'a> TimelineRepo<'a> {
             .writer
             .transaction(move |tx| {
                 // Node と同順に SET 句を積む（updated_at を先頭に固定）。
-                let mut sets: Vec<String> = vec!["updated_at = datetime('now','localtime')".to_owned()];
+                let mut sets: Vec<String> =
+                    vec!["updated_at = datetime('now','localtime')".to_owned()];
                 let mut vals: Vec<SqlValue> = Vec::new();
                 let mut next = 1;
                 // string ガード系（title/type）: 値が在るときのみ更新。
@@ -454,12 +467,36 @@ impl<'a> TimelineRepo<'a> {
                     next += 1;
                 }
                 // キー存在系（nullable）: 外側 Some でキー存在 → SET（`null` は SqlValue::Null）。
-                push_present_text(&mut sets, &mut vals, &mut next, "start_time", input.start_time);
+                push_present_text(
+                    &mut sets,
+                    &mut vals,
+                    &mut next,
+                    "start_time",
+                    input.start_time,
+                );
                 push_present_text(&mut sets, &mut vals, &mut next, "end_time", input.end_time);
                 push_present_int(&mut sets, &mut vals, &mut next, "todo_id", input.todo_id);
-                push_present_text(&mut sets, &mut vals, &mut next, "transit_from", input.transit_from);
-                push_present_text(&mut sets, &mut vals, &mut next, "transit_to", input.transit_to);
-                push_present_text(&mut sets, &mut vals, &mut next, "transit_line", input.transit_line);
+                push_present_text(
+                    &mut sets,
+                    &mut vals,
+                    &mut next,
+                    "transit_from",
+                    input.transit_from,
+                );
+                push_present_text(
+                    &mut sets,
+                    &mut vals,
+                    &mut next,
+                    "transit_to",
+                    input.transit_to,
+                );
+                push_present_text(
+                    &mut sets,
+                    &mut vals,
+                    &mut next,
+                    "transit_line",
+                    input.transit_line,
+                );
 
                 let where_id = next;
                 let where_uid = next + 1;

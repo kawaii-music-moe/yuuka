@@ -87,7 +87,15 @@ pub async fn advance_recurring(
                     "INSERT INTO planned_payments \
                      (user_id, title, amount, category, memo, due_date, repeat_rule) \
                      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-                    params![user_id, title, amount, category, memo, next_due, repeat_rule],
+                    params![
+                        user_id,
+                        title,
+                        amount,
+                        category,
+                        memo,
+                        next_due,
+                        repeat_rule
+                    ],
                 )
                 .map_err(map_sqlite)?;
             Ok(n > 0)

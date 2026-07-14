@@ -24,7 +24,8 @@ static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 /// migrations 適用済みの一時 DB（本番 open は CREATE しないので先にファイルを作る）。
 fn fresh_db() -> (Db, std::path::PathBuf) {
     let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let path = std::env::temp_dir().join(format!("yuuka_orch_it_{}_{n}.sqlite", std::process::id()));
+    let path =
+        std::env::temp_dir().join(format!("yuuka_orch_it_{}_{n}.sqlite", std::process::id()));
     {
         rusqlite::Connection::open(&path).expect("seed file");
     }
@@ -117,7 +118,9 @@ fn engine_with(db: Db, crypto: Option<Arc<SystemCrypto>>, text: &str) -> ChatEng
         db,
         crypto,
         ToolRegistry::new(),
-        Arc::new(FakeFactory { text: text.to_owned() }),
+        Arc::new(FakeFactory {
+            text: text.to_owned(),
+        }),
     )
 }
 
@@ -128,7 +131,8 @@ fn null_sink() -> StatusSink {
 #[tokio::test]
 async fn secretary_turn_persists_and_replies() {
     let (db, path) = fresh_db();
-    let crypto = Arc::new(SystemCrypto::new(SecretString::from("orch-test-secret".to_owned())).unwrap());
+    let crypto =
+        Arc::new(SystemCrypto::new(SecretString::from("orch-test-secret".to_owned())).unwrap());
     seed_user_with_key(&path, &crypto, "u1");
 
     let engine = engine_with(db, Some(crypto), "こんにちは！ご用件をどうぞ。");
@@ -148,13 +152,18 @@ async fn secretary_turn_persists_and_replies() {
     assert_eq!(reply.text, "こんにちは！ご用件をどうぞ。");
     // ユーザー発言 + アシスタント応答が両方永続化される。
     assert_eq!(count_logs(&path, "u1", "user"), 1, "user 発言が保存される");
-    assert_eq!(count_logs(&path, "u1", "assistant"), 1, "assistant 応答が保存される");
+    assert_eq!(
+        count_logs(&path, "u1", "assistant"),
+        1,
+        "assistant 応答が保存される"
+    );
 }
 
 #[tokio::test]
 async fn second_turn_sees_prior_history() {
     let (db, path) = fresh_db();
-    let crypto = Arc::new(SystemCrypto::new(SecretString::from("orch-test-secret".to_owned())).unwrap());
+    let crypto =
+        Arc::new(SystemCrypto::new(SecretString::from("orch-test-secret".to_owned())).unwrap());
     seed_user_with_key(&path, &crypto, "u2");
     let engine = engine_with(db, Some(crypto), "了解しました。");
 
@@ -163,7 +172,10 @@ async fn second_turn_sees_prior_history() {
             .secretary_turn(
                 &BotId::system_default(),
                 &UserId::new("u2"),
-                IncomingChat { text: "メモして".to_owned(), ..IncomingChat::default() },
+                IncomingChat {
+                    text: "メモして".to_owned(),
+                    ..IncomingChat::default()
+                },
                 &null_sink(),
             )
             .await
@@ -179,22 +191,38 @@ async fn missing_gemini_key_returns_warning_reply() {
     let (db, path) = fresh_db();
     seed_user_no_key(&path, "u3");
     // crypto は Some でもキー行が無ければ ⚠️ 応答（Node processMessage の catch パリティ）。
-    let crypto = Arc::new(SystemCrypto::new(SecretString::from("orch-test-secret".to_owned())).unwrap());
+    let crypto =
+        Arc::new(SystemCrypto::new(SecretString::from("orch-test-secret".to_owned())).unwrap());
     let engine = engine_with(db, Some(crypto), "unused");
 
     let reply = engine
         .secretary_turn(
             &BotId::system_default(),
             &UserId::new("u3"),
-            IncomingChat { text: "やあ".to_owned(), ..IncomingChat::default() },
+            IncomingChat {
+                text: "やあ".to_owned(),
+                ..IncomingChat::default()
+            },
             &null_sink(),
         )
         .await
         .expect("turn ok");
-    assert!(reply.text.contains("Gemini API Keyが設定されていません"), "reply={}", reply.text);
+    assert!(
+        reply.text.contains("Gemini API Keyが設定されていません"),
+        "reply={}",
+        reply.text
+    );
     // ⚠️ 定型応答は履歴に保存しない（Node processMessage catch パリティ）。ユーザー発言は保存済み。
-    assert_eq!(count_logs(&path, "u3", "user"), 1, "ユーザー発言は保存される");
-    assert_eq!(count_logs(&path, "u3", "assistant"), 0, "⚠️ 応答は履歴を汚染しない");
+    assert_eq!(
+        count_logs(&path, "u3", "user"),
+        1,
+        "ユーザー発言は保存される"
+    );
+    assert_eq!(
+        count_logs(&path, "u3", "assistant"),
+        0,
+        "⚠️ 応答は履歴を汚染しない"
+    );
 }
 
 /// `message_logs` を破壊して非 LLM（DB）エラーを誘発する。
@@ -212,13 +240,20 @@ async fn non_llm_error_returns_persona_styled_reply() {
         Arc::new(SystemCrypto::new(SecretString::from("orch-test-secret".to_owned())).unwrap());
     seed_user_with_key(&path, &crypto, "u4");
     break_message_logs(&path);
-    let engine = engine_with(db, Some(crypto), "ごめんなさい、うまく処理できませんでした…！");
+    let engine = engine_with(
+        db,
+        Some(crypto),
+        "ごめんなさい、うまく処理できませんでした…！",
+    );
 
     let reply = engine
         .secretary_turn(
             &BotId::system_default(),
             &UserId::new("u4"),
-            IncomingChat { text: "やあ".to_owned(), ..IncomingChat::default() },
+            IncomingChat {
+                text: "やあ".to_owned(),
+                ..IncomingChat::default()
+            },
             &null_sink(),
         )
         .await
@@ -240,10 +275,16 @@ async fn non_llm_error_without_key_falls_back_to_fixed_error() {
         .secretary_turn(
             &BotId::system_default(),
             &UserId::new("u5"),
-            IncomingChat { text: "やあ".to_owned(), ..IncomingChat::default() },
+            IncomingChat {
+                text: "やあ".to_owned(),
+                ..IncomingChat::default()
+            },
             &null_sink(),
         )
         .await;
     // キー無し＝ペルソナ応答も生成不能 → Err（呼び出し側の固定文フォールバックへ）。
-    assert!(result.is_err(), "生成不能時は Err で固定文経路へ: {result:?}");
+    assert!(
+        result.is_err(),
+        "生成不能時は Err で固定文経路へ: {result:?}"
+    );
 }

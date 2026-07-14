@@ -53,7 +53,12 @@ pub fn ctx_full(
     notifier: Arc<dyn Notifier>,
     playbook_runner: Arc<dyn PlaybookRunner>,
 ) -> ServiceContext {
-    ServiceContext::new(db, notifier, Arc::new(MetricsRegistry::new()), playbook_runner)
+    ServiceContext::new(
+        db,
+        notifier,
+        Arc::new(MetricsRegistry::new()),
+        playbook_runner,
+    )
 }
 
 /// 送信を記録するテスト用 notifier（`succeed` で成功/失敗を切り替える）。

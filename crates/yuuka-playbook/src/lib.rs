@@ -114,8 +114,10 @@ mod tests {
 
     fn seed_db_with_path() -> (Db, std::path::PathBuf) {
         let seq = SEQ.fetch_add(1, Ordering::Relaxed);
-        let path = std::env::temp_dir()
-            .join(format!("yuuka_playbook_test_{}_{seq}.sqlite", std::process::id()));
+        let path = std::env::temp_dir().join(format!(
+            "yuuka_playbook_test_{}_{seq}.sqlite",
+            std::process::id()
+        ));
         {
             let conn = rusqlite::Connection::open(&path).expect("seed db");
             conn.execute_batch(PLAYBOOKS_DDL).expect("create playbooks");
@@ -232,7 +234,10 @@ mod tests {
         assert_eq!(hits[0].name, "alpha");
         // 空 query は全件（Node の falsy 扱いと一致）。
         assert_eq!(
-            repo.list(&scope("u"), Some(String::new())).await.unwrap().len(),
+            repo.list(&scope("u"), Some(String::new()))
+                .await
+                .unwrap()
+                .len(),
             2
         );
     }
@@ -314,7 +319,11 @@ mod tests {
             .unwrap();
         assert_eq!(repo.list_schedules(&scope("userA")).await.unwrap().len(), 1);
         // 別ユーザーには見えない。
-        assert!(repo.list_schedules(&scope("userB")).await.unwrap().is_empty());
+        assert!(repo
+            .list_schedules(&scope("userB"))
+            .await
+            .unwrap()
+            .is_empty());
     }
 
     #[tokio::test]
@@ -332,9 +341,15 @@ mod tests {
         let id = saved.id;
 
         // 他人は toggle できない。
-        assert!(!repo.toggle_schedule(&scope("intruder"), id, false).await.unwrap());
+        assert!(!repo
+            .toggle_schedule(&scope("intruder"), id, false)
+            .await
+            .unwrap());
         // オーナーは toggle 可・enabled が反映される。
-        assert!(repo.toggle_schedule(&scope("owner"), id, false).await.unwrap());
+        assert!(repo
+            .toggle_schedule(&scope("owner"), id, false)
+            .await
+            .unwrap());
         let after = repo.list_schedules(&scope("owner")).await.unwrap();
         assert!(!after[0].enabled);
 
@@ -344,7 +359,11 @@ mod tests {
         // オーナーは delete 可。二重削除は false。
         assert!(repo.delete_schedule(&scope("owner"), id).await.unwrap());
         assert!(!repo.delete_schedule(&scope("owner"), id).await.unwrap());
-        assert!(repo.list_schedules(&scope("owner")).await.unwrap().is_empty());
+        assert!(repo
+            .list_schedules(&scope("owner"))
+            .await
+            .unwrap()
+            .is_empty());
     }
 
     #[tokio::test]
@@ -463,7 +482,11 @@ mod tests {
 
     // ── 定期実行スケジュール / 実行履歴（route レベル） ──
 
-    async fn post_json(app: &axum::Router, uri: &str, body: &'static str) -> axum::response::Response {
+    async fn post_json(
+        app: &axum::Router,
+        uri: &str,
+        body: &'static str,
+    ) -> axum::response::Response {
         app.clone()
             .oneshot(
                 Request::builder()
@@ -479,7 +502,9 @@ mod tests {
     }
 
     async fn body_json(resp: axum::response::Response) -> serde_json::Value {
-        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         serde_json::from_slice(&bytes).unwrap()
     }
 
@@ -505,7 +530,10 @@ mod tests {
         assert_eq!(save.status(), StatusCode::OK);
         let sj = body_json(save).await;
         assert_eq!(sj["success"], serde_json::json!(true));
-        assert_eq!(sj["message"], serde_json::json!("スケジュール「daily」を保存しました。"));
+        assert_eq!(
+            sj["message"],
+            serde_json::json!("スケジュール「daily」を保存しました。")
+        );
         assert_eq!(sj["schedule"]["playbook_name"], serde_json::json!("daily"));
         assert_eq!(sj["schedule"]["enabled"], serde_json::json!(true));
         // 内部所有者列 user_id は露出しない。
@@ -539,13 +567,19 @@ mod tests {
         assert_eq!(id, 1);
         assert_eq!(toggle.status(), StatusCode::OK);
         let tj = body_json(toggle).await;
-        assert_eq!(tj["message"], serde_json::json!("スケジュールを無効化しました。"));
+        assert_eq!(
+            tj["message"],
+            serde_json::json!("スケジュールを無効化しました。")
+        );
 
         // delete → 200 + 削除メッセージ。
         let del = post_json(&app, "/api/playbooks/schedules/delete", r#"{"id":1}"#).await;
         assert_eq!(del.status(), StatusCode::OK);
         let dj = body_json(del).await;
-        assert_eq!(dj["message"], serde_json::json!("スケジュールを削除しました。"));
+        assert_eq!(
+            dj["message"],
+            serde_json::json!("スケジュールを削除しました。")
+        );
     }
 
     #[tokio::test]
@@ -577,13 +611,21 @@ mod tests {
         .await;
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
         let j = body_json(resp).await;
-        assert_eq!(j["message"], serde_json::json!("マクロ「ghost」が見つかりません。"));
+        assert_eq!(
+            j["message"],
+            serde_json::json!("マクロ「ghost」が見つかりません。")
+        );
     }
 
     #[tokio::test]
     async fn route_toggle_missing_id_400() {
         let app = app();
-        let resp = post_json(&app, "/api/playbooks/schedules/toggle", r#"{"enabled":true}"#).await;
+        let resp = post_json(
+            &app,
+            "/api/playbooks/schedules/toggle",
+            r#"{"enabled":true}"#,
+        )
+        .await;
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
         let j = body_json(resp).await;
         assert_eq!(j["message"], serde_json::json!("idは必須です。"));
@@ -601,10 +643,18 @@ mod tests {
     #[tokio::test]
     async fn route_toggle_unknown_id_400() {
         let app = app();
-        let resp = post_json(&app, "/api/playbooks/schedules/toggle", r#"{"id":999,"enabled":true}"#).await;
+        let resp = post_json(
+            &app,
+            "/api/playbooks/schedules/toggle",
+            r#"{"id":999,"enabled":true}"#,
+        )
+        .await;
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
         let j = body_json(resp).await;
-        assert_eq!(j["message"], serde_json::json!("スケジュールが見つかりません。"));
+        assert_eq!(
+            j["message"],
+            serde_json::json!("スケジュールが見つかりません。")
+        );
     }
 
     #[tokio::test]

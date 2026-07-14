@@ -6,7 +6,7 @@
 //! 通知・繰り返し計算に必要な内部列（`user_id`/`bot_id`/`repeat_*`）を含む（クリーンビュー `Todo`
 //! とは別型）。リマインドエンジン（期限通知）とルーチンサービス（繰り返し生成）の双方が使う。
 
-use rusqlite::{Row, params};
+use rusqlite::{params, Row};
 use yuuka_core::{CrossUserAccess, DbError};
 use yuuka_db::map_sqlite;
 
@@ -53,7 +53,9 @@ impl TodoRepo<'_> {
                      AND datetime(due_date) <= datetime('now', 'localtime', ?1) \
                      ORDER BY datetime(due_date) ASC";
                 let mut stmt = conn.prepare(sql).map_err(map_sqlite)?;
-                let rows = stmt.query_map(params![window], row_to_due).map_err(map_sqlite)?;
+                let rows = stmt
+                    .query_map(params![window], row_to_due)
+                    .map_err(map_sqlite)?;
                 let mut out = Vec::new();
                 for row in rows {
                     out.push(row.map_err(map_sqlite)?);

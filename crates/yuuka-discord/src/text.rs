@@ -166,15 +166,24 @@ fn split_keeping_matches<'a>(input: &'a str, re: &Regex) -> Vec<Segment<'a>> {
     for m in re.find_iter(input) {
         if m.start() > last {
             if let Some(text) = input.get(last..m.start()) {
-                segments.push(Segment { text, is_match: false });
+                segments.push(Segment {
+                    text,
+                    is_match: false,
+                });
             }
         }
-        segments.push(Segment { text: m.as_str(), is_match: true });
+        segments.push(Segment {
+            text: m.as_str(),
+            is_match: true,
+        });
         last = m.end();
     }
     if last < input.len() {
         if let Some(text) = input.get(last..) {
-            segments.push(Segment { text, is_match: false });
+            segments.push(Segment {
+                text,
+                is_match: false,
+            });
         }
     }
     segments
@@ -332,7 +341,9 @@ fn is_table_separator(line: Option<&str>) -> bool {
     if cells.is_empty() || (cells.len() == 1 && cells.first().is_some_and(String::is_empty)) {
         return false;
     }
-    cells.iter().all(|c| table_sep_cell_regex().is_match(c.trim()))
+    cells
+        .iter()
+        .all(|c| table_sep_cell_regex().is_match(c.trim()))
 }
 
 fn split_table_row(line: &str) -> Vec<String> {
@@ -518,7 +529,10 @@ mod tests {
     fn markdown_protects_code_blocks() {
         let input = "```\n- [ ] not converted\n```\n- [ ] converted";
         let out = to_discord_markdown(input);
-        assert!(out.contains("- [ ] not converted"), "コード内は変換しない: {out}");
+        assert!(
+            out.contains("- [ ] not converted"),
+            "コード内は変換しない: {out}"
+        );
         assert!(out.contains("⬜ converted"), "コード外は変換: {out}");
     }
 

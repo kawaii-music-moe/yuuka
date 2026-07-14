@@ -94,8 +94,10 @@ mod tests {
 
     fn test_db() -> Db {
         let seq = TEST_DB_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let path = std::env::temp_dir()
-            .join(format!("yuuka_sup_test_{}_{seq}.sqlite", std::process::id()));
+        let path = std::env::temp_dir().join(format!(
+            "yuuka_sup_test_{}_{seq}.sqlite",
+            std::process::id()
+        ));
         {
             let conn = rusqlite::Connection::open(&path).expect("seed");
             conn.execute_batch(
@@ -110,8 +112,8 @@ mod tests {
             .expect("ddl");
         }
         let db = Db::open(&path).expect("open"); // migrations で users 表を作成。
-        // /api/me は DB からユーザーを再取得する（P3-5）。FakeAuth のユーザー "u" を seed する
-        // （V17 実スキーマの NOT NULL: username/password_hash/salt を充足）。
+                                                 // /api/me は DB からユーザーを再取得する（P3-5）。FakeAuth のユーザー "u" を seed する
+                                                 // （V17 実スキーマの NOT NULL: username/password_hash/salt を充足）。
         {
             let conn = rusqlite::Connection::open(&path).expect("open users");
             conn.execute(
@@ -176,7 +178,12 @@ mod tests {
 
         // domain route /api/tasks（todo）— 認証必須が効く。
         let tasks_unauth = app()
-            .oneshot(Request::builder().uri("/api/tasks").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/api/tasks")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
         assert_eq!(tasks_unauth.status(), StatusCode::UNAUTHORIZED);

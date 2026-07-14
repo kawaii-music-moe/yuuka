@@ -110,7 +110,9 @@ mod loop_tests {
                 .lock()
                 .unwrap()
                 .push((name.as_str().to_owned(), args));
-            Ok(ToolOutcome::from_payload(json!({ "success": true, "id": 1 })))
+            Ok(ToolOutcome::from_payload(
+                json!({ "success": true, "id": 1 }),
+            ))
         }
     }
 

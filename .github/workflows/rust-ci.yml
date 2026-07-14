@@ -1,0 +1,59 @@
+name: Rust CI
+
+# Rust バックエンド（crates/）の品質ゲート。絶対制約 1（厳格エラー＝anyhow/eyre 禁止）と
+# 2（自己復帰）を CI で機械強制する: clippy -D warnings（8 restriction lint）+ cargo-deny
+# （anyhow/eyre/backoff の bans）+ fmt --check + build + test。ローカル手動運用を常時緑の CI へ。
+on:
+  pull_request:
+    paths:
+      - "crates/**"
+      - "xtask/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "deny.toml"
+      - "clippy.toml"
+      - "rust-toolchain.toml"
+      - ".github/workflows/rust-ci.yml"
+  push:
+    branches: [develop, main, feature/rust-rewrite]
+
+# 同一ブランチ/PR で新しい push があれば古い実行をキャンセル。
+concurrency:
+  group: rust-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ── build / clippy / test / fmt（rust-toolchain.toml の 1.96.1 + clippy/rustfmt を採用） ──
+  check:
+    name: fmt / clippy / build / test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # rust-toolchain.toml（channel=1.96.1・components=clippy,rustfmt）を rustup が尊重する。
+      - name: Show toolchain
+        run: rustc --version && cargo --version && cargo clippy --version
+      - uses: Swatinem/rust-cache@v2
+      - name: Format check (P3-2)
+        run: cargo fmt --all -- --check
+      - name: Clippy (絶対制約 1・-D warnings)
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - name: Build (release)
+        run: cargo build --workspace --release
+      - name: Test
+        run: cargo test --workspace
+
+  # ── cargo-deny（anyhow/eyre/backoff の bans・ライセンス・advisories） ──
+  deny:
+    name: cargo-deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check

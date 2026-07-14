@@ -171,10 +171,11 @@ impl Tool for AddContactTool {
     fn declaration(&self) -> FunctionDeclaration {
         FunctionDeclaration {
             name: self.name.clone(),
-            description: "知り合いの連絡先やメモ（名前・誕生日・関係・連絡先・覚え書き）を新しく登録する。\
+            description:
+                "知り合いの連絡先やメモ（名前・誕生日・関係・連絡先・覚え書き）を新しく登録する。\
                 「〜さんの誕生日は…」「同僚の…さんは…好き」のように人の情報を記録したい時に使う。\
                 誕生日を入れておくと前日に自動でお知らせが届く。"
-                .to_owned(),
+                    .to_owned(),
             parameters_json_schema: json!({
                 "type": "object",
                 "properties": {
@@ -415,11 +416,7 @@ impl Tool for AddClipboardEntryTool {
         } else {
             match arg_f64(&args, "ttl_hours") {
                 Some(v) if v.is_finite() && v >= 0.0 => v,
-                _ => {
-                    return Ok(fail_payload(
-                        "ttl_hours は0以上の数値で指定してください。",
-                    ))
-                }
+                _ => return Ok(fail_payload("ttl_hours は0以上の数値で指定してください。")),
             }
         };
         // 0 = 無期限（expires_at NULL）。それ以外は now + ttl 時間。
@@ -610,9 +607,10 @@ impl Tool for GetContextNoteTool {
     fn declaration(&self) -> FunctionDeclaration {
         FunctionDeclaration {
             name: self.name.clone(),
-            description: "自由記述のメモ帳（コンテキストノート）の現在の全文を読む。\
+            description:
+                "自由記述のメモ帳（コンテキストノート）の現在の全文を読む。\
                 「メモ帳見せて」等や、setContextNote で書き換える前に現在の中身を確認する時に呼ぶ。"
-                .to_owned(),
+                    .to_owned(),
             parameters_json_schema: json!({ "type": "object", "properties": {} }),
             requires_confirmation: false,
         }
@@ -869,10 +867,16 @@ mod tests {
 
         // delete。
         let delete = find(&tools, "deleteContact");
-        let out = delete.call(&ctx(), json!({"contact_id": id})).await.unwrap();
+        let out = delete
+            .call(&ctx(), json!({"contact_id": id}))
+            .await
+            .unwrap();
         assert_eq!(out.payload["success"], true);
         // 二重削除は not-found（success:false）。
-        let out = delete.call(&ctx(), json!({"contact_id": id})).await.unwrap();
+        let out = delete
+            .call(&ctx(), json!({"contact_id": id}))
+            .await
+            .unwrap();
         assert_eq!(out.payload["success"], false);
     }
 
@@ -932,7 +936,11 @@ mod tests {
             .iter()
             .map(|t| t.declaration().name.to_string())
             .collect();
-        for n in ["addClipboardEntry", "listClipboardEntries", "deleteClipboardEntry"] {
+        for n in [
+            "addClipboardEntry",
+            "listClipboardEntries",
+            "deleteClipboardEntry",
+        ] {
             assert!(names.contains(&n.to_owned()), "missing tool: {n}");
         }
 
@@ -943,7 +951,10 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(out.payload["success"], true);
-        assert_eq!(out.payload["message"], "クリップボードに保存しました（24時間後に自動削除）📎");
+        assert_eq!(
+            out.payload["message"],
+            "クリップボードに保存しました（24時間後に自動削除）📎"
+        );
         assert_eq!(out.payload["entry"]["content"], "会議メモ");
         assert!(out.payload["entry"]["expires_at"].is_string());
         let id = out.payload["entry"]["id"].as_i64().unwrap();
@@ -953,7 +964,10 @@ mod tests {
             .call(&ctx(), json!({"content": "ずっと", "ttl_hours": 0}))
             .await
             .unwrap();
-        assert_eq!(out.payload["message"], "クリップボードに保存しました（無期限）📎");
+        assert_eq!(
+            out.payload["message"],
+            "クリップボードに保存しました（無期限）📎"
+        );
         assert!(out.payload["entry"]["expires_at"].is_null());
 
         // 空 content → fail。
@@ -996,7 +1010,9 @@ mod tests {
         let add = find(&tools, "addClipboardEntry");
         let list = find(&tools, "listClipboardEntries");
 
-        add.call(&ctx(), json!({"content": "A のメモ"})).await.unwrap();
+        add.call(&ctx(), json!({"content": "A のメモ"}))
+            .await
+            .unwrap();
 
         let ctx_b = ToolContext::new(BotId::system_default(), UserId::new("userB"));
         let out = list.call(&ctx_b, json!({})).await.unwrap();
@@ -1017,19 +1033,28 @@ mod tests {
         assert_eq!(out.payload["length"], 0);
 
         // set: 全置換。
-        let out = set.call(&ctx(), json!({"content": "コーヒーはブラック"})).await.unwrap();
+        let out = set
+            .call(&ctx(), json!({"content": "コーヒーはブラック"}))
+            .await
+            .unwrap();
         assert_eq!(out.payload["success"], true);
         let out = get.call(&ctx(), json!({})).await.unwrap();
         assert_eq!(out.payload["content"], "コーヒーはブラック");
 
         // append: 改行で連結。
-        let out = append.call(&ctx(), json!({"content": "犬を飼っている"})).await.unwrap();
+        let out = append
+            .call(&ctx(), json!({"content": "犬を飼っている"}))
+            .await
+            .unwrap();
         assert_eq!(out.payload["success"], true);
         let out = get.call(&ctx(), json!({})).await.unwrap();
         assert_eq!(out.payload["content"], "コーヒーはブラック\n犬を飼っている");
 
         // append 空 → fail。
-        let out = append.call(&ctx(), json!({"content": "   "})).await.unwrap();
+        let out = append
+            .call(&ctx(), json!({"content": "   "}))
+            .await
+            .unwrap();
         assert_eq!(out.payload["success"], false);
 
         // set 上限超過 → fail（scope は保持）。
@@ -1049,9 +1074,12 @@ mod tests {
         let add = find(&tools, "addContact");
         let search = find(&tools, "searchContacts");
 
-        add.call(&ctx(), json!({"name": "田中太郎", "relationship": "同僚", "notes": "野球好き"}))
-            .await
-            .unwrap();
+        add.call(
+            &ctx(),
+            json!({"name": "田中太郎", "relationship": "同僚", "notes": "野球好き"}),
+        )
+        .await
+        .unwrap();
         add.call(&ctx(), json!({"name": "佐藤花子", "relationship": "友人"}))
             .await
             .unwrap();
@@ -1072,7 +1100,10 @@ mod tests {
         assert_eq!(out.payload["count"], 1);
         assert_eq!(out.payload["contacts"][0]["name"], "佐藤花子");
         // 該当なし。
-        let out = search.call(&ctx(), json!({"query": "存在しない"})).await.unwrap();
+        let out = search
+            .call(&ctx(), json!({"query": "存在しない"}))
+            .await
+            .unwrap();
         assert_eq!(out.payload["count"], 0);
 
         // 別ユーザーには漏れない。

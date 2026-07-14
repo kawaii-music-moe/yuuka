@@ -76,17 +76,26 @@ async fn day(
 async fn plan_add(
     user: AuthenticatedUser,
     State(db): State<Db>,
-    ScopedJson { bot_id, value: input }: ScopedJson<NewDayPlanBlock>,
+    ScopedJson {
+        bot_id,
+        value: input,
+    }: ScopedJson<NewDayPlanBlock>,
 ) -> Result<Json<Envelope<DayPlanBlockData>>, ApiError> {
     // Node parity: date / type / title のいずれか欠落（空文字含む）は 400。
     if input.date.trim().is_empty() {
-        return Err(ApiError(WebError::Validation("date is required".to_owned())));
+        return Err(ApiError(WebError::Validation(
+            "date is required".to_owned(),
+        )));
     }
     if input.r#type.trim().is_empty() {
-        return Err(ApiError(WebError::Validation("type is required".to_owned())));
+        return Err(ApiError(WebError::Validation(
+            "type is required".to_owned(),
+        )));
     }
     if input.title.trim().is_empty() {
-        return Err(ApiError(WebError::Validation("title is required".to_owned())));
+        return Err(ApiError(WebError::Validation(
+            "title is required".to_owned(),
+        )));
     }
     let scope = resolve_scope(&user.0, &db, bot_id.as_deref()).await?;
     let block = TimelineRepo::new(&db).add_plan(&scope, input).await?;
@@ -96,7 +105,10 @@ async fn plan_add(
 async fn plan_update(
     user: AuthenticatedUser,
     State(db): State<Db>,
-    ScopedJson { bot_id, value: input }: ScopedJson<UpdatePlanBlock>,
+    ScopedJson {
+        bot_id,
+        value: input,
+    }: ScopedJson<UpdatePlanBlock>,
 ) -> Result<Json<Envelope<DayPlanBlockData>>, ApiError> {
     // Node parity: `Number(b.id)` が falsy（0/欠落）は 400。
     if input.id == 0 {
@@ -113,7 +125,10 @@ async fn plan_update(
 async fn plan_delete(
     user: AuthenticatedUser,
     State(db): State<Db>,
-    ScopedJson { bot_id, value: input }: ScopedJson<IdInput>,
+    ScopedJson {
+        bot_id,
+        value: input,
+    }: ScopedJson<IdInput>,
 ) -> Result<Json<Envelope<EmptyData>>, ApiError> {
     // Node parity: `Number(b.id)` が falsy（0/欠落）は 400。
     if input.id == 0 {
@@ -127,13 +142,20 @@ async fn plan_delete(
 async fn add(
     user: AuthenticatedUser,
     State(db): State<Db>,
-    ScopedJson { bot_id, value: input }: ScopedJson<NewTimelineRecord>,
+    ScopedJson {
+        bot_id,
+        value: input,
+    }: ScopedJson<NewTimelineRecord>,
 ) -> Result<Json<Envelope<TimelineRecordData>>, ApiError> {
     if input.date.trim().is_empty() {
-        return Err(ApiError(WebError::Validation("date is required".to_owned())));
+        return Err(ApiError(WebError::Validation(
+            "date is required".to_owned(),
+        )));
     }
     if input.r#type.trim().is_empty() {
-        return Err(ApiError(WebError::Validation("type is required".to_owned())));
+        return Err(ApiError(WebError::Validation(
+            "type is required".to_owned(),
+        )));
     }
     let scope = resolve_scope(&user.0, &db, bot_id.as_deref()).await?;
     let repo = TimelineRepo::new(&db);
@@ -143,14 +165,17 @@ async fn add(
         // Node: `amount = Number(b.amount)` が falsy（0/NaN/未指定）は 400。
         let amount = input.amount.unwrap_or(0.0);
         if amount == 0.0 {
-            return Err(ApiError(WebError::Validation("amount is required".to_owned())));
+            return Err(ApiError(WebError::Validation(
+                "amount is required".to_owned(),
+            )));
         }
         // Node: `typeof b.category === "string" ? b.category : "その他"`（空文字はそのまま採用）。
         let category = input
             .category
             .clone()
             .unwrap_or_else(|| "その他".to_owned());
-        repo.add_expense_record(&scope, &input, amount, category).await?
+        repo.add_expense_record(&scope, &input, amount, category)
+            .await?
     } else {
         // task_done の todos 完了は repo.add がトランザクション内で処理する。
         repo.add(&scope, input).await?
@@ -161,7 +186,10 @@ async fn add(
 async fn delete(
     user: AuthenticatedUser,
     State(db): State<Db>,
-    ScopedJson { bot_id, value: input }: ScopedJson<IdInput>,
+    ScopedJson {
+        bot_id,
+        value: input,
+    }: ScopedJson<IdInput>,
 ) -> Result<Json<Envelope<EmptyData>>, ApiError> {
     let scope = resolve_scope(&user.0, &db, bot_id.as_deref()).await?;
     let ok = TimelineRepo::new(&db).delete(&scope, input.id).await?;
@@ -175,7 +203,10 @@ async fn delete(
 async fn media_upload(
     user: AuthenticatedUser,
     State(state): State<AppState>,
-    ScopedJson { bot_id, value: input }: ScopedJson<NewTimelineMedia>,
+    ScopedJson {
+        bot_id,
+        value: input,
+    }: ScopedJson<NewTimelineMedia>,
 ) -> Result<Json<Envelope<TimelineRecordData>>, ApiError> {
     // Node: `!date || !base64 || !mimeType`（空文字含む）は 400「date / base64 / mimeType が必要です。」
     if input.date.trim().is_empty()
@@ -188,10 +219,14 @@ async fn media_upload(
     }
     let scope = resolve_scope(&user.0, &state.db, bot_id.as_deref()).await?;
     // メディア保存（MIME 検証・書き込み）。失敗は Node 同様 400（生の内部エラーは出さない）。
-    let media_path =
-        media::save_media_base64(&state.config.media_dir, &input.base64, &input.mime_type, &input.date)
-            .await
-            .map_err(|msg| ApiError(WebError::Validation(msg)))?;
+    let media_path = media::save_media_base64(
+        &state.config.media_dir,
+        &input.base64,
+        &input.mime_type,
+        &input.date,
+    )
+    .await
+    .map_err(|msg| ApiError(WebError::Validation(msg)))?;
     let media_type = media::media_type_of(&input.mime_type).to_owned();
     let record_fields = NewTimelineRecord {
         date: input.date,

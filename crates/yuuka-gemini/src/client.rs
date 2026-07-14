@@ -238,7 +238,10 @@ impl GeminiClient {
             tool_config: None,
             generation_config,
         };
-        match self.send_with_retry(&req, AUX_MAX_RETRIES, AUX_TIMEOUT).await {
+        match self
+            .send_with_retry(&req, AUX_MAX_RETRIES, AUX_TIMEOUT)
+            .await
+        {
             Ok(resp) => Some(resp),
             Err(err) => {
                 tracing::warn!(error = %err, "補助生成に失敗（None へ縮退）");

@@ -154,9 +154,11 @@ mod tests {
             .db
             .read
             .read(|conn| {
-                conn.query_row("SELECT birthday_reminded_year FROM contacts WHERE id=1", [], |r| {
-                    r.get(0)
-                })
+                conn.query_row(
+                    "SELECT birthday_reminded_year FROM contacts WHERE id=1",
+                    [],
+                    |r| r.get(0),
+                )
                 .map_err(map_sqlite)
             })
             .await

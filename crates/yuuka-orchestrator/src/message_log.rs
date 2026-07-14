@@ -77,7 +77,14 @@ pub async fn recent_context(
     bot_id: &str,
     limit: i64,
 ) -> Result<Vec<ContextEntry>, DbError> {
-    recent_context_with_floor(db, user_id, bot_id, context_floor_key(user_id, bot_id), limit).await
+    recent_context_with_floor(
+        db,
+        user_id,
+        bot_id,
+        context_floor_key(user_id, bot_id),
+        limit,
+    )
+    .await
 }
 
 /// owner DM（汎用モード）コンテキストを古い順に取得する（Node `getBotDmContext`）。SQLite の行は秘書と
@@ -91,8 +98,14 @@ pub async fn recent_bot_dm_context(
     user_id: &str,
     limit: i64,
 ) -> Result<Vec<ContextEntry>, DbError> {
-    recent_context_with_floor(db, user_id, bot_id, bot_dm_context_floor_key(user_id, bot_id), limit)
-        .await
+    recent_context_with_floor(
+        db,
+        user_id,
+        bot_id,
+        bot_dm_context_floor_key(user_id, bot_id),
+        limit,
+    )
+    .await
 }
 
 /// LLM へ渡す直近コンテキストを**古い順**で取得する（Node `getRecentContext`/`getBotDmContext` の SQLite

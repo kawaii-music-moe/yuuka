@@ -29,7 +29,9 @@ use crate::ports::{
 };
 use crate::presence::build_presence;
 use crate::reply::{send_channel_reply, send_channel_text};
-use crate::text::{is_supported_audio, strip_all_mentions, strip_self_mention, NON_MEMBER_GUIDANCE};
+use crate::text::{
+    is_supported_audio, strip_all_mentions, strip_self_mention, NON_MEMBER_GUIDANCE,
+};
 
 // ─── 定型文（現行文言 1:1） ────────────────────────────────────────────────────
 
@@ -126,9 +128,7 @@ async fn assistant_flow(deps: &FlowDeps, rt: &RuntimeBot, bot: &BotRecord, messa
         return;
     }
 
-    let guild_id: Option<GuildId> = message
-        .guild_id
-        .map(|g| GuildId::new(g.get().to_string()));
+    let guild_id: Option<GuildId> = message.guild_id.map(|g| GuildId::new(g.get().to_string()));
     if !is_dm {
         let Some(gid) = guild_id.as_ref() else {
             return;
@@ -289,14 +289,29 @@ async fn dispatch_assistant(
 ) -> Result<TurnReply, TurnError> {
     if is_dm {
         deps.processor
-            .process_bot_dm(&rt.bot_id, speaker, chat, handles.status.clone(), handles.delivery.clone())
+            .process_bot_dm(
+                &rt.bot_id,
+                speaker,
+                chat,
+                handles.status.clone(),
+                handles.delivery.clone(),
+            )
             .await
     } else if let Some(gid) = guild_id {
         deps.processor
-            .process_guild(&rt.bot_id, gid, speaker, chat, handles.status.clone(), handles.delivery.clone())
+            .process_guild(
+                &rt.bot_id,
+                gid,
+                speaker,
+                chat,
+                handles.status.clone(),
+                handles.delivery.clone(),
+            )
             .await
     } else {
-        Err(TurnError::Failed("guild id missing for guild turn".to_owned()))
+        Err(TurnError::Failed(
+            "guild id missing for guild turn".to_owned(),
+        ))
     }
 }
 
@@ -339,9 +354,11 @@ async fn secretary_flow(deps: &FlowDeps, rt: &RuntimeBot, bot: &BotRecord, messa
     let full_text = format!("{context_prefix}{text}");
 
     // 画像は現メッセージ優先、無ければ返信先も探す（現行 [`src/bot.ts:1071-1078`]）。
-    let image = select_image(&message.attachments)
-        .cloned()
-        .or_else(|| reference.as_ref().and_then(|r| select_image(&r.attachments).cloned()));
+    let image = select_image(&message.attachments).cloned().or_else(|| {
+        reference
+            .as_ref()
+            .and_then(|r| select_image(&r.attachments).cloned())
+    });
     let audio = select_audio(&message.attachments).cloned();
     let delivery = make_delivery(deps, rt, &message, is_dm, author.clone(), typing.handle());
     let discord_msg_id = Some(message.id.get().to_string());
@@ -373,9 +390,20 @@ async fn secretary_flow(deps: &FlowDeps, rt: &RuntimeBot, bot: &BotRecord, messa
         match fetch_inline_media(&att, "image/jpeg").await {
             Ok(media) => {
                 // レシート OCR は秘書専用。caption は現メッセージ本文（空なら None）。
-                let caption = if text.is_empty() { None } else { Some(text.clone()) };
+                let caption = if text.is_empty() {
+                    None
+                } else {
+                    Some(text.clone())
+                };
                 deps.processor
-                    .parse_receipt(&rt.bot_id, &author, media, caption, status.clone(), delivery.clone())
+                    .parse_receipt(
+                        &rt.bot_id,
+                        &author,
+                        media,
+                        caption,
+                        status.clone(),
+                        delivery.clone(),
+                    )
                     .await
             }
             Err(e) => Err(TurnError::Failed(e.to_string())),
@@ -668,9 +696,11 @@ fn reference_message_id(message: &Message) -> Option<String> {
 
 /// 画像添付を選ぶ（content-type が `image/` 始まり・現行）。
 fn select_image(attachments: &[Attachment]) -> Option<&Attachment> {
-    attachments
-        .iter()
-        .find(|a| a.content_type.as_deref().is_some_and(|ct| ct.starts_with("image/")))
+    attachments.iter().find(|a| {
+        a.content_type
+            .as_deref()
+            .is_some_and(|ct| ct.starts_with("image/"))
+    })
 }
 
 /// 音声添付を選ぶ（現行 SUPPORTED_AUDIO_TYPES / `audio/` 始まり）。
@@ -681,7 +711,10 @@ fn select_audio(attachments: &[Attachment]) -> Option<&Attachment> {
 }
 
 /// 添付を URL 取得 → base64 化する（現行 fetch → Buffer.toString("base64")）。
-async fn fetch_inline_media(att: &Attachment, default_mime: &str) -> Result<InlineMedia, DiscordError> {
+async fn fetch_inline_media(
+    att: &Attachment,
+    default_mime: &str,
+) -> Result<InlineMedia, DiscordError> {
     let resp = reqwest::get(&att.url)
         .await
         .map_err(|e| DiscordError::Transport(format!("attachment fetch: {e}")))?;

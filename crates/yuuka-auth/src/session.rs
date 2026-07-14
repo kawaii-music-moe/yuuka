@@ -57,7 +57,10 @@ impl SessionStore {
             Ok(c) => c,
             Err(e) => {
                 tracing::warn!(error = %e, "REDIS_URL が不正。Cookie セッションは in-memory 縮退");
-                return Self { redis: None, memory };
+                return Self {
+                    redis: None,
+                    memory,
+                };
             }
         };
         match tokio::time::timeout(CONNECT_TIMEOUT, ConnectionManager::new(client)).await {
@@ -70,11 +73,17 @@ impl SessionStore {
             }
             Ok(Err(e)) => {
                 tracing::warn!(error = %e, "Redis 接続不可。Cookie セッションは in-memory 縮退");
-                Self { redis: None, memory }
+                Self {
+                    redis: None,
+                    memory,
+                }
             }
             Err(_) => {
                 tracing::warn!("Redis 接続タイムアウト。Cookie セッションは in-memory 縮退");
-                Self { redis: None, memory }
+                Self {
+                    redis: None,
+                    memory,
+                }
             }
         }
     }

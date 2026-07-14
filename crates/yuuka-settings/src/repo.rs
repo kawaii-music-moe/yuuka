@@ -59,7 +59,11 @@ pub async fn update_username(db: &Db, discord_id: &str, username: &str) -> Resul
 ///
 /// # Errors
 /// bcrypt 失敗・書き込み失敗時 [`DbError`]。
-pub async fn update_password(db: &Db, discord_id: &str, new_password: &str) -> Result<bool, DbError> {
+pub async fn update_password(
+    db: &Db,
+    discord_id: &str,
+    new_password: &str,
+) -> Result<bool, DbError> {
     // async な bcrypt はクロージャ外で先に済ませる（yuuka-auth の cost 12 実装を再利用）。
     let hash = yuuka_auth::users::hash_password(new_password.to_owned()).await?;
     let discord_id = discord_id.to_owned();
@@ -101,7 +105,10 @@ pub async fn delete_user(db: &Db, discord_id: &str) -> Result<bool, DbError> {
     db.writer
         .transaction(move |tx| {
             let n = tx
-                .execute("DELETE FROM users WHERE discord_id = ?1", params![discord_id])
+                .execute(
+                    "DELETE FROM users WHERE discord_id = ?1",
+                    params![discord_id],
+                )
                 .map_err(map_sqlite)?;
             Ok(n > 0)
         })
@@ -295,8 +302,10 @@ mod tests {
 
     fn fresh_db() -> (Db, PathBuf) {
         let seq = SEQ.fetch_add(1, Ordering::Relaxed);
-        let path = std::env::temp_dir()
-            .join(format!("yuuka_settings_test_{}_{seq}.sqlite", std::process::id()));
+        let path = std::env::temp_dir().join(format!(
+            "yuuka_settings_test_{}_{seq}.sqlite",
+            std::process::id()
+        ));
         let _ = std::fs::remove_file(&path);
         // Rust は不在 DB を作らない（P0-4）。raw 接続で空ファイルを作ってから migrate する。
         drop(Connection::open(&path).expect("create db file"));
@@ -410,15 +419,27 @@ mod tests {
                 Some("tag".to_owned())
             ))
         );
-        assert_eq!(col(&path, "u", "gemini_model").as_deref(), Some("gemini-3.1-flash-lite"));
+        assert_eq!(
+            col(&path, "u", "gemini_model").as_deref(),
+            Some("gemini-3.1-flash-lite")
+        );
         // keep-current: 既存 3 列を書き戻し、モデルのみ変更。
         let (e, i, t) = get_gemini_enc(&db, "u").await.unwrap().unwrap();
-        set_gemini(&db, "u", e, i, t, "gemini-3.1-pro").await.unwrap();
+        set_gemini(&db, "u", e, i, t, "gemini-3.1-pro")
+            .await
+            .unwrap();
         assert_eq!(
             get_gemini_enc(&db, "u").await.unwrap(),
-            Some((Some("enc".to_owned()), Some("iv".to_owned()), Some("tag".to_owned())))
+            Some((
+                Some("enc".to_owned()),
+                Some("iv".to_owned()),
+                Some("tag".to_owned())
+            ))
         );
-        assert_eq!(col(&path, "u", "gemini_model").as_deref(), Some("gemini-3.1-pro"));
+        assert_eq!(
+            col(&path, "u", "gemini_model").as_deref(),
+            Some("gemini-3.1-pro")
+        );
     }
 
     #[tokio::test]
@@ -455,7 +476,10 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(col(&path, "u", "notify_target_type").as_deref(), Some("channel"));
+        assert_eq!(
+            col(&path, "u", "notify_target_type").as_deref(),
+            Some("channel")
+        );
         assert_eq!(col(&path, "u", "notify_target_id"), None);
         assert_eq!(col(&path, "u", "timezone").as_deref(), Some("UTC"));
 
@@ -470,7 +494,9 @@ mod tests {
         let (db, path) = fresh_db();
         seed_user(&path, "u", "user");
         // interval 1000 → 720 に、generations 0.5 → floor 0 → max(1)=1 に。folder は未指定で不変。
-        update_backup(&db, "u", true, 1000.0, 0.5, None).await.unwrap();
+        update_backup(&db, "u", true, 1000.0, 0.5, None)
+            .await
+            .unwrap();
         assert_eq!(col_i(&path, "u", "backup_enabled"), Some(1));
         assert_eq!(col_i(&path, "u", "backup_interval_hours"), Some(720));
         assert_eq!(col_i(&path, "u", "backup_generations"), Some(1));
@@ -483,6 +509,9 @@ mod tests {
         assert_eq!(col_i(&path, "u", "backup_enabled"), Some(0));
         assert_eq!(col_i(&path, "u", "backup_interval_hours"), Some(1));
         assert_eq!(col_i(&path, "u", "backup_generations"), Some(3));
-        assert_eq!(col(&path, "u", "backup_folder_id").as_deref(), Some("FOLDER123"));
+        assert_eq!(
+            col(&path, "u", "backup_folder_id").as_deref(),
+            Some("FOLDER123")
+        );
     }
 }

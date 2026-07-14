@@ -15,13 +15,13 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Deserialize;
 use yuuka_core::WebError;
-use yuuka_types::{Envelope, EmptyData};
+use yuuka_types::{EmptyData, Envelope};
 use yuuka_web::{resolve_scope, ApiError, AppState, AuthenticatedUser, Db, ScopedJson};
 
 use crate::dto::{
     BudgetLimitListData, DeleteBudgetLimit, ExpenseData, ExpenseListData, NewExpense,
-    NewPlannedPayment, PlannedPaymentData, PlannedPaymentId, PlannedPaymentListData, SetBudgetLimit,
-    SettlePlanData,
+    NewPlannedPayment, PlannedPaymentData, PlannedPaymentId, PlannedPaymentListData,
+    SetBudgetLimit, SettlePlanData,
 };
 use crate::repo::ExpenseRepo;
 
@@ -80,7 +80,9 @@ async fn list(
     let expenses = repo.list(&scope).await?;
     let total = repo.monthly_total(&scope, "expense", year, month).await?;
     let income_total = repo.monthly_total(&scope, "income", year, month).await?;
-    let breakdown = repo.monthly_category_breakdown(&scope, year, month, "expense").await?;
+    let breakdown = repo
+        .monthly_category_breakdown(&scope, year, month, "expense")
+        .await?;
     let trend = repo.monthly_trend(&scope, 6).await?;
     Ok(Json(Envelope::ok(ExpenseListData {
         expenses,
@@ -94,7 +96,10 @@ async fn list(
 async fn add(
     user: AuthenticatedUser,
     State(db): State<Db>,
-    ScopedJson { bot_id, value: input }: ScopedJson<NewExpense>,
+    ScopedJson {
+        bot_id,
+        value: input,
+    }: ScopedJson<NewExpense>,
 ) -> Result<Json<Envelope<ExpenseData>>, ApiError> {
     // Node parity: amount と category は必須（amount は 0 も金額として不正扱い＝truthy 判定）。
     if input.amount == 0 || input.category.trim().is_empty() {
@@ -122,7 +127,10 @@ async fn list_budget_limits(
 async fn set_budget_limit(
     user: AuthenticatedUser,
     State(db): State<Db>,
-    ScopedJson { bot_id, value: input }: ScopedJson<SetBudgetLimit>,
+    ScopedJson {
+        bot_id,
+        value: input,
+    }: ScopedJson<SetBudgetLimit>,
 ) -> Result<Json<Envelope<EmptyData>>, ApiError> {
     // Node parity: category は必須（空文字は truthy 判定で許容だが空白のみは拒否）、
     // limitAmount は 0 以上の数値（0 は許容）。i64 デシリアライズで非数/非整数は既に弾かれる。
@@ -152,7 +160,10 @@ async fn set_budget_limit(
 async fn delete_budget_limit(
     user: AuthenticatedUser,
     State(db): State<Db>,
-    ScopedJson { bot_id, value: input }: ScopedJson<DeleteBudgetLimit>,
+    ScopedJson {
+        bot_id,
+        value: input,
+    }: ScopedJson<DeleteBudgetLimit>,
 ) -> Result<Json<Envelope<EmptyData>>, ApiError> {
     // Node parity: category は必須（`!category` で 400）。
     if input.category.trim().is_empty() {
@@ -179,23 +190,29 @@ async fn list_plans(
     let scope = resolve_scope(&user.0, &db, q.bot_id.as_deref()).await?;
     // Node: `includePaid === "true"`（厳密一致）。それ以外は pending のみ。
     let include_paid = q.include_paid.as_deref() == Some("true");
-    let plans = ExpenseRepo::new(&db).list_plans(&scope, include_paid).await?;
+    let plans = ExpenseRepo::new(&db)
+        .list_plans(&scope, include_paid)
+        .await?;
     Ok(Json(Envelope::ok(PlannedPaymentListData { plans })))
 }
 
 async fn add_plan(
     user: AuthenticatedUser,
     State(db): State<Db>,
-    ScopedJson { bot_id, value: input }: ScopedJson<NewPlannedPayment>,
+    ScopedJson {
+        bot_id,
+        value: input,
+    }: ScopedJson<NewPlannedPayment>,
 ) -> Result<Json<Envelope<PlannedPaymentData>>, ApiError> {
     // Node parity: 期日は dueDate ?? plannedDate（旧 UI 互換）。空文字は falsy 扱い。
     let due = pick_nonempty(input.due_date.as_deref())
         .or_else(|| pick_nonempty(input.planned_date.as_deref()));
     // title/amount/category/期日 は必須（amount は 0 も falsy で 400）。
     let due = match due {
-        Some(d) if !input.title.trim().is_empty()
-            && input.amount != 0
-            && !input.category.trim().is_empty() =>
+        Some(d)
+            if !input.title.trim().is_empty()
+                && input.amount != 0
+                && !input.category.trim().is_empty() =>
         {
             d
         }
@@ -213,7 +230,10 @@ async fn add_plan(
 async fn pay_plan(
     user: AuthenticatedUser,
     State(db): State<Db>,
-    ScopedJson { bot_id, value: input }: ScopedJson<PlannedPaymentId>,
+    ScopedJson {
+        bot_id,
+        value: input,
+    }: ScopedJson<PlannedPaymentId>,
 ) -> Result<Json<Envelope<SettlePlanData>>, ApiError> {
     // Node parity: `!id`（0 含む）は 400。
     if input.id == 0 {
@@ -261,7 +281,10 @@ async fn pay_plan(
 async fn delete_plan(
     user: AuthenticatedUser,
     State(db): State<Db>,
-    ScopedJson { bot_id, value: input }: ScopedJson<PlannedPaymentId>,
+    ScopedJson {
+        bot_id,
+        value: input,
+    }: ScopedJson<PlannedPaymentId>,
 ) -> Result<Json<Envelope<EmptyData>>, ApiError> {
     // Node parity: `!id`（0 含む）は 400。成否は bare `{success: ok}` で返す。
     if input.id == 0 {

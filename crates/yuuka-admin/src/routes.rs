@@ -42,8 +42,14 @@ pub(crate) async fn default_bot_token(
         .encrypt_text(token)
         .map_err(|_| ApiError(WebError::Internal))?;
     repo::upsert_default_bot_token(&db, &admin.0.discord_id, &enc).await?;
-    yuuka_auth::audit::add_audit_log(&db, &admin.0.discord_id, "admin.default_bot_token", None, None)
-        .await;
+    yuuka_auth::audit::add_audit_log(
+        &db,
+        &admin.0.discord_id,
+        "admin.default_bot_token",
+        None,
+        None,
+    )
+    .await;
     // 2. デフォルト Bot 再起動（runtime シーム）。
     rt.bots.restart_default(token).await;
     Ok(ok_message("デフォルトBotのトークンを更新しました。"))
@@ -124,11 +130,15 @@ pub(crate) async fn users_role(
         return Ok(bad_request("targetUserId と role が必要です。"));
     }
     if role != "user" && role != "admin" {
-        return Ok(bad_request("role は 'user' または 'admin' のみ指定可能です。"));
+        return Ok(bad_request(
+            "role は 'user' または 'admin' のみ指定可能です。",
+        ));
     }
     // 自己降格防止。
     if target == admin_id && role == "user" {
-        return Ok(bad_request("自分自身の Admin 権限を解除することはできません。"));
+        return Ok(bad_request(
+            "自分自身の Admin 権限を解除することはできません。",
+        ));
     }
     if !repo::update_user_role(&db, target, role).await? {
         return Ok(bad_request(
@@ -185,7 +195,9 @@ pub(crate) async fn audit_logs(
     let offset = parse_int_or(q.offset.as_deref(), 0).max(0);
     let logs = repo::list_audit_logs(&db, limit, action, offset).await?;
     let total = repo::count_audit_logs(&db, action).await?;
-    Ok(json_ok(json!({ "success": true, "logs": logs, "total": total })))
+    Ok(json_ok(
+        json!({ "success": true, "logs": logs, "total": total }),
+    ))
 }
 
 // ─── Bot 管理 ─────────────────────────────────────────────────────────────────
@@ -217,8 +229,14 @@ pub(crate) async fn bots_suspend(
     if !repo::suspend_bot(&db, bot_id).await? {
         return Ok(bad_request("Botの停止処分に失敗しました。"));
     }
-    yuuka_auth::audit::add_audit_log(&db, &admin.0.discord_id, "admin.bot_suspend", Some(bot_id), None)
-        .await;
+    yuuka_auth::audit::add_audit_log(
+        &db,
+        &admin.0.discord_id,
+        "admin.bot_suspend",
+        Some(bot_id),
+        None,
+    )
+    .await;
     Ok(ok_message(&format!(
         "Bot {bot_id} を停止処分にしました。Discordクライアントは停止されました。"
     )))
@@ -269,8 +287,14 @@ pub(crate) async fn invite_codes_create(
         return Ok(bad_request("招待コードを入力してください。"));
     }
     repo::create_invite_code(&db, code, &admin.0.discord_id).await?;
-    yuuka_auth::audit::add_audit_log(&db, &admin.0.discord_id, "admin.invite_create", Some(code), None)
-        .await;
+    yuuka_auth::audit::add_audit_log(
+        &db,
+        &admin.0.discord_id,
+        "admin.invite_create",
+        Some(code),
+        None,
+    )
+    .await;
     Ok(ok_message(&format!("招待コード「{code}」を作成しました。")))
 }
 
@@ -282,9 +306,17 @@ pub(crate) async fn invite_codes_revoke(
     if !repo::revoke_invite_code(&db, &code).await? {
         return Ok(bad_request("未使用の招待コードのみ無効化できます。"));
     }
-    yuuka_auth::audit::add_audit_log(&db, &admin.0.discord_id, "admin.invite_revoke", Some(&code), None)
-        .await;
-    Ok(ok_message(&format!("招待コード「{code}」を無効化しました。")))
+    yuuka_auth::audit::add_audit_log(
+        &db,
+        &admin.0.discord_id,
+        "admin.invite_revoke",
+        Some(&code),
+        None,
+    )
+    .await;
+    Ok(ok_message(&format!(
+        "招待コード「{code}」を無効化しました。"
+    )))
 }
 
 pub(crate) async fn invite_codes_delete(
@@ -295,8 +327,14 @@ pub(crate) async fn invite_codes_delete(
     if !repo::delete_invite_code(&db, &code).await? {
         return Ok(bad_request("未使用の招待コードのみ削除できます。"));
     }
-    yuuka_auth::audit::add_audit_log(&db, &admin.0.discord_id, "admin.invite_delete", Some(&code), None)
-        .await;
+    yuuka_auth::audit::add_audit_log(
+        &db,
+        &admin.0.discord_id,
+        "admin.invite_delete",
+        Some(&code),
+        None,
+    )
+    .await;
     Ok(ok_message(&format!("招待コード「{code}」を削除しました。")))
 }
 

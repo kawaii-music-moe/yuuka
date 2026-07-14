@@ -77,8 +77,10 @@ mod tests {
 
     fn seed_db() -> Db {
         let seq = SEQ.fetch_add(1, Ordering::Relaxed);
-        let path = std::env::temp_dir()
-            .join(format!("yuuka_registry_test_{}_{seq}.sqlite", std::process::id()));
+        let path = std::env::temp_dir().join(format!(
+            "yuuka_registry_test_{}_{seq}.sqlite",
+            std::process::id()
+        ));
         {
             let conn = Connection::open(&path).unwrap();
             conn.execute_batch(DDL).unwrap();
@@ -111,11 +113,18 @@ mod tests {
             "addContact",
             "listCredentialServices",
         ] {
-            assert!(names.contains(&expected.to_owned()), "missing tool: {expected}");
+            assert!(
+                names.contains(&expected.to_owned()),
+                "missing tool: {expected}"
+            );
         }
         // native は bare 名（namespace 無し）。
         assert!(!names.iter().any(|n| n.contains(':')));
-        assert!(decls.len() >= 14, "8 ドメイン分のツールが集約されている: {}", decls.len());
+        assert!(
+            decls.len() >= 14,
+            "8 ドメイン分のツールが集約されている: {}",
+            decls.len()
+        );
     }
 
     /// canned レスポンスを返す fake backend（GenerateBackend は pub なので外部クレートで実装可）。

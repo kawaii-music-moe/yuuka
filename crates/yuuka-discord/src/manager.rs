@@ -103,7 +103,10 @@ impl DiscordManager {
         // runner 群。
         let mut runners = Vec::with_capacity(eligible.len());
         for (bot_id, token) in eligible {
-            let http = clients.get(&bot_id).cloned().unwrap_or_else(|| Arc::new(new_client(&token)));
+            let http = clients
+                .get(&bot_id)
+                .cloned()
+                .unwrap_or_else(|| Arc::new(new_client(&token)));
             let flow = FlowDeps {
                 http: http.clone(),
                 directory: self.ports.directory.clone(),
@@ -151,10 +154,7 @@ impl TenantRunner {
     ///
     /// # Errors
     /// 恒久クローズ時 [`DiscordError::ShardClosedFatal`]（[`run_tenant`] を参照）。
-    pub async fn run(
-        &self,
-        cancel: impl Future<Output = ()> + Send,
-    ) -> Result<(), DiscordError> {
+    pub async fn run(&self, cancel: impl Future<Output = ()> + Send) -> Result<(), DiscordError> {
         run_tenant(
             &self.config,
             self.flow.clone(),
@@ -310,7 +310,8 @@ impl DiscordMessenger {
                 },
             ],
         }];
-        self.send_owner_dm(shared_user_id, &content, &components).await
+        self.send_owner_dm(shared_user_id, &content, &components)
+            .await
     }
 
     /// 利用申請の受付 DM（承認/却下ボタン付き・現行 `sendMemberRequestDM`）。
@@ -388,12 +389,20 @@ impl crate::ports::MemberDmSender for DiscordMessenger {
         note: Option<&str>,
         request_id: i64,
     ) -> bool {
-        self.send_member_request_dm(owner_id, bot_name, applicant_label, guild_label, note, request_id)
-            .await
+        self.send_member_request_dm(
+            owner_id,
+            bot_name,
+            applicant_label,
+            guild_label,
+            note,
+            request_id,
+        )
+        .await
     }
 
     async fn send_decision_dm(&self, applicant_id: &str, bot_name: &str, approved: bool) -> bool {
-        self.send_member_decision_dm(applicant_id, bot_name, approved).await
+        self.send_member_decision_dm(applicant_id, bot_name, approved)
+            .await
     }
 }
 

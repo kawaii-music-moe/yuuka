@@ -77,7 +77,10 @@ async fn list(
 async fn save(
     user: AuthenticatedUser,
     State(db): State<Db>,
-    ScopedJson { bot_id, value: input }: ScopedJson<NewPlaybook>,
+    ScopedJson {
+        bot_id,
+        value: input,
+    }: ScopedJson<NewPlaybook>,
 ) -> Result<Json<Envelope<PlaybookData>>, ApiError> {
     if input.name.trim().is_empty()
         || input.title.trim().is_empty()
@@ -95,10 +98,15 @@ async fn save(
 async fn delete(
     user: AuthenticatedUser,
     State(db): State<Db>,
-    ScopedJson { bot_id, value: input }: ScopedJson<NameInput>,
+    ScopedJson {
+        bot_id,
+        value: input,
+    }: ScopedJson<NameInput>,
 ) -> Result<Json<Envelope<EmptyData>>, ApiError> {
     if input.name.trim().is_empty() {
-        return Err(ApiError(WebError::Validation("name is required".to_owned())));
+        return Err(ApiError(WebError::Validation(
+            "name is required".to_owned(),
+        )));
     }
     let scope = resolve_scope(&user.0, &db, bot_id.as_deref()).await?;
     // Node parity: `{success: <削除できたか>}`（削除した name は返さない・該当無も 200）。
@@ -128,7 +136,10 @@ async fn list_schedules(
 async fn save_schedule(
     user: AuthenticatedUser,
     State(db): State<Db>,
-    ScopedJson { bot_id, value: input }: ScopedJson<NewSchedule>,
+    ScopedJson {
+        bot_id,
+        value: input,
+    }: ScopedJson<NewSchedule>,
 ) -> Result<Json<Envelope<ScheduleData>>, ApiError> {
     if input.playbook_name.trim().is_empty() || input.cron_expression.trim().is_empty() {
         return Err(ApiError(WebError::Validation(
@@ -138,7 +149,10 @@ async fn save_schedule(
     // Node は raw の playbookName をメッセージに埋め込む（正規化前）。
     let playbook_name = input.playbook_name.clone();
     let scope = resolve_scope(&user.0, &db, bot_id.as_deref()).await?;
-    match PlaybookRepo::new(&db).upsert_schedule(&scope, input).await? {
+    match PlaybookRepo::new(&db)
+        .upsert_schedule(&scope, input)
+        .await?
+    {
         Some(schedule) => Ok(Json(Envelope::ok_with_message(
             ScheduleData { schedule },
             format!("スケジュール「{playbook_name}」を保存しました。"),
@@ -157,7 +171,10 @@ async fn save_schedule(
 async fn toggle_schedule(
     user: AuthenticatedUser,
     State(db): State<Db>,
-    ScopedJson { bot_id, value: input }: ScopedJson<ToggleScheduleInput>,
+    ScopedJson {
+        bot_id,
+        value: input,
+    }: ScopedJson<ToggleScheduleInput>,
 ) -> Result<Json<Envelope<EmptyData>>, ApiError> {
     let Some(id) = input.id else {
         return Err(ApiError(WebError::Validation("idは必須です。".to_owned())));
@@ -187,7 +204,10 @@ async fn toggle_schedule(
 async fn delete_schedule(
     user: AuthenticatedUser,
     State(db): State<Db>,
-    ScopedJson { bot_id, value: input }: ScopedJson<ScheduleIdInput>,
+    ScopedJson {
+        bot_id,
+        value: input,
+    }: ScopedJson<ScheduleIdInput>,
 ) -> Result<Json<Envelope<EmptyData>>, ApiError> {
     let Some(id) = input.id else {
         return Err(ApiError(WebError::Validation("idは必須です。".to_owned())));

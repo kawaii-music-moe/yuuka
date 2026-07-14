@@ -351,13 +351,18 @@ impl Tool for ListTodosTool {
                 ),
                 None => "該当するToDoはありません。".to_owned(),
             };
-            return Ok(ToolOutcome::from_payload(ok_payload(msg, json!({ "todos": [] }))));
+            return Ok(ToolOutcome::from_payload(ok_payload(
+                msg,
+                json!({ "todos": [] }),
+            )));
         }
 
         let msg = format!(
             "ToDo一覧 (親タスク {}件{})",
             todos.len(),
-            tag.as_ref().map(|t| format!("、タグ: {t}")).unwrap_or_default(),
+            tag.as_ref()
+                .map(|t| format!("、タグ: {t}"))
+                .unwrap_or_default(),
         );
         Ok(ToolOutcome::from_payload(ok_payload(
             msg,
@@ -378,7 +383,8 @@ impl Tool for CompleteTodoTool {
     fn declaration(&self) -> FunctionDeclaration {
         FunctionDeclaration {
             name: self.name.clone(),
-            description: "指定した ToDo を完了にする。todo_id は listTodos で確認できる ID。".to_owned(),
+            description: "指定した ToDo を完了にする。todo_id は listTodos で確認できる ID。"
+                .to_owned(),
             parameters_json_schema: json!({
                 "type": "object",
                 "properties": { "todo_id": { "type": "number", "description": "完了にする ToDo の ID" } },
@@ -418,7 +424,8 @@ impl Tool for DeleteTodoTool {
     fn declaration(&self) -> FunctionDeclaration {
         FunctionDeclaration {
             name: self.name.clone(),
-            description: "指定した ToDo を削除する。todo_id は listTodos で確認できる ID。".to_owned(),
+            description: "指定した ToDo を削除する。todo_id は listTodos で確認できる ID。"
+                .to_owned(),
             parameters_json_schema: json!({
                 "type": "object",
                 "properties": { "todo_id": { "type": "number", "description": "削除する ToDo の ID" } },
@@ -547,10 +554,11 @@ impl Tool for UpdateTodoTool {
     fn declaration(&self) -> FunctionDeclaration {
         FunctionDeclaration {
             name: self.name.clone(),
-            description: "既にあるタスクの中身を変える（タイトル・説明・締め切り・開始日・優先度・状態）。\
+            description:
+                "既にあるタスクの中身を変える（タイトル・説明・締め切り・開始日・優先度・状態）。\
                 「#2の期限を金曜にして」等の依頼で呼ぶ。変える項目だけを指定する。\
                 進捗（何%まで進んだか）を変えたい時は代わりに updateTaskProgress を使う。"
-                .to_owned(),
+                    .to_owned(),
             parameters_json_schema: json!({
                 "type": "object",
                 "properties": {
@@ -671,10 +679,15 @@ impl Tool for UpdateTaskProgressTool {
         let scope = scope_of(ctx);
         let repo = TodoRepo::new(&self.db);
         let Some(todo) = repo.get(&scope, todo_id).await.map_err(exec_err)? else {
-            return Ok(fail_payload(format!("タスク #{todo_id} が見つかりません。")));
+            return Ok(fail_payload(format!(
+                "タスク #{todo_id} が見つかりません。"
+            )));
         };
         // サブタスクを持つ親は進捗が自動算出のため弾く（Node パリティ）。
-        let subtasks = repo.list_subtasks_tree(&scope, todo_id).await.map_err(exec_err)?;
+        let subtasks = repo
+            .list_subtasks_tree(&scope, todo_id)
+            .await
+            .map_err(exec_err)?;
         if !subtasks.is_empty() {
             let done = subtasks.iter().filter(|s| s.status == "done").count();
             return Ok(fail_payload(format!(
@@ -744,15 +757,28 @@ impl Tool for GetTaskDetailTool {
         let scope = scope_of(ctx);
         let repo = TodoRepo::new(&self.db);
         let Some(todo) = repo.get(&scope, todo_id).await.map_err(exec_err)? else {
-            return Ok(fail_payload(format!("タスク #{todo_id} が見つかりません。")));
+            return Ok(fail_payload(format!(
+                "タスク #{todo_id} が見つかりません。"
+            )));
         };
-        let subtasks = repo.list_subtasks_tree(&scope, todo_id).await.map_err(exec_err)?;
-        let logs = repo.list_progress_logs(&scope, todo_id).await.map_err(exec_err)?;
+        let subtasks = repo
+            .list_subtasks_tree(&scope, todo_id)
+            .await
+            .map_err(exec_err)?;
+        let logs = repo
+            .list_progress_logs(&scope, todo_id)
+            .await
+            .map_err(exec_err)?;
         let eff = effective_progress(&todo, &subtasks);
         let done = subtasks.iter().filter(|s| s.status == "done").count();
         let message = format!(
             "タスク「{}」(#{}) の詳細です。進捗 {}%、サブタスク {}/{} 完了、進捗履歴 {} 件。",
-            todo.title, todo.id, eff, done, subtasks.len(), logs.len(),
+            todo.title,
+            todo.id,
+            eff,
+            done,
+            subtasks.len(),
+            logs.len(),
         );
         Ok(ToolOutcome::from_payload(ok_payload(
             message,
@@ -804,7 +830,10 @@ impl Tool for ListTodoTagsTool {
         }
         let mut tags: Vec<(String, i64)> = counts.into_iter().collect();
         tags.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-        let lines: Vec<String> = tags.iter().map(|(t, c)| format!("🏷️ {t} ({c}件)")).collect();
+        let lines: Vec<String> = tags
+            .iter()
+            .map(|(t, c)| format!("🏷️ {t} ({c}件)"))
+            .collect();
         let payload: Vec<Value> = tags
             .iter()
             .map(|(t, c)| json!({ "tag": t, "count": c }))
@@ -970,12 +999,16 @@ impl Tool for EditTodoTagsTool {
         }
         let input_tags = normalize_tags(args.get("tags").unwrap_or(&Value::Null));
         if mode != "set" && input_tags.is_empty() {
-            return Ok(fail_payload(format!("{mode} には tags を1つ以上指定してください。")));
+            return Ok(fail_payload(format!(
+                "{mode} には tags を1つ以上指定してください。"
+            )));
         }
         let scope = scope_of(ctx);
         let repo = TodoRepo::new(&self.db);
         let Some(todo) = repo.get(&scope, todo_id).await.map_err(exec_err)? else {
-            return Ok(fail_payload(format!("タスク #{todo_id} が見つかりません。")));
+            return Ok(fail_payload(format!(
+                "タスク #{todo_id} が見つかりません。"
+            )));
         };
         let current = todo.tags;
         let next: Vec<String> = match mode.as_str() {
@@ -991,10 +1024,17 @@ impl Tool for EditTodoTagsTool {
             }
             _ => {
                 let remove: std::collections::HashSet<&String> = input_tags.iter().collect();
-                current.into_iter().filter(|t| !remove.contains(t)).collect()
+                current
+                    .into_iter()
+                    .filter(|t| !remove.contains(t))
+                    .collect()
             }
         };
-        match repo.update_tags(&scope, todo_id, next).await.map_err(exec_err)? {
+        match repo
+            .update_tags(&scope, todo_id, next)
+            .await
+            .map_err(exec_err)?
+        {
             Some(updated) => {
                 let tag_label = if updated.tags.is_empty() {
                     "（タグなし）".to_owned()
@@ -1002,11 +1042,16 @@ impl Tool for EditTodoTagsTool {
                     updated.tags.join("、")
                 };
                 Ok(ToolOutcome::from_payload(ok_payload(
-                    format!("ToDo「{}」(#{}) のタグを更新しました🏷️ {tag_label}", updated.title, updated.id),
+                    format!(
+                        "ToDo「{}」(#{}) のタグを更新しました🏷️ {tag_label}",
+                        updated.title, updated.id
+                    ),
                     json!({ "todo": updated }),
                 )))
             }
-            None => Ok(fail_payload(format!("タスク #{todo_id} のタグ更新に失敗しました。"))),
+            None => Ok(fail_payload(format!(
+                "タスク #{todo_id} のタグ更新に失敗しました。"
+            ))),
         }
     }
 }
@@ -1098,8 +1143,10 @@ mod tests {
 
     fn seed_db() -> Db {
         let seq = SEQ.fetch_add(1, Ordering::Relaxed);
-        let path =
-            std::env::temp_dir().join(format!("yuuka_todo_tools_{}_{seq}.sqlite", std::process::id()));
+        let path = std::env::temp_dir().join(format!(
+            "yuuka_todo_tools_{}_{seq}.sqlite",
+            std::process::id()
+        ));
         {
             let conn = Connection::open(&path).unwrap();
             conn.execute_batch(TODOS_DDL).unwrap();
@@ -1125,7 +1172,10 @@ mod tests {
         let tools = tools(db).unwrap();
 
         // 宣言名は bare（Node system prompt と一致）。
-        let names: Vec<String> = tools.iter().map(|t| t.declaration().name.to_string()).collect();
+        let names: Vec<String> = tools
+            .iter()
+            .map(|t| t.declaration().name.to_string())
+            .collect();
         assert!(names.contains(&"addTodo".to_owned()));
         assert!(!names.iter().any(|n| n.contains(':')), "native は bare 名");
 
@@ -1200,7 +1250,9 @@ mod tests {
         let add = find(&tools, "addTodo");
         let list = find(&tools, "listTodos");
 
-        add.call(&ctx(), json!({"title": "A のタスク"})).await.unwrap();
+        add.call(&ctx(), json!({"title": "A のタスク"}))
+            .await
+            .unwrap();
 
         // 別ユーザーには見えない。
         let ctx_b = ToolContext::new(BotId::system_default(), UserId::new("userB"));
@@ -1224,7 +1276,10 @@ mod tests {
 
         // サブタスク追加（親の下に付く）。
         let out = add_sub
-            .call(&ctx(), json!({"parent_todo_id": parent_id, "title": "要件定義"}))
+            .call(
+                &ctx(),
+                json!({"parent_todo_id": parent_id, "title": "要件定義"}),
+            )
             .await
             .unwrap();
         assert_eq!(out.payload["success"], true);
@@ -1239,11 +1294,17 @@ mod tests {
 
         // updateTodo: タイトル変更は成功、無変更は fail、不正 priority も fail。
         let out = update
-            .call(&ctx(), json!({"todo_id": sub_id, "title": "要件定義（改）"}))
+            .call(
+                &ctx(),
+                json!({"todo_id": sub_id, "title": "要件定義（改）"}),
+            )
             .await
             .unwrap();
         assert_eq!(out.payload["todo"]["title"], "要件定義（改）");
-        let out = update.call(&ctx(), json!({"todo_id": sub_id})).await.unwrap();
+        let out = update
+            .call(&ctx(), json!({"todo_id": sub_id}))
+            .await
+            .unwrap();
         assert_eq!(out.payload["success"], false);
         let out = update
             .call(&ctx(), json!({"todo_id": sub_id, "priority": "urgent"}))
@@ -1253,7 +1314,10 @@ mod tests {
 
         // updateTaskProgress: 葉サブタスクは更新可（100 で完了）。
         let out = progress
-            .call(&ctx(), json!({"todo_id": sub_id, "progress": 100, "note": "済"}))
+            .call(
+                &ctx(),
+                json!({"todo_id": sub_id, "progress": 100, "note": "済"}),
+            )
             .await
             .unwrap();
         assert_eq!(out.payload["success"], true);
@@ -1266,12 +1330,18 @@ mod tests {
         assert_eq!(out.payload["success"], false);
 
         // getTaskDetail: 親の effective_progress はサブ 1/1 完了 = 100。
-        let out = detail.call(&ctx(), json!({"todo_id": parent_id})).await.unwrap();
+        let out = detail
+            .call(&ctx(), json!({"todo_id": parent_id}))
+            .await
+            .unwrap();
         assert_eq!(out.payload["success"], true);
         assert_eq!(out.payload["effective_progress"], 100);
         assert_eq!(out.payload["subtasks"].as_array().unwrap().len(), 1);
         // 存在しないタスクの detail → fail。
-        let out = detail.call(&ctx(), json!({"todo_id": 99999})).await.unwrap();
+        let out = detail
+            .call(&ctx(), json!({"todo_id": 99999}))
+            .await
+            .unwrap();
         assert_eq!(out.payload["success"], false);
     }
 
@@ -1346,48 +1416,78 @@ mod tests {
 
         // set: 丸ごと置換（重複は正規化で1つに）。
         let out = edit_tags
-            .call(&ctx(), json!({"todo_id": id, "tags": ["家事", "家事", "急ぎ"]}))
+            .call(
+                &ctx(),
+                json!({"todo_id": id, "tags": ["家事", "家事", "急ぎ"]}),
+            )
             .await
             .unwrap();
         assert_eq!(out.payload["success"], true);
         assert_eq!(out.payload["todo"]["tags"], json!(["家事", "急ぎ"]));
         // add: 追加。
         let out = edit_tags
-            .call(&ctx(), json!({"todo_id": id, "mode": "add", "tags": ["週末"]}))
+            .call(
+                &ctx(),
+                json!({"todo_id": id, "mode": "add", "tags": ["週末"]}),
+            )
             .await
             .unwrap();
         assert_eq!(out.payload["todo"]["tags"], json!(["家事", "急ぎ", "週末"]));
         // remove: 指定タグを外す。
         let out = edit_tags
-            .call(&ctx(), json!({"todo_id": id, "mode": "remove", "tags": ["急ぎ"]}))
+            .call(
+                &ctx(),
+                json!({"todo_id": id, "mode": "remove", "tags": ["急ぎ"]}),
+            )
             .await
             .unwrap();
         assert_eq!(out.payload["todo"]["tags"], json!(["家事", "週末"]));
         // 不正 mode → fail。
-        let out = edit_tags.call(&ctx(), json!({"todo_id": id, "mode": "x", "tags": []})).await.unwrap();
+        let out = edit_tags
+            .call(&ctx(), json!({"todo_id": id, "mode": "x", "tags": []}))
+            .await
+            .unwrap();
         assert_eq!(out.payload["success"], false);
         // add で tags 空 → fail。
-        let out = edit_tags.call(&ctx(), json!({"todo_id": id, "mode": "add", "tags": []})).await.unwrap();
+        let out = edit_tags
+            .call(&ctx(), json!({"todo_id": id, "mode": "add", "tags": []}))
+            .await
+            .unwrap();
         assert_eq!(out.payload["success"], false);
 
         // 単発タスクへの stopRoutine → fail（ルーチンではない）。
-        let out = stop_routine.call(&ctx(), json!({"todo_id": id})).await.unwrap();
+        let out = stop_routine
+            .call(&ctx(), json!({"todo_id": id}))
+            .await
+            .unwrap();
         assert_eq!(out.payload["success"], false);
 
         // ルーチンタスクを作って停止。
         let out = add
-            .call(&ctx(), json!({"title": "毎週報告", "repeat_rule": "0 9 * * 1", "due_date": "2026-08-03"}))
+            .call(
+                &ctx(),
+                json!({"title": "毎週報告", "repeat_rule": "0 9 * * 1", "due_date": "2026-08-03"}),
+            )
             .await
             .unwrap();
         let rid = out.payload["todo"]["id"].as_i64().unwrap();
-        let out = stop_routine.call(&ctx(), json!({"todo_id": rid})).await.unwrap();
+        let out = stop_routine
+            .call(&ctx(), json!({"todo_id": rid}))
+            .await
+            .unwrap();
         assert_eq!(out.payload["success"], true);
         assert!(out.payload["todo"]["repeat_rule"].is_null());
         // 停止後は単発なので再度 stop は fail。
-        let out = stop_routine.call(&ctx(), json!({"todo_id": rid})).await.unwrap();
+        let out = stop_routine
+            .call(&ctx(), json!({"todo_id": rid}))
+            .await
+            .unwrap();
         assert_eq!(out.payload["success"], false);
         // 存在しない ID。
-        let out = stop_routine.call(&ctx(), json!({"todo_id": 99999})).await.unwrap();
+        let out = stop_routine
+            .call(&ctx(), json!({"todo_id": 99999}))
+            .await
+            .unwrap();
         assert_eq!(out.payload["success"], false);
     }
 }

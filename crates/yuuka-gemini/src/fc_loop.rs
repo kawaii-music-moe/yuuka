@@ -77,11 +77,31 @@ pub fn claims_action_completed(text: &str) -> bool {
         return false;
     }
     const VERBS: &[&str] = &[
-        "登録", "追加", "削除", "設定", "記録", "保存", "作成", "更新", "消込", "予約", "同期",
-        "変更", "オン", "オフ", "有効化", "無効化",
+        "登録",
+        "追加",
+        "削除",
+        "設定",
+        "記録",
+        "保存",
+        "作成",
+        "更新",
+        "消込",
+        "予約",
+        "同期",
+        "変更",
+        "オン",
+        "オフ",
+        "有効化",
+        "無効化",
     ];
     // し + {ました, ておきました, ておきます, ます, ますね}
-    const SHI_FORMS: &[&str] = &["しました", "しておきました", "しておきます", "しますね", "します"];
+    const SHI_FORMS: &[&str] = &[
+        "しました",
+        "しておきました",
+        "しておきます",
+        "しますね",
+        "します",
+    ];
     for verb in VERBS {
         for form in SHI_FORMS {
             if text.contains(&format!("{verb}{form}")) {
@@ -210,7 +230,8 @@ pub async fn run_function_calling_loop(
         // 並行呼び出し公式サポート。id を相関に保持する（独立ツールの並行実行は将来最適化）。
         for fc in &calls {
             result.tool_calls.push(fc.name.clone());
-            let response = dispatch_one(provider, ctx, &fc.name, fc.args.clone(), &mut result).await;
+            let response =
+                dispatch_one(provider, ctx, &fc.name, fc.args.clone(), &mut result).await;
             response_parts.push(Part::function_response(FunctionResponse {
                 name: fc.name.clone(),
                 response,
@@ -277,7 +298,9 @@ mod tests {
     #[test]
     fn claims_action_completed_ignores_plain_text() {
         assert!(!claims_action_completed(""));
-        assert!(!claims_action_completed("こんにちは、今日の天気は晴れです。"));
+        assert!(!claims_action_completed(
+            "こんにちは、今日の天気は晴れです。"
+        ));
         assert!(!claims_action_completed("登録が必要ですか？"));
     }
 

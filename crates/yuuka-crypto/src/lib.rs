@@ -282,7 +282,11 @@ impl SystemCrypto {
     ///
     /// # Errors
     /// ソルト不正・導出失敗・暗号化失敗で [`CryptoError`]。
-    pub fn encrypt_for_user(&self, salt_hex: &str, plaintext: &str) -> Result<Encrypted, CryptoError> {
+    pub fn encrypt_for_user(
+        &self,
+        salt_hex: &str,
+        plaintext: &str,
+    ) -> Result<Encrypted, CryptoError> {
         let key = self.user_key(salt_hex)?;
         encrypt_with_key(&key, plaintext)
     }

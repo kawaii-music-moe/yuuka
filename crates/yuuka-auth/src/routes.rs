@@ -13,11 +13,11 @@ use std::convert::Infallible;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 
+use axum::extract::FromRequestParts;
 use axum::extract::{ConnectInfo, Extension, State};
 use axum::http::header::SET_COOKIE;
 use axum::http::request::Parts;
 use axum::http::{HeaderValue, StatusCode};
-use axum::extract::FromRequestParts;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -168,7 +168,12 @@ async fn setup(
     // 既にセットアップ済みなら拒否。
     match users::count_users(&state.db).await {
         Ok(0) => {}
-        Ok(_) => return err(StatusCode::BAD_REQUEST, "システムは既にセットアップされています。"),
+        Ok(_) => {
+            return err(
+                StatusCode::BAD_REQUEST,
+                "システムは既にセットアップされています。",
+            )
+        }
         Err(e) => return ApiError::from(e).into_response(),
     }
 
@@ -188,10 +193,16 @@ async fn setup(
     let clean_discord_id = body.discord_id.trim();
     let clean_username = body.username.trim();
     if !is_valid_discord_id(clean_discord_id) {
-        return err(StatusCode::BAD_REQUEST, "Discord ID の形式が不正です（17〜20桁の数字）。");
+        return err(
+            StatusCode::BAD_REQUEST,
+            "Discord ID の形式が不正です（17〜20桁の数字）。",
+        );
     }
     if clean_username.encode_utf16().count() > 64 {
-        return err(StatusCode::BAD_REQUEST, "ユーザーネームは64文字以内で入力してください。");
+        return err(
+            StatusCode::BAD_REQUEST,
+            "ユーザーネームは64文字以内で入力してください。",
+        );
     }
     // 暗号が未構成なら **DB 書き込み前に** fail-closed する。create_user を先に走らせると、その後の
     // Gemini キー暗号化で 500 になった際に「admin 行だけ commit 済み（count!=0）→ setup が二度と
@@ -224,7 +235,8 @@ async fn setup(
         Err(msg) => return err(StatusCode::INTERNAL_SERVER_ERROR, msg),
     };
     if let Err(e) =
-        users::update_user_gemini_settings(&state.db, clean_discord_id, &enc, GEMINI_DEFAULT_MODEL).await
+        users::update_user_gemini_settings(&state.db, clean_discord_id, &enc, GEMINI_DEFAULT_MODEL)
+            .await
     {
         return ApiError::from(e).into_response();
     }
@@ -237,9 +249,21 @@ async fn setup(
     };
     let token = match rt.sessions.create(&su, rt.session_ttl_secs).await {
         Ok(t) => t,
-        Err(_) => return err(StatusCode::INTERNAL_SERVER_ERROR, "セッションの発行に失敗しました。"),
+        Err(_) => {
+            return err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "セッションの発行に失敗しました。",
+            )
+        }
     };
-    audit::add_audit_log(&state.db, clean_discord_id, "auth.register", Some("initial_setup"), None).await;
+    audit::add_audit_log(
+        &state.db,
+        clean_discord_id,
+        "auth.register",
+        Some("initial_setup"),
+        None,
+    )
+    .await;
 
     let cookie = build_session_cookie(state.config.https, &token, ttl_max_age(rt.session_ttl_secs));
     json_with_cookie(
@@ -270,13 +294,24 @@ async fn register(
     let clean_discord_id = body.discord_id.trim();
     let clean_username = body.username.trim();
     if !is_valid_discord_id(clean_discord_id) {
-        return err(StatusCode::BAD_REQUEST, "Discord ID の形式が不正です（17〜20桁の数字）。");
+        return err(
+            StatusCode::BAD_REQUEST,
+            "Discord ID の形式が不正です（17〜20桁の数字）。",
+        );
     }
     if clean_username.encode_utf16().count() > 64 {
-        return err(StatusCode::BAD_REQUEST, "ユーザーネームは64文字以内で入力してください。");
+        return err(
+            StatusCode::BAD_REQUEST,
+            "ユーザーネームは64文字以内で入力してください。",
+        );
     }
     match users::get_user_by_discord_id(&state.db, clean_discord_id).await {
-        Ok(Some(_)) => return err(StatusCode::BAD_REQUEST, "このDiscord IDは既に登録されています。"),
+        Ok(Some(_)) => {
+            return err(
+                StatusCode::BAD_REQUEST,
+                "このDiscord IDは既に登録されています。",
+            )
+        }
         Ok(None) => {}
         Err(e) => return ApiError::from(e).into_response(),
     }
@@ -286,7 +321,12 @@ async fn register(
     // 招待コードは事前検証のみ（消費は本人確認後）。無効なら DM を送らない。
     match invite::is_valid_code(&state.db, body.invite_code.trim()).await {
         Ok(true) => {}
-        Ok(false) => return err(StatusCode::BAD_REQUEST, "無効な、または使用済みの招待コードです。"),
+        Ok(false) => {
+            return err(
+                StatusCode::BAD_REQUEST,
+                "無効な、または使用済みの招待コードです。",
+            )
+        }
         Err(e) => return ApiError::from(e).into_response(),
     }
     // DM スパム・ID 列挙の防止（(IP, discordId) 単位）。
@@ -308,7 +348,12 @@ async fn register(
         },
     ) {
         Ok(c) => c,
-        Err(_) => return err(StatusCode::INTERNAL_SERVER_ERROR, "確認コードの生成に失敗しました。"),
+        Err(_) => {
+            return err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "確認コードの生成に失敗しました。",
+            )
+        }
     };
     if !rt.dm.send_registration_code(clean_discord_id, &code).await {
         return err(
@@ -331,7 +376,10 @@ async fn register_verify(
     Json(body): Json<VerifyBody>,
 ) -> Response {
     if body.discord_id.is_empty() || body.code.is_empty() {
-        return err(StatusCode::BAD_REQUEST, "Discord ID と確認コードを入力してください。");
+        return err(
+            StatusCode::BAD_REQUEST,
+            "Discord ID と確認コードを入力してください。",
+        );
     }
     // 暗号未構成なら、保留コードや招待コードを消費する前に fail-closed（setup と同じ半端回避）。
     if rt.crypto.is_none() {
@@ -345,10 +393,16 @@ async fn register_verify(
     let reg = match rt.pending.verify(clean_discord_id, body.code.trim()) {
         VerifyResult::Ok(reg) => *reg,
         VerifyResult::NotFound => {
-            return err(StatusCode::BAD_REQUEST, "登録手続きが見つかりません。最初からやり直してください。")
+            return err(
+                StatusCode::BAD_REQUEST,
+                "登録手続きが見つかりません。最初からやり直してください。",
+            )
         }
         VerifyResult::Expired => {
-            return err(StatusCode::BAD_REQUEST, "確認コードの有効期限が切れました。最初からやり直してください。")
+            return err(
+                StatusCode::BAD_REQUEST,
+                "確認コードの有効期限が切れました。最初からやり直してください。",
+            )
         }
         VerifyResult::TooManyAttempts => {
             return err(
@@ -363,19 +417,35 @@ async fn register_verify(
 
     // 確認中に他経路で同 ID が登録された場合の保護。
     match users::get_user_by_discord_id(&state.db, clean_discord_id).await {
-        Ok(Some(_)) => return err(StatusCode::BAD_REQUEST, "このDiscord IDは既に登録されています。"),
+        Ok(Some(_)) => {
+            return err(
+                StatusCode::BAD_REQUEST,
+                "このDiscord IDは既に登録されています。",
+            )
+        }
         Ok(None) => {}
         Err(e) => return ApiError::from(e).into_response(),
     }
     // 招待コードをアトミックに消費（本人確認後）。
     match invite::validate_and_consume_code(&state.db, &reg.invite_code, clean_discord_id).await {
         Ok(true) => {}
-        Ok(false) => return err(StatusCode::BAD_REQUEST, "無効な、または使用済みの招待コードです。"),
+        Ok(false) => {
+            return err(
+                StatusCode::BAD_REQUEST,
+                "無効な、または使用済みの招待コードです。",
+            )
+        }
         Err(e) => return ApiError::from(e).into_response(),
     }
 
-    if let Err(e) =
-        users::create_user(&state.db, clean_discord_id, &reg.username, &reg.password, &rt.admin_discord_ids).await
+    if let Err(e) = users::create_user(
+        &state.db,
+        clean_discord_id,
+        &reg.username,
+        &reg.password,
+        &rt.admin_discord_ids,
+    )
+    .await
     {
         return ApiError::from(e).into_response();
     }
@@ -384,13 +454,15 @@ async fn register_verify(
         Err(msg) => return err(StatusCode::INTERNAL_SERVER_ERROR, msg),
     };
     if let Err(e) =
-        users::update_user_gemini_settings(&state.db, clean_discord_id, &enc, GEMINI_DEFAULT_MODEL).await
+        users::update_user_gemini_settings(&state.db, clean_discord_id, &enc, GEMINI_DEFAULT_MODEL)
+            .await
     {
         return ApiError::from(e).into_response();
     }
     audit::add_audit_log(&state.db, clean_discord_id, "auth.register", None, None).await;
 
-    Json(json!({"success": true, "message": "登録が完了しました！ログインしてください。"})).into_response()
+    Json(json!({"success": true, "message": "登録が完了しました！ログインしてください。"}))
+        .into_response()
 }
 
 /// `POST /api/login`（auth: none）。レート制限つきの資格情報ログイン。成功で Cookie セッションを発行。
@@ -401,7 +473,10 @@ async fn login(
     Json(body): Json<LoginBody>,
 ) -> Response {
     if body.discord_id.is_empty() || body.password.is_empty() {
-        return err(StatusCode::BAD_REQUEST, "Discord ID とパスワードを入力してください。");
+        return err(
+            StatusCode::BAD_REQUEST,
+            "Discord ID とパスワードを入力してください。",
+        );
     }
     let clean_discord_id = body.discord_id.trim().to_owned();
     // レート制限鍵は (IP, アカウント) 単位（1 IP から全アカウントを巻き込まない）。
@@ -420,7 +495,8 @@ async fn login(
     };
     // タイミングオラクル対策: 不在でも一定の bcrypt 比較時間を消費する。
     let stored_hash = user.as_ref().map(|u| u.password_hash.clone());
-    let password_ok = users::verify_password_constant_time(body.password.clone(), stored_hash).await;
+    let password_ok =
+        users::verify_password_constant_time(body.password.clone(), stored_hash).await;
 
     if let (Some(u), true) = (user.as_ref(), password_ok) {
         rt.rate.clear_login(&rl_key);
@@ -432,11 +508,15 @@ async fn login(
         let token = match rt.sessions.create(&su, rt.session_ttl_secs).await {
             Ok(t) => t,
             Err(_) => {
-                return err(StatusCode::INTERNAL_SERVER_ERROR, "セッションの発行に失敗しました。")
+                return err(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "セッションの発行に失敗しました。",
+                )
             }
         };
         audit::add_audit_log(&state.db, &clean_discord_id, "auth.login", None, None).await;
-        let cookie = build_session_cookie(state.config.https, &token, ttl_max_age(rt.session_ttl_secs));
+        let cookie =
+            build_session_cookie(state.config.https, &token, ttl_max_age(rt.session_ttl_secs));
         return json_with_cookie(
             StatusCode::OK,
             json!({"success": true, "message": "ログインに成功しました！"}),
@@ -447,9 +527,19 @@ async fn login(
     // 失敗。ロック期間中は resetAt を延長せず新しい窓のみ開始する（Node と一致）。
     rt.rate.record_login_failure(&rl_key);
     if user.is_some() {
-        audit::add_audit_log(&state.db, &clean_discord_id, "auth.login_failed", None, None).await;
+        audit::add_audit_log(
+            &state.db,
+            &clean_discord_id,
+            "auth.login_failed",
+            None,
+            None,
+        )
+        .await;
     }
-    err(StatusCode::UNAUTHORIZED, "Discord ID またはパスワードが正しくありません。")
+    err(
+        StatusCode::UNAUTHORIZED,
+        "Discord ID またはパスワードが正しくありません。",
+    )
 }
 
 /// `POST /api/logout`（auth: user）。セッションを失効させ Cookie を削除する。
@@ -518,7 +608,8 @@ fn ttl_max_age(ttl_secs: u64) -> i64 {
 pub fn build_session_cookie(https: bool, token: &str, max_age: i64) -> HeaderValue {
     let name = if https { COOKIE_HOST } else { COOKIE_DEV };
     let secure = if https { "; Secure" } else { "" };
-    let cookie = format!("{name}={token}; Path=/; HttpOnly{secure}; SameSite=Lax; Max-Age={max_age}");
+    let cookie =
+        format!("{name}={token}; Path=/; HttpOnly{secure}; SameSite=Lax; Max-Age={max_age}");
     HeaderValue::from_str(&cookie).unwrap_or_else(|_| HeaderValue::from_static(""))
 }
 
@@ -529,7 +620,11 @@ fn is_valid_discord_id(s: &str) -> bool {
 
 /// `Cookie` ヘッダからセッショントークンを取り出す（Node `getSessionToken`・auth.rs と同一規則）。
 fn extract_cookie_token(parts: &Parts, https: bool) -> Option<String> {
-    let raw = parts.headers.get(axum::http::header::COOKIE)?.to_str().ok()?;
+    let raw = parts
+        .headers
+        .get(axum::http::header::COOKIE)?
+        .to_str()
+        .ok()?;
     let find = |name: &str| {
         raw.split(';')
             .filter_map(|kv| kv.split_once('='))
@@ -552,7 +647,12 @@ fn resolve_client_ip(peer: Option<IpAddr>, xff: Option<&str>, trusted: &[IpAddr]
     };
     if !trusted.is_empty() && trusted.contains(&peer) {
         if let Some(xff) = xff {
-            for part in xff.split(',').map(str::trim).filter(|s| !s.is_empty()).rev() {
+            for part in xff
+                .split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .rev()
+            {
                 match part.parse::<IpAddr>() {
                     Ok(ip) if trusted.contains(&ip) => continue,
                     _ => return part.to_owned(),
@@ -571,7 +671,10 @@ struct ClientIp(String);
 impl FromRequestParts<AppState> for ClientIp {
     type Rejection = Infallible;
 
-    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Self::Rejection> {
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
         // `into_make_service_with_connect_info::<SocketAddr>()` が peer を extensions に載せる。
         // テスト（Router 直叩き）では不在 → `unknown` に縮退。
         let peer = parts
@@ -582,7 +685,11 @@ impl FromRequestParts<AppState> for ClientIp {
             .headers
             .get("x-forwarded-for")
             .and_then(|v| v.to_str().ok());
-        Ok(Self(resolve_client_ip(peer, xff, &state.config.trusted_proxies)))
+        Ok(Self(resolve_client_ip(
+            peer,
+            xff,
+            &state.config.trusted_proxies,
+        )))
     }
 }
 
@@ -592,7 +699,10 @@ struct RawSessionToken(Option<String>);
 impl FromRequestParts<AppState> for RawSessionToken {
     type Rejection = Infallible;
 
-    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Self::Rejection> {
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
         Ok(Self(extract_cookie_token(parts, state.config.https)))
     }
 }
@@ -605,7 +715,10 @@ pub struct SessionCookieToken(pub Option<String>);
 impl FromRequestParts<AppState> for SessionCookieToken {
     type Rejection = Infallible;
 
-    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Self::Rejection> {
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
         Ok(Self(extract_cookie_token(parts, state.config.https)))
     }
 }

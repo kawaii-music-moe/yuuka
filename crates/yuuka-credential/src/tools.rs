@@ -247,7 +247,13 @@ mod tests {
         (Db::open(&path).unwrap(), path)
     }
 
-    fn insert_at(path: &std::path::Path, user_id: &str, service_name: &str, username: &str, url: &str) {
+    fn insert_at(
+        path: &std::path::Path,
+        user_id: &str,
+        service_name: &str,
+        username: &str,
+        url: &str,
+    ) {
         let conn = Connection::open(path).unwrap();
         conn.execute(
             "INSERT INTO credentials \
@@ -277,7 +283,10 @@ mod tests {
         let tools = tools(db).unwrap();
 
         // 宣言名は bare（Node system prompt と一致）。
-        let names: Vec<String> = tools.iter().map(|t| t.declaration().name.to_string()).collect();
+        let names: Vec<String> = tools
+            .iter()
+            .map(|t| t.declaration().name.to_string())
+            .collect();
         assert!(names.contains(&"listCredentialServices".to_owned()));
         assert!(names.contains(&"deleteCredential".to_owned()));
         assert!(!names.iter().any(|n| n.contains(':')), "native は bare 名");

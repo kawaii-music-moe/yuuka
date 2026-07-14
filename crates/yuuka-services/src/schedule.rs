@@ -50,7 +50,10 @@ impl Schedule {
     fn delay_from(&self, now: chrono::DateTime<Local>) -> Duration {
         match self {
             Schedule::FixedSecs(secs) => Duration::from_secs(*secs),
-            _ => match self.cron_expr().and_then(|e| cron_util::next_after(&e, now)) {
+            _ => match self
+                .cron_expr()
+                .and_then(|e| cron_util::next_after(&e, now))
+            {
                 Some(next) => (next - now).to_std().unwrap_or(Duration::from_secs(1)),
                 None => Duration::from_secs(60),
             },
@@ -117,7 +120,10 @@ mod tests {
     #[test]
     fn fixed_secs_delay_is_exact() {
         let now = Local::now();
-        assert_eq!(Schedule::FixedSecs(300).delay_from(now), Duration::from_secs(300));
+        assert_eq!(
+            Schedule::FixedSecs(300).delay_from(now),
+            Duration::from_secs(300)
+        );
     }
 
     #[test]
@@ -156,7 +162,10 @@ mod tests {
     #[tokio::test]
     async fn run_cron_ticks_on_start_then_exits_on_cancel() {
         let ticks = Arc::new(AtomicUsize::new(0));
-        let svc = CountingService { ticks: ticks.clone(), on_start: true };
+        let svc = CountingService {
+            ticks: ticks.clone(),
+            on_start: true,
+        };
         let ctx = ctx_null(crate::test_support::seeded_db("CREATE TABLE t(x)").0);
         // 即座に ready な cancel。on-start tick 後、次の sleep へ入る前に cancel で抜ける。
         run_cron(&svc, &ctx, std::future::ready(())).await;
@@ -166,7 +175,10 @@ mod tests {
     #[tokio::test]
     async fn run_cron_without_on_start_does_not_tick_before_cancel() {
         let ticks = Arc::new(AtomicUsize::new(0));
-        let svc = CountingService { ticks: ticks.clone(), on_start: false };
+        let svc = CountingService {
+            ticks: ticks.clone(),
+            on_start: false,
+        };
         let ctx = ctx_null(crate::test_support::seeded_db("CREATE TABLE t(x)").0);
         run_cron(&svc, &ctx, std::future::ready(())).await;
         assert_eq!(ticks.load(Ordering::SeqCst), 0);

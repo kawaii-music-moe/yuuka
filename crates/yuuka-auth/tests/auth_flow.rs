@@ -27,7 +27,8 @@ static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 /// migrations 適用済みの一時 DB を開く（本番 open は CREATE しないので先にファイルを作る）。
 fn fresh_db() -> Db {
     let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let path = std::env::temp_dir().join(format!("yuuka_auth_it_{}_{n}.sqlite", std::process::id()));
+    let path =
+        std::env::temp_dir().join(format!("yuuka_auth_it_{}_{n}.sqlite", std::process::id()));
     {
         rusqlite::Connection::open(&path).expect("seed file");
     }
@@ -39,7 +40,8 @@ fn build() -> Router {
     let db = fresh_db();
     let sessions = SessionStore::in_memory();
     let crypto = Arc::new(
-        SystemCrypto::new(SecretString::from("integration-test-secret".to_owned())).expect("crypto"),
+        SystemCrypto::new(SecretString::from("integration-test-secret".to_owned()))
+            .expect("crypto"),
     );
     // /api/me の検証側（CompositeAuth）と発行側（AuthRuntime）が同じ sessions を共有するのが要。
     let auth = Arc::new(CompositeAuth::new(db.clone(), sessions.clone(), 7));
@@ -51,8 +53,12 @@ fn build() -> Router {
         Arc::new(NullRegistrationDm),
         Vec::new(),
     ));
-    apply_common_layers(framework_routes().merge(yuuka_auth::routes(runtime)), false, None)
-        .with_state(state)
+    apply_common_layers(
+        framework_routes().merge(yuuka_auth::routes(runtime)),
+        false,
+        None,
+    )
+    .with_state(state)
 }
 
 /// ConnectInfo（peer アドレス）を載せた JSON リクエストを 1 発投げる。
@@ -77,8 +83,10 @@ async fn call(
     };
     // 本番同様に ConnectInfo<SocketAddr> を注入（レート制限のクライアント IP 解決経路を通す）。
     let mut req = req;
-    req.extensions_mut()
-        .insert(ConnectInfo(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 40000)));
+    req.extensions_mut().insert(ConnectInfo(SocketAddr::new(
+        IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
+        40000,
+    )));
 
     let resp = app.clone().oneshot(req).await.expect("response");
     let status = resp.status();
@@ -87,7 +95,9 @@ async fn call(
         .get("set-cookie")
         .and_then(|v| v.to_str().ok())
         .map(str::to_owned);
-    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.expect("body");
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .expect("body");
     let value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
     (status, set_cookie, value)
 }
@@ -120,14 +130,19 @@ async fn setup_status_reports_need_setup_then_flips() {
     assert_eq!(status, StatusCode::OK);
 
     let (_, _, body) = call(&app, "GET", "/api/setup/status", None, None).await;
-    assert_eq!(body["needSetup"], json!(false), "セットアップ後は needSetup=false");
+    assert_eq!(
+        body["needSetup"],
+        json!(false),
+        "セットアップ後は needSetup=false"
+    );
 }
 
 #[tokio::test]
 async fn setup_issues_session_and_me_verifies_it() {
     let app = build();
     // setup → 200 + Set-Cookie（自動ログイン）。
-    let (status, set_cookie, body) = call(&app, "POST", "/api/setup", None, Some(setup_body())).await;
+    let (status, set_cookie, body) =
+        call(&app, "POST", "/api/setup", None, Some(setup_body())).await;
     assert_eq!(status, StatusCode::OK, "setup 応答: {body}");
     let cookie = cookie_pair(&set_cookie.expect("setup が Set-Cookie を返す"));
     assert!(cookie.starts_with("yuuka-session="), "cookie = {cookie}");
@@ -202,5 +217,9 @@ async fn register_without_discord_returns_502_via_null_dm() {
         "geminiApiKey": "k",
     });
     let (status, _, body) = call(&app, "POST", "/api/register", None, Some(body)).await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "無効招待コードは 400: {body}");
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "無効招待コードは 400: {body}"
+    );
 }

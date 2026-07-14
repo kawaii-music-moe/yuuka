@@ -314,12 +314,10 @@ impl Supervisor {
         // 安定稼働していたら backoff をリセットしてから次遅延を決める。
         let delay = {
             let policy = self.policy;
-            let state = states
-                .entry(idx)
-                .or_insert_with(|| BackoffState {
-                    backoff: policy.new_backoff(),
-                    spawned_at: Instant::now(),
-                });
+            let state = states.entry(idx).or_insert_with(|| BackoffState {
+                backoff: policy.new_backoff(),
+                spawned_at: Instant::now(),
+            });
             if state.spawned_at.elapsed() >= policy.stable_after {
                 state.backoff = policy.new_backoff();
             }
@@ -454,7 +452,10 @@ mod tests {
             }
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
-        assert!(starts.load(Ordering::SeqCst) >= 4, "3 失敗後に再起動して生存");
+        assert!(
+            starts.load(Ordering::SeqCst) >= 4,
+            "3 失敗後に再起動して生存"
+        );
 
         let _ = tx.send(true);
         handle.await.unwrap();
@@ -505,7 +506,11 @@ mod tests {
         tokio::time::timeout(Duration::from_secs(2), sup.run(std::future::pending()))
             .await
             .expect("恒久障害で監督ループが自然終了する");
-        assert_eq!(starts.load(Ordering::SeqCst), 1, "恒久障害は 1 回のみ・再起動しない");
+        assert_eq!(
+            starts.load(Ordering::SeqCst),
+            1,
+            "恒久障害は 1 回のみ・再起動しない"
+        );
     }
 
     #[tokio::test]

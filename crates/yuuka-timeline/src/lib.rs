@@ -188,7 +188,11 @@ mod tests {
         assert_eq!(fetched.id, created.id);
 
         // 別ユーザーからは get できない。
-        assert!(repo.get(&scope("other"), created.id).await.unwrap().is_none());
+        assert!(repo
+            .get(&scope("other"), created.id)
+            .await
+            .unwrap()
+            .is_none());
 
         assert!(repo.delete(&scope("u"), created.id).await.unwrap());
         assert!(repo
@@ -246,7 +250,11 @@ mod tests {
         assert_eq!(time, "12:34:56"); // recorded_at.slice(11,19)
 
         // 別ユーザーには見えない（スコープ分離）。
-        assert!(repo.list(&scope("other"), Some("2026-07-06".to_owned())).await.unwrap().is_empty());
+        assert!(repo
+            .list(&scope("other"), Some("2026-07-06".to_owned()))
+            .await
+            .unwrap()
+            .is_empty());
     }
 
     #[tokio::test]
@@ -418,7 +426,9 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(ok.status(), StatusCode::OK);
-        let bytes = axum::body::to_bytes(ok.into_body(), usize::MAX).await.unwrap();
+        let bytes = axum::body::to_bytes(ok.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let j: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(j["success"], serde_json::json!(true));
         assert_eq!(j["record"]["type"], serde_json::json!("expense"));
@@ -482,7 +492,9 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(up.status(), StatusCode::OK);
-        let bytes = axum::body::to_bytes(up.into_body(), usize::MAX).await.unwrap();
+        let bytes = axum::body::to_bytes(up.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let j: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(j["success"], serde_json::json!(true));
         assert_eq!(j["record"]["type"], serde_json::json!("media"));
@@ -503,11 +515,10 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(get.status(), StatusCode::OK);
-        assert_eq!(
-            get.headers().get("content-type").unwrap(),
-            "image/png"
-        );
-        let served = axum::body::to_bytes(get.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(get.headers().get("content-type").unwrap(), "image/png");
+        let served = axum::body::to_bytes(get.into_body(), usize::MAX)
+            .await
+            .unwrap();
         assert_eq!(&served[..], b"hello");
 
         // 未存在ファイルは 404。
@@ -600,7 +611,8 @@ mod tests {
 
         // `amount` は Node が body から読むため受理する。
         let expense: NewTimelineRecord =
-            serde_json::from_str(r#"{"date":"2026-07-06","type":"expense","amount":1500}"#).unwrap();
+            serde_json::from_str(r#"{"date":"2026-07-06","type":"expense","amount":1500}"#)
+                .unwrap();
         assert_eq!(expense.amount, Some(1500.0));
     }
 
@@ -623,7 +635,9 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(add.status(), StatusCode::OK);
-        let bytes = axum::body::to_bytes(add.into_body(), usize::MAX).await.unwrap();
+        let bytes = axum::body::to_bytes(add.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let j: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         // 内部列はクライアント設定不可 → NULL のまま。
         assert!(j["record"]["media_path"].is_null());
@@ -830,8 +844,7 @@ mod tests {
         assert_eq!(present_val.start_time, Some(Some("07:00".to_owned())));
 
         // title は string ガード: 数値/ null は拾わない（外側 None）。
-        let bad_title: UpdatePlanBlock =
-            serde_json::from_str(r#"{"id":1,"title":null}"#).unwrap();
+        let bad_title: UpdatePlanBlock = serde_json::from_str(r#"{"id":1,"title":null}"#).unwrap();
         assert_eq!(bad_title.title, None);
     }
 
@@ -855,7 +868,9 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(add.status(), StatusCode::OK);
-        let bytes = axum::body::to_bytes(add.into_body(), usize::MAX).await.unwrap();
+        let bytes = axum::body::to_bytes(add.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let j: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(j["success"], serde_json::json!(true));
         assert_eq!(j["block"]["title"], serde_json::json!("会議"));
@@ -873,15 +888,15 @@ mod tests {
                     .uri("/api/timeline/plan/update")
                     .header("cookie", "__Host-yuuka-session=good")
                     .header("content-type", "application/json")
-                    .body(Body::from(format!(
-                        r#"{{"id":{id},"title":"打合せ"}}"#
-                    )))
+                    .body(Body::from(format!(r#"{{"id":{id},"title":"打合せ"}}"#)))
                     .unwrap(),
             )
             .await
             .unwrap();
         assert_eq!(upd.status(), StatusCode::OK);
-        let ub = axum::body::to_bytes(upd.into_body(), usize::MAX).await.unwrap();
+        let ub = axum::body::to_bytes(upd.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let uj: serde_json::Value = serde_json::from_slice(&ub).unwrap();
         assert_eq!(uj["block"]["title"], serde_json::json!("打合せ"));
 
@@ -898,7 +913,9 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(day.status(), StatusCode::OK);
-        let db_ = axum::body::to_bytes(day.into_body(), usize::MAX).await.unwrap();
+        let db_ = axum::body::to_bytes(day.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let dj: serde_json::Value = serde_json::from_slice(&db_).unwrap();
         assert_eq!(dj["blocks"][0]["title"], serde_json::json!("打合せ"));
         assert!(dj["records"].is_array());
@@ -917,7 +934,9 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(del.status(), StatusCode::OK);
-        let delb = axum::body::to_bytes(del.into_body(), usize::MAX).await.unwrap();
+        let delb = axum::body::to_bytes(del.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let dlj: serde_json::Value = serde_json::from_slice(&delb).unwrap();
         assert_eq!(dlj["success"], serde_json::json!(true));
     }
@@ -984,7 +1003,9 @@ mod tests {
                     .method("POST")
                     .uri("/api/timeline/plan")
                     .header("content-type", "application/json")
-                    .body(Body::from(r#"{"date":"2026-07-06","type":"event","title":"x"}"#))
+                    .body(Body::from(
+                        r#"{"date":"2026-07-06","type":"event","title":"x"}"#,
+                    ))
                     .unwrap(),
             )
             .await

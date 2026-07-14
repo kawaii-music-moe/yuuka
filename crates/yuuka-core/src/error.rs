@@ -34,10 +34,7 @@ pub enum ConfigError {
     MissingField { field: &'static str },
 
     #[error("invalid config value for {field}: {reason}")]
-    InvalidValue {
-        field: &'static str,
-        reason: String,
-    },
+    InvalidValue { field: &'static str, reason: String },
 
     #[error("required secret missing: {name}")]
     MissingSecret { name: &'static str },
@@ -505,7 +502,10 @@ mod tests {
     fn payload_too_large_maps_to_413_m2() {
         // M-2: body 上限超過は 413（400 の Validation と区別する）。
         assert_eq!(WebError::PayloadTooLarge.status(), 413);
-        assert_eq!(WebError::PayloadTooLarge.client_message(), "payload too large");
+        assert_eq!(
+            WebError::PayloadTooLarge.client_message(),
+            "payload too large"
+        );
         // 内部詳細を漏らさない他の丸めは従来どおり。
         assert_eq!(WebError::Internal.status(), 500);
         assert_eq!(WebError::Validation("x".to_owned()).status(), 400);

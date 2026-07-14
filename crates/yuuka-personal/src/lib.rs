@@ -131,9 +131,12 @@ mod tests {
     async fn add_list_and_scope_isolation() {
         let db = seed_db();
         let repo = ContactRepo::new(&db);
-        repo.add(&scope("userA"), new_contact("Alice", vec!["friend".to_owned()]))
-            .await
-            .unwrap();
+        repo.add(
+            &scope("userA"),
+            new_contact("Alice", vec!["friend".to_owned()]),
+        )
+        .await
+        .unwrap();
 
         let listed = repo.list(&scope("userA")).await.unwrap();
         assert_eq!(listed.len(), 1);
@@ -192,11 +195,7 @@ mod tests {
 
         // 別ユーザーは他人の連絡先を更新できない（該当行 0 → None）。
         let res = repo
-            .update(
-                &scope("userB"),
-                created.id,
-                new_contact("Hijack", vec![]),
-            )
+            .update(&scope("userB"), created.id, new_contact("Hijack", vec![]))
             .await
             .unwrap();
         assert!(res.is_none());
@@ -274,7 +273,10 @@ mod tests {
         assert_eq!(j["success"], serde_json::json!(true));
         assert_eq!(j["contacts"][0]["name"], serde_json::json!("Dave"));
         assert_eq!(j["contacts"][0]["tags"][0], serde_json::json!("gym"));
-        assert_eq!(j["contacts"][0]["birthday"], serde_json::json!("1990-01-02"));
+        assert_eq!(
+            j["contacts"][0]["birthday"],
+            serde_json::json!("1990-01-02")
+        );
         // 内部列は露出しない（構造的フェイルクローズ）。
         assert!(j["contacts"][0]["user_id"].is_null());
         assert!(j["contacts"][0]["bot_id"].is_null());
@@ -420,7 +422,10 @@ mod tests {
         let contents: Vec<&str> = entries.iter().map(|e| e.content.as_str()).collect();
         assert!(contents.contains(&"forever"));
         assert!(contents.contains(&"future"));
-        assert!(!contents.contains(&"past"), "expired entry must be filtered");
+        assert!(
+            !contents.contains(&"past"),
+            "expired entry must be filtered"
+        );
         assert!(
             !contents.contains(&"otheruser"),
             "other user's entry must not leak"

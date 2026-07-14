@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use rusqlite::types::Value;
 use rusqlite::{Connection, OptionalExtension};
 
-use crate::{derive_system_key, derive_user_key, decrypt_with_key, encrypt_with_key, CryptoError};
+use crate::{decrypt_with_key, derive_system_key, derive_user_key, encrypt_with_key, CryptoError};
 
 /// 1 つの暗号化カラム群の仕様（Node `EncryptedColumnSpec`）。
 #[derive(Debug, Clone, Copy)]
@@ -93,7 +93,9 @@ pub fn rotate_secret_key(
     new_secret: &str,
 ) -> Result<usize, CryptoError> {
     if old_secret == new_secret {
-        tracing::warn!("YUUKA_ENCRYPTION_SECRET_NEW が現行鍵と同一のためローテーションをスキップします");
+        tracing::warn!(
+            "YUUKA_ENCRYPTION_SECRET_NEW が現行鍵と同一のためローテーションをスキップします"
+        );
         return Ok(0);
     }
     tracing::info!("YUUKA_ENCRYPTION_SECRET ローテーションを開始します");
@@ -296,7 +298,10 @@ mod tests {
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )
             .unwrap();
-        assert!(decrypt_with_key(&old_sys, &e, &i, &t).is_err(), "旧システム鍵では復号不可");
+        assert!(
+            decrypt_with_key(&old_sys, &e, &i, &t).is_err(),
+            "旧システム鍵では復号不可"
+        );
 
         // 新鍵で構築した SystemCrypto で正しく復号できる（システム鍵）。
         let new_crypto = SystemCrypto::new(SecretString::from(new)).unwrap();

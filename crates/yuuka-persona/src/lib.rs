@@ -62,8 +62,10 @@ mod tests {
 
     fn seed_db() -> Db {
         let seq = SEQ.fetch_add(1, Ordering::Relaxed);
-        let path = std::env::temp_dir()
-            .join(format!("yuuka_persona_test_{}_{seq}.sqlite", std::process::id()));
+        let path = std::env::temp_dir().join(format!(
+            "yuuka_persona_test_{}_{seq}.sqlite",
+            std::process::id()
+        ));
         {
             let conn = rusqlite::Connection::open(&path).expect("seed db");
             conn.execute_batch(PERSONAS_DDL).expect("create personas");
@@ -103,7 +105,11 @@ mod tests {
         // 別ユーザーには見えない（owner_id で分離）。
         assert!(repo.list(&scope("userB")).await.unwrap().is_empty());
         // 別ユーザーからは get もできない。
-        assert!(repo.get(&scope("userB"), created.id).await.unwrap().is_none());
+        assert!(repo
+            .get(&scope("userB"), created.id)
+            .await
+            .unwrap()
+            .is_none());
     }
 
     #[tokio::test]
@@ -116,11 +122,7 @@ mod tests {
             .unwrap();
 
         let updated = repo
-            .update(
-                &scope("owner"),
-                created.id,
-                new_persona("renamed", "p1"),
-            )
+            .update(&scope("owner"), created.id, new_persona("renamed", "p1"))
             .await
             .unwrap()
             .expect("updated row");
@@ -133,7 +135,11 @@ mod tests {
             .await
             .unwrap();
         assert!(cross.is_none());
-        let after = repo.get(&scope("owner"), created.id).await.unwrap().unwrap();
+        let after = repo
+            .get(&scope("owner"), created.id)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(after.name, "renamed");
     }
 
@@ -155,7 +161,10 @@ mod tests {
     async fn empty_name_rejected() {
         let db = seed_db();
         let repo = PersonaRepo::new(&db);
-        assert!(repo.add(&scope("u"), new_persona("   ", "x")).await.is_err());
+        assert!(repo
+            .add(&scope("u"), new_persona("   ", "x"))
+            .await
+            .is_err());
     }
 
     struct FakeAuth {
@@ -213,7 +222,9 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(list.status(), StatusCode::OK);
-        let bytes = axum::body::to_bytes(list.into_body(), usize::MAX).await.unwrap();
+        let bytes = axum::body::to_bytes(list.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let j: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(j["success"], serde_json::json!(true));
         assert_eq!(j["personas"][0]["name"], serde_json::json!("hello"));

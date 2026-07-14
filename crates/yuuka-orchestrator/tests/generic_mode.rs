@@ -25,8 +25,10 @@ static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 fn fresh_db() -> (Db, std::path::PathBuf) {
     let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let path =
-        std::env::temp_dir().join(format!("yuuka_generic_it_{}_{n}.sqlite", std::process::id()));
+    let path = std::env::temp_dir().join(format!(
+        "yuuka_generic_it_{}_{n}.sqlite",
+        std::process::id()
+    ));
     {
         rusqlite::Connection::open(&path).expect("seed file");
     }
@@ -107,7 +109,12 @@ impl GenerateBackend for FakeBackend {
         _contents: &[Content],
         _tool_config: Option<ToolConfig>,
     ) -> Result<GenerateContentResponse, GeminiError> {
-        Ok(self.responses.lock().unwrap().pop_front().expect("response"))
+        Ok(self
+            .responses
+            .lock()
+            .unwrap()
+            .pop_front()
+            .expect("response"))
     }
 }
 
@@ -127,7 +134,9 @@ impl GeminiFactory for FakeFactory {
         .expect("valid response");
         let mut q = std::collections::VecDeque::new();
         q.push_back(resp);
-        Ok(Arc::new(FakeBackend { responses: Mutex::new(q) }))
+        Ok(Arc::new(FakeBackend {
+            responses: Mutex::new(q),
+        }))
     }
 }
 
@@ -144,7 +153,9 @@ fn engine_with(db: Db, crypto: Arc<SystemCrypto>, text: &str) -> ChatEngine {
         db,
         Some(crypto),
         ToolRegistry::new(),
-        Arc::new(FakeFactory { text: text.to_owned() }),
+        Arc::new(FakeFactory {
+            text: text.to_owned(),
+        }),
     )
 }
 
@@ -171,7 +182,10 @@ async fn process_guild_persists_prefixed_and_replies() {
             &BotId::new("botG"),
             &GuildId::new("g1"),
             speaker("mem1", "たろう"),
-            IncomingChat { text: "こんにちは".to_owned(), ..IncomingChat::default() },
+            IncomingChat {
+                text: "こんにちは".to_owned(),
+                ..IncomingChat::default()
+            },
             null_sink(),
             Arc::new(NoopDelivery),
         )
@@ -203,7 +217,10 @@ async fn process_bot_dm_uses_separate_context() {
         .process_bot_dm(
             &BotId::new("botG"),
             speaker("owner1", "オーナー"),
-            IncomingChat { text: "調子どう？".to_owned(), ..IncomingChat::default() },
+            IncomingChat {
+                text: "調子どう？".to_owned(),
+                ..IncomingChat::default()
+            },
             null_sink(),
             Arc::new(NoopDelivery),
         )
@@ -230,13 +247,20 @@ async fn missing_bot_key_degrades_by_scope() {
         .process_bot_dm(
             &BotId::new("botNoKey"),
             speaker("owner1", "オーナー"),
-            IncomingChat { text: "やあ".to_owned(), ..IncomingChat::default() },
+            IncomingChat {
+                text: "やあ".to_owned(),
+                ..IncomingChat::default()
+            },
             null_sink(),
             Arc::new(NoopDelivery),
         )
         .await
         .expect("dm ok");
-    assert!(dm.text.contains("Bot専用のGemini APIキー"), "dm={}", dm.text);
+    assert!(
+        dm.text.contains("Bot専用のGemini APIキー"),
+        "dm={}",
+        dm.text
+    );
 
     // ギルド: キー未設定は黙殺（空応答）。
     let guild = engine
@@ -244,7 +268,10 @@ async fn missing_bot_key_degrades_by_scope() {
             &BotId::new("botNoKey"),
             &GuildId::new("g1"),
             speaker("mem1", "たろう"),
-            IncomingChat { text: "こんにちは".to_owned(), ..IncomingChat::default() },
+            IncomingChat {
+                text: "こんにちは".to_owned(),
+                ..IncomingChat::default()
+            },
             null_sink(),
             Arc::new(NoopDelivery),
         )
@@ -269,7 +296,10 @@ async fn non_llm_error_returns_bot_persona_reply() {
             &BotId::new("botG"),
             &GuildId::new("g1"),
             speaker("mem1", "たろう"),
-            IncomingChat { text: "こんにちは".to_owned(), ..IncomingChat::default() },
+            IncomingChat {
+                text: "こんにちは".to_owned(),
+                ..IncomingChat::default()
+            },
             null_sink(),
             Arc::new(NoopDelivery),
         )

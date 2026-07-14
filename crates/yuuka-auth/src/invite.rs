@@ -5,8 +5,8 @@
 //! `INSERT OR IGNORE`（冪等）で `created_by = NULL`。
 
 use rusqlite::params;
-use yuuka_db::map_sqlite;
 use yuuka_core::DbError;
+use yuuka_db::map_sqlite;
 use yuuka_web::Db;
 
 /// コードが有効（存在・未使用・未失効）か（Node `isValidCode`）。消費はしない（事前検証用）。

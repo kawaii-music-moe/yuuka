@@ -9,7 +9,7 @@
 //! 実装するため、本 impl は yuuka-discord に置く（services は discord に依存しない＝非循環）。
 
 use async_trait::async_trait;
-use yuuka_services::{Notification, NotifyTarget, Notifier as ServicesNotifier};
+use yuuka_services::{Notification, Notifier as ServicesNotifier, NotifyTarget};
 
 use crate::manager::DiscordMessenger;
 use crate::ports::{DeliverTarget, Notifier as DiscordNotifierPort, TurnReply};

@@ -146,7 +146,11 @@ pub fn build_system_instruction(
         }
         _ => DEFAULT_PERSONA.to_owned(),
     };
-    let rich = if rich_reply { RICH_REPLY_ON } else { RICH_REPLY_OFF };
+    let rich = if rich_reply {
+        RICH_REPLY_ON
+    } else {
+        RICH_REPLY_OFF
+    };
     let rules = system_rules(date_time_str);
 
     // Node の parts 配列（空要素は filter 除去）を `\n` 結合する。
@@ -176,7 +180,10 @@ mod tests {
     #[test]
     fn format_date_time_ja_matches_node_shape() {
         // 2026-07-08 21:05:30 (水) をローカルで構築して表記を確認（曜日は日付から算出）。
-        let dt = Local.with_ymd_and_hms(2026, 7, 8, 21, 5, 30).single().expect("dt");
+        let dt = Local
+            .with_ymd_and_hms(2026, 7, 8, 21, 5, 30)
+            .single()
+            .expect("dt");
         let s = format_date_time_ja(dt);
         assert!(s.starts_with("2026年7月8日 ("), "s={s}");
         assert!(s.ends_with(") 21時05分30秒"), "s={s}");

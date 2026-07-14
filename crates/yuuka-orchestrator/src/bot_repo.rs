@@ -7,9 +7,9 @@
 
 use rusqlite::{params, OptionalExtension};
 use yuuka_core::DbError;
+use yuuka_core::{BotId, CapabilitySet, UserId};
 use yuuka_db::map_sqlite;
 use yuuka_discord::{BotRecord, MemberDecision, PersonaRecord, ShareRecord};
-use yuuka_core::{BotId, CapabilitySet, UserId};
 use yuuka_web::Db;
 
 /// Bot 専用モデル（Node `BOT_DEFAULT_MODEL`・汎用モードは常にこれ）。
@@ -289,7 +289,12 @@ fn opt(s: &str) -> Option<String> {
 /// # Errors
 /// 読み取り失敗時 [`DbError`]。
 pub async fn is_registered_user(db: &Db, user_id: &str) -> Result<bool, DbError> {
-    exists(db, "SELECT 1 FROM users WHERE discord_id = ?1 LIMIT 1", user_id.to_owned()).await
+    exists(
+        db,
+        "SELECT 1 FROM users WHERE discord_id = ?1 LIMIT 1",
+        user_id.to_owned(),
+    )
+    .await
 }
 
 /// 管理者ロールか（Node `isAdmin`）。
@@ -743,7 +748,10 @@ pub async fn revoke_share(db: &Db, bot_id: &str, shared_user: &str) -> Result<()
 ///
 /// # Errors
 /// 読み取り失敗時 [`DbError`]。
-pub async fn get_public_persona(db: &Db, persona_id: i64) -> Result<Option<PersonaRecord>, DbError> {
+pub async fn get_public_persona(
+    db: &Db,
+    persona_id: i64,
+) -> Result<Option<PersonaRecord>, DbError> {
     db.read
         .read(move |conn| {
             conn.query_row(

@@ -81,7 +81,10 @@ mod tests {
     use chrono::TimeZone;
 
     fn at(y: i32, mo: u32, d: u32, h: u32, mi: u32) -> DateTime<Local> {
-        Local.with_ymd_and_hms(y, mo, d, h, mi, 0).single().expect("valid local time")
+        Local
+            .with_ymd_and_hms(y, mo, d, h, mi, 0)
+            .single()
+            .expect("valid local time")
     }
 
     #[test]

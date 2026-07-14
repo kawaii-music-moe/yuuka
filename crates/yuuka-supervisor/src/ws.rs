@@ -241,7 +241,10 @@ async fn handle_text(
         Ok(f) => f,
         // JSON 不正 → internal（Node parity）。
         Err(_) => {
-            let _ = tx.send(json_msg(&err_frame("internal", "不正なメッセージ形式です。")));
+            let _ = tx.send(json_msg(&err_frame(
+                "internal",
+                "不正なメッセージ形式です。",
+            )));
             return;
         }
     };
@@ -303,7 +306,10 @@ async fn process_msg(
         }
         Err(e) => {
             tracing::warn!(error = %e, "ws turn 処理に失敗");
-            let _ = tx.send(json_msg(&err_frame("internal", "処理中にエラーが発生しました。")));
+            let _ = tx.send(json_msg(&err_frame(
+                "internal",
+                "処理中にエラーが発生しました。",
+            )));
         }
     }
 }
@@ -521,7 +527,10 @@ mod tests {
         )
         .unwrap();
         assert!(matches!(&f, ClientFrame::Msg { .. }));
-        if let ClientFrame::Msg { image, reply_to_id, .. } = f {
+        if let ClientFrame::Msg {
+            image, reply_to_id, ..
+        } = f
+        {
             assert_eq!(image.unwrap().mime, "image/png");
             assert_eq!(reply_to_id.as_deref(), Some("9"));
         }

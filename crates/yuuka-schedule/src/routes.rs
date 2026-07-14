@@ -57,7 +57,10 @@ async fn list(
 async fn add(
     user: AuthenticatedUser,
     State(db): State<Db>,
-    ScopedJson { bot_id, value: input }: ScopedJson<NewSchedule>,
+    ScopedJson {
+        bot_id,
+        value: input,
+    }: ScopedJson<NewSchedule>,
 ) -> Result<Json<Envelope<ScheduleData>>, ApiError> {
     if input.title.trim().is_empty() {
         return Err(ApiError(WebError::Validation(
@@ -77,7 +80,10 @@ async fn add(
 async fn delete(
     user: AuthenticatedUser,
     State(db): State<Db>,
-    ScopedJson { bot_id, value: input }: ScopedJson<IdInput>,
+    ScopedJson {
+        bot_id,
+        value: input,
+    }: ScopedJson<IdInput>,
 ) -> Result<Json<Envelope<EmptyData>>, ApiError> {
     let scope = resolve_scope(&user.0, &db, bot_id.as_deref()).await?;
     let ok = ScheduleRepo::new(&db).delete(&scope, input.id).await?;

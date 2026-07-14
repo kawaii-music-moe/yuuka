@@ -30,7 +30,10 @@ use yuuka_core::DbError;
 pub fn map_sqlite(e: rusqlite::Error) -> DbError {
     use rusqlite::ErrorCode;
     if let rusqlite::Error::SqliteFailure(inner, _) = &e {
-        if matches!(inner.code, ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked) {
+        if matches!(
+            inner.code,
+            ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked
+        ) {
             return DbError::Busy;
         }
     }
@@ -39,9 +42,7 @@ pub fn map_sqlite(e: rusqlite::Error) -> DbError {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        map_sqlite, open_conn, run_migrations, ReadPool, WriterHandle,
-    };
+    use super::{map_sqlite, open_conn, run_migrations, ReadPool, WriterHandle};
     use tempfile::tempdir;
     use yuuka_core::DbError;
 
@@ -84,9 +85,13 @@ mod tests {
         seed_db(&path, "");
         let conn = open_conn(&path, false).unwrap();
 
-        let jm: String = conn.query_row("PRAGMA journal_mode", [], |r| r.get(0)).unwrap();
+        let jm: String = conn
+            .query_row("PRAGMA journal_mode", [], |r| r.get(0))
+            .unwrap();
         assert!(jm.eq_ignore_ascii_case("wal"), "journal_mode={jm}");
-        let fk: i64 = conn.query_row("PRAGMA foreign_keys", [], |r| r.get(0)).unwrap();
+        let fk: i64 = conn
+            .query_row("PRAGMA foreign_keys", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(fk, 1, "foreign_keys must be ON");
     }
 
@@ -141,7 +146,10 @@ mod tests {
         let dir = tempdir().unwrap();
         let path = dir.path().join("t.sqlite");
         // テスト専用 DDL（本番では Rust は DDL 不発行・schema.rs 参照）。DB と表を先に用意。
-        seed_db(&path, "CREATE TABLE items(id INTEGER PRIMARY KEY, name TEXT);");
+        seed_db(
+            &path,
+            "CREATE TABLE items(id INTEGER PRIMARY KEY, name TEXT);",
+        );
 
         let writer = WriterHandle::spawn(path.clone()).unwrap();
 
@@ -175,7 +183,10 @@ mod tests {
         // catch_unwind が無いと 1 発の panic 以後、全書き込みが恒久 WriterGone になる。
         let dir = tempdir().unwrap();
         let path = dir.path().join("panic.sqlite");
-        seed_db(&path, "CREATE TABLE items(id INTEGER PRIMARY KEY, name TEXT);");
+        seed_db(
+            &path,
+            "CREATE TABLE items(id INTEGER PRIMARY KEY, name TEXT);",
+        );
         let writer = WriterHandle::spawn(path.clone()).unwrap();
 
         // 1) panic するジョブ。当該呼び出しは WriterGone を受け取る（sender が unwind で drop）。
@@ -200,9 +211,11 @@ mod tests {
         let pool = ReadPool::open(&path).unwrap();
         let name: String = pool
             .read(|c| {
-                c.query_row("SELECT name FROM items WHERE name = 'after-panic'", [], |r| {
-                    r.get(0)
-                })
+                c.query_row(
+                    "SELECT name FROM items WHERE name = 'after-panic'",
+                    [],
+                    |r| r.get(0),
+                )
                 .map_err(map_sqlite)
             })
             .await

@@ -41,7 +41,11 @@ impl<'a> ScheduleRepo<'a> {
     ///
     /// # Errors
     /// クエリ失敗時 [`DbError`]。
-    pub async fn list_upcoming(&self, scope: &UserScope, days: i64) -> Result<Vec<Schedule>, DbError> {
+    pub async fn list_upcoming(
+        &self,
+        scope: &UserScope,
+        days: i64,
+    ) -> Result<Vec<Schedule>, DbError> {
         let (uid, bid) = scope_keys(scope);
         self.read
             .read(move |conn| {

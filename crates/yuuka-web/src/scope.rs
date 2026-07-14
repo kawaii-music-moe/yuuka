@@ -81,8 +81,10 @@ mod tests {
 
     fn db_with_bots() -> Db {
         let seq = SEQ.fetch_add(1, Ordering::Relaxed);
-        let path = std::env::temp_dir()
-            .join(format!("yuuka_scope_test_{}_{seq}.sqlite", std::process::id()));
+        let path = std::env::temp_dir().join(format!(
+            "yuuka_scope_test_{}_{seq}.sqlite",
+            std::process::id()
+        ));
         {
             let conn = rusqlite::Connection::open(&path).expect("seed");
             conn.execute_batch(
@@ -115,7 +117,14 @@ mod tests {
         let s = |b: Option<&'static str>| {
             let db = db.clone();
             let u = owner.clone();
-            async move { resolve_scope(&u, &db, b).await.unwrap().bot_id().as_str().to_owned() }
+            async move {
+                resolve_scope(&u, &db, b)
+                    .await
+                    .unwrap()
+                    .bot_id()
+                    .as_str()
+                    .to_owned()
+            }
         };
 
         // 未指定・system_default は system_default。

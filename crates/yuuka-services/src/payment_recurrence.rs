@@ -51,7 +51,9 @@ async fn run(ctx: &ServiceContext) -> Result<(), yuuka_core::DbError> {
                 "🔁 繰り返し支払い予定を次回へ更新"
             ),
             Ok(false) => {}
-            Err(e) => tracing::error!(id = plan.id, error = %e, "❌ 繰り返し支払い予定の処理に失敗"),
+            Err(e) => {
+                tracing::error!(id = plan.id, error = %e, "❌ 繰り返し支払い予定の処理に失敗")
+            }
         }
     }
     Ok(())
@@ -125,6 +127,9 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(amount, 80000);
-        assert!(next_due.ends_with("-01"), "next_due should be a month start: {next_due}");
+        assert!(
+            next_due.ends_with("-01"),
+            "next_due should be a month start: {next_due}"
+        );
     }
 }

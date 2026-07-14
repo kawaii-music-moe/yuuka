@@ -5,7 +5,7 @@
 //! （横断アクセスは cron/バッチ起点でしか作れない・§7.3）。返す [`DueReminder`] は通知に必要な
 //! 内部列（`user_id`/`bot_id`/送信先/繰り返し規則）を含む（クリーンビュー `Reminder` とは別型）。
 
-use rusqlite::{Row, params};
+use rusqlite::{params, Row};
 use yuuka_core::{CrossUserAccess, DbError};
 use yuuka_db::map_sqlite;
 
@@ -64,8 +64,11 @@ impl ReminderRepo<'_> {
     pub async fn mark_sent(&self, _cron: CrossUserAccess, id: i64) -> Result<(), DbError> {
         self.writer
             .execute(move |conn| {
-                conn.execute("UPDATE reminders SET status = 'sent' WHERE id = ?1", params![id])
-                    .map_err(map_sqlite)?;
+                conn.execute(
+                    "UPDATE reminders SET status = 'sent' WHERE id = ?1",
+                    params![id],
+                )
+                .map_err(map_sqlite)?;
                 Ok(())
             })
             .await

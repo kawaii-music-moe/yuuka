@@ -23,7 +23,10 @@ impl CronService for TodoRecurrenceService {
 
     fn schedule(&self) -> Schedule {
         // 毎日 0:10（支払い予定 0:05 と時刻をずらして負荷集中を避ける）。
-        Schedule::DailyAt { hour: 0, minute: 10 }
+        Schedule::DailyAt {
+            hour: 0,
+            minute: 10,
+        }
     }
 
     async fn tick(&self, ctx: &ServiceContext) {
@@ -38,7 +41,8 @@ async fn run(ctx: &ServiceContext) -> Result<(), yuuka_core::DbError> {
     let overdue = repo.list_overdue_routines(ctx.cross).await?;
     for todo in overdue {
         // repo 側フィルタの保険。
-        let (Some(rule), Some(due)) = (todo.repeat_rule.as_deref(), todo.due_date.as_deref()) else {
+        let (Some(rule), Some(due)) = (todo.repeat_rule.as_deref(), todo.due_date.as_deref())
+        else {
             continue;
         };
 
@@ -56,12 +60,23 @@ async fn run(ctx: &ServiceContext) -> Result<(), yuuka_core::DbError> {
 
         // 終了条件2-a: 次回期日が終了日を越えるなら終了（現在の1件を最終とする）。
         if matches!(todo.repeat_until.as_deref(), Some(until) if next_due.as_str() > until) {
-            end(ctx, &repo, todo.id, &todo.title, &todo.user_id, "終了日到達").await;
+            end(
+                ctx,
+                &repo,
+                todo.id,
+                &todo.title,
+                &todo.user_id,
+                "終了日到達",
+            )
+            .await;
             continue;
         }
 
         let next_count = todo.repeat_count.map(|c| c - 1);
-        match repo.advance_routine(ctx.cross, todo.id, next_due.clone(), next_count).await {
+        match repo
+            .advance_routine(ctx.cross, todo.id, next_due.clone(), next_count)
+            .await
+        {
             Ok(true) => tracing::info!(
                 id = todo.id, next_due, user = %todo.user_id,
                 "🔁 ルーチンタスクを次回へ更新"
@@ -74,7 +89,14 @@ async fn run(ctx: &ServiceContext) -> Result<(), yuuka_core::DbError> {
 }
 
 /// ルーチンを終了して単発へ戻す（ログ付き）。
-async fn end(ctx: &ServiceContext, repo: &TodoRepo<'_>, id: i64, title: &str, user: &str, reason: &str) {
+async fn end(
+    ctx: &ServiceContext,
+    repo: &TodoRepo<'_>,
+    id: i64,
+    title: &str,
+    user: &str,
+    reason: &str,
+) {
     match repo.end_routine(ctx.cross, id).await {
         Ok(()) => tracing::info!(id, title, user, reason, "🏁 ルーチン終了"),
         Err(e) => tracing::error!(id, error = %e, "❌ ルーチン終了処理に失敗"),
@@ -129,8 +151,12 @@ mod tests {
         let (db, _dir) = seeded_db(TODOS_DDL);
         let ctx = ctx_null(db);
         // 数日前が期日の日次ルーチン（回数無制限）。cron 収束が 1000 回上限内に収まる現実的入力。
-        insert(&ctx, "INSERT INTO todos (user_id,title,due_date,status,progress,due_reminded,repeat_rule) \
-             VALUES ('u','routine', date('now','localtime','-3 days'),'done',100,1,'0 0 * * *')").await;
+        insert(
+            &ctx,
+            "INSERT INTO todos (user_id,title,due_date,status,progress,due_reminded,repeat_rule) \
+             VALUES ('u','routine', date('now','localtime','-3 days'),'done',100,1,'0 0 * * *')",
+        )
+        .await;
 
         run(&ctx).await.unwrap();
 
@@ -146,7 +172,10 @@ mod tests {
             })
             .await
             .unwrap();
-        assert!(due.as_deref().is_some_and(|d| d >= today.as_str()), "due {due:?} >= {today}");
+        assert!(
+            due.as_deref().is_some_and(|d| d >= today.as_str()),
+            "due {due:?} >= {today}"
+        );
         assert_eq!(rule.as_deref(), Some("0 0 * * *")); // まだ繰り返し中。
     }
 
@@ -154,8 +183,12 @@ mod tests {
     async fn last_count_ends_routine() {
         let (db, _dir) = seeded_db(TODOS_DDL);
         let ctx = ctx_null(db);
-        insert(&ctx, "INSERT INTO todos (user_id,title,due_date,repeat_rule,repeat_count) \
-             VALUES ('u','last','2000-01-01','0 0 * * *',1)").await;
+        insert(
+            &ctx,
+            "INSERT INTO todos (user_id,title,due_date,repeat_rule,repeat_count) \
+             VALUES ('u','last','2000-01-01','0 0 * * *',1)",
+        )
+        .await;
 
         run(&ctx).await.unwrap();
 

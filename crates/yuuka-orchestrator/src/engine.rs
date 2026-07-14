@@ -13,14 +13,16 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use base64::Engine as _;
 use secrecy::SecretString;
-use yuuka_core::{BotId, DbError, GeminiError, GuildId, ResponsePart, ToolContext, TurnMode, UserId};
+use yuuka_core::{
+    BotId, DbError, GeminiError, GuildId, ResponsePart, ToolContext, TurnMode, UserId,
+};
 use yuuka_crypto::SystemCrypto;
 use yuuka_discord::{
     BotStatus, FileAttachment, IncomingChat, InlineMedia, Speaker, StatusSink, TurnDelivery,
     TurnError, TurnProcessor, TurnReply,
 };
 use yuuka_gemini::{
-    run_function_calling_loop, Content, GenerateBackend, GeminiClient, LoopOptions, Part, Role,
+    run_function_calling_loop, Content, GeminiClient, GenerateBackend, LoopOptions, Part, Role,
     Status, StatusCb,
 };
 use yuuka_tools::ToolRegistry;
@@ -89,8 +91,11 @@ pub trait GeminiFactory: Send + Sync {
     ///
     /// # Errors
     /// クライアント構築失敗時 [`GeminiError`]。
-    fn build(&self, model: &str, api_key: SecretString)
-        -> Result<Arc<dyn GenerateBackend>, GeminiError>;
+    fn build(
+        &self,
+        model: &str,
+        api_key: SecretString,
+    ) -> Result<Arc<dyn GenerateBackend>, GeminiError>;
 }
 
 /// 本番ファクトリ: `GeminiClient` を構築する。
@@ -240,10 +245,9 @@ impl ChatEngine {
         let Some(cfg) = user::user_gemini(&self.db, uid).await.map_err(db_fail)? else {
             return Ok(TurnReply::text(NO_KEY_MESSAGE));
         };
-        let crypto = self
-            .crypto
-            .as_ref()
-            .ok_or_else(|| llm_fail("encryption unavailable (YUUKA_ENCRYPTION_SECRET)".to_owned()))?;
+        let crypto = self.crypto.as_ref().ok_or_else(|| {
+            llm_fail("encryption unavailable (YUUKA_ENCRYPTION_SECRET)".to_owned())
+        })?;
         let plaintext = crypto
             .decrypt_text(&cfg.encrypted, &cfg.iv, &cfg.tag)
             .map_err(|e| llm_fail(format!("gemini key decrypt: {e}")))?;
@@ -375,16 +379,27 @@ impl ChatEngine {
                 (GuildScope::Guild, Some(gid)) => {
                     let prefixed = format!("[{}]: {}", speaker.display_name, log_text);
                     message_log::add_guild_message_log(
-                        &self.db, bid, gid, uid, "user", &prefixed,
-                        msg.discord_msg_id.as_deref(), msg.reply_to_msg_id.as_deref(),
+                        &self.db,
+                        bid,
+                        gid,
+                        uid,
+                        "user",
+                        &prefixed,
+                        msg.discord_msg_id.as_deref(),
+                        msg.reply_to_msg_id.as_deref(),
                     )
                     .await
                     .map_err(db_fail)?;
                 }
                 _ => {
                     message_log::add_message_log(
-                        &self.db, uid, bid, "user", &log_text,
-                        msg.discord_msg_id.as_deref(), msg.reply_to_msg_id.as_deref(),
+                        &self.db,
+                        uid,
+                        bid,
+                        "user",
+                        &log_text,
+                        msg.discord_msg_id.as_deref(),
+                        msg.reply_to_msg_id.as_deref(),
                     )
                     .await
                     .map_err(db_fail)?;
@@ -397,25 +412,38 @@ impl ChatEngine {
         //    （Node `getBotDmContext`・秘書 `getRecentContext` と floor キーを分ける）。
         let history = match (scope, gid) {
             (GuildScope::Guild, Some(gid)) => {
-                message_log::recent_guild_context(&self.db, bid, gid, message_log::GUILD_CONTEXT_LIMIT).await
+                message_log::recent_guild_context(
+                    &self.db,
+                    bid,
+                    gid,
+                    message_log::GUILD_CONTEXT_LIMIT,
+                )
+                .await
             }
-            _ => message_log::recent_bot_dm_context(&self.db, bid, uid, message_log::CONTEXT_LIMIT).await,
+            _ => {
+                message_log::recent_bot_dm_context(&self.db, bid, uid, message_log::CONTEXT_LIMIT)
+                    .await
+            }
         }
         .map_err(db_fail)?;
         let mut contents = build_contents(&history, &msg);
 
         // 3. システムプロンプト（Bot 単位ペルソナ + 共有/個人ノート）。
         let persona_prompt = match bot.persona_id {
-            Some(pid) => bot_repo::persona_prompt_by_id(&self.db, pid).await.map_err(db_fail)?,
+            Some(pid) => bot_repo::persona_prompt_by_id(&self.db, pid)
+                .await
+                .map_err(db_fail)?,
             None => None,
         };
         let guild_note = match (scope, gid) {
-            (GuildScope::Guild, Some(gid)) => {
-                bot_repo::bot_guild_note(&self.db, bid, gid).await.map_err(db_fail)?
-            }
+            (GuildScope::Guild, Some(gid)) => bot_repo::bot_guild_note(&self.db, bid, gid)
+                .await
+                .map_err(db_fail)?,
             _ => String::new(),
         };
-        let personal_note = bot_repo::bot_user_note(&self.db, bid, uid).await.map_err(db_fail)?;
+        let personal_note = bot_repo::bot_user_note(&self.db, bid, uid)
+            .await
+            .map_err(db_fail)?;
         let sys = guild_prompt::build_guild_system_instruction(
             persona_prompt.as_deref(),
             scope,
@@ -433,10 +461,9 @@ impl ChatEngine {
                 GuildScope::Dm => TurnReply::text(BOT_NO_KEY_MESSAGE),
             });
         };
-        let crypto = self
-            .crypto
-            .as_ref()
-            .ok_or_else(|| llm_fail("encryption unavailable (YUUKA_ENCRYPTION_SECRET)".to_owned()))?;
+        let crypto = self.crypto.as_ref().ok_or_else(|| {
+            llm_fail("encryption unavailable (YUUKA_ENCRYPTION_SECRET)".to_owned())
+        })?;
         let plaintext = crypto
             .decrypt_text(&triplet.encrypted, &triplet.iv, &triplet.tag)
             .map_err(|e| llm_fail(format!("bot gemini key decrypt: {e}")))?;
@@ -473,9 +500,11 @@ impl ChatEngine {
             Err(e) => {
                 // Node `guildErrorResult`: レート/サーバーエラーは分類済み ⚠️ を通常応答で返す（履歴非保存）。
                 // その他の上流エラーは LLM 関連＝固定文フォールバックへ。
-                if let Some(msg) =
-                    classify_gemini_error(&e, GENERIC_RATE_LIMIT_MESSAGE, GENERIC_SERVER_ERROR_MESSAGE)
-                {
+                if let Some(msg) = classify_gemini_error(
+                    &e,
+                    GENERIC_RATE_LIMIT_MESSAGE,
+                    GENERIC_SERVER_ERROR_MESSAGE,
+                ) {
                     return Ok(TurnReply::text(msg));
                 }
                 return Err(llm_fail(e.to_string()));
@@ -490,9 +519,30 @@ impl ChatEngine {
         };
         match (scope, gid) {
             (GuildScope::Guild, Some(gid)) => {
-                message_log::add_guild_message_log(&self.db, bid, gid, uid, "assistant", &reply_text, None, None).await
+                message_log::add_guild_message_log(
+                    &self.db,
+                    bid,
+                    gid,
+                    uid,
+                    "assistant",
+                    &reply_text,
+                    None,
+                    None,
+                )
+                .await
             }
-            _ => message_log::add_message_log(&self.db, uid, bid, "assistant", &reply_text, None, None).await,
+            _ => {
+                message_log::add_message_log(
+                    &self.db,
+                    uid,
+                    bid,
+                    "assistant",
+                    &reply_text,
+                    None,
+                    None,
+                )
+                .await
+            }
         }
         .map_err(db_fail)?;
 
@@ -527,14 +577,19 @@ impl ChatEngine {
                 (Some(persona), cfg.model, cfg.encrypted, cfg.iv, cfg.tag)
             }
             PersonaSource::Bot => {
-                let t = bot_repo::bot_gemini(&self.db, bot_id.as_str()).await.ok()??;
+                let t = bot_repo::bot_gemini(&self.db, bot_id.as_str())
+                    .await
+                    .ok()??;
                 let persona = match bot_repo::get_bot(&self.db, bot_id.as_str())
                     .await
                     .ok()
                     .flatten()
                     .and_then(|b| b.persona_id)
                 {
-                    Some(pid) => bot_repo::persona_prompt_by_id(&self.db, pid).await.ok().flatten(),
+                    Some(pid) => bot_repo::persona_prompt_by_id(&self.db, pid)
+                        .await
+                        .ok()
+                        .flatten(),
                     None => None,
                 };
                 (
@@ -621,8 +676,15 @@ impl TurnProcessor for ChatEngine {
         _delivery: Arc<dyn TurnDelivery>,
     ) -> Result<TurnReply, TurnError> {
         // 非同期配信（deferred）は縮退シーム＝同期実行のみ（delivery は未使用）。
-        self.generic_turn(bot_id, GuildScope::Guild, Some(guild_id), &speaker, msg, &status)
-            .await
+        self.generic_turn(
+            bot_id,
+            GuildScope::Guild,
+            Some(guild_id),
+            &speaker,
+            msg,
+            &status,
+        )
+        .await
     }
 
     async fn process_bot_dm(
@@ -729,10 +791,16 @@ fn build_contents(history: &[ContextEntry], msg: &IncomingChat) -> Vec<Content> 
     // 直近が user でなければ空テキスト + 添付だけの user content を積む。
     let mut inline = Vec::new();
     if let Some(img) = &msg.image {
-        inline.push(Part::inline_data(img.mime_type.clone(), img.data_base64.clone()));
+        inline.push(Part::inline_data(
+            img.mime_type.clone(),
+            img.data_base64.clone(),
+        ));
     }
     if let Some(aud) = &msg.audio {
-        inline.push(Part::inline_data(aud.mime_type.clone(), aud.data_base64.clone()));
+        inline.push(Part::inline_data(
+            aud.mime_type.clone(),
+            aud.data_base64.clone(),
+        ));
     }
     if !inline.is_empty() {
         match out.last_mut() {
@@ -768,7 +836,9 @@ fn rich_parts_to_files(parts: &[ResponsePart]) -> Vec<FileAttachment> {
         .iter()
         .filter_map(|p| match p {
             ResponsePart::InlineData { mime_type, data } => {
-                let bytes = base64::engine::general_purpose::STANDARD.decode(data).ok()?;
+                let bytes = base64::engine::general_purpose::STANDARD
+                    .decode(data)
+                    .ok()?;
                 let ext = if mime_type.contains("png") {
                     "png"
                 } else if mime_type.contains("jpeg") || mime_type.contains("jpg") {
@@ -808,13 +878,20 @@ mod tests {
     /// （二重ユーザーターン回帰の防止・Node `buildContentsFromHistory` パリティ）。
     #[test]
     fn build_contents_does_not_duplicate_persisted_message() {
-        let history = vec![entry("assistant", "前回の返信"), entry("user", "こんにちは")];
+        let history = vec![
+            entry("assistant", "前回の返信"),
+            entry("user", "こんにちは"),
+        ];
         let msg = IncomingChat {
             text: "こんにちは".to_owned(),
             ..IncomingChat::default()
         };
         let contents = build_contents(&history, &msg);
-        assert_eq!(contents.len(), 2, "履歴 2 件がそのまま 2 content（発言の再追加なし）");
+        assert_eq!(
+            contents.len(),
+            2,
+            "履歴 2 件がそのまま 2 content（発言の再追加なし）"
+        );
         assert!(matches!(contents[0].role, Role::Model));
         assert!(matches!(contents[1].role, Role::User));
         assert_eq!(contents[1].parts[0].text.as_deref(), Some("こんにちは"));
@@ -848,7 +925,11 @@ mod tests {
             ..IncomingChat::default()
         };
         let contents = build_contents(&history, &msg);
-        assert_eq!(count_user_turns(&contents), 1, "添付でユーザーターンは増えない");
+        assert_eq!(
+            count_user_turns(&contents),
+            1,
+            "添付でユーザーターンは増えない"
+        );
         let last = contents.last().expect("content あり");
         assert!(
             last.parts.iter().any(|p| p.inline_data.is_some()),
@@ -862,11 +943,19 @@ mod tests {
         let rl = GeminiError::RateLimited { retry_after: None };
         // 秘書経路と汎用モード経路で別文言を返す（共有定数ではない）。
         assert_eq!(
-            classify_gemini_error(&rl, SECRETARY_RATE_LIMIT_MESSAGE, SECRETARY_SERVER_ERROR_MESSAGE),
+            classify_gemini_error(
+                &rl,
+                SECRETARY_RATE_LIMIT_MESSAGE,
+                SECRETARY_SERVER_ERROR_MESSAGE
+            ),
             Some(SECRETARY_RATE_LIMIT_MESSAGE)
         );
         assert_eq!(
-            classify_gemini_error(&rl, GENERIC_RATE_LIMIT_MESSAGE, GENERIC_SERVER_ERROR_MESSAGE),
+            classify_gemini_error(
+                &rl,
+                GENERIC_RATE_LIMIT_MESSAGE,
+                GENERIC_SERVER_ERROR_MESSAGE
+            ),
             Some(GENERIC_RATE_LIMIT_MESSAGE)
         );
         // サーバーエラーは Node isServerError の 4 ステータスのみ。

@@ -94,7 +94,11 @@ mod tests {
         generic.mode = yuuka_core::TurnMode::GuildAssistant;
         generic.capabilities =
             yuuka_core::CapabilitySet::from_granted(vec!["secretary".to_owned()]);
-        assert_eq!(np.list(&generic).len(), 0, "汎用モードでは秘書ツールは露出しない");
+        assert_eq!(
+            np.list(&generic).len(),
+            0,
+            "汎用モードでは秘書ツールは露出しない"
+        );
 
         let name = ToolName::namespaced("native", "add_todo").unwrap();
         let out = np
@@ -136,12 +140,18 @@ mod tests {
 
         let name = ToolName::namespaced("native", "add_expense").unwrap();
         assert!(snap.has(&name));
-        let out = snap.dispatch(&name, json!({"amount": 500}), &ctx()).await.unwrap();
+        let out = snap
+            .dispatch(&name, json!({"amount": 500}), &ctx())
+            .await
+            .unwrap();
         assert_eq!(out.payload["tool"], "native:add_expense");
 
         // 未知は UnknownTool。
         let missing = ToolName::namespaced("native", "ghost").unwrap();
-        let err = snap.dispatch(&missing, json!({}), &ctx()).await.unwrap_err();
+        let err = snap
+            .dispatch(&missing, json!({}), &ctx())
+            .await
+            .unwrap_err();
         assert!(matches!(err, ToolError::UnknownTool(_)));
     }
 

@@ -87,7 +87,10 @@ impl AdminRuntime {
 /// 管理ルータ（`AppState` 上でマージされる）。ルート固有依存を `Extension` で載せる。
 pub fn routes(runtime: Arc<AdminRuntime>) -> Router<AppState> {
     Router::new()
-        .route("/api/admin/default-bot/token", post(routes::default_bot_token))
+        .route(
+            "/api/admin/default-bot/token",
+            post(routes::default_bot_token),
+        )
         .route("/api/admin/stats", get(routes::stats))
         .route(
             "/api/admin/system-settings",

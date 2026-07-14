@@ -72,7 +72,10 @@ impl<'a> ContactRepo<'a> {
     pub async fn search(&self, scope: &UserScope, query: &str) -> Result<Vec<Contact>, DbError> {
         let (uid, bid) = scope_keys(scope);
         // `%`/`_` をエスケープして部分一致パターンにする（Node と同一）。
-        let escaped = query.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
+        let escaped = query
+            .replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_");
         let like = format!("%{escaped}%");
         self.read
             .read(move |conn| {
@@ -290,11 +293,7 @@ impl<'a> ClipboardRepo<'a> {
     ///
     /// # Errors
     /// クエリ失敗時 [`DbError`]。
-    pub async fn get(
-        &self,
-        scope: &UserScope,
-        id: i64,
-    ) -> Result<Option<ClipboardEntry>, DbError> {
+    pub async fn get(&self, scope: &UserScope, id: i64) -> Result<Option<ClipboardEntry>, DbError> {
         let (uid, bid) = scope_keys(scope);
         self.read
             .read(move |conn| {
@@ -396,7 +395,10 @@ impl<'a> ContextNoteRepo<'a> {
                 let mut stmt = conn.prepare(sql).map_err(map_sqlite)?;
                 let mut rows = stmt
                     .query_map(params![uid, bid], |row| {
-                        Ok((row.get::<_, String>("content")?, row.get::<_, Option<String>>("updated_at")?))
+                        Ok((
+                            row.get::<_, String>("content")?,
+                            row.get::<_, Option<String>>("updated_at")?,
+                        ))
                     })
                     .map_err(map_sqlite)?;
                 match rows.next() {

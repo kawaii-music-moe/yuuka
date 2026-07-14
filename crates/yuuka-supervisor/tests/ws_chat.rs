@@ -91,11 +91,7 @@ struct FakeFactory {
     text: String,
 }
 impl GeminiFactory for FakeFactory {
-    fn build(
-        &self,
-        _m: &str,
-        _k: SecretString,
-    ) -> Result<Arc<dyn GenerateBackend>, GeminiError> {
+    fn build(&self, _m: &str, _k: SecretString) -> Result<Arc<dyn GenerateBackend>, GeminiError> {
         Ok(Arc::new(FakeBackend {
             text: self.text.clone(),
         }))
@@ -110,7 +106,8 @@ fn seeded_db() -> (Db, Arc<SystemCrypto>) {
         rusqlite::Connection::open(&path).unwrap();
     }
     let db = Db::open(&path).unwrap();
-    let crypto = Arc::new(SystemCrypto::new(SecretString::from("ws-test-secret".to_owned())).unwrap());
+    let crypto =
+        Arc::new(SystemCrypto::new(SecretString::from("ws-test-secret".to_owned())).unwrap());
     let enc = crypto.encrypt_text("fake-key").unwrap();
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute(
@@ -136,7 +133,14 @@ async fn ws_chat_ready_then_msg_returns_done() {
         }),
     ));
     let state = AppState::new(Arc::new(FakeAuth), WebConfig::default(), db);
-    let app = build_app(state, axum::Router::new(), axum::Router::new(), axum::Router::new(), ws_routes(engine, 20), None);
+    let app = build_app(
+        state,
+        axum::Router::new(),
+        axum::Router::new(),
+        axum::Router::new(),
+        ws_routes(engine, 20),
+        None,
+    );
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -150,7 +154,9 @@ async fn ws_chat_ready_then_msg_returns_done() {
         .unwrap();
     req.headers_mut()
         .insert("authorization", "Bearer good".parse().unwrap());
-    let (mut ws, _resp) = tokio_tungstenite::connect_async(req).await.expect("connect");
+    let (mut ws, _resp) = tokio_tungstenite::connect_async(req)
+        .await
+        .expect("connect");
 
     // 1) 最初のフレームは ready（束縛 Bot・ユーザー・上限）。
     let ready = next_json(&mut ws).await;
@@ -183,10 +189,19 @@ async fn ws_chat_rejects_cookie_only_auth() {
         db.clone(),
         Some(crypto),
         ToolRegistry::new(),
-        Arc::new(FakeFactory { text: "x".to_owned() }),
+        Arc::new(FakeFactory {
+            text: "x".to_owned(),
+        }),
     ));
     let state = AppState::new(Arc::new(CookieAndBearerAuth), WebConfig::default(), db);
-    let app = build_app(state, axum::Router::new(), axum::Router::new(), axum::Router::new(), ws_routes(engine, 20), None);
+    let app = build_app(
+        state,
+        axum::Router::new(),
+        axum::Router::new(),
+        axum::Router::new(),
+        ws_routes(engine, 20),
+        None,
+    );
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -244,6 +259,5 @@ async fn read_until(ws: &mut WsStream, want_type: &str) -> Value {
     }
 }
 
-type WsStream = tokio_tungstenite::WebSocketStream<
-    tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
->;
+type WsStream =
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;

@@ -172,7 +172,8 @@ impl Tool for AddTimelineRecordTool {
                 Some(a) if a != 0.0 => a,
                 _ => return Ok(fail_payload("expense には amount が必要です。")),
             };
-            let category = arg_str(&args, "expense_category").unwrap_or_else(|| "その他".to_owned());
+            let category =
+                arg_str(&args, "expense_category").unwrap_or_else(|| "その他".to_owned());
             let input = NewTimelineRecord {
                 date,
                 r#type,
@@ -248,7 +249,10 @@ impl Tool for ListDayPlanTool {
         let scope = scope_of(ctx);
         let repo = TimelineRepo::new(&self.db);
         let date = arg_str(&args, "date");
-        let blocks = repo.list_plans(&scope, date.clone()).await.map_err(exec_err)?;
+        let blocks = repo
+            .list_plans(&scope, date.clone())
+            .await
+            .map_err(exec_err)?;
         let records = repo.list(&scope, date.clone()).await.map_err(exec_err)?;
         // 表示用ラベル（date 省略時は "今日" と示す・実データは DB の date('now')）。
         let label = date.clone().unwrap_or_else(|| "今日".to_owned());
@@ -281,9 +285,10 @@ impl Tool for CreateDayPlanBlockTool {
     fn declaration(&self) -> FunctionDeclaration {
         FunctionDeclaration {
             name: self.name.clone(),
-            description: "タイムラインに計画ブロックを1件追加する（その日の予定の枠）。\
+            description:
+                "タイムラインに計画ブロックを1件追加する（その日の予定の枠）。\
                 type は 'task'|'transit'|'event'|'free'。start_time/end_time で時間帯を指定できる。"
-                .to_owned(),
+                    .to_owned(),
             parameters_json_schema: json!({
                 "type": "object",
                 "properties": {
@@ -588,7 +593,10 @@ mod tests {
         assert_eq!(out.payload["success"], false);
 
         // type 欠落 → fail。
-        let out = add.call(&ctx(), json!({"date": "2026-07-06"})).await.unwrap();
+        let out = add
+            .call(&ctx(), json!({"date": "2026-07-06"}))
+            .await
+            .unwrap();
         assert_eq!(out.payload["success"], false);
 
         // 空文字 date → fail（route の空文字検証と一致）。
@@ -629,7 +637,10 @@ mod tests {
         let delete = find(&tools, "deleteDayPlanBlock");
 
         // 必須欠落 → fail。
-        let out = create.call(&ctx(), json!({"date": "2026-08-01"})).await.unwrap();
+        let out = create
+            .call(&ctx(), json!({"date": "2026-08-01"}))
+            .await
+            .unwrap();
         assert_eq!(out.payload["success"], false);
 
         // 作成。
@@ -645,10 +656,16 @@ mod tests {
         assert_eq!(out.payload["block"]["type"], "event");
 
         // 一覧（date 指定）に 1 件。
-        let out = list.call(&ctx(), json!({"date": "2026-08-01"})).await.unwrap();
+        let out = list
+            .call(&ctx(), json!({"date": "2026-08-01"}))
+            .await
+            .unwrap();
         assert_eq!(out.payload["blocks"].as_array().unwrap().len(), 1);
         // 別日は空。
-        let out = list.call(&ctx(), json!({"date": "2026-08-02"})).await.unwrap();
+        let out = list
+            .call(&ctx(), json!({"date": "2026-08-02"}))
+            .await
+            .unwrap();
         assert_eq!(out.payload["blocks"].as_array().unwrap().len(), 0);
 
         // 削除。
@@ -658,7 +675,10 @@ mod tests {
         assert_eq!(out.payload["success"], false);
         // 別ユーザーには見えない。
         let ctx_b = ToolContext::new(BotId::system_default(), UserId::new("userB"));
-        let out = list.call(&ctx_b, json!({"date": "2026-08-01"})).await.unwrap();
+        let out = list
+            .call(&ctx_b, json!({"date": "2026-08-01"}))
+            .await
+            .unwrap();
         assert_eq!(out.payload["blocks"].as_array().unwrap().len(), 0);
     }
 }

@@ -98,7 +98,10 @@ async fn directory_list_bots_for_user_includes_owner_shared_and_default() {
     // guest はオーナーではないが system_default + 共有 active を見られる。
     assert!(ids.contains(&BotId::new("system_default")));
     assert!(ids.contains(&BotId::new("botShared")));
-    assert!(!ids.contains(&BotId::new("botOwned")), "非共有の他人 Bot は見えない");
+    assert!(
+        !ids.contains(&BotId::new("botOwned")),
+        "非共有の他人 Bot は見えない"
+    );
 }
 
 #[tokio::test]
@@ -107,7 +110,10 @@ async fn directory_membership_and_guild_role_checks() {
     seed_user(&path, "owner1", "user");
     seed_bot(&path, "botA", "owner1", "A", true);
     conn(&path)
-        .execute("INSERT INTO bot_guilds (bot_id, guild_id) VALUES ('botA', 'g1')", [])
+        .execute(
+            "INSERT INTO bot_guilds (bot_id, guild_id) VALUES ('botA', 'g1')",
+            [],
+        )
         .unwrap();
     conn(&path)
         .execute(
@@ -130,7 +136,10 @@ async fn directory_membership_and_guild_role_checks() {
     assert!(!dir.is_guild_allowed(&bot, &GuildId::new("g2")).await);
     assert!(dir.is_bot_member(&bot, &g1, &UserId::new("mem1")).await);
     assert!(!dir.is_bot_member(&bot, &g1, &UserId::new("stranger")).await);
-    assert!(dir.is_any_role_allowed(&bot, &g1, &["roleX".into(), "role9".into()]).await);
+    assert!(
+        dir.is_any_role_allowed(&bot, &g1, &["roleX".into(), "role9".into()])
+            .await
+    );
     assert!(!dir.is_any_role_allowed(&bot, &g1, &["roleX".into()]).await);
     // 空ロールは false（Node パリティ）。
     assert!(!dir.is_any_role_allowed(&bot, &g1, &[]).await);
@@ -145,7 +154,9 @@ async fn directory_decrypts_discord_token_with_crypto() {
     seed_user(&path, "owner1", "user");
     seed_bot(&path, "botA", "owner1", "A", true);
     let crypto = SystemCrypto::new(SecretString::from("ports-test-secret".to_owned())).unwrap();
-    let enc = crypto.encrypt_text("super-secret-bot-token").expect("encrypt");
+    let enc = crypto
+        .encrypt_text("super-secret-bot-token")
+        .expect("encrypt");
     conn(&path)
         .execute(
             "UPDATE bots SET discord_token_encrypted = ?1, discord_token_iv = ?2, \
@@ -161,7 +172,10 @@ async fn directory_decrypts_discord_token_with_crypto() {
 
     // crypto 無し → None（起動対象 0 に縮退）。
     let dir_no_crypto = DbBotDirectory::new(db, None);
-    assert!(dir_no_crypto.decrypt_token(&BotId::new("botA")).await.is_none());
+    assert!(dir_no_crypto
+        .decrypt_token(&BotId::new("botA"))
+        .await
+        .is_none());
 }
 
 #[tokio::test]
@@ -205,15 +219,28 @@ async fn membership_submit_and_decide_adds_member() {
         .await;
     assert!(decided.ok, "{}", decided.message);
     assert_eq!(decided.status, Some(MemberDecision::Approved));
-    assert!(dir.is_bot_member(&bot, &g1, &UserId::new("applicant")).await, "承認でメンバー化");
+    assert!(
+        dir.is_bot_member(&bot, &g1, &UserId::new("applicant"))
+            .await,
+        "承認でメンバー化"
+    );
 
     // 非オーナー・非 admin は承認/却下不可（新規申請を作ってから試す）。
-    ms.submit_member_request(&bot, "g1", &UserId::new("other"), None, None).await;
+    ms.submit_member_request(&bot, "g1", &UserId::new("other"), None, None)
+        .await;
     let other_req: i64 = conn(&path)
-        .query_row("SELECT id FROM bot_member_requests WHERE user_id = 'other'", [], |r| r.get(0))
+        .query_row(
+            "SELECT id FROM bot_member_requests WHERE user_id = 'other'",
+            [],
+            |r| r.get(0),
+        )
         .unwrap();
     let forbidden = ms
-        .decide_member_request(other_req, MemberDecision::Approved, &UserId::new("stranger"))
+        .decide_member_request(
+            other_req,
+            MemberDecision::Approved,
+            &UserId::new("stranger"),
+        )
         .await;
     assert!(!forbidden.ok, "オーナー/Admin のみ");
 }
@@ -242,22 +269,35 @@ async fn membership_share_and_persona_import() {
     let ms = DbMembership::new(db);
 
     let share_id: i64 = conn(&path)
-        .query_row("SELECT id FROM bot_shares WHERE shared_user_id = 'guest'", [], |r| r.get(0))
+        .query_row(
+            "SELECT id FROM bot_shares WHERE shared_user_id = 'guest'",
+            [],
+            |r| r.get(0),
+        )
         .unwrap();
     let share = ms.get_share(share_id).await.expect("share");
     assert_eq!(share.status, "pending");
     assert_eq!(share.shared_user_id, UserId::new("guest"));
 
     // 承認 → active。
-    ms.accept_share(&BotId::new("botA"), &UserId::new("guest")).await;
+    ms.accept_share(&BotId::new("botA"), &UserId::new("guest"))
+        .await;
     let status: String = conn(&path)
-        .query_row("SELECT status FROM bot_shares WHERE id = ?1", [share_id], |r| r.get(0))
+        .query_row(
+            "SELECT status FROM bot_shares WHERE id = ?1",
+            [share_id],
+            |r| r.get(0),
+        )
         .unwrap();
     assert_eq!(status, "active");
 
     // 公開ペルソナ取得 + インポート（独立コピー）。
     let persona_id: i64 = conn(&path)
-        .query_row("SELECT id FROM personas WHERE name = '公開ペルソナ'", [], |r| r.get(0))
+        .query_row(
+            "SELECT id FROM personas WHERE name = '公開ペルソナ'",
+            [],
+            |r| r.get(0),
+        )
         .unwrap();
     assert!(ms.get_public_persona(persona_id).await.is_some());
     assert!(ms.import_persona(&UserId::new("guest"), persona_id).await);

@@ -202,7 +202,11 @@ mod tests {
 
         // 子孫がルートに再出現せず、残るのは other のみ。
         let listed = repo.list_tree(&s, None, None).await.unwrap();
-        assert_eq!(listed.len(), 1, "親削除で子孫も消え、孤児のルート昇格が起きない");
+        assert_eq!(
+            listed.len(),
+            1,
+            "親削除で子孫も消え、孤児のルート昇格が起きない"
+        );
         assert_eq!(listed[0].title, "other");
         // 子孫は個別 get でも消滅。
         assert!(repo.get(&s, child.id).await.unwrap().is_none());
@@ -817,8 +821,16 @@ mod tests {
         assert_eq!(subs[0].subtasks[0].id, grandchild.id);
 
         // 子を持たないタスクは空。存在しない id も空。
-        assert!(repo.list_subtasks_tree(&s, grandchild.id).await.unwrap().is_empty());
-        assert!(repo.list_subtasks_tree(&s, 999_999).await.unwrap().is_empty());
+        assert!(repo
+            .list_subtasks_tree(&s, grandchild.id)
+            .await
+            .unwrap()
+            .is_empty());
+        assert!(repo
+            .list_subtasks_tree(&s, 999_999)
+            .await
+            .unwrap()
+            .is_empty());
     }
 
     /// update_progress: 0-100 にクランプし進捗ログを追記、100 で done へ同期する（Node `updateProgress`）。
@@ -857,7 +869,11 @@ mod tests {
         assert_eq!(logs[1].todo_id, t.id);
 
         // 不在 id は None（ログも増えない）。
-        assert!(repo.update_progress(&s, 999_999, 50, None).await.unwrap().is_none());
+        assert!(repo
+            .update_progress(&s, 999_999, 50, None)
+            .await
+            .unwrap()
+            .is_none());
     }
 
     /// update: 部分更新。due_date 変更で due_reminded がリセットされ、空文字で NULL クリアされる。
@@ -885,7 +901,11 @@ mod tests {
             .expect("row");
         assert_eq!(upd.title, "renamed");
         assert_eq!(upd.description.as_deref(), Some("desc"));
-        assert_eq!(upd.due_date.as_deref(), Some("2026-07-02"), "未指定は据え置き");
+        assert_eq!(
+            upd.due_date.as_deref(),
+            Some("2026-07-02"),
+            "未指定は据え置き"
+        );
 
         // 空文字で due_date/start_date をクリア（NULL 化）。
         let cleared = repo
@@ -907,7 +927,15 @@ mod tests {
 
         // 不在 id は None（スコープ外含む）。
         assert!(repo
-            .update(&s, 999_999, TodoUpdate { id: 999_999, title: Some("x".to_owned()), ..Default::default() })
+            .update(
+                &s,
+                999_999,
+                TodoUpdate {
+                    id: 999_999,
+                    title: Some("x".to_owned()),
+                    ..Default::default()
+                }
+            )
             .await
             .unwrap()
             .is_none());
@@ -926,7 +954,16 @@ mod tests {
 
         // Unchanged: priority を触らない（他フィールドだけ更新）→ high のまま。
         let kept = repo
-            .update(&s, t.id, TodoUpdate { id: t.id, title: Some("k".to_owned()), priority: PriorityUpdate::Unchanged, ..Default::default() })
+            .update(
+                &s,
+                t.id,
+                TodoUpdate {
+                    id: t.id,
+                    title: Some("k".to_owned()),
+                    priority: PriorityUpdate::Unchanged,
+                    ..Default::default()
+                },
+            )
             .await
             .unwrap()
             .expect("row");
@@ -934,7 +971,15 @@ mod tests {
 
         // Set: medium へ。
         let set = repo
-            .update(&s, t.id, TodoUpdate { id: t.id, priority: PriorityUpdate::Set("medium".to_owned()), ..Default::default() })
+            .update(
+                &s,
+                t.id,
+                TodoUpdate {
+                    id: t.id,
+                    priority: PriorityUpdate::Set("medium".to_owned()),
+                    ..Default::default()
+                },
+            )
             .await
             .unwrap()
             .expect("row");
@@ -942,7 +987,15 @@ mod tests {
 
         // Clear: NULL へ。
         let cleared = repo
-            .update(&s, t.id, TodoUpdate { id: t.id, priority: PriorityUpdate::Clear, ..Default::default() })
+            .update(
+                &s,
+                t.id,
+                TodoUpdate {
+                    id: t.id,
+                    priority: PriorityUpdate::Clear,
+                    ..Default::default()
+                },
+            )
             .await
             .unwrap()
             .expect("row");
@@ -962,16 +1015,40 @@ mod tests {
         assert_eq!(u.priority, PriorityUpdate::Unchanged, "未指定は据え置き");
 
         // priority: null/空はクリア、正規は設定、不正・数値外は据え置き。
-        assert_eq!(parse(r#"{"id":1,"priority":null}"#).priority, PriorityUpdate::Clear);
-        assert_eq!(parse(r#"{"id":1,"priority":""}"#).priority, PriorityUpdate::Clear);
-        assert_eq!(parse(r#"{"id":1,"priority":"high"}"#).priority, PriorityUpdate::Set("high".to_owned()));
-        assert_eq!(parse(r#"{"id":1,"priority":2}"#).priority, PriorityUpdate::Set("high".to_owned()));
-        assert_eq!(parse(r#"{"id":1,"priority":"bogus"}"#).priority, PriorityUpdate::Unchanged);
-        assert_eq!(parse(r#"{"id":1,"priority":9}"#).priority, PriorityUpdate::Unchanged);
+        assert_eq!(
+            parse(r#"{"id":1,"priority":null}"#).priority,
+            PriorityUpdate::Clear
+        );
+        assert_eq!(
+            parse(r#"{"id":1,"priority":""}"#).priority,
+            PriorityUpdate::Clear
+        );
+        assert_eq!(
+            parse(r#"{"id":1,"priority":"high"}"#).priority,
+            PriorityUpdate::Set("high".to_owned())
+        );
+        assert_eq!(
+            parse(r#"{"id":1,"priority":2}"#).priority,
+            PriorityUpdate::Set("high".to_owned())
+        );
+        assert_eq!(
+            parse(r#"{"id":1,"priority":"bogus"}"#).priority,
+            PriorityUpdate::Unchanged
+        );
+        assert_eq!(
+            parse(r#"{"id":1,"priority":9}"#).priority,
+            PriorityUpdate::Unchanged
+        );
 
         // status: open/done のみ採用、他は None（据え置き）。
-        assert_eq!(parse(r#"{"id":1,"status":"open"}"#).status.as_deref(), Some("open"));
-        assert_eq!(parse(r#"{"id":1,"status":"done"}"#).status.as_deref(), Some("done"));
+        assert_eq!(
+            parse(r#"{"id":1,"status":"open"}"#).status.as_deref(),
+            Some("open")
+        );
+        assert_eq!(
+            parse(r#"{"id":1,"status":"done"}"#).status.as_deref(),
+            Some("done")
+        );
         assert_eq!(parse(r#"{"id":1,"status":"bogus"}"#).status, None);
         assert_eq!(parse(r#"{"id":1,"status":null}"#).status, None);
     }
@@ -990,12 +1067,22 @@ mod tests {
             .await
             .unwrap();
         let status = resp.status();
-        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
-        let j = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap() };
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let j = if bytes.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_slice(&bytes).unwrap()
+        };
         (status, j)
     }
 
-    async fn post_json(app: &axum::Router, uri: &str, body: String) -> (StatusCode, serde_json::Value) {
+    async fn post_json(
+        app: &axum::Router,
+        uri: &str,
+        body: String,
+    ) -> (StatusCode, serde_json::Value) {
         let resp = app
             .clone()
             .oneshot(
@@ -1010,8 +1097,14 @@ mod tests {
             .await
             .unwrap();
         let status = resp.status();
-        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
-        let j = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap() };
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let j = if bytes.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_slice(&bytes).unwrap()
+        };
         (status, j)
     }
 
@@ -1027,24 +1120,44 @@ mod tests {
     async fn route_detail_validates_and_returns_siblings() {
         let app = app();
         // id 未指定 → 400。
-        assert_eq!(get_json(&app, "/api/tasks/detail").await.0, StatusCode::BAD_REQUEST);
+        assert_eq!(
+            get_json(&app, "/api/tasks/detail").await.0,
+            StatusCode::BAD_REQUEST
+        );
         // 非数値 → 400（Node Number("abc")=NaN）。
-        assert_eq!(get_json(&app, "/api/tasks/detail?id=abc").await.0, StatusCode::BAD_REQUEST);
+        assert_eq!(
+            get_json(&app, "/api/tasks/detail?id=abc").await.0,
+            StatusCode::BAD_REQUEST
+        );
         // 0 → 400（Node !0）。
-        assert_eq!(get_json(&app, "/api/tasks/detail?id=0").await.0, StatusCode::BAD_REQUEST);
+        assert_eq!(
+            get_json(&app, "/api/tasks/detail?id=0").await.0,
+            StatusCode::BAD_REQUEST
+        );
         // 不在 → 404。
-        assert_eq!(get_json(&app, "/api/tasks/detail?id=999999").await.0, StatusCode::NOT_FOUND);
+        assert_eq!(
+            get_json(&app, "/api/tasks/detail?id=999999").await.0,
+            StatusCode::NOT_FOUND
+        );
 
         // (a) 葉タスクの detail: 自身の進捗ログが progressLogs に載る（Node は要求 id のログを返す）。
         let leaf = add_parent(&app, r#"{"title":"L"}"#).await;
-        let (ps, _) = post_json(&app, "/api/tasks/progress", format!(r#"{{"id":{leaf},"progress":40,"note":"half"}}"#)).await;
+        let (ps, _) = post_json(
+            &app,
+            "/api/tasks/progress",
+            format!(r#"{{"id":{leaf},"progress":40,"note":"half"}}"#),
+        )
+        .await;
         assert_eq!(ps, StatusCode::OK);
         let (ls, lj) = get_json(&app, &format!("/api/tasks/detail?id={leaf}")).await;
         assert_eq!(ls, StatusCode::OK);
         assert_eq!(lj["success"], serde_json::json!(true));
         // task はフラット単一 todo（subtasks を内包しない）。
         assert_eq!(lj["task"]["title"], serde_json::json!("L"));
-        assert!(lj["task"]["subtasks"].is_null(), "task はフラット（サブツリー非内包）");
+        assert!(
+            lj["task"]["subtasks"].is_null(),
+            "task はフラット（サブツリー非内包）"
+        );
         // 葉なので subtasks は空、effectiveProgress は手動 progress を反映。
         assert_eq!(lj["subtasks"].as_array().unwrap().len(), 0);
         assert_eq!(lj["effectiveProgress"], serde_json::json!(40));
@@ -1057,7 +1170,12 @@ mod tests {
 
         // (b) 親の detail: 兄弟キー subtasks に子がネストし、effectiveProgress は葉から算出（子未完→0）。
         let pid = add_parent(&app, r#"{"title":"P"}"#).await;
-        post_json(&app, "/api/tasks/add", format!(r#"{{"title":"C","parentId":{pid}}}"#)).await;
+        post_json(
+            &app,
+            "/api/tasks/add",
+            format!(r#"{{"title":"C","parentId":{pid}}}"#),
+        )
+        .await;
         let (pstatus, pj) = get_json(&app, &format!("/api/tasks/detail?id={pid}")).await;
         assert_eq!(pstatus, StatusCode::OK);
         assert_eq!(pj["subtasks"][0]["title"], serde_json::json!("C"));
@@ -1091,14 +1209,42 @@ mod tests {
     async fn route_update_validates_and_updates() {
         let app = app();
         // id なし → 400（missing field id で DTO パース失敗）。
-        assert_eq!(post_json(&app, "/api/tasks/update", r#"{"title":"x"}"#.to_owned()).await.0, StatusCode::BAD_REQUEST);
+        assert_eq!(
+            post_json(&app, "/api/tasks/update", r#"{"title":"x"}"#.to_owned())
+                .await
+                .0,
+            StatusCode::BAD_REQUEST
+        );
         // id=0 → 400。
-        assert_eq!(post_json(&app, "/api/tasks/update", r#"{"id":0,"title":"x"}"#.to_owned()).await.0, StatusCode::BAD_REQUEST);
+        assert_eq!(
+            post_json(
+                &app,
+                "/api/tasks/update",
+                r#"{"id":0,"title":"x"}"#.to_owned()
+            )
+            .await
+            .0,
+            StatusCode::BAD_REQUEST
+        );
         // 不在 → 404。
-        assert_eq!(post_json(&app, "/api/tasks/update", r#"{"id":999999,"title":"x"}"#.to_owned()).await.0, StatusCode::NOT_FOUND);
+        assert_eq!(
+            post_json(
+                &app,
+                "/api/tasks/update",
+                r#"{"id":999999,"title":"x"}"#.to_owned()
+            )
+            .await
+            .0,
+            StatusCode::NOT_FOUND
+        );
 
         let pid = add_parent(&app, r#"{"title":"orig"}"#).await;
-        let (status, j) = post_json(&app, "/api/tasks/update", format!(r#"{{"id":{pid},"title":"updated","priority":"high","status":"done"}}"#)).await;
+        let (status, j) = post_json(
+            &app,
+            "/api/tasks/update",
+            format!(r#"{{"id":{pid},"title":"updated","priority":"high","status":"done"}}"#),
+        )
+        .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(j["task"]["title"], serde_json::json!("updated"));
         assert_eq!(j["task"]["priority"], serde_json::json!("high"));
@@ -1110,19 +1256,52 @@ mod tests {
     async fn route_progress_leaf_ok_parent_conflict() {
         let app = app();
         // id なし → 400。
-        assert_eq!(post_json(&app, "/api/tasks/progress", r#"{"progress":50}"#.to_owned()).await.0, StatusCode::BAD_REQUEST);
+        assert_eq!(
+            post_json(&app, "/api/tasks/progress", r#"{"progress":50}"#.to_owned())
+                .await
+                .0,
+            StatusCode::BAD_REQUEST
+        );
         // 不在 → 404。
-        assert_eq!(post_json(&app, "/api/tasks/progress", r#"{"id":999999,"progress":50}"#.to_owned()).await.0, StatusCode::NOT_FOUND);
+        assert_eq!(
+            post_json(
+                &app,
+                "/api/tasks/progress",
+                r#"{"id":999999,"progress":50}"#.to_owned()
+            )
+            .await
+            .0,
+            StatusCode::NOT_FOUND
+        );
 
         // 葉タスクは進捗更新可（200）。
         let leaf = add_parent(&app, r#"{"title":"leaf"}"#).await;
-        let (ls, lj) = post_json(&app, "/api/tasks/progress", format!(r#"{{"id":{leaf},"progress":60}}"#)).await;
+        let (ls, lj) = post_json(
+            &app,
+            "/api/tasks/progress",
+            format!(r#"{{"id":{leaf},"progress":60}}"#),
+        )
+        .await;
         assert_eq!(ls, StatusCode::OK);
         assert_eq!(lj["task"]["progress"], serde_json::json!(60));
 
         // サブタスクを持つ親は 409（進捗は子から算出のため手動不可）。
         let parent = add_parent(&app, r#"{"title":"parent"}"#).await;
-        post_json(&app, "/api/tasks/add", format!(r#"{{"title":"child","parentId":{parent}}}"#)).await;
-        assert_eq!(post_json(&app, "/api/tasks/progress", format!(r#"{{"id":{parent},"progress":50}}"#)).await.0, StatusCode::CONFLICT);
+        post_json(
+            &app,
+            "/api/tasks/add",
+            format!(r#"{{"title":"child","parentId":{parent}}}"#),
+        )
+        .await;
+        assert_eq!(
+            post_json(
+                &app,
+                "/api/tasks/progress",
+                format!(r#"{{"id":{parent},"progress":50}}"#)
+            )
+            .await
+            .0,
+            StatusCode::CONFLICT
+        );
     }
 }

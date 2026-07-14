@@ -35,7 +35,12 @@ impl SupervisedService for CronSupervised {
 
     async fn run(&self, mut shutdown: ShutdownToken) -> Result<(), ServiceError> {
         // 停止協調は cancel future として cron ループの `select!` へ配線する。
-        run_cron(&*self.svc, &self.ctx, async move { shutdown.cancelled().await }).await;
+        run_cron(
+            &*self.svc,
+            &self.ctx,
+            async move { shutdown.cancelled().await },
+        )
+        .await;
         // cron ループは cancel でのみ抜ける＝意図的停止（再起動しない）。
         Ok(())
     }
@@ -67,8 +72,8 @@ mod tests {
         use std::sync::atomic::{AtomicU64, Ordering};
         static SEQ: AtomicU64 = AtomicU64::new(0);
         let seq = SEQ.fetch_add(1, Ordering::Relaxed);
-        let path = std::env::temp_dir()
-            .join(format!("yuuka_svc_sup_{}_{seq}.sqlite", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("yuuka_svc_sup_{}_{seq}.sqlite", std::process::id()));
         // Db::open は既存ファイル前提（read/writer は CREATE しない）。先にファイルを作る。
         rusqlite::Connection::open(&path).expect("create db file");
         // 空 DB で十分（アダプタ生成・名前確認は DB を触らない）。

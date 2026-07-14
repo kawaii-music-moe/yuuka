@@ -66,7 +66,9 @@ impl MessengerRegistrationDm {
 #[async_trait::async_trait]
 impl RegistrationDm for MessengerRegistrationDm {
     async fn send_registration_code(&self, discord_id: &str, code: &str) -> bool {
-        self.messenger.send_registration_code_dm(discord_id, code).await
+        self.messenger
+            .send_registration_code_dm(discord_id, code)
+            .await
     }
 }
 
@@ -107,7 +109,10 @@ mod tests {
     #[test]
     fn transient_errors_map_to_transient() {
         // 一過性のゲートウェイ断・トランスポート障害はバックオフ再起動対象。
-        assert_eq!(fatality_of(DiscordError::GatewayClosed), Fatality::Transient);
+        assert_eq!(
+            fatality_of(DiscordError::GatewayClosed),
+            Fatality::Transient
+        );
         assert_eq!(
             fatality_of(DiscordError::Transport("boom".to_owned())),
             Fatality::Transient

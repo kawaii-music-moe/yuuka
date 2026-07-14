@@ -88,8 +88,14 @@ pub(crate) async fn password(
     // 全セッション失効 + デスクトップトークン全失効（各端末は次回 401 で再ログイン）。
     rt.sessions.destroy_all_for_user(&user.0.discord_id).await;
     revoke_all_desktop_tokens(&state.db, &user.0.discord_id).await?;
-    yuuka_auth::audit::add_audit_log(&state.db, &user.0.discord_id, "auth.password_change", None, None)
-        .await;
+    yuuka_auth::audit::add_audit_log(
+        &state.db,
+        &user.0.discord_id,
+        "auth.password_change",
+        None,
+        None,
+    )
+    .await;
 
     // 継続ログイン用に新しいセッションを発行する（全失効の後）。
     let su = SessionUser {
@@ -142,8 +148,14 @@ pub(crate) async fn delete_account(
         return Ok(not_found("アカウントが見つかりません。"));
     }
     rt.sessions.destroy_all_for_user(&user.0.discord_id).await;
-    yuuka_auth::audit::add_audit_log(&state.db, &user.0.discord_id, "auth.account_delete", None, None)
-        .await;
+    yuuka_auth::audit::add_audit_log(
+        &state.db,
+        &user.0.discord_id,
+        "auth.account_delete",
+        None,
+        None,
+    )
+    .await;
     Ok(ok_message(
         "アカウントを削除しました。関連データもすべて削除されました。",
     ))
@@ -299,7 +311,11 @@ fn ok_message(message: &str) -> Response {
 }
 
 fn status_json(status: StatusCode, message: &str) -> Response {
-    (status, Json(json!({ "success": false, "message": message }))).into_response()
+    (
+        status,
+        Json(json!({ "success": false, "message": message })),
+    )
+        .into_response()
 }
 
 fn bad_request(message: &str) -> Response {
@@ -422,7 +438,10 @@ mod tests {
     #[test]
     fn drive_folder_id_forms() {
         // ID 単体。
-        assert_eq!(extract_drive_folder_id("abc_123-XYZ").as_deref(), Some("abc_123-XYZ"));
+        assert_eq!(
+            extract_drive_folder_id("abc_123-XYZ").as_deref(),
+            Some("abc_123-XYZ")
+        );
         // /folders/<ID> を含む URL。
         assert_eq!(
             extract_drive_folder_id("https://drive.google.com/drive/folders/FOLDER_1").as_deref(),

@@ -63,9 +63,7 @@ pub fn parse_custom_id(custom_id: &str) -> (&str, &str, &str) {
 #[must_use]
 pub fn button_custom_id(interaction: &Interaction) -> Option<&str> {
     match interaction.data.as_ref()? {
-        InteractionData::MessageComponent(data)
-            if data.component_type == ComponentType::Button =>
-        {
+        InteractionData::MessageComponent(data) if data.component_type == ComponentType::Button => {
             Some(&data.custom_id)
         }
         _ => None,
@@ -97,8 +95,9 @@ pub async fn decide(
                 return InteractionPlan::Reply("申請情報が不正です。".to_owned());
             }
             // owner 宛 DM 用の表示ラベルを先に解決（Node: `applicantLabel?.trim() || ユーザー ${id}`）。
-            let applicant_dm_label =
-                label_or(applicant_label.as_deref(), || format!("ユーザー {}", invoker.as_str()));
+            let applicant_dm_label = label_or(applicant_label.as_deref(), || {
+                format!("ユーザー {}", invoker.as_str())
+            });
             let guild_dm_label = label_or(guild_label.as_deref(), || format!("ギルド {guild_id}"));
             let outcome = deps
                 .membership
@@ -117,7 +116,14 @@ pub async fn decide(
                     (&outcome.owner_id, &outcome.bot_name, outcome.request_id)
                 {
                     deps.dm
-                        .send_request_dm(owner, name, &applicant_dm_label, &guild_dm_label, None, rid)
+                        .send_request_dm(
+                            owner,
+                            name,
+                            &applicant_dm_label,
+                            &guild_dm_label,
+                            None,
+                            rid,
+                        )
                         .await;
                 }
             }
@@ -200,12 +206,11 @@ pub async fn decide(
             let bot_name = bot
                 .as_ref()
                 .map_or_else(|| share.bot_id.as_str().to_owned(), |b| b.name.clone());
-            let content =
-                format!("✅ Bot「**{bot_name}**」へのアクセスが有効になりました！");
+            let content = format!("✅ Bot「**{bot_name}**」へのアクセスが有効になりました！");
 
             // 推奨ペルソナ（公開）のインポート確認をフォローアップ（§5.2.2）。
-            let followup = build_persona_followup(deps, bot.and_then(|b| b.recommended_persona_id))
-                .await;
+            let followup =
+                build_persona_followup(deps, bot.and_then(|b| b.recommended_persona_id)).await;
             InteractionPlan::Update { content, followup }
         }
 
@@ -216,14 +221,16 @@ pub async fn decide(
             }
             let Some(persona_id) = parse_id(id_str) else {
                 return InteractionPlan::Update {
-                    content: "ペルソナのインポートに失敗しました（非公開化された可能性があります）。"
-                        .to_owned(),
+                    content:
+                        "ペルソナのインポートに失敗しました（非公開化された可能性があります）。"
+                            .to_owned(),
                     followup: None,
                 };
             };
             let ok = deps.membership.import_persona(invoker, persona_id).await;
             let content = if ok {
-                "✅ ペルソナをインポートしました。管理画面の「ペルソナ」から適用できます。".to_owned()
+                "✅ ペルソナをインポートしました。管理画面の「ペルソナ」から適用できます。"
+                    .to_owned()
             } else {
                 "ペルソナのインポートに失敗しました（非公開化された可能性があります）。".to_owned()
             };
@@ -316,7 +323,9 @@ pub async fn respond(deps: &InteractionDeps, interaction: &Interaction, plan: In
             }
             if let Some(followup) = followup {
                 let components = to_twilight_components(&followup.components);
-                let mut req = client.create_followup(&interaction.token).content(&followup.content);
+                let mut req = client
+                    .create_followup(&interaction.token)
+                    .content(&followup.content);
                 if !components.is_empty() {
                     req = req.components(&components);
                 }
@@ -349,12 +358,18 @@ mod tests {
 
     #[test]
     fn parse_custom_id_splits_three() {
-        assert_eq!(parse_custom_id("share_accept:42"), ("share_accept", "42", ""));
+        assert_eq!(
+            parse_custom_id("share_accept:42"),
+            ("share_accept", "42", "")
+        );
         assert_eq!(
             parse_custom_id("memreq_apply:bot1:guild9"),
             ("memreq_apply", "bot1", "guild9")
         );
-        assert_eq!(parse_custom_id("persona_import"), ("persona_import", "", ""));
+        assert_eq!(
+            parse_custom_id("persona_import"),
+            ("persona_import", "", "")
+        );
         // extra に `:` が含まれても 3 分割で残りは extra へ（現行 split の 3 要素 destructure と一致）。
         assert_eq!(parse_custom_id("a:b:c:d"), ("a", "b", "c:d"));
     }
@@ -486,7 +501,12 @@ mod tests {
             ));
             true
         }
-        async fn send_decision_dm(&self, applicant_id: &str, _bot_name: &str, approved: bool) -> bool {
+        async fn send_decision_dm(
+            &self,
+            applicant_id: &str,
+            _bot_name: &str,
+            approved: bool,
+        ) -> bool {
             self.decision_dms
                 .lock()
                 .unwrap()
@@ -516,7 +536,10 @@ mod tests {
     async fn memreq_apply_invalid_info() {
         let d = deps(FakeMembership::default(), FakeDirectory::default());
         let plan = decide(&d, "memreq_apply", "", "", &UserId::new("u"), None, None).await;
-        assert_eq!(plan, InteractionPlan::Reply("申請情報が不正です。".to_owned()));
+        assert_eq!(
+            plan,
+            InteractionPlan::Reply("申請情報が不正です。".to_owned())
+        );
     }
 
     #[tokio::test]
@@ -528,7 +551,16 @@ mod tests {
             },
             FakeDirectory::default(),
         );
-        let plan = decide(&d, "memreq_apply", "bot1", "g9", &UserId::new("u"), None, None).await;
+        let plan = decide(
+            &d,
+            "memreq_apply",
+            "bot1",
+            "g9",
+            &UserId::new("u"),
+            None,
+            None,
+        )
+        .await;
         assert_eq!(
             plan,
             InteractionPlan::Reply(
@@ -621,7 +653,16 @@ mod tests {
     #[tokio::test]
     async fn unknown_action_ignored() {
         let d = deps(FakeMembership::default(), FakeDirectory::default());
-        let plan = decide(&d, "totally_unknown", "1", "", &UserId::new("u"), None, None).await;
+        let plan = decide(
+            &d,
+            "totally_unknown",
+            "1",
+            "",
+            &UserId::new("u"),
+            None,
+            None,
+        )
+        .await;
         assert_eq!(plan, InteractionPlan::Ignore);
     }
 
@@ -679,8 +720,14 @@ mod tests {
         )
         .await;
         let sent = dm.request_dms.lock().unwrap();
-        assert_eq!(sent[0].2, "ユーザー u", "applicant 無しは ユーザー+id フォールバック");
-        assert_eq!(sent[0].3, "ギルド g9", "guild 空白は ギルド+guildId フォールバック");
+        assert_eq!(
+            sent[0].2, "ユーザー u",
+            "applicant 無しは ユーザー+id フォールバック"
+        );
+        assert_eq!(
+            sent[0].3, "ギルド g9",
+            "guild 空白は ギルド+guildId フォールバック"
+        );
     }
 
     #[tokio::test]
@@ -700,7 +747,16 @@ mod tests {
             FakeDirectory::default(),
             dm.clone(),
         );
-        let plan = decide(&d, "memreq_approve", "5", "", &UserId::new("owner"), None, None).await;
+        let plan = decide(
+            &d,
+            "memreq_approve",
+            "5",
+            "",
+            &UserId::new("owner"),
+            None,
+            None,
+        )
+        .await;
         assert!(matches!(plan, InteractionPlan::Update { .. }));
         let sent = dm.decision_dms.lock().unwrap();
         assert_eq!(sent.as_slice(), &[("applicant1".to_owned(), true)]);

@@ -6,9 +6,9 @@
 //! `spawn_blocking` で回し、async ランタイムをブロックしない。
 
 use rusqlite::{params, OptionalExtension};
+use yuuka_core::DbError;
 use yuuka_crypto::{generate_user_salt, Encrypted};
 use yuuka_db::map_sqlite;
-use yuuka_core::DbError;
 use yuuka_types::Role;
 use yuuka_web::Db;
 
@@ -62,7 +62,10 @@ fn role_text(role: Role) -> &'static str {
 ///
 /// # Errors
 /// 読み取り失敗時 [`DbError`]。
-pub async fn get_user_by_discord_id(db: &Db, discord_id: &str) -> Result<Option<AuthUser>, DbError> {
+pub async fn get_user_by_discord_id(
+    db: &Db,
+    discord_id: &str,
+) -> Result<Option<AuthUser>, DbError> {
     let id = discord_id.to_owned();
     db.read
         .read(move |conn| {
@@ -220,13 +223,16 @@ mod tests {
         // Rust が作った $2b$ ハッシュを Rust が検証できる（＝Node とも相互運用可能な形式）。
         let hash = bcrypt::hash("Correct-horse-1", BCRYPT_COST).unwrap();
         assert!(hash.starts_with("$2b$"));
-        assert!(verify_password_constant_time("Correct-horse-1".to_owned(), Some(hash.clone())).await);
+        assert!(
+            verify_password_constant_time("Correct-horse-1".to_owned(), Some(hash.clone())).await
+        );
         assert!(!verify_password_constant_time("wrong".to_owned(), Some(hash)).await);
         // 不在ユーザー（None）は常に false（例外を投げずダミー比較を消費）。
         assert!(!verify_password_constant_time("anything".to_owned(), None).await);
         // 破損ハッシュ（旧 scrypt 形式）は false（Node の try/catch 相当）。
         assert!(
-            !verify_password_constant_time("x".to_owned(), Some("not-a-bcrypt-hash".to_owned())).await
+            !verify_password_constant_time("x".to_owned(), Some("not-a-bcrypt-hash".to_owned()))
+                .await
         );
     }
 }

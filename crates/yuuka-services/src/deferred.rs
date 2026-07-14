@@ -38,7 +38,11 @@ macro_rules! deferred_service {
                 false
             }
             async fn tick(&self, _ctx: &ServiceContext) {
-                tracing::debug!(service = $name, reason = $reason, "予約シーム: 本体未実装（依存基盤待ち）");
+                tracing::debug!(
+                    service = $name,
+                    reason = $reason,
+                    "予約シーム: 本体未実装（依存基盤待ち）"
+                );
             }
         }
     };
@@ -71,7 +75,10 @@ mod tests {
     #[test]
     fn deferred_services_have_stable_names_and_schedules() {
         assert_eq!(ReportService.name(), "report");
-        assert!(matches!(BackupService.schedule(), Schedule::Cron("15 * * * *")));
+        assert!(matches!(
+            BackupService.schedule(),
+            Schedule::Cron("15 * * * *")
+        ));
         assert!(!BriefingService.run_on_start());
     }
 }

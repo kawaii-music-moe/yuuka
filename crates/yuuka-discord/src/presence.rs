@@ -11,8 +11,8 @@
 //! `MissingActivity` で拒否するため、`state: None` の Custom アクティビティ 1 つで表す
 //! （表示テキストが無い＝実質クリアと同じ見え方）。
 
-use twilight_model::gateway::presence::{Activity, ActivityType, MinimalActivity, Status};
 use twilight_model::gateway::payload::outgoing::UpdatePresence;
+use twilight_model::gateway::presence::{Activity, ActivityType, MinimalActivity, Status};
 use yuuka_core::DiscordError;
 
 use crate::ports::BotStatus;

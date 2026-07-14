@@ -98,7 +98,15 @@ fn plan_status_emoji(status: &str) -> &'static str {
 
 /// 支出カテゴリの許容一覧（Node `expenseRepo.CATEGORIES`）。setBudgetLimit の検証に使う。
 const CATEGORIES: [&str; 9] = [
-    "食費", "日用品", "交通費", "光熱費", "通信費", "医療費", "娯楽", "衣服", "その他",
+    "食費",
+    "日用品",
+    "交通費",
+    "光熱費",
+    "通信費",
+    "医療費",
+    "娯楽",
+    "衣服",
+    "その他",
 ];
 
 /// カテゴリ一覧を `, ` 連結（Node `CATEGORY_LIST`・エラーメッセージ用）。
@@ -247,7 +255,9 @@ impl Tool for AddExpenseTool {
 
     async fn call(&self, ctx: &ToolContext, args: Value) -> Result<ToolOutcome, ToolError> {
         let Some(amount) = arg_i64(&args, "amount").filter(|n| *n > 0) else {
-            return Ok(fail_payload("amount は1以上の整数（円）で指定してください。"));
+            return Ok(fail_payload(
+                "amount は1以上の整数（円）で指定してください。",
+            ));
         };
         let Some(category) = arg_str(&args, "category") else {
             return Ok(fail_payload("category を指定してください。"));
@@ -376,10 +386,11 @@ impl Tool for GetMonthlySummaryTool {
     fn declaration(&self) -> FunctionDeclaration {
         FunctionDeclaration {
             name: self.name.clone(),
-            description: "指定した月の収支まとめ（収入合計・支出合計・差額・支出のカテゴリ別内訳）を返す。\
+            description:
+                "指定した月の収支まとめ（収入合計・支出合計・差額・支出のカテゴリ別内訳）を返す。\
                 「今月いくら使った？」等で呼ぶ。年と月を省くと今月のまとめを返す。\
                 カテゴリの細かい内訳だけ見たい時は getCategoryBreakdown を使う。"
-                .to_owned(),
+                    .to_owned(),
             parameters_json_schema: json!({
                 "type": "object",
                 "properties": {
@@ -396,8 +407,14 @@ impl Tool for GetMonthlySummaryTool {
         let repo = ExpenseRepo::new(&self.db);
         let (year, month) = resolve_year_month(&repo, &args).await.map_err(exec_err)?;
         let label = month_label(year, month);
-        let income = repo.monthly_total(&scope, "income", year, month).await.map_err(exec_err)?;
-        let expense = repo.monthly_total(&scope, "expense", year, month).await.map_err(exec_err)?;
+        let income = repo
+            .monthly_total(&scope, "income", year, month)
+            .await
+            .map_err(exec_err)?;
+        let expense = repo
+            .monthly_total(&scope, "expense", year, month)
+            .await
+            .map_err(exec_err)?;
         let balance = income - expense;
         let breakdown = repo
             .monthly_category_breakdown(&scope, year, month, "expense")
@@ -419,7 +436,12 @@ impl Tool for GetMonthlySummaryTool {
             lines.push("───────────".to_owned());
             lines.push("支出の内訳:".to_owned());
             for c in &breakdown {
-                lines.push(format!("  {}: {} ({}件)", c.category, format_yen(c.total), c.count));
+                lines.push(format!(
+                    "  {}: {} ({}件)",
+                    c.category,
+                    format_yen(c.total),
+                    c.count
+                ));
             }
         }
         Ok(ToolOutcome::from_payload(ok_payload(
@@ -463,7 +485,11 @@ impl Tool for GetCategoryBreakdownTool {
         } else {
             "expense"
         };
-        let type_label = if etype == "income" { "収入" } else { "支出" };
+        let type_label = if etype == "income" {
+            "収入"
+        } else {
+            "支出"
+        };
         let scope = scope_of(ctx);
         let repo = ExpenseRepo::new(&self.db);
         let (year, month) = resolve_year_month(&repo, &args).await.map_err(exec_err)?;
@@ -472,7 +498,10 @@ impl Tool for GetCategoryBreakdownTool {
             .monthly_category_breakdown(&scope, year, month, etype)
             .await
             .map_err(exec_err)?;
-        let total = repo.monthly_total(&scope, etype, year, month).await.map_err(exec_err)?;
+        let total = repo
+            .monthly_total(&scope, etype, year, month)
+            .await
+            .map_err(exec_err)?;
 
         if breakdown.is_empty() {
             return Ok(ToolOutcome::from_payload(ok_payload(
@@ -488,7 +517,13 @@ impl Tool for GetCategoryBreakdownTool {
                 } else {
                     "0".to_owned()
                 };
-                format!("{}: {} ({}%, {}件)", c.category, format_yen(c.total), ratio, c.count)
+                format!(
+                    "{}: {} ({}%, {}件)",
+                    c.category,
+                    format_yen(c.total),
+                    ratio,
+                    c.count
+                )
             })
             .collect();
         let message = format!(
@@ -618,9 +653,7 @@ impl Tool for SetBudgetLimitTool {
 
     async fn call(&self, ctx: &ToolContext, args: Value) -> Result<ToolOutcome, ToolError> {
         let category = arg_str(&args, "category");
-        let valid = category
-            .as_deref()
-            .is_some_and(|c| CATEGORIES.contains(&c));
+        let valid = category.as_deref().is_some_and(|c| CATEGORIES.contains(&c));
         if !valid {
             let raw = args.get("category").and_then(Value::as_str).unwrap_or("");
             return Ok(fail_payload(format!(
@@ -723,7 +756,10 @@ impl Tool for ListPlannedPaymentsTool {
 
     async fn call(&self, ctx: &ToolContext, args: Value) -> Result<ToolOutcome, ToolError> {
         // 既知ステータスのみ採用、それ以外（未指定・不正値）は "pending"（Node parity）。
-        let raw = args.get("status").and_then(Value::as_str).unwrap_or("pending");
+        let raw = args
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or("pending");
         let status = if matches!(raw, "settled" | "cancelled" | "all") {
             raw
         } else {
@@ -810,7 +846,9 @@ impl Tool for AddPlannedPaymentTool {
             return Ok(fail_payload("title（支払いの概要）を指定してください。"));
         };
         let Some(amount) = arg_int(&args, "amount").filter(|n| *n > 0) else {
-            return Ok(fail_payload("amount は1以上の整数（円）で指定してください。"));
+            return Ok(fail_payload(
+                "amount は1以上の整数（円）で指定してください。",
+            ));
         };
         let category = arg_str(&args, "category");
         if !category.as_deref().is_some_and(|c| CATEGORIES.contains(&c)) {
@@ -821,7 +859,9 @@ impl Tool for AddPlannedPaymentTool {
             )));
         }
         let Some(due_date) = arg_str(&args, "due_date").filter(|d| is_ymd(d)) else {
-            return Ok(fail_payload("due_date は YYYY-MM-DD 形式で指定してください。"));
+            return Ok(fail_payload(
+                "due_date は YYYY-MM-DD 形式で指定してください。",
+            ));
         };
         let repeat_rule = arg_str(&args, "repeat_rule");
         if let Some(rule) = &repeat_rule {
@@ -897,7 +937,9 @@ impl Tool for SettlePlannedPaymentTool {
         let scope = scope_of(ctx);
         let repo = ExpenseRepo::new(&self.db);
         let Some(plan) = repo.get_plan(&scope, plan_id).await.map_err(exec_err)? else {
-            return Ok(fail_payload(format!("支払い予定 #{plan_id} が見つかりません。")));
+            return Ok(fail_payload(format!(
+                "支払い予定 #{plan_id} が見つかりません。"
+            )));
         };
         if plan.status != "pending" {
             let state = if plan.status == "settled" {
@@ -905,7 +947,9 @@ impl Tool for SettlePlannedPaymentTool {
             } else {
                 "キャンセル済み"
             };
-            return Ok(fail_payload(format!("支払い予定 #{plan_id} は既に{state}です。")));
+            return Ok(fail_payload(format!(
+                "支払い予定 #{plan_id} は既に{state}です。"
+            )));
         }
         // 予定内容で新規記帳 + 消込 + 紐付き ToDo 自動完了（expense_id 指定での既存記録紐付けは deferred）。
         let (expense_id, completed) = repo.settle_plan(&scope, &plan).await.map_err(exec_err)?;
@@ -960,7 +1004,9 @@ impl Tool for CancelPlannedPaymentTool {
         let scope = scope_of(ctx);
         let repo = ExpenseRepo::new(&self.db);
         let Some(plan) = repo.get_plan(&scope, plan_id).await.map_err(exec_err)? else {
-            return Ok(fail_payload(format!("支払い予定 #{plan_id} が見つかりません。")));
+            return Ok(fail_payload(format!(
+                "支払い予定 #{plan_id} が見つかりません。"
+            )));
         };
         if plan.status != "pending" {
             let state = if plan.status == "settled" {
@@ -968,7 +1014,9 @@ impl Tool for CancelPlannedPaymentTool {
             } else {
                 "キャンセル済み"
             };
-            return Ok(fail_payload(format!("支払い予定 #{plan_id} は既に{state}です。")));
+            return Ok(fail_payload(format!(
+                "支払い予定 #{plan_id} は既に{state}です。"
+            )));
         }
         // NOTE: 紐付きリマインドの期日前キャンセル（linked_reminder_id）は cross-domain のため deferred。
         if !repo.cancel_plan(&scope, plan_id).await.map_err(exec_err)? {
@@ -1014,7 +1062,9 @@ impl Tool for FindSettlementCandidatesTool {
 
     async fn call(&self, ctx: &ToolContext, args: Value) -> Result<ToolOutcome, ToolError> {
         let Some(amount) = arg_int(&args, "amount").filter(|n| *n > 0) else {
-            return Ok(fail_payload("amount は1以上の整数（円）で指定してください。"));
+            return Ok(fail_payload(
+                "amount は1以上の整数（円）で指定してください。",
+            ));
         };
         let Some(category) = arg_str(&args, "category") else {
             return Ok(fail_payload("category を指定してください。"));
@@ -1188,9 +1238,12 @@ mod tests {
         assert!(out.payload["expense"]["bot_id"].is_null());
 
         // income を1件追加。
-        add.call(&ctx(), json!({"amount": 300000, "category": "給与", "type": "income"}))
-            .await
-            .unwrap();
+        add.call(
+            &ctx(),
+            json!({"amount": 300000, "category": "給与", "type": "income"}),
+        )
+        .await
+        .unwrap();
 
         // list（既定）で2件見える。
         let list = find(&tools, "listRecentExpenses");
@@ -1281,12 +1334,21 @@ mod tests {
         let del_budget = find(&tools, "deleteBudgetLimit");
 
         // 当月の支出/収入を記録（date 省略=今日）。
-        add.call(&ctx(), json!({"amount": 3000, "category": "食費"})).await.unwrap();
-        add.call(&ctx(), json!({"amount": 2000, "category": "食費"})).await.unwrap();
-        add.call(&ctx(), json!({"amount": 1000, "category": "娯楽"})).await.unwrap();
-        add.call(&ctx(), json!({"amount": 50000, "category": "給与", "type": "income"}))
+        add.call(&ctx(), json!({"amount": 3000, "category": "食費"}))
             .await
             .unwrap();
+        add.call(&ctx(), json!({"amount": 2000, "category": "食費"}))
+            .await
+            .unwrap();
+        add.call(&ctx(), json!({"amount": 1000, "category": "娯楽"}))
+            .await
+            .unwrap();
+        add.call(
+            &ctx(),
+            json!({"amount": 50000, "category": "給与", "type": "income"}),
+        )
+        .await
+        .unwrap();
 
         // getMonthlySummary: 収入50000/支出6000/差44000。
         let out = summary.call(&ctx(), json!({})).await.unwrap();
@@ -1303,15 +1365,30 @@ mod tests {
         assert_eq!(bd[0]["category"], "食費");
         assert_eq!(bd[0]["total"], 5000);
         // income 指定。
-        let out = breakdown.call(&ctx(), json!({"type": "income"})).await.unwrap();
+        let out = breakdown
+            .call(&ctx(), json!({"type": "income"}))
+            .await
+            .unwrap();
         assert_eq!(out.payload["total"], 50000);
 
         // setBudgetLimit: 無効カテゴリ拒否・非正数拒否・正常設定。
-        let out = set_budget.call(&ctx(), json!({"category": "宇宙旅行", "limit_amount": 10000})).await.unwrap();
+        let out = set_budget
+            .call(
+                &ctx(),
+                json!({"category": "宇宙旅行", "limit_amount": 10000}),
+            )
+            .await
+            .unwrap();
         assert_eq!(out.payload["success"], false);
-        let out = set_budget.call(&ctx(), json!({"category": "食費", "limit_amount": 0})).await.unwrap();
+        let out = set_budget
+            .call(&ctx(), json!({"category": "食費", "limit_amount": 0}))
+            .await
+            .unwrap();
         assert_eq!(out.payload["success"], false);
-        let out = set_budget.call(&ctx(), json!({"category": "食費", "limit_amount": 4000})).await.unwrap();
+        let out = set_budget
+            .call(&ctx(), json!({"category": "食費", "limit_amount": 4000}))
+            .await
+            .unwrap();
         assert_eq!(out.payload["success"], true);
 
         // getBudgetLimits: 食費 消化5000/上限4000 → 125%（超過）。
@@ -1323,9 +1400,15 @@ mod tests {
         assert_eq!(limits[0]["ratio_percent"], 125);
 
         // deleteBudgetLimit: 設定済みは削除成功、未設定は fail。
-        let out = del_budget.call(&ctx(), json!({"category": "食費"})).await.unwrap();
+        let out = del_budget
+            .call(&ctx(), json!({"category": "食費"}))
+            .await
+            .unwrap();
         assert_eq!(out.payload["success"], true);
-        let out = del_budget.call(&ctx(), json!({"category": "食費"})).await.unwrap();
+        let out = del_budget
+            .call(&ctx(), json!({"category": "食費"}))
+            .await
+            .unwrap();
         assert_eq!(out.payload["success"], false);
     }
 
@@ -1341,7 +1424,13 @@ mod tests {
         // 追加: 検証（無効カテゴリ / 期日形式 / 金額）。
         let out = add.call(&ctx(), json!({"title": "家賃", "amount": 80000, "category": "宇宙", "due_date": "2026-08-27"})).await.unwrap();
         assert_eq!(out.payload["success"], false);
-        let out = add.call(&ctx(), json!({"title": "家賃", "amount": 80000, "category": "その他", "due_date": "8/27"})).await.unwrap();
+        let out = add
+            .call(
+                &ctx(),
+                json!({"title": "家賃", "amount": 80000, "category": "その他", "due_date": "8/27"}),
+            )
+            .await
+            .unwrap();
         assert_eq!(out.payload["success"], false);
         // 正常追加 2 件。
         let out = add.call(&ctx(), json!({"title": "家賃", "amount": 80000, "category": "その他", "due_date": "2026-08-27"})).await.unwrap();
@@ -1369,7 +1458,10 @@ mod tests {
         let out = cancel.call(&ctx(), json!({"plan_id": pay2})).await.unwrap();
         assert_eq!(out.payload["success"], false);
         // 存在しない ID。
-        let out = settle.call(&ctx(), json!({"plan_id": 99999})).await.unwrap();
+        let out = settle
+            .call(&ctx(), json!({"plan_id": 99999}))
+            .await
+            .unwrap();
         assert_eq!(out.payload["success"], false);
 
         // 未消込一覧は 0 件（1 件消込・1 件キャンセル）、all では 2 件。
@@ -1377,7 +1469,10 @@ mod tests {
         assert_eq!(out.payload["plans"].as_array().unwrap().len(), 0);
         let out = list.call(&ctx(), json!({"status": "all"})).await.unwrap();
         assert_eq!(out.payload["plans"].as_array().unwrap().len(), 2);
-        let out = list.call(&ctx(), json!({"status": "settled"})).await.unwrap();
+        let out = list
+            .call(&ctx(), json!({"status": "settled"}))
+            .await
+            .unwrap();
         assert_eq!(out.payload["plans"].as_array().unwrap().len(), 1);
     }
 
@@ -1398,15 +1493,24 @@ mod tests {
             .unwrap();
 
         // amount 必須検証。
-        let out = candidates.call(&ctx(), json!({"category": "その他"})).await.unwrap();
+        let out = candidates
+            .call(&ctx(), json!({"category": "その他"}))
+            .await
+            .unwrap();
         assert_eq!(out.payload["success"], false);
         // category 必須。
-        let out = candidates.call(&ctx(), json!({"amount": 80000})).await.unwrap();
+        let out = candidates
+            .call(&ctx(), json!({"amount": 80000}))
+            .await
+            .unwrap();
         assert_eq!(out.payload["success"], false);
 
         // カテゴリ一致・金額 ±10%（78000 は 80000 の -2.5%）・期日 ±7日 → 1件（娯楽は除外）。
         let out = candidates
-            .call(&ctx(), json!({"amount": 78000, "category": "その他", "date": "2026-08-25"}))
+            .call(
+                &ctx(),
+                json!({"amount": 78000, "category": "その他", "date": "2026-08-25"}),
+            )
             .await
             .unwrap();
         assert_eq!(out.payload["candidates"].as_array().unwrap().len(), 1);
@@ -1414,14 +1518,20 @@ mod tests {
 
         // 金額が離れすぎ（50000 は 80000 の -37%）→ 0件。
         let out = candidates
-            .call(&ctx(), json!({"amount": 50000, "category": "その他", "date": "2026-08-25"}))
+            .call(
+                &ctx(),
+                json!({"amount": 50000, "category": "その他", "date": "2026-08-25"}),
+            )
             .await
             .unwrap();
         assert_eq!(out.payload["candidates"].as_array().unwrap().len(), 0);
 
         // 期日が離れすぎ（1ヶ月後）→ 0件。
         let out = candidates
-            .call(&ctx(), json!({"amount": 80000, "category": "その他", "date": "2026-09-30"}))
+            .call(
+                &ctx(),
+                json!({"amount": 80000, "category": "その他", "date": "2026-09-30"}),
+            )
             .await
             .unwrap();
         assert_eq!(out.payload["candidates"].as_array().unwrap().len(), 0);

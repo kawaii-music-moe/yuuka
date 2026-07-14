@@ -80,8 +80,10 @@ mod tests {
 
     fn db_with_setting(rows: &[(&str, &str)]) -> Db {
         let n = SEQ.fetch_add(1, Ordering::Relaxed);
-        let path =
-            std::env::temp_dir().join(format!("yuuka_settings_test_{}_{n}.sqlite", std::process::id()));
+        let path = std::env::temp_dir().join(format!(
+            "yuuka_settings_test_{}_{n}.sqlite",
+            std::process::id()
+        ));
         {
             rusqlite::Connection::open(&path).expect("seed file");
         }

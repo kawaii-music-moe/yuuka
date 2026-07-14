@@ -124,8 +124,11 @@ mod tests {
     use yuuka_web::Db;
 
     fn seed_db() -> Db {
-        let path = std::env::temp_dir()
-            .join(format!("yuuka_auth_desktop_{}_{:?}.sqlite", std::process::id(), std::thread::current().id()));
+        let path = std::env::temp_dir().join(format!(
+            "yuuka_auth_desktop_{}_{:?}.sqlite",
+            std::process::id(),
+            std::thread::current().id()
+        ));
         let _ = std::fs::remove_file(&path);
         {
             let conn = rusqlite::Connection::open(&path).expect("seed");
@@ -160,7 +163,10 @@ mod tests {
             .await
             .unwrap();
 
-        let user = verify(&db, sha256_hex("tok-good"), 90).await.unwrap().expect("user");
+        let user = verify(&db, sha256_hex("tok-good"), 90)
+            .await
+            .unwrap()
+            .expect("user");
         assert_eq!(user.discord_id, "123");
         assert_eq!(user.username, "alice");
         assert_eq!(user.role, Role::Admin);
@@ -181,8 +187,14 @@ mod tests {
             })
             .await
             .unwrap();
-        assert!(verify(&db, sha256_hex("tok-revoked"), 90).await.unwrap().is_none());
-        assert!(verify(&db, sha256_hex("never-issued"), 90).await.unwrap().is_none());
+        assert!(verify(&db, sha256_hex("tok-revoked"), 90)
+            .await
+            .unwrap()
+            .is_none());
+        assert!(verify(&db, sha256_hex("never-issued"), 90)
+            .await
+            .unwrap()
+            .is_none());
     }
 
     #[tokio::test]
@@ -202,6 +214,9 @@ mod tests {
             })
             .await
             .unwrap();
-        assert!(verify(&db, sha256_hex("tok-old"), 90).await.unwrap().is_none());
+        assert!(verify(&db, sha256_hex("tok-old"), 90)
+            .await
+            .unwrap()
+            .is_none());
     }
 }

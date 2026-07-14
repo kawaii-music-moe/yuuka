@@ -59,8 +59,11 @@ fn or_default<T: Default>(r: Result<T, DbError>, what: &str) -> T {
 #[async_trait]
 impl BotDirectory for DbBotDirectory {
     async fn get_bot(&self, bot_id: &BotId) -> Option<BotRecord> {
-        or_default(bot_repo::get_bot(&self.db, bot_id.as_str()).await, "get_bot")
-            .map(|r| r.to_record())
+        or_default(
+            bot_repo::get_bot(&self.db, bot_id.as_str()).await,
+            "get_bot",
+        )
+        .map(|r| r.to_record())
     }
 
     async fn list_all_bots(&self) -> Vec<BotRecord> {
@@ -82,8 +85,10 @@ impl BotDirectory for DbBotDirectory {
 
     async fn decrypt_token(&self, bot_id: &BotId) -> Option<SecretString> {
         let crypto = self.crypto.as_ref()?;
-        let triplet =
-            or_default(bot_repo::bot_discord_token(&self.db, bot_id.as_str()).await, "decrypt_token")?;
+        let triplet = or_default(
+            bot_repo::bot_discord_token(&self.db, bot_id.as_str()).await,
+            "decrypt_token",
+        )?;
         match crypto.decrypt_text(&triplet.encrypted, &triplet.iv, &triplet.tag) {
             Ok(plain) => Some(SecretString::from(plain)),
             Err(e) => {
@@ -122,8 +127,13 @@ impl BotDirectory for DbBotDirectory {
 
     async fn is_bot_member(&self, bot_id: &BotId, guild_id: &GuildId, user_id: &UserId) -> bool {
         or_default(
-            bot_repo::is_bot_member(&self.db, bot_id.as_str(), guild_id.as_str(), user_id.as_str())
-                .await,
+            bot_repo::is_bot_member(
+                &self.db,
+                bot_id.as_str(),
+                guild_id.as_str(),
+                user_id.as_str(),
+            )
+            .await,
             "is_bot_member",
         )
     }
@@ -209,7 +219,8 @@ impl MembershipService for DbMembership {
         decision: MemberDecision,
         actor: &UserId,
     ) -> DecisionOutcome {
-        match bot_repo::decide_member_request(&self.db, request_id, decision, actor.as_str()).await {
+        match bot_repo::decide_member_request(&self.db, request_id, decision, actor.as_str()).await
+        {
             Ok(res) => DecisionOutcome {
                 ok: res.ok,
                 message: res.message,
@@ -309,7 +320,10 @@ impl InMemoryRateLimiter {
     fn increment(&self, key: String, ttl: Duration) -> u32 {
         let now = Instant::now();
         // 毒された Mutex でも継続する（into_inner）。
-        let mut map = self.counters.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut map = self
+            .counters
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if map.len() > COUNTER_SOFT_CAP {
             map.retain(|_, w| w.expires_at > now);
         }
@@ -373,7 +387,8 @@ fn today_suffix() -> String {
 impl RateLimiter for InMemoryRateLimiter {
     async fn consume(&self, bot_id: &BotId, guild_id: &GuildId, user_id: &UserId) -> RateDecision {
         let (per_min, per_day, guild_day) = (
-            self.limit(USER_PER_MINUTE_KEY, DEFAULT_USER_PER_MINUTE).await,
+            self.limit(USER_PER_MINUTE_KEY, DEFAULT_USER_PER_MINUTE)
+                .await,
             self.limit(USER_PER_DAY_KEY, DEFAULT_USER_PER_DAY).await,
             self.limit(GUILD_PER_DAY_KEY, DEFAULT_GUILD_PER_DAY).await,
         );

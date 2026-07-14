@@ -175,8 +175,9 @@ impl Tool for ListSchedulesTool {
     fn declaration(&self) -> FunctionDeclaration {
         FunctionDeclaration {
             name: self.name.clone(),
-            description: "これから先の予定の一覧を表示する。例:「今週の予定は?」「直近の予定を見せて」。"
-                .to_owned(),
+            description:
+                "これから先の予定の一覧を表示する。例:「今週の予定は?」「直近の予定を見せて」。"
+                    .to_owned(),
             parameters_json_schema: json!({
                 "type": "object",
                 "properties": {
@@ -299,8 +300,10 @@ mod tests {
 
     fn seed_db() -> Db {
         let seq = SEQ.fetch_add(1, Ordering::Relaxed);
-        let path = std::env::temp_dir()
-            .join(format!("yuuka_schedule_tools_{}_{seq}.sqlite", std::process::id()));
+        let path = std::env::temp_dir().join(format!(
+            "yuuka_schedule_tools_{}_{seq}.sqlite",
+            std::process::id()
+        ));
         {
             let conn = Connection::open(&path).unwrap();
             conn.execute_batch(SCHEDULES_DDL).unwrap();
@@ -346,7 +349,10 @@ mod tests {
         // add（snake_case 引数）。remind 未指定は既定 10（Node parity）。
         let add = find(&tools, "addSchedule");
         let out = add
-            .call(&ctx(), json!({"title": "打ち合わせ", "start_at": start_in_days(1)}))
+            .call(
+                &ctx(),
+                json!({"title": "打ち合わせ", "start_at": start_in_days(1)}),
+            )
             .await
             .unwrap();
         assert_eq!(out.payload["success"], true);
@@ -362,10 +368,16 @@ mod tests {
 
         // delete。
         let delete = find(&tools, "deleteSchedule");
-        let out = delete.call(&ctx(), json!({"schedule_id": id})).await.unwrap();
+        let out = delete
+            .call(&ctx(), json!({"schedule_id": id}))
+            .await
+            .unwrap();
         assert_eq!(out.payload["success"], true);
         // 二重削除は not-found（success:false）。
-        let out = delete.call(&ctx(), json!({"schedule_id": id})).await.unwrap();
+        let out = delete
+            .call(&ctx(), json!({"schedule_id": id}))
+            .await
+            .unwrap();
         assert_eq!(out.payload["success"], false);
 
         // 削除後は list も空。
@@ -404,9 +416,12 @@ mod tests {
         let add = find(&tools, "addSchedule");
         let list = find(&tools, "listSchedules");
 
-        add.call(&ctx(), json!({"title": "A の予定", "start_at": start_in_days(1)}))
-            .await
-            .unwrap();
+        add.call(
+            &ctx(),
+            json!({"title": "A の予定", "start_at": start_in_days(1)}),
+        )
+        .await
+        .unwrap();
 
         // 別ユーザーには見えない。
         let ctx_b = ToolContext::new(BotId::system_default(), UserId::new("userB"));

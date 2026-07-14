@@ -72,14 +72,20 @@ fn common_passwords() -> &'static HashSet<String> {
                         .map(|l| l.trim().to_lowercase())
                         .filter(|l| !l.is_empty())
                         .collect();
-                    tracing::info!(count = set.len(), file = candidate, "一般的パスワードリストを読み込み");
+                    tracing::info!(
+                        count = set.len(),
+                        file = candidate,
+                        "一般的パスワードリストを読み込み"
+                    );
                     return set;
                 }
                 Err(_) => continue,
             }
         }
         // fail-open: 見つからなければチェックをスキップ（Node と同一・登録を妨げない）。
-        tracing::warn!("common-passwords-10k.txt が見つかりません。一般的パスワードチェックをスキップします");
+        tracing::warn!(
+            "common-passwords-10k.txt が見つかりません。一般的パスワードチェックをスキップします"
+        );
         HashSet::new()
     })
 }

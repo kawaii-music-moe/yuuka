@@ -64,8 +64,10 @@ mod tests {
     // 衝突するため、空ファイルからマイグレーションに一任する。
     fn seed_db() -> Db {
         let seq = SEQ.fetch_add(1, Ordering::Relaxed);
-        let path = std::env::temp_dir()
-            .join(format!("yuuka_finance_test_{}_{seq}.sqlite", std::process::id()));
+        let path = std::env::temp_dir().join(format!(
+            "yuuka_finance_test_{}_{seq}.sqlite",
+            std::process::id()
+        ));
         // 前回の残骸を除去して毎回まっさらなマイグレーション適用にする。
         let _ = std::fs::remove_file(&path);
         {
@@ -173,7 +175,10 @@ mod tests {
     async fn get_and_delete() {
         let db = seed_db();
         let repo = ExpenseRepo::new(&db);
-        let created = repo.add(&scope("u"), new_expense(500, "娯楽")).await.unwrap();
+        let created = repo
+            .add(&scope("u"), new_expense(500, "娯楽"))
+            .await
+            .unwrap();
 
         let got = repo
             .get(&scope("u"), created.id)
@@ -183,7 +188,11 @@ mod tests {
         assert_eq!(got.id, created.id);
 
         // 別スコープからは取得も削除もできない。
-        assert!(repo.get(&scope("other"), created.id).await.unwrap().is_none());
+        assert!(repo
+            .get(&scope("other"), created.id)
+            .await
+            .unwrap()
+            .is_none());
         assert!(!repo.delete(&scope("other"), created.id).await.unwrap());
 
         assert!(repo.delete(&scope("u"), created.id).await.unwrap());
@@ -210,21 +219,40 @@ mod tests {
         let repo = ExpenseRepo::new(&db);
         let s = scope("u");
         // 2026-03: 食費 1000 + 食費 500 + 交通費 200（支出）、給与 40000（収入）。
-        repo.add(&s, dated_expense(1000, "食費", "2026-03-05", "expense")).await.unwrap();
-        repo.add(&s, dated_expense(500, "食費", "2026-03-20", "expense")).await.unwrap();
-        repo.add(&s, dated_expense(200, "交通費", "2026-03-21", "expense")).await.unwrap();
-        repo.add(&s, dated_expense(40_000, "給与", "2026-03-25", "income")).await.unwrap();
+        repo.add(&s, dated_expense(1000, "食費", "2026-03-05", "expense"))
+            .await
+            .unwrap();
+        repo.add(&s, dated_expense(500, "食費", "2026-03-20", "expense"))
+            .await
+            .unwrap();
+        repo.add(&s, dated_expense(200, "交通費", "2026-03-21", "expense"))
+            .await
+            .unwrap();
+        repo.add(&s, dated_expense(40_000, "給与", "2026-03-25", "income"))
+            .await
+            .unwrap();
         // 別月 2026-02: 食費 999（集計対象外の確認用）。
-        repo.add(&s, dated_expense(999, "食費", "2026-02-10", "expense")).await.unwrap();
+        repo.add(&s, dated_expense(999, "食費", "2026-02-10", "expense"))
+            .await
+            .unwrap();
 
         // 月次合計（支出/収入）は指定月のみ集計。
-        assert_eq!(repo.monthly_total(&s, "expense", 2026, 3).await.unwrap(), 1700);
-        assert_eq!(repo.monthly_total(&s, "income", 2026, 3).await.unwrap(), 40_000);
+        assert_eq!(
+            repo.monthly_total(&s, "expense", 2026, 3).await.unwrap(),
+            1700
+        );
+        assert_eq!(
+            repo.monthly_total(&s, "income", 2026, 3).await.unwrap(),
+            40_000
+        );
         // 空月は 0（COALESCE）。
         assert_eq!(repo.monthly_total(&s, "expense", 2026, 4).await.unwrap(), 0);
 
         // カテゴリ別内訳は金額降順・件数付き（食費 1500/2件 → 交通費 200/1件）。
-        let bd = repo.monthly_category_breakdown(&s, 2026, 3, "expense").await.unwrap();
+        let bd = repo
+            .monthly_category_breakdown(&s, 2026, 3, "expense")
+            .await
+            .unwrap();
         assert_eq!(bd.len(), 2);
         assert_eq!(bd[0].category, "食費");
         assert_eq!(bd[0].total, 1500);
@@ -236,7 +264,12 @@ mod tests {
         let trend = repo.monthly_trend(&s, 6).await.unwrap();
         assert_eq!(trend.len(), 6);
         // 別ユーザーには金銭データが漏れない（スコープ分離）。
-        assert_eq!(repo.monthly_total(&scope("userB"), "expense", 2026, 3).await.unwrap(), 0);
+        assert_eq!(
+            repo.monthly_total(&scope("userB"), "expense", 2026, 3)
+                .await
+                .unwrap(),
+            0
+        );
     }
 
     struct FakeAuth {
@@ -296,7 +329,9 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(list.status(), StatusCode::OK);
-        let bytes = axum::body::to_bytes(list.into_body(), usize::MAX).await.unwrap();
+        let bytes = axum::body::to_bytes(list.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let j: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(j["success"], serde_json::json!(true));
         assert_eq!(j["expenses"][0]["amount"], serde_json::json!(1500));
@@ -400,8 +435,12 @@ mod tests {
 
         assert!(repo.list_budget_limits(&s).await.unwrap().is_empty());
 
-        repo.upsert_budget_limit(&s, "食費".to_owned(), 50_000).await.unwrap();
-        repo.upsert_budget_limit(&s, "娯楽".to_owned(), 0).await.unwrap();
+        repo.upsert_budget_limit(&s, "食費".to_owned(), 50_000)
+            .await
+            .unwrap();
+        repo.upsert_budget_limit(&s, "娯楽".to_owned(), 0)
+            .await
+            .unwrap();
         let limits = repo.list_budget_limits(&s).await.unwrap();
         assert_eq!(limits.len(), 2);
         // category 昇順。
@@ -411,17 +450,29 @@ mod tests {
         assert_eq!(limits[1].limit_amount, 50_000);
 
         // 再設定は UPSERT（重複行を作らない）。
-        repo.upsert_budget_limit(&s, "食費".to_owned(), 60_000).await.unwrap();
+        repo.upsert_budget_limit(&s, "食費".to_owned(), 60_000)
+            .await
+            .unwrap();
         let limits = repo.list_budget_limits(&s).await.unwrap();
         assert_eq!(limits.len(), 2);
         assert_eq!(limits[1].limit_amount, 60_000);
 
         // 別スコープには見えない（金銭データの分離）。
-        assert!(repo.list_budget_limits(&scope("other")).await.unwrap().is_empty());
+        assert!(repo
+            .list_budget_limits(&scope("other"))
+            .await
+            .unwrap()
+            .is_empty());
 
         // 削除（2回目は false）。
-        assert!(repo.delete_budget_limit(&s, "食費".to_owned()).await.unwrap());
-        assert!(!repo.delete_budget_limit(&s, "食費".to_owned()).await.unwrap());
+        assert!(repo
+            .delete_budget_limit(&s, "食費".to_owned())
+            .await
+            .unwrap());
+        assert!(!repo
+            .delete_budget_limit(&s, "食費".to_owned())
+            .await
+            .unwrap());
         assert_eq!(repo.list_budget_limits(&s).await.unwrap().len(), 1);
     }
 
@@ -442,7 +493,9 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(set.status(), StatusCode::OK);
-        let bytes = axum::body::to_bytes(set.into_body(), usize::MAX).await.unwrap();
+        let bytes = axum::body::to_bytes(set.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let j: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(j["success"], serde_json::json!(true));
         assert_eq!(
@@ -461,7 +514,9 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(get.status(), StatusCode::OK);
-        let bytes = axum::body::to_bytes(get.into_body(), usize::MAX).await.unwrap();
+        let bytes = axum::body::to_bytes(get.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let j: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(j["limits"][0]["category"], serde_json::json!("食費"));
         assert_eq!(j["limits"][0]["limit_amount"], serde_json::json!(50000));
@@ -549,7 +604,9 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(add.status(), StatusCode::OK);
-        let bytes = axum::body::to_bytes(add.into_body(), usize::MAX).await.unwrap();
+        let bytes = axum::body::to_bytes(add.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let j: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(j["plan"]["due_date"], serde_json::json!("2026-09-10"));
         assert_eq!(j["plan"]["status"], serde_json::json!("pending"));
@@ -565,7 +622,9 @@ mod tests {
                     .uri("/api/expenses/plans/add")
                     .header("cookie", "__Host-yuuka-session=good")
                     .header("content-type", "application/json")
-                    .body(Body::from(r#"{"title":"x","amount":100,"category":"食費"}"#))
+                    .body(Body::from(
+                        r#"{"title":"x","amount":100,"category":"食費"}"#,
+                    ))
                     .unwrap(),
             )
             .await
@@ -629,7 +688,9 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
-        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let j: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(j["success"], serde_json::json!(true));
         assert_eq!(j["completedTodos"], serde_json::json!(1));
@@ -743,7 +804,9 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
-        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let j: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(j["success"], serde_json::json!(true));
 
@@ -761,7 +824,9 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
-        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let j: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(j["success"], serde_json::json!(false));
     }

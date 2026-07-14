@@ -122,7 +122,10 @@ async fn execute(
             ctx.cross,
             run_id,
             "failed",
-            format!("マクロ「{}」が見つかりませんでした。", schedule.playbook_name),
+            format!(
+                "マクロ「{}」が見つかりませんでした。",
+                schedule.playbook_name
+            ),
         )
         .await?;
         // tick モデルの無限再発火を避けるため未検出でも last_run を進める（Node 差分・上記モジュール注記）。
@@ -136,9 +139,14 @@ async fn execute(
         playbook.title, playbook.steps
     );
 
-    match ctx.playbook_runner.run_secretary(&bot_id, &user_id, prompt).await {
+    match ctx
+        .playbook_runner
+        .run_secretary(&bot_id, &user_id, prompt)
+        .await
+    {
         Ok(text) => {
-            repo.record_run_finish(ctx.cross, run_id, "success", text.clone()).await?;
+            repo.record_run_finish(ctx.cross, run_id, "success", text.clone())
+                .await?;
             repo.touch_last_run(ctx.cross, schedule.id).await?;
             // Node: `📋 マクロ「**{title}**」の定期実行が完了しました。\n\n{text.slice(0,1700)}`。
             let content = format!(
@@ -150,7 +158,8 @@ async fn execute(
             tracing::info!(playbook = %schedule.playbook_name, "✅ マクロ定期実行完了");
         }
         Err(err) => {
-            repo.record_run_finish(ctx.cross, run_id, "failed", err.clone()).await?;
+            repo.record_run_finish(ctx.cross, run_id, "failed", err.clone())
+                .await?;
             repo.touch_last_run(ctx.cross, schedule.id).await?;
             // Node: `⚠️ マクロ「{playbook_name}」の定期実行に失敗しました: {err.slice(0,500)}`。
             let content = format!(
@@ -318,7 +327,9 @@ mod tests {
         {
             let sent = notifier.sent.lock().unwrap();
             assert_eq!(sent.len(), 1);
-            assert!(sent[0].content.contains("📋 マクロ「**朝のルーティン**」の定期実行が完了しました"));
+            assert!(sent[0]
+                .content
+                .contains("📋 マクロ「**朝のルーティン**」の定期実行が完了しました"));
             assert!(sent[0].content.contains("実行結果です"));
         }
 
@@ -353,7 +364,9 @@ mod tests {
         assert_eq!(output, "Gemini 障害");
         let sent = notifier.sent.lock().unwrap();
         assert_eq!(sent.len(), 1);
-        assert!(sent[0].content.contains("⚠️ マクロ「morning」の定期実行に失敗しました"));
+        assert!(sent[0]
+            .content
+            .contains("⚠️ マクロ「morning」の定期実行に失敗しました"));
     }
 
     #[tokio::test]

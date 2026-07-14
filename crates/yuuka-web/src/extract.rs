@@ -78,8 +78,9 @@ where
         let json: Value = if bytes.is_empty() {
             Value::Object(serde_json::Map::new())
         } else {
-            serde_json::from_slice(&bytes)
-                .map_err(|_| ApiError(WebError::Validation("request body must be JSON".to_owned())))?
+            serde_json::from_slice(&bytes).map_err(|_| {
+                ApiError(WebError::Validation("request body must be JSON".to_owned()))
+            })?
         };
 
         // body.botId ?? query.botId（Node `resolveBotId` と同一 nullish 優先）。
@@ -117,8 +118,13 @@ mod tests {
     #[tokio::test]
     async fn body_botid_wins_over_query() {
         // フロントは JSON body に botId を注入する。body 優先で拾えること。
-        let req = post("/api/tasks/add?botId=queryBot", r#"{"botId":"bodyBot","title":"t"}"#);
-        let s = ScopedJson::<Value>::from_request(req, &()).await.expect("extract");
+        let req = post(
+            "/api/tasks/add?botId=queryBot",
+            r#"{"botId":"bodyBot","title":"t"}"#,
+        );
+        let s = ScopedJson::<Value>::from_request(req, &())
+            .await
+            .expect("extract");
         assert_eq!(s.bot_id.as_deref(), Some("bodyBot"));
         assert_eq!(s.value["title"], serde_json::json!("t"));
     }
@@ -126,7 +132,9 @@ mod tests {
     #[tokio::test]
     async fn falls_back_to_query_when_body_absent() {
         let req = post("/x?botId=queryBot", r#"{"title":"t"}"#);
-        let s = ScopedJson::<Value>::from_request(req, &()).await.expect("extract");
+        let s = ScopedJson::<Value>::from_request(req, &())
+            .await
+            .expect("extract");
         assert_eq!(s.bot_id.as_deref(), Some("queryBot"));
     }
 
@@ -134,7 +142,9 @@ mod tests {
     async fn none_when_botid_absent_everywhere() {
         // botId がどこにも無ければ None（呼び出し側で system_default に畳まれる）。
         let req = post("/x", r#"{"title":"t"}"#);
-        let s = ScopedJson::<Value>::from_request(req, &()).await.expect("extract");
+        let s = ScopedJson::<Value>::from_request(req, &())
+            .await
+            .expect("extract");
         assert_eq!(s.bot_id, None);
     }
 

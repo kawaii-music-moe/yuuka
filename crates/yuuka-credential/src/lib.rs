@@ -180,7 +180,10 @@ mod tests {
             .unwrap();
         let j: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(j["success"], serde_json::json!(true));
-        assert_eq!(j["credentials"][0]["service_name"], serde_json::json!("github"));
+        assert_eq!(
+            j["credentials"][0]["service_name"],
+            serde_json::json!("github")
+        );
         assert_eq!(j["credentials"][0]["username"], serde_json::json!("alice"));
         // 機密フェイルクローズ: 暗号化列・user_id は絶対に露出しない。
         assert!(j["credentials"][0]["encrypted_password"].is_null());
@@ -280,7 +283,8 @@ mod tests {
         ));
         {
             let conn = rusqlite::Connection::open(&path).expect("seed db");
-            conn.execute_batch(CREDENTIALS_DDL).expect("create credentials");
+            conn.execute_batch(CREDENTIALS_DDL)
+                .expect("create credentials");
         }
         let db = Db::open(&path).expect("open db");
         (db, path)
