@@ -70,12 +70,41 @@ pub fn tools(db: Db) -> Result<Vec<Arc<dyn Tool>>, ToolError> {
         }),
         Arc::new(ListTasksByTagTool {
             name: ToolName::checked("listTasksByTag".to_owned())?,
-            db,
+            db: db.clone(),
         }),
         Arc::new(GetTaskUsageGuideTool {
             name: ToolName::checked("getTaskUsageGuide".to_owned())?,
         }),
+        Arc::new(EditTodoTagsTool {
+            name: ToolName::checked("editTodoTags".to_owned())?,
+            db: db.clone(),
+        }),
+        Arc::new(StopTodoRoutineTool {
+            name: ToolName::checked("stopTodoRoutine".to_owned())?,
+            db,
+        }),
     ])
+}
+
+/// タグ配列を正規化する（Node `normalizeTags`＝文字列化・trim・空除去・重複除去・最大 8 件）。
+fn normalize_tags(value: &Value) -> Vec<String> {
+    let Some(arr) = value.as_array() else {
+        return Vec::new();
+    };
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for raw in arr {
+        let Some(s) = raw.as_str() else { continue };
+        let tag = s.trim();
+        if tag.is_empty() || !seen.insert(tag.to_owned()) {
+            continue;
+        }
+        out.push(tag.to_owned());
+        if out.len() >= 8 {
+            break;
+        }
+    }
+    out
 }
 
 /// タスク管理の使い方ガイド本文（Node `TASK_USAGE_GUIDE_MD`・公開ページ `/tasks/guide` と同内容）。
@@ -901,6 +930,140 @@ impl Tool for GetTaskUsageGuideTool {
     }
 }
 
+// ─── editTodoTags ────────────────────────────────────────────────────────────
+
+struct EditTodoTagsTool {
+    name: ToolName,
+    db: Db,
+}
+
+#[async_trait]
+impl Tool for EditTodoTagsTool {
+    fn declaration(&self) -> FunctionDeclaration {
+        FunctionDeclaration {
+            name: self.name.clone(),
+            description: "タスクのタグを手動で直す。mode で 'set'（丸ごと置換・既定）/'add'（追加）\
+                /'remove'（指定タグを外す）を選ぶ。tags にはタグ名を配列で渡す（例: ['業務','緊急']）。"
+                .to_owned(),
+            parameters_json_schema: json!({
+                "type": "object",
+                "properties": {
+                    "todo_id": { "type": "number", "description": "タグを直すタスクのID（#番号）" },
+                    "mode": { "type": "string", "description": "'set'（既定）|'add'|'remove'" },
+                    "tags": { "type": "array", "items": { "type": "string" }, "description": "対象のタグ名（配列）" }
+                },
+                "required": ["todo_id", "tags"]
+            }),
+            requires_confirmation: false,
+        }
+    }
+
+    async fn call(&self, ctx: &ToolContext, args: Value) -> Result<ToolOutcome, ToolError> {
+        let Some(todo_id) = arg_i64(&args, "todo_id") else {
+            return Ok(fail_payload("todo_id（#番号）を指定してください。"));
+        };
+        let mode = arg_str(&args, "mode").unwrap_or_else(|| "set".to_owned());
+        if mode != "set" && mode != "add" && mode != "remove" {
+            return Ok(fail_payload(
+                "mode は 'set' | 'add' | 'remove' のいずれかで指定してください。",
+            ));
+        }
+        let input_tags = normalize_tags(args.get("tags").unwrap_or(&Value::Null));
+        if mode != "set" && input_tags.is_empty() {
+            return Ok(fail_payload(format!("{mode} には tags を1つ以上指定してください。")));
+        }
+        let scope = scope_of(ctx);
+        let repo = TodoRepo::new(&self.db);
+        let Some(todo) = repo.get(&scope, todo_id).await.map_err(exec_err)? else {
+            return Ok(fail_payload(format!("タスク #{todo_id} が見つかりません。")));
+        };
+        let current = todo.tags;
+        let next: Vec<String> = match mode.as_str() {
+            "set" => input_tags,
+            "add" => {
+                // 既存 + 入力を再正規化（重複除去・最大 8）。
+                let merged: Vec<Value> = current
+                    .iter()
+                    .chain(input_tags.iter())
+                    .map(|t| Value::String(t.clone()))
+                    .collect();
+                normalize_tags(&Value::Array(merged))
+            }
+            _ => {
+                let remove: std::collections::HashSet<&String> = input_tags.iter().collect();
+                current.into_iter().filter(|t| !remove.contains(t)).collect()
+            }
+        };
+        match repo.update_tags(&scope, todo_id, next).await.map_err(exec_err)? {
+            Some(updated) => {
+                let tag_label = if updated.tags.is_empty() {
+                    "（タグなし）".to_owned()
+                } else {
+                    updated.tags.join("、")
+                };
+                Ok(ToolOutcome::from_payload(ok_payload(
+                    format!("ToDo「{}」(#{}) のタグを更新しました🏷️ {tag_label}", updated.title, updated.id),
+                    json!({ "todo": updated }),
+                )))
+            }
+            None => Ok(fail_payload(format!("タスク #{todo_id} のタグ更新に失敗しました。"))),
+        }
+    }
+}
+
+// ─── stopTodoRoutine ─────────────────────────────────────────────────────────
+
+struct StopTodoRoutineTool {
+    name: ToolName,
+    db: Db,
+}
+
+#[async_trait]
+impl Tool for StopTodoRoutineTool {
+    fn declaration(&self) -> FunctionDeclaration {
+        FunctionDeclaration {
+            name: self.name.clone(),
+            description: "ルーチン（繰り返し）タスクの繰り返しを終了する。「もう毎週の○○はやらなくていい」\
+                等で呼ぶ。タスク自体は消えず、今ある1件は単発タスクとして残る（完全削除は deleteTodo）。"
+                .to_owned(),
+            parameters_json_schema: json!({
+                "type": "object",
+                "properties": {
+                    "todo_id": { "type": "number", "description": "繰り返しを終了するタスクのID（#番号）" }
+                },
+                "required": ["todo_id"]
+            }),
+            requires_confirmation: false,
+        }
+    }
+
+    async fn call(&self, ctx: &ToolContext, args: Value) -> Result<ToolOutcome, ToolError> {
+        let Some(todo_id) = arg_i64(&args, "todo_id") else {
+            return Ok(fail_payload("todo_id（#番号）を指定してください。"));
+        };
+        let scope = scope_of(ctx);
+        let repo = TodoRepo::new(&self.db);
+        match repo.stop_routine(&scope, todo_id).await.map_err(exec_err)? {
+            Some(stopped) => Ok(ToolOutcome::from_payload(ok_payload(
+                format!(
+                    "タスク「{}」(#{}) の繰り返しを終了しました🏁（このタスクは単発として残ります）",
+                    stopped.title, stopped.id
+                ),
+                json!({ "todo": stopped }),
+            ))),
+            None => {
+                // 対象なし = 存在しない or 既にルーチンでない（Node パリティで区別）。
+                let msg = if repo.get(&scope, todo_id).await.map_err(exec_err)?.is_some() {
+                    format!("タスク #{todo_id} はルーチン（繰り返し）ではありません。")
+                } else {
+                    format!("タスク #{todo_id} が見つかりません。")
+                };
+                Ok(fail_payload(msg))
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -1167,5 +1330,64 @@ mod tests {
             .unwrap()
             .contains("タスク管理の使い方"));
         assert_eq!(out.payload["guide_url"], "/tasks/guide");
+    }
+
+    #[tokio::test]
+    async fn edit_tags_and_stop_routine() {
+        let db = seed_db();
+        let tools = tools(db).unwrap();
+        let add = find(&tools, "addTodo");
+        let edit_tags = find(&tools, "editTodoTags");
+        let stop_routine = find(&tools, "stopTodoRoutine");
+
+        // タスク作成（tags=[]）。
+        let out = add.call(&ctx(), json!({"title": "掃除"})).await.unwrap();
+        let id = out.payload["todo"]["id"].as_i64().unwrap();
+
+        // set: 丸ごと置換（重複は正規化で1つに）。
+        let out = edit_tags
+            .call(&ctx(), json!({"todo_id": id, "tags": ["家事", "家事", "急ぎ"]}))
+            .await
+            .unwrap();
+        assert_eq!(out.payload["success"], true);
+        assert_eq!(out.payload["todo"]["tags"], json!(["家事", "急ぎ"]));
+        // add: 追加。
+        let out = edit_tags
+            .call(&ctx(), json!({"todo_id": id, "mode": "add", "tags": ["週末"]}))
+            .await
+            .unwrap();
+        assert_eq!(out.payload["todo"]["tags"], json!(["家事", "急ぎ", "週末"]));
+        // remove: 指定タグを外す。
+        let out = edit_tags
+            .call(&ctx(), json!({"todo_id": id, "mode": "remove", "tags": ["急ぎ"]}))
+            .await
+            .unwrap();
+        assert_eq!(out.payload["todo"]["tags"], json!(["家事", "週末"]));
+        // 不正 mode → fail。
+        let out = edit_tags.call(&ctx(), json!({"todo_id": id, "mode": "x", "tags": []})).await.unwrap();
+        assert_eq!(out.payload["success"], false);
+        // add で tags 空 → fail。
+        let out = edit_tags.call(&ctx(), json!({"todo_id": id, "mode": "add", "tags": []})).await.unwrap();
+        assert_eq!(out.payload["success"], false);
+
+        // 単発タスクへの stopRoutine → fail（ルーチンではない）。
+        let out = stop_routine.call(&ctx(), json!({"todo_id": id})).await.unwrap();
+        assert_eq!(out.payload["success"], false);
+
+        // ルーチンタスクを作って停止。
+        let out = add
+            .call(&ctx(), json!({"title": "毎週報告", "repeat_rule": "0 9 * * 1", "due_date": "2026-08-03"}))
+            .await
+            .unwrap();
+        let rid = out.payload["todo"]["id"].as_i64().unwrap();
+        let out = stop_routine.call(&ctx(), json!({"todo_id": rid})).await.unwrap();
+        assert_eq!(out.payload["success"], true);
+        assert!(out.payload["todo"]["repeat_rule"].is_null());
+        // 停止後は単発なので再度 stop は fail。
+        let out = stop_routine.call(&ctx(), json!({"todo_id": rid})).await.unwrap();
+        assert_eq!(out.payload["success"], false);
+        // 存在しない ID。
+        let out = stop_routine.call(&ctx(), json!({"todo_id": 99999})).await.unwrap();
+        assert_eq!(out.payload["success"], false);
     }
 }

@@ -167,6 +167,72 @@ impl<'a> TodoRepo<'a> {
             .await
     }
 
+    /// todo のタグを丸ごと置き換え、更新後の行を返す（Node `updateTodoTags`）。該当無は `None`。
+    ///
+    /// `tags` は JSON 配列文字列として保存する（正規化は呼び出し側で済ませる）。
+    ///
+    /// # Errors
+    /// 書き込み・取得失敗時 [`DbError`]。
+    pub async fn update_tags(
+        &self,
+        scope: &UserScope,
+        id: i64,
+        tags: Vec<String>,
+    ) -> Result<Option<Todo>, DbError> {
+        let (uid, bid) = scope_keys(scope);
+        // タグ配列を JSON 文字列へ（固定形状なので失敗し得ないが lint 準拠で握らず伝播）。
+        let tags_json =
+            serde_json::to_string(&tags).map_err(|e| DbError::Operation(format!("tags: {e}")))?;
+        let changed = self
+            .writer
+            .transaction(move |tx| {
+                let n = tx
+                    .execute(
+                        "UPDATE todos SET tags = ?1, updated_at = datetime('now', 'localtime') \
+                         WHERE id = ?2 AND user_id = ?3 AND bot_id = ?4",
+                        params![tags_json, id, uid, bid],
+                    )
+                    .map_err(map_sqlite)?;
+                Ok(n > 0)
+            })
+            .await?;
+        if changed {
+            self.get(scope, id).await
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// ルーチン（繰り返し）を終了する（Node `stopRoutine`）。`repeat_rule`/`_until`/`_count` を NULL 化。
+    ///
+    /// 対象がルーチン（`repeat_rule IS NOT NULL`）でなければ・存在しなければ `None`（単発タスクは
+    /// そのまま残る）。更新後の行を返す。
+    ///
+    /// # Errors
+    /// 書き込み・取得失敗時 [`DbError`]。
+    pub async fn stop_routine(&self, scope: &UserScope, id: i64) -> Result<Option<Todo>, DbError> {
+        let (uid, bid) = scope_keys(scope);
+        let changed = self
+            .writer
+            .transaction(move |tx| {
+                let n = tx
+                    .execute(
+                        "UPDATE todos SET repeat_rule = NULL, repeat_until = NULL, \
+                         repeat_count = NULL, updated_at = datetime('now', 'localtime') \
+                         WHERE id = ?1 AND user_id = ?2 AND bot_id = ?3 AND repeat_rule IS NOT NULL",
+                        params![id, uid, bid],
+                    )
+                    .map_err(map_sqlite)?;
+                Ok(n > 0)
+            })
+            .await?;
+        if changed {
+            self.get(scope, id).await
+        } else {
+            Ok(None)
+        }
+    }
+
     /// todo を作成し、作成後の行を返す。
     ///
     /// # Errors
