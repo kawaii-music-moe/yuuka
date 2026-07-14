@@ -20,8 +20,8 @@ use yuuka_core::tool::FunctionDeclaration;
 use yuuka_core::{DbError, Tool, ToolContext, ToolError, ToolName, ToolOutcome, UserScope};
 use yuuka_web::Db;
 
-use crate::dto::NewContact;
-use crate::repo::{ClipboardRepo, ContactRepo};
+use crate::dto::{NewContact, CONTEXT_NOTE_MAX_LENGTH};
+use crate::repo::{ClipboardRepo, ContactRepo, ContextNoteRepo};
 
 /// このドメインが公開する Native ツール一式を作る。
 ///
@@ -57,6 +57,18 @@ pub fn tools(db: Db) -> Result<Vec<Arc<dyn Tool>>, ToolError> {
         }),
         Arc::new(DeleteClipboardEntryTool {
             name: ToolName::checked("deleteClipboardEntry".to_owned())?,
+            db: db.clone(),
+        }),
+        Arc::new(GetContextNoteTool {
+            name: ToolName::checked("getContextNote".to_owned())?,
+            db: db.clone(),
+        }),
+        Arc::new(SetContextNoteTool {
+            name: ToolName::checked("setContextNote".to_owned())?,
+            db: db.clone(),
+        }),
+        Arc::new(AppendContextNoteTool {
+            name: ToolName::checked("appendContextNote".to_owned())?,
             db,
         }),
     ])
@@ -520,6 +532,169 @@ impl Tool for DeleteClipboardEntryTool {
     }
 }
 
+/// 整数を 3 桁区切りにする（Node `Number.toLocaleString()` の桁区切り・上限メッセージ用）。
+fn format_thousands(n: usize) -> String {
+    let digits = n.to_string();
+    let len = digits.len();
+    let mut out = String::with_capacity(len + len / 3);
+    for (i, ch) in digits.chars().enumerate() {
+        if i != 0 && (len - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(ch);
+    }
+    out
+}
+
+// ─── getContextNote ──────────────────────────────────────────────────────────
+
+struct GetContextNoteTool {
+    name: ToolName,
+    db: Db,
+}
+
+#[async_trait]
+impl Tool for GetContextNoteTool {
+    fn declaration(&self) -> FunctionDeclaration {
+        FunctionDeclaration {
+            name: self.name.clone(),
+            description: "自由記述のメモ帳（コンテキストノート）の現在の全文を読む。\
+                「メモ帳見せて」等や、setContextNote で書き換える前に現在の中身を確認する時に呼ぶ。"
+                .to_owned(),
+            parameters_json_schema: json!({ "type": "object", "properties": {} }),
+            requires_confirmation: false,
+        }
+    }
+
+    async fn call(&self, ctx: &ToolContext, _args: Value) -> Result<ToolOutcome, ToolError> {
+        let (content, _updated) = ContextNoteRepo::new(&self.db)
+            .get(&scope_of(ctx))
+            .await
+            .map_err(exec_err)?;
+        let length = content.chars().count();
+        Ok(ToolOutcome::from_payload(json!({
+            "success": true,
+            "content": content,
+            "length": length,
+            "max_length": CONTEXT_NOTE_MAX_LENGTH,
+        })))
+    }
+}
+
+// ─── setContextNote ──────────────────────────────────────────────────────────
+
+struct SetContextNoteTool {
+    name: ToolName,
+    db: Db,
+}
+
+#[async_trait]
+impl Tool for SetContextNoteTool {
+    fn declaration(&self) -> FunctionDeclaration {
+        FunctionDeclaration {
+            name: self.name.clone(),
+            description: format!(
+                "メモ帳（コンテキストノート）の全文を書き換える（全置換）。{}文字まで。\
+                 誤って消さないため、先に getContextNote で今の中身を読み、書き換え後の全文をユーザーに見せて承認を得てから呼ぶ。",
+                format_thousands(CONTEXT_NOTE_MAX_LENGTH)
+            ),
+            parameters_json_schema: json!({
+                "type": "object",
+                "properties": {
+                    "content": { "type": "string", "description": format!("書き換え後のメモ帳の全文（{}文字まで・改行区切りの箇条書き推奨）", format_thousands(CONTEXT_NOTE_MAX_LENGTH)) }
+                },
+                "required": ["content"]
+            }),
+            requires_confirmation: false,
+        }
+    }
+
+    async fn call(&self, ctx: &ToolContext, args: Value) -> Result<ToolOutcome, ToolError> {
+        // Node: `String(args.content ?? "")`（trim せず・空許容）。
+        let content = args.get("content").and_then(Value::as_str).unwrap_or("");
+        let length = content.chars().count();
+        if length > CONTEXT_NOTE_MAX_LENGTH {
+            return Ok(fail_payload(format!(
+                "コンテキストノートは{}文字以内です（現在: {}文字）",
+                format_thousands(CONTEXT_NOTE_MAX_LENGTH),
+                format_thousands(length),
+            )));
+        }
+        ContextNoteRepo::new(&self.db)
+            .set(&scope_of(ctx), content.to_owned())
+            .await
+            .map_err(exec_err)?;
+        Ok(ToolOutcome::from_payload(json!({
+            "success": true,
+            "message": "コンテキストノートを更新しました📝",
+            "total_length": length,
+        })))
+    }
+}
+
+// ─── appendContextNote ───────────────────────────────────────────────────────
+
+struct AppendContextNoteTool {
+    name: ToolName,
+    db: Db,
+}
+
+#[async_trait]
+impl Tool for AppendContextNoteTool {
+    fn declaration(&self) -> FunctionDeclaration {
+        FunctionDeclaration {
+            name: self.name.clone(),
+            description: "メモ帳（コンテキストノート）に1行追記する。ユーザーについて覚えておくべき\
+                事実（好み・約束・背景など）を残す時に呼ぶ。全体を整理し直す時は setContextNote を使う。"
+                .to_owned(),
+            parameters_json_schema: json!({
+                "type": "object",
+                "properties": {
+                    "content": { "type": "string", "description": "追記する内容（1行・要点を簡潔に）" }
+                },
+                "required": ["content"]
+            }),
+            requires_confirmation: false,
+        }
+    }
+
+    async fn call(&self, ctx: &ToolContext, args: Value) -> Result<ToolOutcome, ToolError> {
+        let trimmed = args
+            .get("content")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_owned();
+        if trimmed.is_empty() {
+            return Ok(fail_payload("記憶する内容が空です。"));
+        }
+        let scope = scope_of(ctx);
+        let repo = ContextNoteRepo::new(&self.db);
+        let (current, _updated) = repo.get(&scope).await.map_err(exec_err)?;
+        // Node parity: 現在が空でなければ改行で連結。
+        let next = if current.is_empty() {
+            trimmed
+        } else {
+            format!("{current}\n{trimmed}")
+        };
+        let next_len = next.chars().count();
+        if next_len > CONTEXT_NOTE_MAX_LENGTH {
+            return Ok(fail_payload(format!(
+                "コンテキストノートの上限（{}文字）を超えるため追記できません。不要な項目を整理してから追記してください（現在: {}文字）",
+                format_thousands(CONTEXT_NOTE_MAX_LENGTH),
+                format_thousands(current.chars().count()),
+            )));
+        }
+        repo.set(&scope, next).await.map_err(exec_err)?;
+        Ok(ToolOutcome::from_payload(json!({
+            "success": true,
+            "message": "コンテキストノートに追記しました📝",
+            "total_length": next_len,
+            "max_length": CONTEXT_NOTE_MAX_LENGTH,
+        })))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -774,5 +949,44 @@ mod tests {
         let ctx_b = ToolContext::new(BotId::system_default(), UserId::new("userB"));
         let out = list.call(&ctx_b, json!({})).await.unwrap();
         assert_eq!(out.payload["count"], 0);
+    }
+
+    #[tokio::test]
+    async fn context_note_get_set_append() {
+        let db = seed_db();
+        let tools = tools(db).unwrap();
+        let get = find(&tools, "getContextNote");
+        let set = find(&tools, "setContextNote");
+        let append = find(&tools, "appendContextNote");
+
+        // 初期は空。
+        let out = get.call(&ctx(), json!({})).await.unwrap();
+        assert_eq!(out.payload["content"], "");
+        assert_eq!(out.payload["length"], 0);
+
+        // set: 全置換。
+        let out = set.call(&ctx(), json!({"content": "コーヒーはブラック"})).await.unwrap();
+        assert_eq!(out.payload["success"], true);
+        let out = get.call(&ctx(), json!({})).await.unwrap();
+        assert_eq!(out.payload["content"], "コーヒーはブラック");
+
+        // append: 改行で連結。
+        let out = append.call(&ctx(), json!({"content": "犬を飼っている"})).await.unwrap();
+        assert_eq!(out.payload["success"], true);
+        let out = get.call(&ctx(), json!({})).await.unwrap();
+        assert_eq!(out.payload["content"], "コーヒーはブラック\n犬を飼っている");
+
+        // append 空 → fail。
+        let out = append.call(&ctx(), json!({"content": "   "})).await.unwrap();
+        assert_eq!(out.payload["success"], false);
+
+        // set 上限超過 → fail（scope は保持）。
+        let big = "あ".repeat(super::CONTEXT_NOTE_MAX_LENGTH + 1);
+        let out = set.call(&ctx(), json!({"content": big})).await.unwrap();
+        assert_eq!(out.payload["success"], false);
+        // 別ユーザーには漏れない。
+        let ctx_b = ToolContext::new(BotId::system_default(), UserId::new("userB"));
+        let out = get.call(&ctx_b, json!({})).await.unwrap();
+        assert_eq!(out.payload["content"], "");
     }
 }
