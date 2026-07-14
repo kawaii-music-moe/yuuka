@@ -21,8 +21,8 @@ use yuuka_core::tool::FunctionDeclaration;
 use yuuka_core::{DbError, Tool, ToolContext, ToolError, ToolName, ToolOutcome, UserScope};
 use yuuka_web::Db;
 
-use crate::dto::{normalize_priority, NewTodo};
-use crate::repo::TodoRepo;
+use crate::dto::{normalize_priority, NewTodo, PriorityUpdate, TodoUpdate};
+use crate::repo::{effective_progress, TodoRepo};
 
 /// このドメインが公開する Native ツール一式を作る。
 ///
@@ -46,6 +46,22 @@ pub fn tools(db: Db) -> Result<Vec<Arc<dyn Tool>>, ToolError> {
         }),
         Arc::new(DeleteTodoTool {
             name: ToolName::checked("deleteTodo".to_owned())?,
+            db: db.clone(),
+        }),
+        Arc::new(AddSubtaskTool {
+            name: ToolName::checked("addSubtask".to_owned())?,
+            db: db.clone(),
+        }),
+        Arc::new(UpdateTodoTool {
+            name: ToolName::checked("updateTodo".to_owned())?,
+            db: db.clone(),
+        }),
+        Arc::new(UpdateTaskProgressTool {
+            name: ToolName::checked("updateTaskProgress".to_owned())?,
+            db: db.clone(),
+        }),
+        Arc::new(GetTaskDetailTool {
+            name: ToolName::checked("getTaskDetail".to_owned())?,
             db,
         }),
     ])
@@ -90,6 +106,24 @@ fn arg_i64(args: &Value, key: &str) -> Option<i64> {
     let v = args.get(key)?;
     v.as_i64()
         .or_else(|| v.as_str().and_then(|s| s.trim().parse::<i64>().ok()))
+}
+
+/// 文字列引数を trim して取り出す（**空文字も `Some("")` で返す**・Node `typeof x === "string" ? x.trim() : undefined`）。
+///
+/// `arg_str` と違い空文字を除去しない。`updateTodo` の due_date/start_date は空文字＝クリア指示として
+/// 有効値のため、キーが文字列で存在したか（＝指定されたか）を区別する必要がある。
+fn arg_raw_str(args: &Value, key: &str) -> Option<String> {
+    args.get(key)
+        .and_then(Value::as_str)
+        .map(|s| s.trim().to_owned())
+}
+
+/// 期限ラベル（Node `dueLabel`）。空なら空文字、日時は raw を採用（LLM 向け案内文のため簡約）。
+fn due_label(due_date: Option<&str>) -> String {
+    match due_date.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(d) => format!(" (期限: {d})"),
+        None => String::new(),
+    }
 }
 
 /// 最小 cron 妥当性（5 フィールド・空でない）。厳密な範囲検証は後続（Node `isValidCron` の簡約）。
@@ -350,6 +384,325 @@ impl Tool for DeleteTodoTool {
     }
 }
 
+// ─── addSubtask ──────────────────────────────────────────────────────────────
+
+struct AddSubtaskTool {
+    name: ToolName,
+    db: Db,
+}
+
+#[async_trait]
+impl Tool for AddSubtaskTool {
+    fn declaration(&self) -> FunctionDeclaration {
+        FunctionDeclaration {
+            name: self.name.clone(),
+            description: "あるタスクの中の小さな手順（サブタスク）を1件追加する。\
+                「#3のサブタスクに〜を追加」等、タスクを分解した小タスクを登録する依頼で呼ぶ。\
+                親タスクの進捗は『完了サブタスク数 ÷ 全サブタスク数』で自動計算される。\
+                サブタスクの下にさらにサブタスクは作れない（1段まで）。"
+                .to_owned(),
+            parameters_json_schema: json!({
+                "type": "object",
+                "properties": {
+                    "parent_todo_id": { "type": "number", "description": "どのタスクの下に入れるか。親タスクのID（#番号）" },
+                    "title": { "type": "string", "description": "サブタスクのタイトル（短い体言止め推奨）" },
+                    "description": { "type": "string", "description": "サブタスクの詳しい説明（任意）" },
+                    "due_date": { "type": "string", "description": "締め切り。YYYY-MM-DD または YYYY-MM-DDTHH:MM:SS（任意）" },
+                    "start_date": { "type": "string", "description": "始める日。YYYY-MM-DD または YYYY-MM-DDTHH:MM:SS（任意）" }
+                },
+                "required": ["parent_todo_id", "title"]
+            }),
+            requires_confirmation: false,
+        }
+    }
+
+    async fn call(&self, ctx: &ToolContext, args: Value) -> Result<ToolOutcome, ToolError> {
+        let Some(title) = arg_str(&args, "title") else {
+            return Ok(fail_payload("サブタスクのタイトルを指定してください。"));
+        };
+        let parent_id = arg_i64(&args, "parent_todo_id");
+        let scope = scope_of(ctx);
+        let repo = TodoRepo::new(&self.db);
+        // 親タスクが存在し、スコープ内であること。
+        let parent = match parent_id {
+            Some(pid) => repo.get(&scope, pid).await.map_err(exec_err)?,
+            None => None,
+        };
+        let Some(parent) = parent else {
+            return Ok(fail_payload(format!(
+                "親タスク #{} が見つかりません。",
+                args.get("parent_todo_id").unwrap_or(&Value::Null)
+            )));
+        };
+
+        let new = NewTodo {
+            title,
+            description: arg_str(&args, "description"),
+            due_date: arg_str(&args, "due_date"),
+            start_date: arg_str(&args, "start_date"),
+            priority: None,
+            tags: Vec::new(),
+            parent_id: Some(parent.id),
+            repeat_rule: None,
+            repeat_until: None,
+            repeat_count: None,
+        };
+        let subtask = repo.add(&scope, new).await.map_err(exec_err)?;
+
+        // 親（付け替えの可能性を考慮し subtask.parent_id 基準）の兄弟サブタスク完了数を返す。
+        let effective_parent = subtask.parent_id.unwrap_or(parent.id);
+        let siblings = repo
+            .list_subtasks_tree(&scope, effective_parent)
+            .await
+            .map_err(exec_err)?;
+        let done = siblings.iter().filter(|s| s.status == "done").count();
+        let message = format!(
+            "サブタスク「{}」(#{}) を タスク#{} に追加しました。{}（このタスクのサブタスク: {}/{} 完了）",
+            subtask.title,
+            subtask.id,
+            effective_parent,
+            due_label(subtask.due_date.as_deref()),
+            done,
+            siblings.len(),
+        );
+        Ok(ToolOutcome::from_payload(ok_payload(
+            message,
+            json!({ "subtask": subtask, "parent_todo_id": effective_parent }),
+        )))
+    }
+}
+
+// ─── updateTodo ──────────────────────────────────────────────────────────────
+
+struct UpdateTodoTool {
+    name: ToolName,
+    db: Db,
+}
+
+#[async_trait]
+impl Tool for UpdateTodoTool {
+    fn declaration(&self) -> FunctionDeclaration {
+        FunctionDeclaration {
+            name: self.name.clone(),
+            description: "既にあるタスクの中身を変える（タイトル・説明・締め切り・開始日・優先度・状態）。\
+                「#2の期限を金曜にして」等の依頼で呼ぶ。変える項目だけを指定する。\
+                進捗（何%まで進んだか）を変えたい時は代わりに updateTaskProgress を使う。"
+                .to_owned(),
+            parameters_json_schema: json!({
+                "type": "object",
+                "properties": {
+                    "todo_id": { "type": "number", "description": "変えるタスクのID（#番号）" },
+                    "title": { "type": "string", "description": "新しいタイトル（任意）" },
+                    "description": { "type": "string", "description": "新しい説明文（任意）" },
+                    "due_date": { "type": "string", "description": "新しい締め切り YYYY-MM-DD 等。空文字を渡すと締め切りを消す（任意）" },
+                    "start_date": { "type": "string", "description": "新しい開始日 YYYY-MM-DD 等。空文字を渡すと開始日を消す（任意）" },
+                    "priority": { "type": "string", "description": "新しい優先度 'high'|'medium'|'low'（任意）" },
+                    "status": { "type": "string", "description": "新しい状態 'open'（未完了へ戻す）|'done'（完了）（任意）" }
+                },
+                "required": ["todo_id"]
+            }),
+            requires_confirmation: false,
+        }
+    }
+
+    async fn call(&self, ctx: &ToolContext, args: Value) -> Result<ToolOutcome, ToolError> {
+        let Some(todo_id) = arg_i64(&args, "todo_id") else {
+            return Ok(fail_payload("todo_id を指定してください。"));
+        };
+        // status は 'open'/'done' のみ採用。
+        let status = arg_str(&args, "status").filter(|s| s == "open" || s == "done");
+        // priority は指定時のみ検証（不正値はエラー・クリアは updateTodo では不可）。
+        let priority_arg = arg_str(&args, "priority");
+        let priority = match &priority_arg {
+            Some(p) => match normalize_priority(&Value::String(p.clone())) {
+                Some(valid) => PriorityUpdate::Set(valid),
+                None => {
+                    return Ok(fail_payload(
+                        "優先度は 'high' | 'medium' | 'low' のいずれかで指定してください。",
+                    ));
+                }
+            },
+            None => PriorityUpdate::Unchanged,
+        };
+        let title = arg_str(&args, "title");
+        let description = arg_str(&args, "description");
+        // due_date/start_date は空文字（クリア指示）も有効値として扱う（present 判定は raw）。
+        let due_date = arg_raw_str(&args, "due_date");
+        let start_date = arg_raw_str(&args, "start_date");
+
+        if title.is_none()
+            && description.is_none()
+            && due_date.is_none()
+            && start_date.is_none()
+            && priority_arg.is_none()
+            && status.is_none()
+        {
+            return Ok(fail_payload("変更する項目を1つ以上指定してください。"));
+        }
+
+        let update = TodoUpdate {
+            id: todo_id,
+            title,
+            description,
+            due_date,
+            start_date,
+            priority,
+            status,
+        };
+        match TodoRepo::new(&self.db)
+            .update(&scope_of(ctx), todo_id, update)
+            .await
+            .map_err(exec_err)?
+        {
+            Some(todo) => {
+                let message = format!("ToDo「{}」(#{}) を更新しました📝", todo.title, todo.id);
+                Ok(ToolOutcome::from_payload(ok_payload(
+                    message,
+                    json!({ "todo": todo }),
+                )))
+            }
+            None => Ok(fail_payload(format!("ToDo #{todo_id} が見つかりません。"))),
+        }
+    }
+}
+
+// ─── updateTaskProgress ──────────────────────────────────────────────────────
+
+struct UpdateTaskProgressTool {
+    name: ToolName,
+    db: Db,
+}
+
+#[async_trait]
+impl Tool for UpdateTaskProgressTool {
+    fn declaration(&self) -> FunctionDeclaration {
+        FunctionDeclaration {
+            name: self.name.clone(),
+            description: "タスクの進み具合（0〜100%）を更新し、メモを履歴に残す。\
+                「○○は半分終わった」等の報告で呼ぶ。100にすると自動で完了になる。\
+                サブタスクを持つ親タスクは進捗が自動計算されるため、ここでは更新できない。"
+                .to_owned(),
+            parameters_json_schema: json!({
+                "type": "object",
+                "properties": {
+                    "todo_id": { "type": "number", "description": "進捗を更新するタスクのID（#番号）" },
+                    "progress": { "type": "number", "description": "進み具合 0〜100の整数（%）。100にすると完了扱い" },
+                    "note": { "type": "string", "description": "進捗メモ（履歴に残る・任意）" }
+                },
+                "required": ["todo_id", "progress"]
+            }),
+            requires_confirmation: false,
+        }
+    }
+
+    async fn call(&self, ctx: &ToolContext, args: Value) -> Result<ToolOutcome, ToolError> {
+        // Node `typeof args.progress === "number"`: JSON 数値（整数/小数）のみ・文字列は不可。
+        let progress = args
+            .get("progress")
+            .and_then(|v| v.as_i64().or_else(|| v.as_f64().map(|f| f as i64)));
+        let (Some(todo_id), Some(progress)) = (arg_i64(&args, "todo_id"), progress) else {
+            return Ok(fail_payload(
+                "todo_id と progress（0〜100の数値）を指定してください。",
+            ));
+        };
+        let scope = scope_of(ctx);
+        let repo = TodoRepo::new(&self.db);
+        let Some(todo) = repo.get(&scope, todo_id).await.map_err(exec_err)? else {
+            return Ok(fail_payload(format!("タスク #{todo_id} が見つかりません。")));
+        };
+        // サブタスクを持つ親は進捗が自動算出のため弾く（Node パリティ）。
+        let subtasks = repo.list_subtasks_tree(&scope, todo_id).await.map_err(exec_err)?;
+        if !subtasks.is_empty() {
+            let done = subtasks.iter().filter(|s| s.status == "done").count();
+            return Ok(fail_payload(format!(
+                "タスク#{}「{}」はサブタスクを {} 件持つため、進捗は『完了サブタスク数/全体』(現在 {}/{}) で自動算出されます。該当サブタスクを完了/進捗更新してください。",
+                todo_id, todo.title, subtasks.len(), done, subtasks.len(),
+            )));
+        }
+        let note = arg_str(&args, "note");
+        match repo
+            .update_progress(&scope, todo_id, progress, note.clone())
+            .await
+            .map_err(exec_err)?
+        {
+            Some(updated) => {
+                let done_suffix = if updated.status == "done" {
+                    "（完了にしました✅）"
+                } else {
+                    ""
+                };
+                let note_suffix = note.map(|n| format!("（メモ: {n}）")).unwrap_or_default();
+                let message = format!(
+                    "タスク「{}」(#{}) の進捗を {}% に更新しました📊{note_suffix}{done_suffix}",
+                    updated.title, updated.id, updated.progress,
+                );
+                Ok(ToolOutcome::from_payload(ok_payload(
+                    message,
+                    json!({ "todo": updated }),
+                )))
+            }
+            None => Ok(fail_payload(format!(
+                "タスク #{todo_id} の進捗更新に失敗しました。"
+            ))),
+        }
+    }
+}
+
+// ─── getTaskDetail ───────────────────────────────────────────────────────────
+
+struct GetTaskDetailTool {
+    name: ToolName,
+    db: Db,
+}
+
+#[async_trait]
+impl Tool for GetTaskDetailTool {
+    fn declaration(&self) -> FunctionDeclaration {
+        FunctionDeclaration {
+            name: self.name.clone(),
+            description: "1つのタスクの詳しい中身を取り出す（サブタスク一覧・計算後の進捗・進捗の更新履歴）。\
+                「#3の進捗の経緯を見せて」等の依頼で呼ぶ。"
+                .to_owned(),
+            parameters_json_schema: json!({
+                "type": "object",
+                "properties": {
+                    "todo_id": { "type": "number", "description": "詳しく見るタスクのID（#番号）" }
+                },
+                "required": ["todo_id"]
+            }),
+            requires_confirmation: false,
+        }
+    }
+
+    async fn call(&self, ctx: &ToolContext, args: Value) -> Result<ToolOutcome, ToolError> {
+        let Some(todo_id) = arg_i64(&args, "todo_id") else {
+            return Ok(fail_payload("todo_id を指定してください。"));
+        };
+        let scope = scope_of(ctx);
+        let repo = TodoRepo::new(&self.db);
+        let Some(todo) = repo.get(&scope, todo_id).await.map_err(exec_err)? else {
+            return Ok(fail_payload(format!("タスク #{todo_id} が見つかりません。")));
+        };
+        let subtasks = repo.list_subtasks_tree(&scope, todo_id).await.map_err(exec_err)?;
+        let logs = repo.list_progress_logs(&scope, todo_id).await.map_err(exec_err)?;
+        let eff = effective_progress(&todo, &subtasks);
+        let done = subtasks.iter().filter(|s| s.status == "done").count();
+        let message = format!(
+            "タスク「{}」(#{}) の詳細です。進捗 {}%、サブタスク {}/{} 完了、進捗履歴 {} 件。",
+            todo.title, todo.id, eff, done, subtasks.len(), logs.len(),
+        );
+        Ok(ToolOutcome::from_payload(ok_payload(
+            message,
+            json!({
+                "todo": todo,
+                "effective_progress": eff,
+                "subtasks": subtasks,
+                "progress_logs": logs,
+            }),
+        )))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -371,6 +724,17 @@ mod tests {
         due_reminded INTEGER NOT NULL DEFAULT 0, repeat_rule TEXT, repeat_until TEXT,
         repeat_count INTEGER, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);";
 
+    // task_progress_logs を FK 無しで先に作る（V17 の users/todos FK を避ける・lib.rs テストと同方針）。
+    const PROGRESS_LOGS_DDL: &str = "CREATE TABLE task_progress_logs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id TEXT NOT NULL,
+        bot_id TEXT NOT NULL DEFAULT 'system_default',
+        todo_id INTEGER NOT NULL,
+        progress INTEGER NOT NULL,
+        note TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+    );";
+
     fn seed_db() -> Db {
         let seq = SEQ.fetch_add(1, Ordering::Relaxed);
         let path =
@@ -378,6 +742,7 @@ mod tests {
         {
             let conn = Connection::open(&path).unwrap();
             conn.execute_batch(TODOS_DDL).unwrap();
+            conn.execute_batch(PROGRESS_LOGS_DDL).unwrap();
         }
         Db::open(&path).unwrap()
     }
@@ -480,5 +845,72 @@ mod tests {
         let ctx_b = ToolContext::new(BotId::system_default(), UserId::new("userB"));
         let out = list.call(&ctx_b, json!({})).await.unwrap();
         assert_eq!(out.payload["todos"].as_array().unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn subtask_update_progress_and_detail_flow() {
+        let db = seed_db();
+        let tools = tools(db).unwrap();
+        let add = find(&tools, "addTodo");
+        let add_sub = find(&tools, "addSubtask");
+        let update = find(&tools, "updateTodo");
+        let progress = find(&tools, "updateTaskProgress");
+        let detail = find(&tools, "getTaskDetail");
+
+        // 親タスク作成。
+        let out = add.call(&ctx(), json!({"title": "設計"})).await.unwrap();
+        let parent_id = out.payload["todo"]["id"].as_i64().unwrap();
+
+        // サブタスク追加（親の下に付く）。
+        let out = add_sub
+            .call(&ctx(), json!({"parent_todo_id": parent_id, "title": "要件定義"}))
+            .await
+            .unwrap();
+        assert_eq!(out.payload["success"], true);
+        assert_eq!(out.payload["parent_todo_id"], parent_id);
+        let sub_id = out.payload["subtask"]["id"].as_i64().unwrap();
+        // 存在しない親 → fail。
+        let out = add_sub
+            .call(&ctx(), json!({"parent_todo_id": 99999, "title": "x"}))
+            .await
+            .unwrap();
+        assert_eq!(out.payload["success"], false);
+
+        // updateTodo: タイトル変更は成功、無変更は fail、不正 priority も fail。
+        let out = update
+            .call(&ctx(), json!({"todo_id": sub_id, "title": "要件定義（改）"}))
+            .await
+            .unwrap();
+        assert_eq!(out.payload["todo"]["title"], "要件定義（改）");
+        let out = update.call(&ctx(), json!({"todo_id": sub_id})).await.unwrap();
+        assert_eq!(out.payload["success"], false);
+        let out = update
+            .call(&ctx(), json!({"todo_id": sub_id, "priority": "urgent"}))
+            .await
+            .unwrap();
+        assert_eq!(out.payload["success"], false);
+
+        // updateTaskProgress: 葉サブタスクは更新可（100 で完了）。
+        let out = progress
+            .call(&ctx(), json!({"todo_id": sub_id, "progress": 100, "note": "済"}))
+            .await
+            .unwrap();
+        assert_eq!(out.payload["success"], true);
+        assert_eq!(out.payload["todo"]["status"], "done");
+        // 親はサブタスクを持つため進捗更新は弾かれる。
+        let out = progress
+            .call(&ctx(), json!({"todo_id": parent_id, "progress": 50}))
+            .await
+            .unwrap();
+        assert_eq!(out.payload["success"], false);
+
+        // getTaskDetail: 親の effective_progress はサブ 1/1 完了 = 100。
+        let out = detail.call(&ctx(), json!({"todo_id": parent_id})).await.unwrap();
+        assert_eq!(out.payload["success"], true);
+        assert_eq!(out.payload["effective_progress"], 100);
+        assert_eq!(out.payload["subtasks"].as_array().unwrap().len(), 1);
+        // 存在しないタスクの detail → fail。
+        let out = detail.call(&ctx(), json!({"todo_id": 99999})).await.unwrap();
+        assert_eq!(out.payload["success"], false);
     }
 }
