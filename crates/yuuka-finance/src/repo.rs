@@ -636,6 +636,68 @@ impl<'a> ExpenseRepo<'a> {
             .await
     }
 
+    /// 支払い予定にリマインドを生成して紐付ける（Node `linkPlannedPaymentReminder`）。
+    ///
+    /// 通知時刻＝期日の `days_before` 日前の朝 9 時。この時刻が**既に過ぎている**場合は `Ok(None)`
+    /// を返す（tool 層が専用メッセージへ写像）。過去でなければ単一 tx で `reminders` へ挿入
+    /// （`source='payment'`・`source_id`=plan_id・`target_type='dm'`）+ `planned_payments.
+    /// linked_reminder_id` を更新し、`Ok(Some(reminder_id))` を返す。日付演算は SQLite に委ねる
+    /// （Node の `new Date` ローカル時刻境界と一致）。
+    ///
+    /// # Errors
+    /// 書き込み失敗時 [`DbError`]。
+    pub async fn link_reminder(
+        &self,
+        scope: &UserScope,
+        plan_id: i64,
+        days_before: i64,
+        due_date: String,
+        message: String,
+    ) -> Result<Option<i64>, DbError> {
+        let (uid, bid) = scope_keys(scope);
+        self.writer
+            .transaction(move |tx| {
+                // trigger_at = 期日 - days_before 日 の 09:00:00（ローカル暦）。
+                let trigger_at: String = tx
+                    .query_row(
+                        "SELECT strftime('%Y-%m-%d 09:00:00', date(?1, '-' || ?2 || ' days'))",
+                        params![due_date, days_before],
+                        |r| r.get(0),
+                    )
+                    .map_err(map_sqlite)?;
+                // 既に過ぎているか（ローカル現在時刻と比較）。
+                let is_past: bool = tx
+                    .query_row(
+                        "SELECT ?1 <= datetime('now', 'localtime')",
+                        params![trigger_at],
+                        |r| r.get(0),
+                    )
+                    .map_err(map_sqlite)?;
+                if is_past {
+                    return Ok(None);
+                }
+                tx.execute(
+                    "INSERT INTO reminders \
+                       (user_id, bot_id, message, trigger_at, target_type, status, source, \
+                        source_id, created_at) \
+                     VALUES (?1, ?2, ?3, ?4, 'dm', 'pending', 'payment', ?5, \
+                             datetime('now', 'localtime'))",
+                    params![uid, bid, message, trigger_at, plan_id.to_string()],
+                )
+                .map_err(map_sqlite)?;
+                let reminder_id = tx.last_insert_rowid();
+                tx.execute(
+                    "UPDATE planned_payments \
+                     SET linked_reminder_id = ?1, updated_at = datetime('now', 'localtime') \
+                     WHERE user_id = ?2 AND bot_id = ?3 AND id = ?4",
+                    params![reminder_id, uid, bid, plan_id],
+                )
+                .map_err(map_sqlite)?;
+                Ok(Some(reminder_id))
+            })
+            .await
+    }
+
     /// pending の支払い予定を消込する（§3.4.3）。
     ///
     /// Node `plans/pay` の手順を1つの writer トランザクションで再現する:

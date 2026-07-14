@@ -80,6 +80,10 @@ pub fn tools(db: Db) -> Result<Vec<Arc<dyn Tool>>, ToolError> {
         }),
         Arc::new(LinkPlannedPaymentTodoTool {
             name: ToolName::checked("linkPlannedPaymentTodo".to_owned())?,
+            db: db.clone(),
+        }),
+        Arc::new(LinkPlannedPaymentReminderTool {
+            name: ToolName::checked("linkPlannedPaymentReminder".to_owned())?,
             db,
         }),
     ])
@@ -1199,6 +1203,106 @@ impl Tool for LinkPlannedPaymentTodoTool {
     }
 }
 
+// ─── linkPlannedPaymentReminder ──────────────────────────────────────────────
+
+struct LinkPlannedPaymentReminderTool {
+    name: ToolName,
+    db: Db,
+}
+
+#[async_trait]
+impl Tool for LinkPlannedPaymentReminderTool {
+    fn declaration(&self) -> FunctionDeclaration {
+        FunctionDeclaration {
+            name: self.name.clone(),
+            description:
+                "支払い予定にリマインドを設定して紐付ける（期日の指定日数前の朝9時に通知）。\
+                予定登録後に「リマインドも設定する？」と聞かれてユーザーが希望した時に呼ぶ。"
+                    .to_owned(),
+            parameters_json_schema: json!({
+                "type": "object",
+                "properties": {
+                    "plan_id": { "type": "number", "description": "リマインドを設定する支払い予定のID" },
+                    "days_before": { "type": "number", "description": "期日の何日前に通知するか（0=当日・省略=1）" }
+                },
+                "required": ["plan_id"]
+            }),
+            requires_confirmation: false,
+        }
+    }
+
+    async fn call(&self, ctx: &ToolContext, args: Value) -> Result<ToolOutcome, ToolError> {
+        let Some(plan_id) = arg_int(&args, "plan_id") else {
+            return Ok(fail_payload("plan_id を指定してください。"));
+        };
+        let scope = scope_of(ctx);
+        let repo = ExpenseRepo::new(&self.db);
+        let Some(plan) = repo.get_plan(&scope, plan_id).await.map_err(exec_err)? else {
+            return Ok(fail_payload(format!(
+                "支払い予定 #{plan_id} が見つかりません。"
+            )));
+        };
+        if plan.status != "pending" {
+            let state = if plan.status == "settled" {
+                "消込済み"
+            } else {
+                "キャンセル済み"
+            };
+            return Ok(fail_payload(format!(
+                "支払い予定 #{plan_id} は{state}のためリマインドを設定できません。"
+            )));
+        }
+        if let Some(rid) = plan.linked_reminder_id {
+            return Ok(fail_payload(format!(
+                "支払い予定 #{plan_id} には既にリマインド (#{rid}) が紐付いています。"
+            )));
+        }
+        let days_before = arg_int(&args, "days_before").unwrap_or(1);
+        if days_before < 0 {
+            return Ok(fail_payload(
+                "days_before は0以上の整数で指定してください。",
+            ));
+        }
+        let message = format!(
+            "支払い予定「{}」({}, {}) の期日は {} です💸",
+            plan.title,
+            format_yen(plan.amount),
+            plan.category,
+            plan.due_date
+        );
+        match repo
+            .link_reminder(&scope, plan.id, days_before, plan.due_date.clone(), message)
+            .await
+            .map_err(exec_err)?
+        {
+            Some(reminder_id) => {
+                let when = if days_before == 0 {
+                    "当日".to_owned()
+                } else {
+                    format!("{days_before}日前")
+                };
+                Ok(ToolOutcome::from_payload(ok_payload(
+                    format!(
+                        "支払い予定「{}」に期日{when}の朝9時のリマインド (#{reminder_id}) を設定しました⏰",
+                        plan.title
+                    ),
+                    json!({ "reminder_id": reminder_id, "plan_id": plan.id }),
+                )))
+            }
+            None => {
+                let when = if days_before == 0 {
+                    "当日".to_owned()
+                } else {
+                    format!("{days_before}日前")
+                };
+                Ok(fail_payload(format!(
+                    "リマインド時刻（期日{when}の朝9時）が既に過ぎています。days_before を小さくするか、通常のリマインド登録で時刻を直接指定してください。"
+                )))
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -1267,6 +1371,21 @@ mod tests {
         repeat_count INTEGER, created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
         updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime')));";
 
+    // link_reminder が reminders へ挿入するため FK 無しで用意（V17 の users FK を避ける）。
+    const REMINDERS_DDL: &str = "CREATE TABLE reminders (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id TEXT NOT NULL,
+        bot_id TEXT NOT NULL DEFAULT 'system_default',
+        message TEXT NOT NULL,
+        trigger_at TEXT NOT NULL,
+        repeat_rule TEXT,
+        target_type TEXT NOT NULL DEFAULT 'dm',
+        target_id TEXT,
+        status TEXT NOT NULL DEFAULT 'pending',
+        source TEXT NOT NULL DEFAULT 'manual',
+        source_id TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')));";
+
     fn seed_db() -> Db {
         let seq = SEQ.fetch_add(1, Ordering::Relaxed);
         let path = std::env::temp_dir().join(format!(
@@ -1279,6 +1398,7 @@ mod tests {
             conn.execute_batch(BUDGET_LIMITS_DDL).unwrap();
             conn.execute_batch(PLANNED_PAYMENTS_DDL).unwrap();
             conn.execute_batch(TODOS_DDL).unwrap();
+            conn.execute_batch(REMINDERS_DDL).unwrap();
         }
         Db::open(&path).unwrap()
     }
@@ -1662,6 +1782,67 @@ mod tests {
         // 二重紐付け → fail。
         let out = link
             .call(&ctx(), json!({"plan_id": plan_id}))
+            .await
+            .unwrap();
+        assert_eq!(out.payload["success"], false);
+    }
+
+    #[tokio::test]
+    async fn link_planned_payment_reminder() {
+        let db = seed_db();
+        let tools = tools(db).unwrap();
+        let add = find(&tools, "addPlannedPayment");
+        let link = find(&tools, "linkPlannedPaymentReminder");
+        let list = find(&tools, "listPlannedPayments");
+
+        // 遠い未来の期日（trigger が過去にならないよう）。
+        let out = add
+            .call(
+                &ctx(),
+                json!({"title": "年会費", "amount": 12000, "category": "その他", "due_date": "2099-01-10"}),
+            )
+            .await
+            .unwrap();
+        let plan_id = out.payload["plan"]["id"].as_i64().unwrap();
+
+        // 紐付け成功（days_before 既定=1）。
+        let out = link
+            .call(&ctx(), json!({"plan_id": plan_id}))
+            .await
+            .unwrap();
+        assert_eq!(out.payload["success"], true);
+        let reminder_id = out.payload["reminder_id"].as_i64().unwrap();
+        assert!(reminder_id > 0);
+        // linked_reminder_id が入る。
+        let out = list.call(&ctx(), json!({})).await.unwrap();
+        assert_eq!(
+            out.payload["plans"][0]["linked_reminder_id"].as_i64(),
+            Some(reminder_id)
+        );
+        // 二重紐付け → fail。
+        let out = link
+            .call(&ctx(), json!({"plan_id": plan_id}))
+            .await
+            .unwrap();
+        assert_eq!(out.payload["success"], false);
+
+        // 過去期日の予定 → trigger が過去 → fail（紐付かない）。
+        let out = add
+            .call(
+                &ctx(),
+                json!({"title": "過去分", "amount": 5000, "category": "その他", "due_date": "2020-01-01"}),
+            )
+            .await
+            .unwrap();
+        let past_id = out.payload["plan"]["id"].as_i64().unwrap();
+        let out = link
+            .call(&ctx(), json!({"plan_id": past_id}))
+            .await
+            .unwrap();
+        assert_eq!(out.payload["success"], false);
+        // days_before 負値 → fail。
+        let out = link
+            .call(&ctx(), json!({"plan_id": past_id, "days_before": -1}))
             .await
             .unwrap();
         assert_eq!(out.payload["success"], false);
