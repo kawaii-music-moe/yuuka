@@ -36,6 +36,7 @@ pub fn build_app(
     auth_routes: Router<AppState>,
     admin_routes: Router<AppState>,
     settings_routes: Router<AppState>,
+    webhook_routes: Router<AppState>,
     ws_routes: Router<AppState>,
     dist_dir: Option<&Path>,
 ) -> Router {
@@ -43,6 +44,7 @@ pub fn build_app(
         .merge(auth_routes)
         .merge(admin_routes)
         .merge(settings_routes)
+        .merge(webhook_routes)
         .merge(ws_routes)
         .merge(yuuka_todo::routes())
         .merge(yuuka_finance::routes())
@@ -163,6 +165,8 @@ mod tests {
             yuuka_auth::routes(runtime),
             yuuka_admin::routes(admin_runtime),
             yuuka_settings::routes(settings_runtime),
+            // Webhook ルータ（Null プロセッサ・暗号なし）を merge して検証する。
+            yuuka_webhook::routes(),
             // WS ルータは merge 検証には不要（ChatEngine 構築を避け空ルータを渡す）。
             axum::Router::new(),
             None,

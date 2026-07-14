@@ -33,6 +33,7 @@ members = [
     "crates/yuuka-settings",
     "crates/yuuka-botassistant",
     "crates/yuuka-briefing",
+    "crates/yuuka-webhook",
     "xtask",
 ]
 exclude = [
@@ -151,4 +152,5 @@ yuuka-admin      = { path = "crates/yuuka-admin" }
 yuuka-settings   = { path = "crates/yuuka-settings" }
 yuuka-botassistant = { path = "crates/yuuka-botassistant" }
 yuuka-briefing   = { path = "crates/yuuka-briefing" }
+yuuka-webhook    = { path = "crates/yuuka-webhook" }
 yuuka-services   = { path = "crates/yuuka-services" }

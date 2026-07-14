@@ -21,6 +21,9 @@ pub struct WebConfig {
     /// タイムライン メディアの保存ディレクトリ（Node `MEDIA_DIR = cwd/data/media`）。
     /// `from_core` は `data/media`（cwd 相対）を設定する。`Default` は空（媒体経路を使わないテスト用）。
     pub media_dir: std::path::PathBuf,
+    /// 公開ベース URL（`config.base_url`・Webhook 受信 URL の生成等に使う）。`None`（`BASE_URL` 未設定）は
+    /// 相対 URL へフォールバックする（Node `buildHookUrl`）。
+    pub base_url: Option<String>,
 }
 
 impl WebConfig {
@@ -34,6 +37,7 @@ impl WebConfig {
             allowed_host: crate::csrf::allowed_host_from_base_url(cfg.base_url.as_deref()),
             trusted_proxies: cfg.trusted_proxies.clone(),
             media_dir: std::path::PathBuf::from("data/media"),
+            base_url: cfg.base_url.clone(),
         }
     }
 }

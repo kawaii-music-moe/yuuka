@@ -3566,6 +3566,7 @@ dependencies = [
  "yuuka-tools",
  "yuuka-types",
  "yuuka-web",
+ "yuuka-webhook",
 ]
 
 [[package]]
@@ -3646,6 +3647,27 @@ dependencies = [
  "yuuka-core",
  "yuuka-db",
  "yuuka-types",
+]
+
+[[package]]
+name = "yuuka-webhook"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "base64",
+ "getrandom 0.2.17",
+ "rusqlite",
+ "secrecy",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tower",
+ "yuuka-core",
+ "yuuka-crypto",
+ "yuuka-db",
+ "yuuka-types",
+ "yuuka-web",
 ]
 
 [[package]]

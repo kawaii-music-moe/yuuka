@@ -138,6 +138,7 @@ async fn ws_chat_ready_then_msg_returns_done() {
         axum::Router::new(),
         axum::Router::new(),
         axum::Router::new(),
+        axum::Router::new(),
         ws_routes(engine, 20),
         None,
     );
@@ -196,6 +197,7 @@ async fn ws_chat_rejects_cookie_only_auth() {
     let state = AppState::new(Arc::new(CookieAndBearerAuth), WebConfig::default(), db);
     let app = build_app(
         state,
+        axum::Router::new(),
         axum::Router::new(),
         axum::Router::new(),
         axum::Router::new(),

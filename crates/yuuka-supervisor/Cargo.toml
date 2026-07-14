@@ -28,6 +28,7 @@ yuuka-playbook.workspace = true
 yuuka-persona.workspace = true
 yuuka-botassistant.workspace = true
 yuuka-briefing.workspace = true
+yuuka-webhook.workspace = true
 yuuka-admin.workspace = true
 yuuka-settings.workspace = true
 yuuka-auth.workspace = true
