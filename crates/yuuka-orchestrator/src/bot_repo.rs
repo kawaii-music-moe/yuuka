@@ -1756,6 +1756,59 @@ pub async fn set_bot_recommended_persona(
         .await
 }
 
+/// Admin: 任意のペルソナを**非公開化**する（Node `adminUnpublishPersona`・§5.3.2・owner 非依存）。
+/// `is_public = 0` にし、非公開化できたら推奨 Bot からも解除する。行が動けば `true`（不在は `false`）。
+///
+/// # Errors
+/// 書き込み失敗時 [`DbError`]。
+pub async fn admin_unpublish_persona(db: &Db, id: i64) -> Result<bool, DbError> {
+    db.writer
+        .transaction(move |tx| {
+            let n = tx
+                .execute(
+                    "UPDATE personas SET is_public = 0, \
+                     updated_at = datetime('now','localtime') WHERE id = ?1",
+                    params![id],
+                )
+                .map_err(map_sqlite)?;
+            if n == 0 {
+                return Ok(false);
+            }
+            tx.execute(
+                "UPDATE bots SET recommended_persona_id = NULL WHERE recommended_persona_id = ?1",
+                params![id],
+            )
+            .map_err(map_sqlite)?;
+            Ok(true)
+        })
+        .await
+}
+
+/// Admin: 任意のペルソナを**削除**する（Node `adminDeletePersona`・§5.3.2・owner 非依存）。
+/// 適用中（`bot_active_personas`）は FK `ON DELETE CASCADE` で自動掃除・推奨（`bots.recommended_persona_id`）
+/// は FK 無のため明示解除する。行が動けば `true`（不在は `false`）。
+///
+/// # Errors
+/// 書き込み失敗時 [`DbError`]。
+pub async fn admin_delete_persona(db: &Db, id: i64) -> Result<bool, DbError> {
+    db.writer
+        .transaction(move |tx| {
+            let n = tx
+                .execute("DELETE FROM personas WHERE id = ?1", params![id])
+                .map_err(map_sqlite)?;
+            if n == 0 {
+                return Ok(false);
+            }
+            tx.execute(
+                "UPDATE bots SET recommended_persona_id = NULL WHERE recommended_persona_id = ?1",
+                params![id],
+            )
+            .map_err(map_sqlite)?;
+            Ok(true)
+        })
+        .await
+}
+
 /// 公開ペルソナをユーザーのコピーとしてインポート（Node `importPersona`・独立コピー）。成功なら true。
 ///
 /// # Errors

@@ -61,6 +61,11 @@ pub fn routes_with(crypto: Option<Arc<SystemCrypto>>) -> Router<AppState> {
         .route("/api/bots/usage", get(get_usage))
         .route("/api/bots/recommended-persona", post(set_recommended_persona))
         .route(
+            "/api/admin/personas/unpublish",
+            post(admin_unpublish_persona),
+        )
+        .route("/api/admin/personas/delete", post(admin_delete_persona))
+        .route(
             "/api/admin/bot-attribute-settings",
             get(admin_get).post(admin_set),
         )
@@ -776,6 +781,78 @@ fn forbidden_creator() -> Response {
         StatusCode::FORBIDDEN,
         "Botの作成者のみが推奨ペルソナを設定できます。",
     )
+}
+
+// ─── Admin: マーケットプレイス管理（非公開化・削除 §5.3.2・auth:admin） ──────────────
+
+/// Admin: 任意のペルソナを非公開化する（Node `POST /api/admin/personas/unpublish`）。
+async fn admin_unpublish_persona(
+    admin: AdminUser,
+    State(db): State<Db>,
+    Json(body): Json<Value>,
+) -> Response {
+    let Some(id) = body.get("id").and_then(int_value) else {
+        return bad_request("id は必須です。");
+    };
+    let ok = match bot_repo::admin_unpublish_persona(&db, id).await {
+        Ok(v) => v,
+        Err(_) => return server_error(),
+    };
+    if ok {
+        yuuka_auth::audit::add_audit_log(
+            &db,
+            &admin.0.discord_id,
+            "admin.persona_unpublish",
+            Some(&format!("persona:{id}")),
+            None,
+        )
+        .await;
+    }
+    let message = if ok {
+        "ペルソナを非公開化しました。"
+    } else {
+        "ペルソナが見つかりません。"
+    };
+    (
+        StatusCode::OK,
+        Json(json!({ "success": ok, "message": message })),
+    )
+        .into_response()
+}
+
+/// Admin: 任意のペルソナを削除する（Node `POST /api/admin/personas/delete`）。
+async fn admin_delete_persona(
+    admin: AdminUser,
+    State(db): State<Db>,
+    Json(body): Json<Value>,
+) -> Response {
+    let Some(id) = body.get("id").and_then(int_value) else {
+        return bad_request("id は必須です。");
+    };
+    let ok = match bot_repo::admin_delete_persona(&db, id).await {
+        Ok(v) => v,
+        Err(_) => return server_error(),
+    };
+    if ok {
+        yuuka_auth::audit::add_audit_log(
+            &db,
+            &admin.0.discord_id,
+            "admin.persona_delete",
+            Some(&format!("persona:{id}")),
+            None,
+        )
+        .await;
+    }
+    let message = if ok {
+        "ペルソナを削除しました。"
+    } else {
+        "ペルソナが見つかりません。"
+    };
+    (
+        StatusCode::OK,
+        Json(json!({ "success": ok, "message": message })),
+    )
+        .into_response()
 }
 
 /// `Number(x)` が整数か（数値の整数・整数文字列のみ・Node `Number.isInteger`）。
@@ -1914,5 +1991,66 @@ mod tests {
         )
         .await;
         assert_eq!(st, StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn admin_persona_routes() {
+        // seed: persona 1=owner/private・2=other/public・3=other/private。
+        let app = app();
+
+        // admin が公開ペルソナ(2)を非公開化 → 200「非公開化しました」。
+        let (st, j) = send(
+            &app,
+            "POST",
+            "/api/admin/personas/unpublish",
+            "admin",
+            r#"{"id":2}"#,
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(j["success"], serde_json::json!(true));
+        assert!(j["message"].as_str().unwrap().contains("非公開化"));
+
+        // 不在 id → 200 {success:false, 見つかりません}。
+        let (st, j) = send(
+            &app,
+            "POST",
+            "/api/admin/personas/unpublish",
+            "admin",
+            r#"{"id":9999}"#,
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(j["success"], serde_json::json!(false));
+        assert!(j["message"].as_str().unwrap().contains("見つかりません"));
+
+        // admin が任意ペルソナ(3)を削除 → 200「削除しました」。
+        let (st, j) = send(
+            &app,
+            "POST",
+            "/api/admin/personas/delete",
+            "admin",
+            r#"{"id":3}"#,
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(j["success"], serde_json::json!(true));
+        assert!(j["message"].as_str().unwrap().contains("削除しました"));
+
+        // 非 admin(owner) → 403（AdminUser ゲート）。
+        let (st, _) = send(
+            &app,
+            "POST",
+            "/api/admin/personas/unpublish",
+            "owner",
+            r#"{"id":1}"#,
+        )
+        .await;
+        assert_eq!(st, StatusCode::FORBIDDEN);
+
+        // id 欠落 → 400「id は必須です。」。
+        let (st, j) = send(&app, "POST", "/api/admin/personas/delete", "admin", r#"{}"#).await;
+        assert_eq!(st, StatusCode::BAD_REQUEST);
+        assert_eq!(j["message"], serde_json::json!("id は必須です。"));
     }
 }
