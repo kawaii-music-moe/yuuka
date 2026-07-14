@@ -25,7 +25,7 @@ use yuuka_core::tool::FunctionDeclaration;
 use yuuka_core::{DbError, Tool, ToolContext, ToolError, ToolName, ToolOutcome, UserScope};
 use yuuka_web::Db;
 
-use crate::dto::NewTimelineRecord;
+use crate::dto::{NewDayPlanBlock, NewTimelineRecord};
 use crate::repo::TimelineRepo;
 
 /// このドメインが公開する Native ツール一式を作る。
@@ -35,11 +35,28 @@ use crate::repo::TimelineRepo;
 /// # Errors
 /// ツール名が Gemini 制約に反する場合 [`ToolError`]（コンパイル時定数なので通常発生しない）。
 pub fn tools(db: Db) -> Result<Vec<Arc<dyn Tool>>, ToolError> {
-    Ok(vec![Arc::new(AddTimelineRecordTool {
-        name: ToolName::checked("addTimelineRecord".to_owned())?,
-        db,
-    })])
+    Ok(vec![
+        Arc::new(AddTimelineRecordTool {
+            name: ToolName::checked("addTimelineRecord".to_owned())?,
+            db: db.clone(),
+        }),
+        Arc::new(ListDayPlanTool {
+            name: ToolName::checked("listDayPlan".to_owned())?,
+            db: db.clone(),
+        }),
+        Arc::new(CreateDayPlanBlockTool {
+            name: ToolName::checked("createDayPlanBlock".to_owned())?,
+            db: db.clone(),
+        }),
+        Arc::new(DeleteDayPlanBlockTool {
+            name: ToolName::checked("deleteDayPlanBlock".to_owned())?,
+            db,
+        }),
+    ])
 }
+
+/// 計画ブロックの type 許容値（Node `'task'|'transit'|'event'|'free'`）。
+const PLAN_BLOCK_TYPES: [&str; 4] = ["task", "transit", "event", "free"];
 
 // ─── 共通ヘルパ（todo/tools.rs と同一規約） ──────────────────────────────────────
 
@@ -199,6 +216,174 @@ impl Tool for AddTimelineRecordTool {
             "記録しました。",
             json!({ "record": record }),
         )))
+    }
+}
+
+// ─── listDayPlan ─────────────────────────────────────────────────────────────
+
+struct ListDayPlanTool {
+    name: ToolName,
+    db: Db,
+}
+
+#[async_trait]
+impl Tool for ListDayPlanTool {
+    fn declaration(&self) -> FunctionDeclaration {
+        FunctionDeclaration {
+            name: self.name.clone(),
+            description: "指定日のタイムライン（計画ブロック + 記録）を取得する。\
+                「今日の予定は？」等で呼ぶ。date を省くと今日。"
+                .to_owned(),
+            parameters_json_schema: json!({
+                "type": "object",
+                "properties": {
+                    "date": { "type": "string", "description": "日付 'YYYY-MM-DD'。省略すると今日" }
+                }
+            }),
+            requires_confirmation: false,
+        }
+    }
+
+    async fn call(&self, ctx: &ToolContext, args: Value) -> Result<ToolOutcome, ToolError> {
+        let scope = scope_of(ctx);
+        let repo = TimelineRepo::new(&self.db);
+        let date = arg_str(&args, "date");
+        let blocks = repo.list_plans(&scope, date.clone()).await.map_err(exec_err)?;
+        let records = repo.list(&scope, date.clone()).await.map_err(exec_err)?;
+        // 表示用ラベル（date 省略時は "今日" と示す・実データは DB の date('now')）。
+        let label = date.clone().unwrap_or_else(|| "今日".to_owned());
+        if blocks.is_empty() && records.is_empty() {
+            return Ok(ToolOutcome::from_payload(ok_payload(
+                format!("{label} の計画・記録はまだありません。"),
+                json!({ "date": date, "blocks": [], "records": [] }),
+            )));
+        }
+        Ok(ToolOutcome::from_payload(ok_payload(
+            format!(
+                "{label} の計画 {} 件・記録 {} 件です。",
+                blocks.len(),
+                records.len()
+            ),
+            json!({ "date": date, "blocks": blocks, "records": records }),
+        )))
+    }
+}
+
+// ─── createDayPlanBlock ──────────────────────────────────────────────────────
+
+struct CreateDayPlanBlockTool {
+    name: ToolName,
+    db: Db,
+}
+
+#[async_trait]
+impl Tool for CreateDayPlanBlockTool {
+    fn declaration(&self) -> FunctionDeclaration {
+        FunctionDeclaration {
+            name: self.name.clone(),
+            description: "タイムラインに計画ブロックを1件追加する（その日の予定の枠）。\
+                type は 'task'|'transit'|'event'|'free'。start_time/end_time で時間帯を指定できる。"
+                .to_owned(),
+            parameters_json_schema: json!({
+                "type": "object",
+                "properties": {
+                    "date": { "type": "string", "description": "日付 'YYYY-MM-DD'" },
+                    "type": { "type": "string", "description": "'task'|'transit'|'event'|'free'" },
+                    "title": { "type": "string", "description": "ブロックのタイトル" },
+                    "start_time": { "type": "string", "description": "開始時刻 'HH:MM'（任意）" },
+                    "end_time": { "type": "string", "description": "終了時刻 'HH:MM'（任意）" },
+                    "description": { "type": "string", "description": "補足メモ（任意）" },
+                    "todo_id": { "type": "number", "description": "type='task' の時、紐付けるタスクID（任意）" },
+                    "transit_from": { "type": "string", "description": "出発地（type='transit' 時・任意）" },
+                    "transit_to": { "type": "string", "description": "到着地（type='transit' 時・任意）" },
+                    "transit_line": { "type": "string", "description": "路線・交通機関名（任意）" }
+                },
+                "required": ["date", "type", "title"]
+            }),
+            requires_confirmation: false,
+        }
+    }
+
+    async fn call(&self, ctx: &ToolContext, args: Value) -> Result<ToolOutcome, ToolError> {
+        let (Some(date), Some(block_type), Some(title)) = (
+            arg_str(&args, "date"),
+            arg_str(&args, "type"),
+            arg_str(&args, "title"),
+        ) else {
+            return Ok(fail_payload("date / type / title は必須です。"));
+        };
+        // type を許容値へ正規化（不正値は 'free' へ・Node パリティの安全側）。
+        let block_type = if PLAN_BLOCK_TYPES.contains(&block_type.as_str()) {
+            block_type
+        } else {
+            "free".to_owned()
+        };
+        let input = NewDayPlanBlock {
+            date,
+            r#type: block_type,
+            title: title.clone(),
+            description: arg_str(&args, "description"),
+            start_time: arg_str(&args, "start_time"),
+            end_time: arg_str(&args, "end_time"),
+            todo_id: arg_i64(&args, "todo_id"),
+            transit_from: arg_str(&args, "transit_from"),
+            transit_to: arg_str(&args, "transit_to"),
+            transit_line: arg_str(&args, "transit_line"),
+            position: None,
+        };
+        let block = TimelineRepo::new(&self.db)
+            .add_plan(&scope_of(ctx), input)
+            .await
+            .map_err(exec_err)?;
+        Ok(ToolOutcome::from_payload(ok_payload(
+            format!("計画ブロック「{title}」を追加しました。"),
+            json!({ "block": block }),
+        )))
+    }
+}
+
+// ─── deleteDayPlanBlock ──────────────────────────────────────────────────────
+
+struct DeleteDayPlanBlockTool {
+    name: ToolName,
+    db: Db,
+}
+
+#[async_trait]
+impl Tool for DeleteDayPlanBlockTool {
+    fn declaration(&self) -> FunctionDeclaration {
+        FunctionDeclaration {
+            name: self.name.clone(),
+            description: "タイムラインの計画ブロックを削除する。".to_owned(),
+            parameters_json_schema: json!({
+                "type": "object",
+                "properties": {
+                    "id": { "type": "number", "description": "削除するブロックのID" }
+                },
+                "required": ["id"]
+            }),
+            requires_confirmation: false,
+        }
+    }
+
+    async fn call(&self, ctx: &ToolContext, args: Value) -> Result<ToolOutcome, ToolError> {
+        let Some(id) = arg_i64(&args, "id") else {
+            return Ok(fail_payload("id が必要です。"));
+        };
+        let ok = TimelineRepo::new(&self.db)
+            .delete_plan(&scope_of(ctx), id)
+            .await
+            .map_err(exec_err)?;
+        let message = if ok {
+            "削除しました。"
+        } else {
+            "ブロックが見つかりません。"
+        };
+        Ok(ToolOutcome::from_payload(if ok {
+            ok_payload(message, json!({}))
+        } else {
+            json!({ "success": false, "message": message })
+        }))
     }
 }
 
@@ -433,5 +618,47 @@ mod tests {
             .await
             .unwrap();
         assert!(listed.is_empty());
+    }
+
+    #[tokio::test]
+    async fn day_plan_create_list_delete() {
+        let db = seed_db();
+        let tools = tools(db).unwrap();
+        let create = find(&tools, "createDayPlanBlock");
+        let list = find(&tools, "listDayPlan");
+        let delete = find(&tools, "deleteDayPlanBlock");
+
+        // 必須欠落 → fail。
+        let out = create.call(&ctx(), json!({"date": "2026-08-01"})).await.unwrap();
+        assert_eq!(out.payload["success"], false);
+
+        // 作成。
+        let out = create
+            .call(
+                &ctx(),
+                json!({"date": "2026-08-01", "type": "event", "title": "会議", "start_time": "10:00"}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(out.payload["success"], true);
+        let block_id = out.payload["block"]["id"].as_i64().unwrap();
+        assert_eq!(out.payload["block"]["type"], "event");
+
+        // 一覧（date 指定）に 1 件。
+        let out = list.call(&ctx(), json!({"date": "2026-08-01"})).await.unwrap();
+        assert_eq!(out.payload["blocks"].as_array().unwrap().len(), 1);
+        // 別日は空。
+        let out = list.call(&ctx(), json!({"date": "2026-08-02"})).await.unwrap();
+        assert_eq!(out.payload["blocks"].as_array().unwrap().len(), 0);
+
+        // 削除。
+        let out = delete.call(&ctx(), json!({"id": block_id})).await.unwrap();
+        assert_eq!(out.payload["success"], true);
+        let out = delete.call(&ctx(), json!({"id": block_id})).await.unwrap();
+        assert_eq!(out.payload["success"], false);
+        // 別ユーザーには見えない。
+        let ctx_b = ToolContext::new(BotId::system_default(), UserId::new("userB"));
+        let out = list.call(&ctx_b, json!({"date": "2026-08-01"})).await.unwrap();
+        assert_eq!(out.payload["blocks"].as_array().unwrap().len(), 0);
     }
 }
