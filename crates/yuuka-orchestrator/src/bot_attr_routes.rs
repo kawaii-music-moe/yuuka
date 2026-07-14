@@ -36,9 +36,146 @@ pub fn routes() -> Router<AppState> {
         .route("/api/bots/presets", get(list_presets))
         .route("/api/bots/attributes", post(change_attributes))
         .route(
+            "/api/bots/assistant/guild-note",
+            get(guild_note_get).post(guild_note_set),
+        )
+        .route(
             "/api/admin/bot-attribute-settings",
             get(admin_get).post(admin_set),
         )
+}
+
+/// ギルド共有ノートの最大長（Node `BOT_NOTE_MAX_LENGTH`）。
+const BOT_NOTE_MAX_LENGTH: usize = 10000;
+
+#[derive(Debug, Deserialize)]
+struct GuildNoteQuery {
+    #[serde(default, rename = "botId")]
+    bot_id: Option<String>,
+    #[serde(default, rename = "guildId")]
+    guild_id: Option<String>,
+}
+
+// ─── GET/POST /api/bots/assistant/guild-note（owner/Admin） ──────────────────
+
+async fn guild_note_get(
+    user: AuthenticatedUser,
+    State(db): State<Db>,
+    Query(q): Query<GuildNoteQuery>,
+) -> Response {
+    let bot =
+        match require_owned_bot(&db, &user.0.discord_id, q.bot_id.as_deref().unwrap_or("")).await {
+            Ok(b) => b,
+            Err(resp) => return resp,
+        };
+    let guild_id = q.guild_id.unwrap_or_default();
+    if !is_snowflake(&guild_id) {
+        return bad_request("guildId が必要です。");
+    }
+    let content = match bot_repo::bot_guild_note(&db, &bot.id, &guild_id).await {
+        Ok(c) => c,
+        Err(_) => return server_error(),
+    };
+    (
+        StatusCode::OK,
+        Json(json!({
+            "success": true,
+            "content": content,
+            "max_length": BOT_NOTE_MAX_LENGTH,
+        })),
+    )
+        .into_response()
+}
+
+async fn guild_note_set(
+    user: AuthenticatedUser,
+    State(db): State<Db>,
+    Query(q): Query<GuildNoteQuery>,
+    Json(body): Json<Value>,
+) -> Response {
+    let bot_id = body
+        .get("botId")
+        .and_then(Value::as_str)
+        .or(q.bot_id.as_deref())
+        .unwrap_or("")
+        .to_owned();
+    let bot = match require_owned_bot(&db, &user.0.discord_id, &bot_id).await {
+        Ok(b) => b,
+        Err(resp) => return resp,
+    };
+    let guild_id = body
+        .get("guildId")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or("")
+        .to_owned();
+    let content = body.get("content").and_then(Value::as_str).unwrap_or("");
+    if !is_snowflake(&guild_id) {
+        return bad_request("guildId が必要です。");
+    }
+    // 長さは Node `content.length`（UTF-16 単位）で判定。
+    let len = content.encode_utf16().count();
+    if len > BOT_NOTE_MAX_LENGTH {
+        return bad_request(&format!(
+            "共有ノートは{}文字以内です（現在: {}文字）",
+            format_commas(BOT_NOTE_MAX_LENGTH),
+            format_commas(len)
+        ));
+    }
+    if let Err(_e) = bot_repo::set_bot_guild_note(&db, &bot.id, &guild_id, content).await {
+        return status_json(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "共有ノートの保存に失敗しました。",
+        );
+    }
+    (
+        StatusCode::OK,
+        Json(json!({ "success": true, "message": "共有ノートを保存しました。" })),
+    )
+        .into_response()
+}
+
+/// requireOwnedBot（botId 必須→404→owner/Admin 403・Node）。エラー時は応答を `Err` で返す。
+async fn require_owned_bot(db: &Db, uid: &str, bot_id: &str) -> Result<bot_repo::BotRow, Response> {
+    if bot_id.is_empty() {
+        return Err(bad_request("botId が必要です。"));
+    }
+    let bot = match bot_repo::get_bot(db, bot_id).await {
+        Ok(Some(b)) => b,
+        Ok(None) => return Err(status_json(StatusCode::NOT_FOUND, "Botが見つかりません。")),
+        Err(_) => return Err(server_error()),
+    };
+    let is_admin = match bot_repo::is_admin(db, uid).await {
+        Ok(v) => v,
+        Err(_) => return Err(server_error()),
+    };
+    if bot.owner_id != uid && !is_admin {
+        return Err(status_json(
+            StatusCode::FORBIDDEN,
+            "Botの作成者のみが設定を変更できます。",
+        ));
+    }
+    Ok(bot)
+}
+
+/// `^\d{5,25}$`（Node `isSnowflake`）。
+fn is_snowflake(value: &str) -> bool {
+    let len = value.len();
+    (5..=25).contains(&len) && value.bytes().all(|b| b.is_ascii_digit())
+}
+
+/// 3 桁区切りの 10 進表記（Node `Number.toLocaleString()` 相当・整数のみ）。
+fn format_commas(n: usize) -> String {
+    let s = n.to_string();
+    let bytes = s.as_bytes();
+    let mut out = String::with_capacity(s.len() + s.len() / 3);
+    for (i, b) in bytes.iter().enumerate() {
+        if i > 0 && (bytes.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(*b as char);
+    }
+    out
 }
 
 // ─── GET /api/bots/presets（プリセット一覧・user） ──────────────────────────
@@ -468,5 +605,88 @@ mod tests {
             .find(|p| p["id"] == "secretary")
             .unwrap();
         assert_eq!(sec["displayName"], "秘書さん");
+    }
+
+    #[tokio::test]
+    async fn guild_note_get_set() {
+        let app = app();
+        let gid = "123456789012345678";
+
+        // 未設定は空 + max_length。
+        let (st, j) = send(
+            &app,
+            "GET",
+            &format!("/api/bots/assistant/guild-note?botId=b1&guildId={gid}"),
+            "owner",
+            "",
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(j["content"], "");
+        assert_eq!(j["max_length"], 10000);
+
+        // 非所有者は 403。
+        let (st, _) = send(
+            &app,
+            "GET",
+            &format!("/api/bots/assistant/guild-note?botId=b1&guildId={gid}"),
+            "other",
+            "",
+        )
+        .await;
+        assert_eq!(st, StatusCode::FORBIDDEN);
+        // guildId 不正は 400（requireOwnedBot 通過後）。
+        let (st, _) = send(
+            &app,
+            "GET",
+            "/api/bots/assistant/guild-note?botId=b1&guildId=12",
+            "owner",
+            "",
+        )
+        .await;
+        assert_eq!(st, StatusCode::BAD_REQUEST);
+
+        // 保存 → 再取得で反映。
+        let (st, j) = send(
+            &app,
+            "POST",
+            "/api/bots/assistant/guild-note",
+            "owner",
+            &format!(r#"{{"botId":"b1","guildId":"{gid}","content":"共有メモ"}}"#),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(j["message"], "共有ノートを保存しました。");
+        let (_st, j) = send(
+            &app,
+            "GET",
+            &format!("/api/bots/assistant/guild-note?botId=b1&guildId={gid}"),
+            "owner",
+            "",
+        )
+        .await;
+        assert_eq!(j["content"], "共有メモ");
+
+        // 上限超過は 400（カンマ区切りメッセージ）。
+        let long: String = "x".repeat(10001);
+        let (st, j) = send(
+            &app,
+            "POST",
+            "/api/bots/assistant/guild-note",
+            "owner",
+            &format!(r#"{{"botId":"b1","guildId":"{gid}","content":"{long}"}}"#),
+        )
+        .await;
+        assert_eq!(st, StatusCode::BAD_REQUEST);
+        assert!(j["message"].as_str().unwrap().contains("10,000文字以内"));
+    }
+
+    #[test]
+    fn format_commas_matches_locale() {
+        use super::format_commas;
+        assert_eq!(format_commas(0), "0");
+        assert_eq!(format_commas(10_000), "10,000");
+        assert_eq!(format_commas(12_345), "12,345");
+        assert_eq!(format_commas(1_234_567), "1,234,567");
     }
 }

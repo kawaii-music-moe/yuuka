@@ -597,6 +597,32 @@ pub async fn bot_guild_note(db: &Db, bot_id: &str, guild_id: &str) -> Result<Str
         .await
 }
 
+/// ギルド共有ノートを upsert する（長さ検証は呼び出し側・Node `setBotGuildNote`）。
+///
+/// # Errors
+/// 書き込み失敗時 [`DbError`]。
+pub async fn set_bot_guild_note(
+    db: &Db,
+    bot_id: &str,
+    guild_id: &str,
+    content: &str,
+) -> Result<(), DbError> {
+    let (bot_id, guild_id, content) = (bot_id.to_owned(), guild_id.to_owned(), content.to_owned());
+    db.writer
+        .transaction(move |tx| {
+            tx.execute(
+                "INSERT INTO bot_guild_notes (bot_id, guild_id, content, updated_at) \
+                 VALUES (?1, ?2, ?3, datetime('now','localtime')) \
+                 ON CONFLICT(bot_id, guild_id) DO UPDATE SET \
+                   content = excluded.content, updated_at = datetime('now','localtime')",
+                params![bot_id, guild_id, content],
+            )
+            .map_err(map_sqlite)?;
+            Ok(())
+        })
+        .await
+}
+
 /// 発話者の個人ノート本文（無ければ空文字・Node `getBotUserNote` = `bot_context_notes`）。
 ///
 /// # Errors
