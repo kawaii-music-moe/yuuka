@@ -238,6 +238,56 @@ impl<'a> PersonaRepo<'a> {
             .await
     }
 
+    /// 所有者本人のペルソナの公開フラグ（`is_public`）を設定する（Node `updatePersona({isPublic})`）。
+    /// スコープ内に無ければ `false`。**非公開化（1→0）時は当該ペルソナを推奨に設定している Bot から
+    /// 解除**する（`bots.recommended_persona_id = NULL`・§5.2.1）。読み取り・更新・解除を単一 writer Tx で。
+    ///
+    /// # Errors
+    /// 書き込み失敗時 [`DbError`]。
+    pub async fn set_public(
+        &self,
+        scope: &UserScope,
+        id: i64,
+        is_public: bool,
+    ) -> Result<bool, DbError> {
+        let owner = owner_id(scope);
+        self.writer
+            .transaction(move |tx| {
+                // 現在の is_public（owner-scoped）。無ければ他人／不在で false。
+                let current: Option<i64> = tx
+                    .query_row(
+                        "SELECT is_public FROM personas WHERE id = ?1 AND owner_id = ?2",
+                        params![id, owner],
+                        |r| r.get(0),
+                    )
+                    .optional()
+                    .map_err(map_sqlite)?;
+                let Some(current) = current else {
+                    return Ok(false);
+                };
+                let new_public = i64::from(is_public);
+                let n = tx
+                    .execute(
+                        "UPDATE personas SET is_public = ?1, \
+                         updated_at = datetime('now', 'localtime') \
+                         WHERE id = ?2 AND owner_id = ?3",
+                        params![new_public, id, owner],
+                    )
+                    .map_err(map_sqlite)?;
+                // 非公開化（1→0）時は推奨 Bot から解除（Node §5.2.1）。
+                if current == 1 && new_public == 0 {
+                    tx.execute(
+                        "UPDATE bots SET recommended_persona_id = NULL \
+                         WHERE recommended_persona_id = ?1",
+                        params![id],
+                    )
+                    .map_err(map_sqlite)?;
+                }
+                Ok(n > 0)
+            })
+            .await
+    }
+
     /// 公開ペルソナ（`is_public = 1`）を呼び出し元の所有として**独立コピー**する（Node `importPersona`）。
     /// コピーは `is_public = 0`（既定）。ソースが非公開/不在なら `None`。読み取り + 挿入を単一 writer Tx で
     /// 原子的に行う（read→insert 間にソースが非公開化される競合を排除・Node の別クエリ実装より堅牢）。

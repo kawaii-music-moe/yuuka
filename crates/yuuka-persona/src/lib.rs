@@ -509,6 +509,105 @@ mod tests {
         assert_eq!(priv_resp.status(), StatusCode::NOT_FOUND);
     }
 
+    /// bots.recommended_persona_id を読む（unpublish 解除の検証用）。
+    fn recommended(path: &std::path::Path, bot_id: &str) -> Option<i64> {
+        let conn = rusqlite::Connection::open(path).expect("open");
+        conn.query_row(
+            "SELECT recommended_persona_id FROM bots WHERE id = ?1",
+            rusqlite::params![bot_id],
+            |r| r.get::<_, Option<i64>>(0),
+        )
+        .expect("query")
+    }
+
+    async fn send_post(
+        app: &axum::Router,
+        uri: &str,
+        body: &str,
+    ) -> (StatusCode, serde_json::Value) {
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(uri)
+                    .header("cookie", "__Host-yuuka-session=good")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_owned()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = resp.status();
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let j = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
+        (status, j)
+    }
+
+    #[tokio::test]
+    async fn set_public_toggles_and_detaches_recommending_bots() {
+        let (db, path) = seed_db_at();
+        insert_user(&path, "owner", "Owner");
+        let pid = insert_persona(&path, "owner", "P", "prompt", 0);
+        // このペルソナを推奨に設定した Bot（unpublish で解除されるはず）。
+        {
+            let conn = rusqlite::Connection::open(&path).unwrap();
+            conn.execute(
+                "INSERT INTO bots (id, user_id, name, recommended_persona_id) \
+                 VALUES ('b1', 'owner', 'B', ?1)",
+                rusqlite::params![pid],
+            )
+            .unwrap();
+        }
+        let repo = PersonaRepo::new(&db);
+
+        // 公開（0→1）: 是公開・Bot 推奨は維持（公開化では解除しない）。
+        assert!(repo.set_public(&scope("owner"), pid, true).await.unwrap());
+        assert!(repo.get_public(pid).await.unwrap().is_some());
+        assert_eq!(recommended(&path, "b1"), Some(pid), "公開化では推奨維持");
+
+        // 非公開化（1→0）: 非公開・**推奨 Bot から解除**。
+        assert!(repo.set_public(&scope("owner"), pid, false).await.unwrap());
+        assert!(repo.get_public(pid).await.unwrap().is_none());
+        assert_eq!(recommended(&path, "b1"), None, "非公開化で推奨解除");
+
+        // 他人は変更できない・不在も false。
+        assert!(!repo.set_public(&scope("intruder"), pid, true).await.unwrap());
+        assert!(!repo.set_public(&scope("owner"), 9999, true).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn route_publish_persona() {
+        let (db, path) = seed_db_at();
+        insert_user(&path, "u", "U"); // FakeAuth の user は "u"
+        let mine = insert_persona(&path, "u", "Mine", "p", 0);
+        let others = insert_persona(&path, "someone", "Theirs", "p2", 0);
+        let app = app_with(db);
+
+        // 公開: 200 success:true・Node 文言。
+        let (st, j) = send_post(&app, "/api/personas/publish", &format!(r#"{{"id":{mine},"isPublic":true}}"#)).await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(j["success"], serde_json::json!(true));
+        assert!(j["message"].as_str().unwrap().contains("公開しました"));
+
+        // 非公開に戻す: success:true・非公開文言。
+        let (_, j) = send_post(&app, "/api/personas/publish", &format!(r#"{{"id":{mine},"isPublic":false}}"#)).await;
+        assert!(j["message"].as_str().unwrap().contains("非公開にしました"));
+
+        // 非 bool isPublic は非公開扱い（Node 厳密 ===true）。他人のペルソナ → success:false。
+        let (st, j) = send_post(&app, "/api/personas/publish", &format!(r#"{{"id":{others},"isPublic":true}}"#)).await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(j["success"], serde_json::json!(false));
+        assert!(j["message"].as_str().unwrap().contains("所有者ではありません"));
+
+        // id 欠落 → 400。
+        let (st, j) = send_post(&app, "/api/personas/publish", r#"{"isPublic":true}"#).await;
+        assert_eq!(st, StatusCode::BAD_REQUEST);
+        assert_eq!(j["message"], serde_json::json!("id は必須です。"));
+    }
+
     #[tokio::test]
     async fn route_requires_auth() {
         let resp = app()

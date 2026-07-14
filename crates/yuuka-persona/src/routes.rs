@@ -45,6 +45,7 @@ pub fn routes() -> Router<AppState> {
         .route("/api/personas/marketplace", get(marketplace_list))
         .route("/api/personas/marketplace/{id}", get(marketplace_get))
         .route("/api/personas/import", post(import_persona))
+        .route("/api/personas/publish", post(publish_persona))
 }
 
 async fn list(
@@ -174,11 +175,7 @@ async fn import_persona(
     }: ScopedJson<ImportInput>,
 ) -> Response {
     let Some(id) = as_int_id(input.id) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({ "success": false, "message": "id は必須です。" })),
-        )
-            .into_response();
+        return missing_id();
     };
     // persona は owner=user 単位（bot_id は不使用だが共通の解決経路を通す）。
     let scope = match resolve_scope(&user.0, &db, bot_id.as_deref()).await {
@@ -215,4 +212,63 @@ fn internal_error() -> Response {
         Json(json!({ "success": false, "message": "内部エラーが発生しました。" })),
     )
         .into_response()
+}
+
+/// id が整数でない/欠落時の 400（Node `!Number.isInteger(id)` 分岐・import/publish 共通）。
+fn missing_id() -> Response {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(json!({ "success": false, "message": "id は必須です。" })),
+    )
+        .into_response()
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PublishInput {
+    #[serde(default)]
+    id: Option<Value>,
+    /// Node `ctx.body.isPublic === true`（**厳密 true のみ公開**・非 bool/欠落は非公開扱い）。
+    #[serde(default)]
+    is_public: Option<Value>,
+}
+
+/// 公開/非公開の切り替え（Node `POST /api/personas/publish`＝`updatePersona({isPublic})`）。
+/// id が整数でない → 400。所有者本人のみ更新でき、非公開化時は推奨 Bot から解除。応答は Node 文言。
+async fn publish_persona(
+    user: AuthenticatedUser,
+    State(db): State<Db>,
+    ScopedJson {
+        bot_id,
+        value: input,
+    }: ScopedJson<PublishInput>,
+) -> Response {
+    let Some(id) = as_int_id(input.id) else {
+        return missing_id();
+    };
+    // Node は厳密 `=== true`。非 bool/欠落は false（非公開）。
+    let is_public = input.is_public == Some(Value::Bool(true));
+    let scope = match resolve_scope(&user.0, &db, bot_id.as_deref()).await {
+        Ok(s) => s,
+        Err(_) => return internal_error(),
+    };
+    match PersonaRepo::new(&db).set_public(&scope, id, is_public).await {
+        Ok(ok) => {
+            let message = if ok {
+                if is_public {
+                    "ペルソナをマーケットプレイスに公開しました。"
+                } else {
+                    "ペルソナを非公開にしました。"
+                }
+            } else {
+                "ペルソナが見つからないか、所有者ではありません。"
+            };
+            (
+                StatusCode::OK,
+                Json(json!({ "success": ok, "message": message })),
+            )
+                .into_response()
+        }
+        Err(_) => internal_error(),
+    }
 }
