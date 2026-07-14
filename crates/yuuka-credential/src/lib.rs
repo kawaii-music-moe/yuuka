@@ -301,6 +301,55 @@ mod tests {
         assert!(j["deleted_service_name"].is_null());
     }
 
+    /// delete のガードは Node `!serviceName`（trim せず）パリティ: 空文字は 400「サービス名は必須です。」、
+    /// 空白のみは通って正規化後不一致で 200 {success:false} の no-op（400 にしない）。
+    #[tokio::test]
+    async fn route_delete_guard_matches_node() {
+        let (db, _path) = seed_db_at();
+        let app = app_with(db);
+
+        // 空文字 → 400 + 日本語メッセージ。
+        let empty = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/credentials/delete")
+                    .header("cookie", "__Host-yuuka-session=good")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"serviceName":""}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(empty.status(), StatusCode::BAD_REQUEST);
+        let bytes = axum::body::to_bytes(empty.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let j: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(j["message"], serde_json::json!("サービス名は必須です。"));
+
+        // 空白のみ → 200 {success:false}（no-op・400 にしない）。
+        let ws = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/credentials/delete")
+                    .header("cookie", "__Host-yuuka-session=good")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"serviceName":"   "}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(ws.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(ws.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let j: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(j["success"], serde_json::json!(false));
+    }
+
     #[tokio::test]
     async fn route_requires_auth() {
         let (db, _path) = seed_db_at();

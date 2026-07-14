@@ -178,9 +178,11 @@ async fn delete(
         value: input,
     }: ScopedJson<DeleteCredential>,
 ) -> Result<Json<Envelope<EmptyData>>, ApiError> {
-    if input.service_name.trim().is_empty() {
+    // Node は `!serviceName`（trim せず空文字のみ）で 400。空白のみは通し、正規化後に不一致となり
+    // 200 {success:false} の no-op になる（Node パリティ・メッセージも Node と一致）。
+    if input.service_name.is_empty() {
         return Err(ApiError(WebError::Validation(
-            "serviceName is required".to_owned(),
+            "サービス名は必須です。".to_owned(),
         )));
     }
     let scope = resolve_scope(&user.0, &db, bot_id.as_deref()).await?;

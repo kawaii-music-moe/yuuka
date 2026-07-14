@@ -121,6 +121,29 @@ fn arg_str(args: &Value, key: &str) -> Option<String> {
         .map(str::to_owned)
 }
 
+/// `asOptionalPassword`（空文字のみ None・**前後空白は意味を持ち得るため trim しない**・Node
+/// `credentialFunctions.asOptionalPassword` と一致）。パスワードを trim すると保存値が入力と食い違い、
+/// 後で認証できなくなる（サイレントな資格情報破損）ため、パスワード列は決して trim しない。
+fn arg_password(args: &Value, key: &str) -> Option<String> {
+    args.get(key)
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned)
+}
+
+/// url 引数を「未指定 / 指定あり（空文字＝削除）」で解釈する（Node updateCredential の
+/// `typeof args.url === "string" ? args.url : undefined` + secretService `trim() || null` パリティ）。
+/// 返り: `None` = 未指定（現行維持）・`Some(None)` = 指定あり空＝削除・`Some(Some(u))` = 新 URL。
+fn arg_url_update(args: &Value) -> Option<Option<String>> {
+    match args.get("url") {
+        Some(Value::String(s)) => {
+            let t = s.trim();
+            Some((!t.is_empty()).then(|| t.to_owned()))
+        }
+        _ => None,
+    }
+}
+
 /// DbError をツール実行エラーへ（握り潰さず Gemini へ `{success:false}` として返る・§8.4）。
 fn exec_err(e: DbError) -> ToolError {
     ToolError::Execution(e.to_string())
@@ -296,10 +319,11 @@ impl Tool for AddCredentialTool {
     }
 
     async fn call(&self, ctx: &ToolContext, args: Value) -> Result<ToolOutcome, ToolError> {
+        // password は trim しない（前後空白も有効・Node `asOptionalPassword`）。service/username は trim。
         let (Some(service), Some(username), Some(password)) = (
             arg_str(&args, "service_name"),
             arg_str(&args, "username"),
-            arg_str(&args, "password"),
+            arg_password(&args, "password"),
         ) else {
             return Ok(fail_payload(
                 "service_name・username・password は必須です。",
@@ -316,7 +340,7 @@ impl Tool for AddCredentialTool {
                 Err(outcome) => return Ok(outcome),
             };
         CredentialRepo::new(&self.db)
-            .save(&scope_of(ctx), &service, username, url, enc)
+            .save(&scope_of(ctx), &service, username.clone(), url, enc)
             .await
             .map_err(exec_err)?;
         // v5: 会話から登録した認証情報は、いま応対している（秘書）Bot 自身へ即時に利用許可する（UX 維持・
@@ -327,8 +351,9 @@ impl Tool for AddCredentialTool {
             .map_err(exec_err)?;
         Ok(ToolOutcome::from_payload(ok_payload(
             format!(
-                "「{}」の認証情報を登録しました🔐。返信にパスワードの値を含めないでください。",
-                service.to_lowercase()
+                "「{}」の認証情報を暗号化して登録しました🔐（ユーザー名: {}）。返信にパスワードの値を含めず、ユーザーにはチャット上のパスワード送信メッセージの削除を勧めてください。",
+                service.to_lowercase(),
+                username
             ),
             json!({}),
         )))
@@ -370,18 +395,22 @@ impl Tool for UpdateCredentialTool {
             return Ok(fail_payload("service_name を指定してください。"));
         };
         let username = arg_str(&args, "username");
-        let password = arg_str(&args, "password");
-        let url = arg_str(&args, "url");
-        if username.is_none() && password.is_none() && url.is_none() {
+        // password は trim しない（前後空白も有効・Node `asOptionalPassword`）。
+        let password = arg_password(&args, "password");
+        // url は「指定あり空文字＝削除」を許容する（Node は url だけ別パーサ・下記 helper）。
+        let url_arg = arg_url_update(&args);
+        if username.is_none() && password.is_none() && url_arg.is_none() {
             return Ok(fail_payload(
                 "更新する項目（username / password / url）を1つ以上指定してください。",
             ));
         }
+        // 長さ検証は指定ありの新 URL（trim 済み）を見る（削除=空/未指定はスキップ・Node と同結果）。
+        let url_for_check = url_arg.as_ref().and_then(|o| o.as_deref());
         if let Some(msg) = check_field_lengths(
             &service,
             username.as_deref(),
             password.as_deref(),
-            url.as_deref(),
+            url_for_check,
         ) {
             return Ok(fail_payload(msg));
         }
@@ -395,12 +424,15 @@ impl Tool for UpdateCredentialTool {
                 service.trim().to_lowercase()
             )));
         };
-        // 部分マージ: 指定項目のみ差し替え。password 指定時のみ再暗号化。
+        // 部分マージ: 指定項目のみ差し替え。password 指定時のみ再暗号化。url は指定あり空文字で削除。
         let username_provided = username.is_some();
         let password_provided = password.is_some();
-        let url_provided = url.is_some();
+        let url_provided = url_arg.is_some();
         let new_user = username.unwrap_or(cur_user);
-        let new_url = if url_provided { url } else { cur_url };
+        let new_url = match url_arg {
+            Some(inner) => inner, // 指定あり: 新 URL（Some）または削除（None）。
+            None => cur_url,      // 未指定: 現行維持。
+        };
         let enc = if let Some(pw) = &password {
             match encrypt_password(&self.db, &self.crypto, ctx.user_id.as_str(), pw).await {
                 Ok(e) => e,
@@ -697,6 +729,29 @@ mod tests {
                 .payload["success"],
             false
         );
+
+        // url="" は URL 削除（Node updateCredential パリティ・空文字＝削除の意図）。
+        let out = update
+            .call(&ctx("userA"), json!({"service_name": "github", "url": ""}))
+            .await
+            .unwrap();
+        assert_eq!(out.payload["success"], true);
+        assert!(out.payload["message"].as_str().unwrap().contains("URL"));
+        let out = list.call(&ctx("userA"), json!({})).await.unwrap();
+        let services = out.payload["services"].as_array().unwrap();
+        assert_eq!(services[0]["service_name"], "github");
+        assert!(services[0]["url"].is_null(), "url='' で URL が削除される");
+
+        // 空白のみパスワードも受理される（trim しない・Node asOptionalPassword）。arg_str なら
+        // 空扱いで弾かれていた退行を防ぐ。
+        let out = add
+            .call(
+                &ctx("userA"),
+                json!({"service_name": "spaces", "username": "u", "password": "   "}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(out.payload["success"], true);
 
         // crypto 未設定なら add は縮退（保存不可）。
         let (db2, _p2) = seed_db_at();
