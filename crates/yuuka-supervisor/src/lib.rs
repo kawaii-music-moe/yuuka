@@ -53,7 +53,8 @@ pub fn build_app(
         .merge(yuuka_playbook::routes())
         .merge(yuuka_persona::routes())
         .merge(yuuka_briefing::routes())
-        .merge(yuuka_auth::device_routes());
+        .merge(yuuka_auth::device_routes())
+        .merge(yuuka_orchestrator::member_request_routes());
     let routes = match dist_dir {
         Some(dir) => mount_static(routes, dir),
         None => routes,

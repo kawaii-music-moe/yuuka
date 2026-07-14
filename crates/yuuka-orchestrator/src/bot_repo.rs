@@ -454,6 +454,8 @@ pub async fn persona_prompt_by_id(db: &Db, persona_id: i64) -> Result<Option<Str
 pub struct SubmitResult {
     pub ok: bool,
     pub message: String,
+    /// 失敗理由（Web-API の HTTP status 分岐用・Node `SubmitResult.code`）。ok 時は `None`。
+    pub code: Option<SubmitDeny>,
     /// 承認 DM の宛先（Bot オーナー・Node `sendMemberRequestDM` の ownerId）。ok 時のみ。
     pub owner_id: Option<String>,
     /// Bot 表示名（DM 本文）。ok 時のみ。
@@ -462,11 +464,21 @@ pub struct SubmitResult {
     pub request_id: Option<i64>,
 }
 
+/// 利用申請 submit の失敗理由（Node `SubmitResult.code`）。`BotNotFound` のみ 404・他は 409。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SubmitDeny {
+    BotNotFound,
+    IsOwner,
+    AlreadyMember,
+    AlreadyPending,
+}
+
 /// 失敗結果（DM 情報なし）。
-fn deny_submit(message: &str) -> SubmitResult {
+fn deny_submit(code: SubmitDeny, message: &str) -> SubmitResult {
     SubmitResult {
         ok: false,
         message: message.to_owned(),
+        code: Some(code),
         owner_id: None,
         bot_name: None,
         request_id: None,
@@ -478,6 +490,7 @@ fn ok_submit(owner_id: String, bot_name: String, request_id: i64) -> SubmitResul
     SubmitResult {
         ok: true,
         message: String::new(),
+        code: None,
         owner_id: Some(owner_id),
         bot_name: Some(bot_name),
         request_id: Some(request_id),
@@ -513,10 +526,16 @@ pub async fn submit_member_request(
                 .optional()
                 .map_err(map_sqlite)?;
             let Some((owner, bot_name)) = bot.filter(|_| bot_id != "system_default") else {
-                return Ok(deny_submit("対象のBotが見つかりません。"));
+                return Ok(deny_submit(
+                    SubmitDeny::BotNotFound,
+                    "対象のBotが見つかりません。",
+                ));
             };
             if owner == applicant {
-                return Ok(deny_submit("あなたはこのBotのオーナーです（申請は不要です）。"));
+                return Ok(deny_submit(
+                    SubmitDeny::IsOwner,
+                    "あなたはこのBotのオーナーです（申請は不要です）。",
+                ));
             }
             // 既にメンバー。
             let is_member = tx
@@ -529,7 +548,10 @@ pub async fn submit_member_request(
                 .map_err(map_sqlite)?
                 .is_some();
             if is_member {
-                return Ok(deny_submit("あなたは既にこのギルドの利用メンバーです。"));
+                return Ok(deny_submit(
+                    SubmitDeny::AlreadyMember,
+                    "あなたは既にこのギルドの利用メンバーです。",
+                ));
             }
             // 既存申請（pending は二重申請不可・却下/承認済みは pending へ戻す）。
             let existing: Option<(i64, String)> = tx
@@ -547,9 +569,10 @@ pub async fn submit_member_request(
                 .filter(|n| !n.is_empty())
                 .map(|n| n.chars().take(500).collect::<String>());
             match existing {
-                Some((_, status)) if status == "pending" => {
-                    Ok(deny_submit("既に申請済みです。オーナーの承認をお待ちください。"))
-                }
+                Some((_, status)) if status == "pending" => Ok(deny_submit(
+                    SubmitDeny::AlreadyPending,
+                    "既に申請済みです。オーナーの承認をお待ちください。",
+                )),
                 Some((id, _)) => {
                     tx.execute(
                         "UPDATE bot_member_requests SET status = 'pending', note = ?1, \
@@ -577,10 +600,20 @@ pub async fn submit_member_request(
 pub struct DecideResult {
     pub ok: bool,
     pub message: String,
+    /// 失敗理由（Web-API の HTTP status 分岐用・Node `DecisionResult.code`）。ok 時は `None`。
+    pub code: Option<DecideDeny>,
     pub status: Option<MemberDecision>,
     pub bot_name: Option<String>,
     /// 申請者（結果 DM の宛先・Node `sendMemberDecisionDM` の applicantId）。ok 時のみ。
     pub applicant_id: Option<String>,
+}
+
+/// 承認/却下の失敗理由（Node `DecisionResult.code`）。`NotFound`=404・`Forbidden`=403・`AlreadyDecided`=409。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DecideDeny {
+    NotFound,
+    Forbidden,
+    AlreadyDecided,
 }
 
 /// オーナー/Admin による申請の承認・却下（Node `decideMemberRequestById` + `decideMemberRequest`）。
@@ -608,7 +641,7 @@ pub async fn decide_member_request(
                 .optional()
                 .map_err(map_sqlite)?;
             let Some((bot_id, guild_id, applicant, status)) = req else {
-                return Ok(deny_decide("申請が見つかりません。"));
+                return Ok(deny_decide(DecideDeny::NotFound, "申請が見つかりません。"));
             };
             // Bot と owner。
             let bot: Option<(String, String)> = tx
@@ -620,7 +653,7 @@ pub async fn decide_member_request(
                 .optional()
                 .map_err(map_sqlite)?;
             let Some((owner, bot_name)) = bot else {
-                return Ok(deny_decide("Botが見つかりません。"));
+                return Ok(deny_decide(DecideDeny::NotFound, "Botが見つかりません。"));
             };
             // owner or admin のみ。
             let is_admin = tx
@@ -633,10 +666,16 @@ pub async fn decide_member_request(
                 .map_err(map_sqlite)?
                 .is_some();
             if owner != actor && !is_admin {
-                return Ok(deny_decide("このBotのオーナーのみが承認/却下できます。"));
+                return Ok(deny_decide(
+                    DecideDeny::Forbidden,
+                    "このBotのオーナーのみが承認/却下できます。",
+                ));
             }
             if status != "pending" {
-                return Ok(deny_decide("この申請は既に処理済みです。"));
+                return Ok(deny_decide(
+                    DecideDeny::AlreadyDecided,
+                    "この申請は既に処理済みです。",
+                ));
             }
             let status_str = match decision {
                 MemberDecision::Approved => "approved",
@@ -650,7 +689,10 @@ pub async fn decide_member_request(
                 )
                 .map_err(map_sqlite)?;
             if moved == 0 {
-                return Ok(deny_decide("この申請は既に処理済みです。"));
+                return Ok(deny_decide(
+                    DecideDeny::AlreadyDecided,
+                    "この申請は既に処理済みです。",
+                ));
             }
             if decision == MemberDecision::Approved {
                 tx.execute(
@@ -663,6 +705,7 @@ pub async fn decide_member_request(
             Ok(DecideResult {
                 ok: true,
                 message: String::new(),
+                code: None,
                 status: Some(decision),
                 bot_name: Some(bot_name),
                 applicant_id: Some(applicant),
@@ -672,14 +715,156 @@ pub async fn decide_member_request(
 }
 
 /// 承認/却下の否定結果を組む短縮ヘルパ。
-fn deny_decide(message: &str) -> DecideResult {
+fn deny_decide(code: DecideDeny, message: &str) -> DecideResult {
     DecideResult {
         ok: false,
         message: message.to_owned(),
+        code: Some(code),
         status: None,
         bot_name: None,
         applicant_id: None,
     }
+}
+
+/// `bot_member_requests` 1 行（Web 管理画面の一覧・Node `BotMemberRequestRecord` 全列）。
+#[derive(Debug, Clone)]
+pub struct MemberRequestRow {
+    pub id: i64,
+    pub bot_id: String,
+    pub guild_id: String,
+    pub user_id: String,
+    pub status: String,
+    pub note: Option<String>,
+    pub decided_by: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+fn row_to_member_request(row: &rusqlite::Row) -> rusqlite::Result<MemberRequestRow> {
+    Ok(MemberRequestRow {
+        id: row.get("id")?,
+        bot_id: row.get("bot_id")?,
+        guild_id: row.get("guild_id")?,
+        user_id: row.get("user_id")?,
+        status: row.get("status")?,
+        note: row.get("note")?,
+        decided_by: row.get("decided_by")?,
+        created_at: row.get("created_at")?,
+        updated_at: row.get("updated_at")?,
+    })
+}
+
+/// 申請 1 件を取得する（監査 target 生成用・Node `getMemberRequestById`）。
+///
+/// # Errors
+/// 読み取り失敗時 [`DbError`]。
+pub async fn get_member_request(db: &Db, id: i64) -> Result<Option<MemberRequestRow>, DbError> {
+    db.read
+        .read(move |conn| {
+            conn.query_row(
+                "SELECT * FROM bot_member_requests WHERE id = ?1",
+                params![id],
+                row_to_member_request,
+            )
+            .optional()
+            .map_err(map_sqlite)
+        })
+        .await
+}
+
+/// 申請者本人の申請状況一覧（Node `listMemberRequestsByUser`・created_at DESC）。
+///
+/// # Errors
+/// 読み取り失敗時 [`DbError`]。
+pub async fn list_member_requests_by_user(
+    db: &Db,
+    user_id: &str,
+) -> Result<Vec<MemberRequestRow>, DbError> {
+    let uid = user_id.to_owned();
+    db.read
+        .read(move |conn| {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT * FROM bot_member_requests WHERE user_id = ?1 ORDER BY created_at DESC",
+                )
+                .map_err(map_sqlite)?;
+            let rows = stmt
+                .query_map(params![uid], row_to_member_request)
+                .map_err(map_sqlite)?;
+            let mut out = Vec::new();
+            for row in rows {
+                out.push(row.map_err(map_sqlite)?);
+            }
+            Ok(out)
+        })
+        .await
+}
+
+/// 指定 Bot 宛の申請一覧（owner 用・`status` 指定で絞り込み・Node `listMemberRequestsForBot`・created_at DESC）。
+///
+/// # Errors
+/// 読み取り失敗時 [`DbError`]。
+pub async fn list_member_requests_for_bot(
+    db: &Db,
+    bot_id: &str,
+    status: Option<&str>,
+) -> Result<Vec<MemberRequestRow>, DbError> {
+    let (bid, st) = (bot_id.to_owned(), status.map(str::to_owned));
+    db.read
+        .read(move |conn| {
+            let mut out = Vec::new();
+            if let Some(st) = st {
+                let mut stmt = conn
+                    .prepare(
+                        "SELECT * FROM bot_member_requests WHERE bot_id = ?1 AND status = ?2 \
+                         ORDER BY created_at DESC",
+                    )
+                    .map_err(map_sqlite)?;
+                let rows = stmt
+                    .query_map(params![bid, st], row_to_member_request)
+                    .map_err(map_sqlite)?;
+                for row in rows {
+                    out.push(row.map_err(map_sqlite)?);
+                }
+            } else {
+                let mut stmt = conn
+                    .prepare(
+                        "SELECT * FROM bot_member_requests WHERE bot_id = ?1 ORDER BY created_at DESC",
+                    )
+                    .map_err(map_sqlite)?;
+                let rows = stmt
+                    .query_map(params![bid], row_to_member_request)
+                    .map_err(map_sqlite)?;
+                for row in rows {
+                    out.push(row.map_err(map_sqlite)?);
+                }
+            }
+            Ok(out)
+        })
+        .await
+}
+
+/// ユーザーが所有する Bot の `(id, name)` 一覧（Node `listBotsOwnedBy`・created_at ASC）。
+///
+/// # Errors
+/// 読み取り失敗時 [`DbError`]。
+pub async fn list_bots_owned_by(db: &Db, user_id: &str) -> Result<Vec<(String, String)>, DbError> {
+    let uid = user_id.to_owned();
+    db.read
+        .read(move |conn| {
+            let mut stmt = conn
+                .prepare("SELECT id, name FROM bots WHERE user_id = ?1 ORDER BY created_at ASC")
+                .map_err(map_sqlite)?;
+            let rows = stmt
+                .query_map(params![uid], |r| Ok((r.get(0)?, r.get(1)?)))
+                .map_err(map_sqlite)?;
+            let mut out = Vec::new();
+            for row in rows {
+                out.push(row.map_err(map_sqlite)?);
+            }
+            Ok(out)
+        })
+        .await
 }
 
 /// 共有招待を引く（Node `getShareById`）。

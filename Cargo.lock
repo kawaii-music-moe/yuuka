@@ -3359,20 +3359,25 @@ name = "yuuka-orchestrator"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "axum",
  "base64",
  "chrono",
  "rusqlite",
  "secrecy",
+ "serde",
  "serde_json",
  "tempfile",
  "tokio",
+ "tower",
  "tracing",
+ "yuuka-auth",
  "yuuka-core",
  "yuuka-crypto",
  "yuuka-db",
  "yuuka-discord",
  "yuuka-gemini",
  "yuuka-tools",
+ "yuuka-types",
  "yuuka-web",
 ]
 
