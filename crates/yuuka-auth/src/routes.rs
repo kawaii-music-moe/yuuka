@@ -513,8 +513,9 @@ fn ttl_max_age(ttl_secs: u64) -> i64 {
 /// `Set-Cookie` ヘッダ値を作る（Node `setSessionCookie` パリティ）。
 ///
 /// HTTPS 本番は `__Host-yuuka-session` + `Secure`、開発は `yuuka-session`。`max_age=0` は削除。
-/// トークンは base64url（予約文字なし）なので `HeaderValue` 化は失敗しない。
-fn build_session_cookie(https: bool, token: &str, max_age: i64) -> HeaderValue {
+/// トークンは base64url（予約文字なし）なので `HeaderValue` 化は失敗しない。設定系ルート
+/// （プロフィール/パスワード変更）のセッション再発行でも再利用するため公開する。
+pub fn build_session_cookie(https: bool, token: &str, max_age: i64) -> HeaderValue {
     let name = if https { COOKIE_HOST } else { COOKIE_DEV };
     let secure = if https { "; Secure" } else { "" };
     let cookie = format!("{name}={token}; Path=/; HttpOnly{secure}; SameSite=Lax; Max-Age={max_age}");
@@ -589,6 +590,19 @@ impl FromRequestParts<AppState> for ClientIp {
 struct RawSessionToken(Option<String>);
 
 impl FromRequestParts<AppState> for RawSessionToken {
+    type Rejection = Infallible;
+
+    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Self::Rejection> {
+        Ok(Self(extract_cookie_token(parts, state.config.https)))
+    }
+}
+
+/// 現在のセッショントークン（Cookie から抽出・失敗しない・[`RawSessionToken`] の公開版）。
+///
+/// 設定系ルート（プロフィール/パスワード変更）が旧セッションを失効させて再発行するために使う。
+pub struct SessionCookieToken(pub Option<String>);
+
+impl FromRequestParts<AppState> for SessionCookieToken {
     type Rejection = Infallible;
 
     async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Self::Rejection> {

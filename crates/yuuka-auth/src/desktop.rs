@@ -95,6 +95,27 @@ fn parse_role(raw: &str) -> Role {
     }
 }
 
+/// あるユーザーの全デスクトップトークンを物理削除する（Node `revokeAllDesktopTokensForUser`）。
+///
+/// パスワード変更時に全端末を強制再ログインさせるために呼ぶ（`DELETE FROM desktop_tokens
+/// WHERE user_id = ?`）。
+///
+/// # Errors
+/// 書き込み失敗時 [`DbError`](yuuka_core::DbError)。
+pub async fn revoke_all_for_user(db: &Db, user_id: &str) -> Result<(), yuuka_core::DbError> {
+    let user_id = user_id.to_owned();
+    db.writer
+        .transaction(move |tx| {
+            tx.execute(
+                "DELETE FROM desktop_tokens WHERE user_id = ?1",
+                params![user_id],
+            )
+            .map_err(map_sqlite)?;
+            Ok(())
+        })
+        .await
+}
+
 #[cfg(test)]
 mod tests {
     use super::verify;

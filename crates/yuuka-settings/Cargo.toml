@@ -1,0 +1,29 @@
+[package]
+name = "yuuka-settings"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "yuuka settings ドメイン（ユーザー設定 API: profile/password/gemini/user/backup/delete-account）— Node settingsRoutes.ts パリティ"
+
+[dependencies]
+yuuka-core.workspace = true
+yuuka-crypto.workspace = true
+yuuka-db.workspace = true
+yuuka-types.workspace = true
+yuuka-web.workspace = true
+yuuka-auth.workspace = true
+yuuka-admin.workspace = true
+axum.workspace = true
+rusqlite.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+tower = { workspace = true, features = ["util"] }
+tempfile = "3"
+
+[lints]
+workspace = true

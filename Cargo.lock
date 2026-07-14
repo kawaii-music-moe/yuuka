@@ -3462,6 +3462,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "yuuka-settings"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tower",
+ "yuuka-admin",
+ "yuuka-auth",
+ "yuuka-core",
+ "yuuka-crypto",
+ "yuuka-db",
+ "yuuka-types",
+ "yuuka-web",
+]
+
+[[package]]
 name = "yuuka-supervisor"
 version = "0.1.0"
 dependencies = [
@@ -3498,6 +3518,7 @@ dependencies = [
  "yuuka-reminder",
  "yuuka-schedule",
  "yuuka-services",
+ "yuuka-settings",
  "yuuka-timeline",
  "yuuka-todo",
  "yuuka-tools",

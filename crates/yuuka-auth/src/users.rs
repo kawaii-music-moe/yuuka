@@ -101,7 +101,7 @@ pub async fn count_users(db: &Db) -> Result<i64, DbError> {
 ///
 /// # Errors
 /// bcrypt 失敗・join 失敗時 [`DbError::Operation`]。
-async fn hash_password(password: String) -> Result<String, DbError> {
+pub async fn hash_password(password: String) -> Result<String, DbError> {
     tokio::task::spawn_blocking(move || bcrypt::hash(password, BCRYPT_COST))
         .await
         .map_err(|e| DbError::Operation(format!("bcrypt join: {e}")))?

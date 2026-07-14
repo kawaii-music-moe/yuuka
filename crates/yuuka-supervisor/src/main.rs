@@ -126,14 +126,25 @@ async fn run() -> Result<(), String> {
     // 管理ルータ（/api/admin/*）。セッション一括失効は auth と同一ストアを共有（ロール変更/削除の
     // 即時反映）、デフォルト Bot トークン暗号化は同じ crypto を使う。runtime 効果（Bot 再起動/停止/
     // 稼働状態）は Discord gateway 未配線のため NullBotRuntime へ縮退する（DB 効果は常に完全に働く）。
+    let bot_runtime: Arc<dyn yuuka_admin::BotRuntime> = Arc::new(yuuka_admin::NullBotRuntime);
     let admin_runtime = Arc::new(yuuka_admin::AdminRuntime::new(
         sessions.clone(),
         crypto.clone(),
-        Arc::new(yuuka_admin::NullBotRuntime),
+        bot_runtime.clone(),
         cfg.privacy_policy_url.clone(),
         cfg.terms_url.clone(),
     ));
     let admin_routes = yuuka_admin::routes(admin_runtime);
+
+    // 設定ルータ（/api/settings/*）。セッション再発行/一括失効は auth と同一ストア、Gemini キー暗号化は
+    // 同じ crypto、所有 Bot 停止は admin と同一の BotRuntime シームを共有する。
+    let settings_runtime = Arc::new(yuuka_settings::SettingsRuntime::new(
+        sessions.clone(),
+        cfg.session_ttl_days,
+        crypto.clone(),
+        bot_runtime.clone(),
+    ));
+    let settings_routes = yuuka_settings::routes(settings_runtime);
 
     let auth_runtime = Arc::new(AuthRuntime::new(
         sessions,
@@ -158,6 +169,7 @@ async fn run() -> Result<(), String> {
         state,
         auth_routes,
         admin_routes,
+        settings_routes,
         ws_routes: chat_ws_routes,
         addr,
         dist_dir,
@@ -374,6 +386,8 @@ struct WebService {
     auth_routes: Router<AppState>,
     /// 管理ルータ（`AdminRuntime` を `Extension` で内包済み・`/api/admin/*`）。
     admin_routes: Router<AppState>,
+    /// 設定ルータ（`SettingsRuntime` を `Extension` で内包済み・`/api/settings/*`）。
+    settings_routes: Router<AppState>,
     /// 会話 WS ルータ（`ChatEngine` を `Extension` で内包済み・`/ws/chat`）。
     ws_routes: Router<AppState>,
     addr: SocketAddr,
@@ -391,6 +405,7 @@ impl SupervisedService for WebService {
             self.state.clone(),
             self.auth_routes.clone(),
             self.admin_routes.clone(),
+            self.settings_routes.clone(),
             self.ws_routes.clone(),
             self.dist_dir.as_deref(),
         );

@@ -21,10 +21,11 @@ pub mod routes;
 pub mod token;
 pub mod users;
 
+pub use desktop::revoke_all_for_user as revoke_all_desktop_tokens;
 pub use pending::{
     NullRegistrationDm, PendingRegistration, PendingStore, RegistrationDm, VerifyResult,
 };
-pub use routes::{routes, AuthRuntime};
+pub use routes::{build_session_cookie, routes, AuthRuntime, SessionCookieToken};
 pub use session::SessionStore;
 
 use async_trait::async_trait;
