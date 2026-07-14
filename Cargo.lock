@@ -3473,6 +3473,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "yuuka-richcontent"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "serde_json",
+ "tokio",
+ "yuuka-core",
+]
+
+[[package]]
 name = "yuuka-schedule"
 version = "0.1.0"
 dependencies = [
@@ -3572,6 +3582,7 @@ dependencies = [
  "yuuka-personal",
  "yuuka-playbook",
  "yuuka-reminder",
+ "yuuka-richcontent",
  "yuuka-schedule",
  "yuuka-services",
  "yuuka-settings",

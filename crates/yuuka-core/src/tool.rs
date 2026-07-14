@@ -175,6 +175,28 @@ impl ToolOutcome {
 pub enum ResponsePart {
     /// base64 埋め込みデータ（`inlineData` 相当）。
     InlineData { mime_type: String, data: String },
+    /// リッチ返信の埋め込みカード（Node `ctx.embeds`・`showRichContent`/`sendChart` 相当）。
+    /// reply 層（Discord = twilight `Embed` / desktop = APIEmbed JSON）で描画される。
+    Embed(EmbedPart),
+}
+
+/// リッチ返信の埋め込みカード（provider 中立）。Node `buildRichContentEmbed` の出力に対応する。
+#[derive(Debug, Clone)]
+pub struct EmbedPart {
+    pub title: Option<String>,
+    pub description: Option<String>,
+    /// `0xRRGGBB`。
+    pub color: u32,
+    pub fields: Vec<EmbedFieldPart>,
+    pub footer: Option<String>,
+}
+
+/// 埋め込みフィールド（`{name, value, inline}`）。
+#[derive(Debug, Clone)]
+pub struct EmbedFieldPart {
+    pub name: String,
+    pub value: String,
+    pub inline: bool,
 }
 
 /// Gemini `FunctionDeclaration.name` 制約（`[a-zA-Z0-9_:.-]`・1..=128 文字）を

@@ -18,8 +18,8 @@ use yuuka_core::{
 };
 use yuuka_crypto::SystemCrypto;
 use yuuka_discord::{
-    BotStatus, FileAttachment, IncomingChat, InlineMedia, Speaker, StatusSink, TurnDelivery,
-    TurnError, TurnProcessor, TurnReply,
+    BotStatus, EmbedField, FileAttachment, IncomingChat, InlineMedia, RichEmbed, Speaker,
+    StatusSink, TurnDelivery, TurnError, TurnProcessor, TurnReply,
 };
 use yuuka_gemini::{
     run_function_calling_loop, Content, GeminiClient, GenerateBackend, LoopOptions, Part, Role,
@@ -309,6 +309,7 @@ impl ChatEngine {
 
         Ok(TurnReply {
             text: reply_text,
+            embeds: rich_parts_to_embeds(&result.rich_parts),
             files: rich_parts_to_files(&result.rich_parts),
             ..TurnReply::default()
         })
@@ -548,6 +549,7 @@ impl ChatEngine {
 
         Ok(TurnReply {
             text: reply_text,
+            embeds: rich_parts_to_embeds(&result.rich_parts),
             files: rich_parts_to_files(&result.rich_parts),
             ..TurnReply::default()
         })
@@ -830,6 +832,32 @@ fn status_bridge(sink: &StatusSink) -> StatusCb {
     })
 }
 
+/// ツールが積んだ [`ResponsePart::Embed`]（`showRichContent`/`sendChart`）を provider 中立
+/// [`RichEmbed`] へ写像する（reply 層で Discord=twilight / desktop=APIEmbed JSON へ描画）。
+fn rich_parts_to_embeds(parts: &[ResponsePart]) -> Vec<RichEmbed> {
+    parts
+        .iter()
+        .filter_map(|p| match p {
+            ResponsePart::Embed(e) => Some(RichEmbed {
+                title: e.title.clone(),
+                description: e.description.clone(),
+                color: Some(e.color),
+                fields: e
+                    .fields
+                    .iter()
+                    .map(|f| EmbedField {
+                        name: f.name.clone(),
+                        value: f.value.clone(),
+                        inline: f.inline,
+                    })
+                    .collect(),
+                footer: e.footer.clone(),
+            }),
+            _ => None,
+        })
+        .collect()
+}
+
 /// ツール生成メディア（`rich_parts`）を [`FileAttachment`] へ写像する（base64 デコード）。
 fn rich_parts_to_files(parts: &[ResponsePart]) -> Vec<FileAttachment> {
     parts
@@ -979,5 +1007,35 @@ mod tests {
                 None
             );
         }
+    }
+
+    /// `ResponsePart::Embed`（showRichContent）→ discord 中立 `RichEmbed` の写像を凍結する。
+    #[test]
+    fn rich_parts_to_embeds_maps_embed_part() {
+        let parts = vec![
+            ResponsePart::InlineData {
+                mime_type: "image/png".to_owned(),
+                data: "AAAA".to_owned(),
+            },
+            ResponsePart::Embed(yuuka_core::EmbedPart {
+                title: Some("天気".to_owned()),
+                description: Some("晴れ".to_owned()),
+                color: 0x00b0f4,
+                fields: vec![yuuka_core::EmbedFieldPart {
+                    name: "最高".to_owned(),
+                    value: "30".to_owned(),
+                    inline: true,
+                }],
+                footer: Some("気象庁".to_owned()),
+            }),
+        ];
+        let embeds = rich_parts_to_embeds(&parts);
+        // InlineData は無視され Embed のみ写像される。
+        assert_eq!(embeds.len(), 1);
+        assert_eq!(embeds[0].title.as_deref(), Some("天気"));
+        assert_eq!(embeds[0].color, Some(0x00b0f4));
+        assert_eq!(embeds[0].fields.len(), 1);
+        assert!(embeds[0].fields[0].inline);
+        assert_eq!(embeds[0].footer.as_deref(), Some("気象庁"));
     }
 }

@@ -21,8 +21,8 @@ pub use error::{
 pub use ids::{BotId, GuildId, UserId};
 pub use scope::{CronScan, CrossUserAccess, ScopedRepo, UserScope};
 pub use tool::{
-    CapabilitySet, FunctionDeclaration, ResponsePart, Tool, ToolContext, ToolExposure, ToolName,
-    ToolOutcome, ToolProvider, TurnMode,
+    CapabilitySet, EmbedFieldPart, EmbedPart, FunctionDeclaration, ResponsePart, Tool, ToolContext,
+    ToolExposure, ToolName, ToolOutcome, ToolProvider, TurnMode,
 };
 
 #[cfg(test)]

@@ -64,6 +64,8 @@ fn all_domain_tools(
     all.extend(yuuka_briefing::tools(db.clone())?);
     // 会話ログ要約（秘書経路・memory 能力）。
     all.extend(yuuka_conversation::tools(db.clone())?);
+    // リッチ返信 Embed（core・秘書/汎用モード両経路で常時露出・db 非依存）。
+    all.extend(yuuka_richcontent::tools()?);
     // persona はツール関数を持たない（web 管理）。
     Ok(all)
 }

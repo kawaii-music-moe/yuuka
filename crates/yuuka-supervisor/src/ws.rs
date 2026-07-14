@@ -23,7 +23,9 @@ use base64::Engine as _;
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
-use yuuka_discord::{BotStatus, FileAttachment, IncomingChat, InlineMedia, StatusSink, TurnReply};
+use yuuka_discord::{
+    BotStatus, FileAttachment, IncomingChat, InlineMedia, RichEmbed, StatusSink, TurnReply,
+};
 use yuuka_orchestrator::ChatEngine;
 use yuuka_types::SessionUser;
 use yuuka_web::{has_bot_access, AppState, BearerUser, Db};
@@ -326,17 +328,55 @@ fn status_sink(tx: mpsc::UnboundedSender<Message>) -> StatusSink {
     })
 }
 
-/// [`TurnReply`] を `done` フレームへ写像する（files を base64 化・embeds/components は現状空）。
+/// [`TurnReply`] を `done` フレームへ写像する（files を base64 化・embeds は APIEmbed JSON へ・
+/// components は現状空）。
 fn done_frame(reply: TurnReply) -> ServerFrame<'static> {
+    let embeds = reply.embeds.iter().map(rich_embed_to_json).collect();
     let files = reply.files.into_iter().map(to_file_payload).collect();
     ServerFrame::Done {
         message_id: random_message_id(),
         text: reply.text,
-        embeds: Vec::new(),
+        embeds,
         files,
         components: Vec::new(),
         deferred: false,
     }
+}
+
+/// provider 中立 [`RichEmbed`] を discord.js `EmbedBuilder.toJSON()`（APIEmbed）形の JSON へ写像する。
+/// desktop クライアント（`clients/desktop/src/model.rs` の `Embed`）が `title/description/color/
+/// fields/footer` を読む。`color` は 10 進 RGB 整数（serde が u32 を数値直列化）。
+fn rich_embed_to_json(e: &RichEmbed) -> serde_json::Value {
+    let mut obj = serde_json::Map::new();
+    if let Some(title) = &e.title {
+        obj.insert("title".to_owned(), serde_json::Value::String(title.clone()));
+    }
+    if let Some(desc) = &e.description {
+        obj.insert(
+            "description".to_owned(),
+            serde_json::Value::String(desc.clone()),
+        );
+    }
+    if let Some(color) = e.color {
+        obj.insert("color".to_owned(), serde_json::json!(color));
+    }
+    if !e.fields.is_empty() {
+        let fields: Vec<serde_json::Value> = e
+            .fields
+            .iter()
+            .map(|f| {
+                serde_json::json!({ "name": f.name, "value": f.value, "inline": f.inline })
+            })
+            .collect();
+        obj.insert("fields".to_owned(), serde_json::Value::Array(fields));
+    }
+    if let Some(footer) = &e.footer {
+        obj.insert(
+            "footer".to_owned(),
+            serde_json::json!({ "text": footer }),
+        );
+    }
+    serde_json::Value::Object(obj)
 }
 
 fn err_frame(code: &'static str, message: impl Into<String>) -> ServerFrame<'static> {
@@ -499,6 +539,44 @@ mod tests {
         assert_eq!(d["messageId"], "m1");
         assert_eq!(d["deferred"], false);
         assert!(d["files"].is_array());
+    }
+
+    #[test]
+    fn rich_embed_to_json_matches_apiembed_shape() {
+        use yuuka_discord::{EmbedField, RichEmbed};
+        let full = RichEmbed {
+            title: Some("天気".to_owned()),
+            description: Some("晴れ".to_owned()),
+            color: Some(0x00b0f4),
+            fields: vec![EmbedField {
+                name: "最高".to_owned(),
+                value: "30".to_owned(),
+                inline: true,
+            }],
+            footer: Some("気象庁".to_owned()),
+        };
+        let v = super::rich_embed_to_json(&full);
+        assert_eq!(v["title"], "天気");
+        assert_eq!(v["description"], "晴れ");
+        assert_eq!(v["color"].as_u64(), Some(0x00b0f4)); // 10 進 RGB 整数。
+        assert_eq!(v["fields"][0]["name"], "最高");
+        assert_eq!(v["fields"][0]["inline"], true);
+        assert_eq!(v["footer"]["text"], "気象庁");
+
+        // 省略フィールドはキー自体を出さない（discord.js APIEmbed 準拠）。
+        let minimal = RichEmbed {
+            title: Some("t".to_owned()),
+            description: None,
+            color: None,
+            fields: vec![],
+            footer: None,
+        };
+        let v = super::rich_embed_to_json(&minimal);
+        assert_eq!(v["title"], "t");
+        assert!(v.get("description").is_none());
+        assert!(v.get("color").is_none());
+        assert!(v.get("fields").is_none());
+        assert!(v.get("footer").is_none());
     }
 
     #[test]
