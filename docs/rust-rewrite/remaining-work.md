@@ -1,6 +1,6 @@
 # Rust 移行 — 残作業ロードマップ（本番投入までの ToDo 全集）
 
-- 最終更新: 2026-07-14（**P2-A/P2-B 5 増分セッション**: admin 15 + settings 6 Web-API（新規 `yuuka-admin`/`yuuka-settings`）+ **todo ツール 4 本 + todo タグ/ガイド 3 本 + finance ツール 9 本**を実装 + 敵対的パリティレビューで確定 0 HIGH。全ゲート緑 — build ✅ / clippy -D ✅ / **test 426** ✅ / deny exit0 ✅・新規依存なし。ルート 80/152・ツール 43/87） 
+- 最終更新: 2026-07-14（**P2-A/P2-B 6 増分セッション**: admin 15 + settings 6 Web-API（新規 `yuuka-admin`/`yuuka-settings`）+ **todo ツール 4 本 + todo タグ/ガイド 3 本 + finance ツール 9 本**を実装 + 敵対的パリティレビューで確定 0 HIGH。全ゲート緑 — build ✅ / clippy -D ✅ / **test 426** ✅ / deny exit0 ✅・新規依存なし。ルート 80/152・ツール 43/87） 
 - 対象ブランチ: `feature/rust-rewrite`（未 push・HEAD=`b77506d` の上に未コミット差分）
 - git HEAD: `b77506d`（P2 ドメイン Web-API 拡張）+ 本セッションの縮退シーム解消差分（未コミット）
 - 前提資料: [review-2026-07-06-fix-policy.md](review-2026-07-06-fix-policy.md)（修正方針の唯一の基準）・[review-2026-07-09-batch4-6.md](review-2026-07-09-batch4-6.md)・[PLAN.md](PLAN.md) §11（移行ロードマップ）
