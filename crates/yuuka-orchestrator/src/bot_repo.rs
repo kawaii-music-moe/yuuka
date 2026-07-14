@@ -574,6 +574,288 @@ pub async fn is_any_role_allowed(
         .await
 }
 
+// ─── ギルド常駐アシスタントの許可リスト管理（Node `botAttributesRepo`・Web 管理 UI） ──
+
+/// `bot_guilds` 1 行（応答許可ギルド）。
+#[derive(Debug, Clone)]
+pub struct BotGuildRow {
+    pub bot_id: String,
+    pub guild_id: String,
+    pub created_at: String,
+}
+
+/// `bot_members` 1 行（利用メンバー）。
+#[derive(Debug, Clone)]
+pub struct BotMemberRow {
+    pub bot_id: String,
+    pub guild_id: String,
+    pub user_id: String,
+    pub added_by: String,
+    pub created_at: String,
+}
+
+/// `bot_roles` 1 行（利用可能ロール）。
+#[derive(Debug, Clone)]
+pub struct BotRoleRow {
+    pub bot_id: String,
+    pub guild_id: String,
+    pub role_id: String,
+    pub role_name: Option<String>,
+    pub added_by: String,
+    pub created_at: String,
+}
+
+/// 応答許可ギルドを追加（INSERT OR IGNORE・Node `addAllowedGuild`）。追加できたら `true`。
+///
+/// # Errors
+/// 書き込み失敗時 [`DbError`]。
+pub async fn add_allowed_guild(db: &Db, bot_id: &str, guild_id: &str) -> Result<bool, DbError> {
+    let (b, g) = (bot_id.to_owned(), guild_id.to_owned());
+    db.writer
+        .transaction(move |tx| {
+            let n = tx
+                .execute(
+                    "INSERT OR IGNORE INTO bot_guilds (bot_id, guild_id) VALUES (?1, ?2)",
+                    params![b, g],
+                )
+                .map_err(map_sqlite)?;
+            Ok(n > 0)
+        })
+        .await
+}
+
+/// 応答許可ギルドを削除（Node `removeAllowedGuild`）。削除できたら `true`。
+///
+/// # Errors
+/// 書き込み失敗時 [`DbError`]。
+pub async fn remove_allowed_guild(db: &Db, bot_id: &str, guild_id: &str) -> Result<bool, DbError> {
+    let (b, g) = (bot_id.to_owned(), guild_id.to_owned());
+    db.writer
+        .transaction(move |tx| {
+            let n = tx
+                .execute(
+                    "DELETE FROM bot_guilds WHERE bot_id = ?1 AND guild_id = ?2",
+                    params![b, g],
+                )
+                .map_err(map_sqlite)?;
+            Ok(n > 0)
+        })
+        .await
+}
+
+/// 応答許可ギルド一覧（created_at ASC・Node `listAllowedGuilds`）。
+///
+/// # Errors
+/// 読み取り失敗時 [`DbError`]。
+pub async fn list_allowed_guilds(db: &Db, bot_id: &str) -> Result<Vec<BotGuildRow>, DbError> {
+    let b = bot_id.to_owned();
+    db.read
+        .read(move |conn| {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT bot_id, guild_id, created_at FROM bot_guilds \
+                     WHERE bot_id = ?1 ORDER BY created_at ASC",
+                )
+                .map_err(map_sqlite)?;
+            let rows = stmt
+                .query_map(params![b], |r| {
+                    Ok(BotGuildRow {
+                        bot_id: r.get(0)?,
+                        guild_id: r.get(1)?,
+                        created_at: r.get(2)?,
+                    })
+                })
+                .map_err(map_sqlite)?;
+            let mut out = Vec::new();
+            for row in rows {
+                out.push(row.map_err(map_sqlite)?);
+            }
+            Ok(out)
+        })
+        .await
+}
+
+/// 利用メンバーを追加（INSERT OR IGNORE・Node `addBotMember`）。追加できたら `true`。
+///
+/// # Errors
+/// 書き込み失敗時 [`DbError`]。
+pub async fn add_bot_member(
+    db: &Db,
+    bot_id: &str,
+    guild_id: &str,
+    user_id: &str,
+    added_by: &str,
+) -> Result<bool, DbError> {
+    let (b, g, u, by) = (
+        bot_id.to_owned(),
+        guild_id.to_owned(),
+        user_id.to_owned(),
+        added_by.to_owned(),
+    );
+    db.writer
+        .transaction(move |tx| {
+            let n = tx
+                .execute(
+                    "INSERT OR IGNORE INTO bot_members (bot_id, guild_id, user_id, added_by) \
+                     VALUES (?1, ?2, ?3, ?4)",
+                    params![b, g, u, by],
+                )
+                .map_err(map_sqlite)?;
+            Ok(n > 0)
+        })
+        .await
+}
+
+/// 利用メンバーを削除（Node `removeBotMember`）。削除できたら `true`。
+///
+/// # Errors
+/// 書き込み失敗時 [`DbError`]。
+pub async fn remove_bot_member(
+    db: &Db,
+    bot_id: &str,
+    guild_id: &str,
+    user_id: &str,
+) -> Result<bool, DbError> {
+    let (b, g, u) = (bot_id.to_owned(), guild_id.to_owned(), user_id.to_owned());
+    db.writer
+        .transaction(move |tx| {
+            let n = tx
+                .execute(
+                    "DELETE FROM bot_members WHERE bot_id = ?1 AND guild_id = ?2 AND user_id = ?3",
+                    params![b, g, u],
+                )
+                .map_err(map_sqlite)?;
+            Ok(n > 0)
+        })
+        .await
+}
+
+/// 利用メンバー一覧（bot 全体・created_at ASC・Node `listBotMembers(botId)`）。
+///
+/// # Errors
+/// 読み取り失敗時 [`DbError`]。
+pub async fn list_bot_members(db: &Db, bot_id: &str) -> Result<Vec<BotMemberRow>, DbError> {
+    let b = bot_id.to_owned();
+    db.read
+        .read(move |conn| {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT bot_id, guild_id, user_id, added_by, created_at FROM bot_members \
+                     WHERE bot_id = ?1 ORDER BY created_at ASC",
+                )
+                .map_err(map_sqlite)?;
+            let rows = stmt
+                .query_map(params![b], |r| {
+                    Ok(BotMemberRow {
+                        bot_id: r.get(0)?,
+                        guild_id: r.get(1)?,
+                        user_id: r.get(2)?,
+                        added_by: r.get(3)?,
+                        created_at: r.get(4)?,
+                    })
+                })
+                .map_err(map_sqlite)?;
+            let mut out = Vec::new();
+            for row in rows {
+                out.push(row.map_err(map_sqlite)?);
+            }
+            Ok(out)
+        })
+        .await
+}
+
+/// 利用可能ロールを追加（INSERT OR IGNORE・Node `addAllowedRole`）。追加できたら `true`。
+///
+/// # Errors
+/// 書き込み失敗時 [`DbError`]。
+pub async fn add_allowed_role(
+    db: &Db,
+    bot_id: &str,
+    guild_id: &str,
+    role_id: &str,
+    added_by: &str,
+    role_name: Option<&str>,
+) -> Result<bool, DbError> {
+    let (b, g, r, by, name) = (
+        bot_id.to_owned(),
+        guild_id.to_owned(),
+        role_id.to_owned(),
+        added_by.to_owned(),
+        role_name.map(str::to_owned),
+    );
+    db.writer
+        .transaction(move |tx| {
+            let n = tx
+                .execute(
+                    "INSERT OR IGNORE INTO bot_roles (bot_id, guild_id, role_id, role_name, added_by) \
+                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                    params![b, g, r, name, by],
+                )
+                .map_err(map_sqlite)?;
+            Ok(n > 0)
+        })
+        .await
+}
+
+/// 利用可能ロールを削除（Node `removeAllowedRole`）。削除できたら `true`。
+///
+/// # Errors
+/// 書き込み失敗時 [`DbError`]。
+pub async fn remove_allowed_role(
+    db: &Db,
+    bot_id: &str,
+    guild_id: &str,
+    role_id: &str,
+) -> Result<bool, DbError> {
+    let (b, g, r) = (bot_id.to_owned(), guild_id.to_owned(), role_id.to_owned());
+    db.writer
+        .transaction(move |tx| {
+            let n = tx
+                .execute(
+                    "DELETE FROM bot_roles WHERE bot_id = ?1 AND guild_id = ?2 AND role_id = ?3",
+                    params![b, g, r],
+                )
+                .map_err(map_sqlite)?;
+            Ok(n > 0)
+        })
+        .await
+}
+
+/// 利用可能ロール一覧（bot 全体・created_at ASC・Node `listAllowedRoles(botId)`）。
+///
+/// # Errors
+/// 読み取り失敗時 [`DbError`]。
+pub async fn list_allowed_roles(db: &Db, bot_id: &str) -> Result<Vec<BotRoleRow>, DbError> {
+    let b = bot_id.to_owned();
+    db.read
+        .read(move |conn| {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT bot_id, guild_id, role_id, role_name, added_by, created_at \
+                     FROM bot_roles WHERE bot_id = ?1 ORDER BY created_at ASC",
+                )
+                .map_err(map_sqlite)?;
+            let rows = stmt
+                .query_map(params![b], |r| {
+                    Ok(BotRoleRow {
+                        bot_id: r.get(0)?,
+                        guild_id: r.get(1)?,
+                        role_id: r.get(2)?,
+                        role_name: r.get(3)?,
+                        added_by: r.get(4)?,
+                        created_at: r.get(5)?,
+                    })
+                })
+                .map_err(map_sqlite)?;
+            let mut out = Vec::new();
+            for row in rows {
+                out.push(row.map_err(map_sqlite)?);
+            }
+            Ok(out)
+        })
+        .await
+}
+
 // ─── ノート（汎用モードのシステムプロンプト注入・Node `botGuildNote`/`botContextNote`） ──
 
 /// ギルド共有ノート本文（無ければ空文字・Node `getBotGuildNote`）。

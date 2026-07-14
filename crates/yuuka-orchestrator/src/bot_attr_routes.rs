@@ -40,10 +40,238 @@ pub fn routes() -> Router<AppState> {
             get(guild_note_get).post(guild_note_set),
         )
         .route("/api/bots/assistant/persona", post(set_persona))
+        .route("/api/bots/assistant/guilds", post(set_guild))
+        .route("/api/bots/assistant/members", post(set_member))
+        .route("/api/bots/assistant/roles", post(set_role))
         .route(
             "/api/admin/bot-attribute-settings",
             get(admin_get).post(admin_set),
         )
+}
+
+/// `action === "remove" ? remove : add`（Node）。
+fn is_remove(body: &Value) -> bool {
+    body.get("action").and_then(Value::as_str) == Some("remove")
+}
+
+async fn owned_bot_from_body(
+    db: &Db,
+    uid: &str,
+    body: &Value,
+) -> Result<bot_repo::BotRow, Response> {
+    let bot_id = body.get("botId").and_then(Value::as_str).unwrap_or("");
+    require_owned_bot(db, uid, bot_id).await
+}
+
+// ─── POST /api/bots/assistant/guilds（応答許可ギルド・owner/Admin） ──────────
+
+async fn set_guild(
+    user: AuthenticatedUser,
+    State(db): State<Db>,
+    Json(body): Json<Value>,
+) -> Response {
+    let uid = user.0.discord_id;
+    let bot = match owned_bot_from_body(&db, &uid, &body).await {
+        Ok(b) => b,
+        Err(resp) => return resp,
+    };
+    let guild_id = trimmed(&body, "guildId");
+    let remove = is_remove(&body);
+    if !is_snowflake(&guild_id) {
+        return bad_request("ギルドID（数字）を入力してください。");
+    }
+    let ok = match if remove {
+        bot_repo::remove_allowed_guild(&db, &bot.id, &guild_id).await
+    } else {
+        bot_repo::add_allowed_guild(&db, &bot.id, &guild_id).await
+    } {
+        Ok(v) => v,
+        Err(_) => return server_error(),
+    };
+    audit_change(
+        &db,
+        &uid,
+        "bot.guild_allow_change",
+        &format!("{}:{}", guild_id, action_word(remove)),
+    )
+    .await;
+    let guilds = match bot_repo::list_allowed_guilds(&db, &bot.id).await {
+        Ok(g) => g,
+        Err(_) => return server_error(),
+    };
+    let list: Vec<Value> = guilds
+        .iter()
+        .map(|g| json!({ "bot_id": g.bot_id, "guild_id": g.guild_id, "created_at": g.created_at }))
+        .collect();
+    (
+        StatusCode::OK,
+        Json(json!({
+            "success": true,
+            "guilds": list,
+            "message": change_message(ok, remove, "応答許可ギルドへ追加しました。", "応答許可ギルドから削除しました。"),
+        })),
+    )
+        .into_response()
+}
+
+// ─── POST /api/bots/assistant/members（利用メンバー・owner/Admin） ───────────
+
+async fn set_member(
+    user: AuthenticatedUser,
+    State(db): State<Db>,
+    Json(body): Json<Value>,
+) -> Response {
+    let uid = user.0.discord_id;
+    let bot = match owned_bot_from_body(&db, &uid, &body).await {
+        Ok(b) => b,
+        Err(resp) => return resp,
+    };
+    let guild_id = trimmed(&body, "guildId");
+    let member_id = trimmed(&body, "userId");
+    let remove = is_remove(&body);
+    if !is_snowflake(&guild_id) || !is_snowflake(&member_id) {
+        return bad_request("ギルドIDとユーザーID（数字）を入力してください。");
+    }
+    let ok = match if remove {
+        bot_repo::remove_bot_member(&db, &bot.id, &guild_id, &member_id).await
+    } else {
+        bot_repo::add_bot_member(&db, &bot.id, &guild_id, &member_id, &uid).await
+    } {
+        Ok(v) => v,
+        Err(_) => return server_error(),
+    };
+    let action = if remove {
+        "bot.member_remove"
+    } else {
+        "bot.member_add"
+    };
+    audit_change(
+        &db,
+        &uid,
+        action,
+        &format!("{}:{}:{}", bot.id, guild_id, member_id),
+    )
+    .await;
+    let members = match bot_repo::list_bot_members(&db, &bot.id).await {
+        Ok(m) => m,
+        Err(_) => return server_error(),
+    };
+    let list: Vec<Value> = members
+        .iter()
+        .map(|m| {
+            json!({
+                "bot_id": m.bot_id, "guild_id": m.guild_id, "user_id": m.user_id,
+                "added_by": m.added_by, "created_at": m.created_at,
+            })
+        })
+        .collect();
+    (
+        StatusCode::OK,
+        Json(json!({
+            "success": true,
+            "members": list,
+            "message": change_message(ok, remove, "利用メンバーへ追加しました。", "利用メンバーから削除しました。"),
+        })),
+    )
+        .into_response()
+}
+
+// ─── POST /api/bots/assistant/roles（利用可能ロール・owner/Admin） ───────────
+
+async fn set_role(
+    user: AuthenticatedUser,
+    State(db): State<Db>,
+    Json(body): Json<Value>,
+) -> Response {
+    let uid = user.0.discord_id;
+    let bot = match owned_bot_from_body(&db, &uid, &body).await {
+        Ok(b) => b,
+        Err(resp) => return resp,
+    };
+    let guild_id = trimmed(&body, "guildId");
+    let role_id = trimmed(&body, "roleId");
+    let role_name = body.get("roleName").and_then(Value::as_str);
+    let remove = is_remove(&body);
+    if !is_snowflake(&guild_id) || !is_snowflake(&role_id) {
+        return bad_request("ギルドIDとロールID（数字）を入力してください。");
+    }
+    let ok = match if remove {
+        bot_repo::remove_allowed_role(&db, &bot.id, &guild_id, &role_id).await
+    } else {
+        bot_repo::add_allowed_role(&db, &bot.id, &guild_id, &role_id, &uid, role_name).await
+    } {
+        Ok(v) => v,
+        Err(_) => return server_error(),
+    };
+    let action = if remove {
+        "bot.role_remove"
+    } else {
+        "bot.role_add"
+    };
+    audit_change(
+        &db,
+        &uid,
+        action,
+        &format!("{}:{}:{}", bot.id, guild_id, role_id),
+    )
+    .await;
+    let roles = match bot_repo::list_allowed_roles(&db, &bot.id).await {
+        Ok(r) => r,
+        Err(_) => return server_error(),
+    };
+    let list: Vec<Value> = roles
+        .iter()
+        .map(|r| {
+            json!({
+                "bot_id": r.bot_id, "guild_id": r.guild_id, "role_id": r.role_id,
+                "role_name": r.role_name, "added_by": r.added_by, "created_at": r.created_at,
+            })
+        })
+        .collect();
+    (
+        StatusCode::OK,
+        Json(json!({
+            "success": true,
+            "roles": list,
+            "message": change_message(ok, remove, "利用可能ロールへ追加しました。", "利用可能ロールから削除しました。"),
+        })),
+    )
+        .into_response()
+}
+
+fn trimmed(body: &Value, key: &str) -> String {
+    body.get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or("")
+        .to_owned()
+}
+
+fn action_word(remove: bool) -> &'static str {
+    if remove {
+        "remove"
+    } else {
+        "add"
+    }
+}
+
+fn change_message(
+    ok: bool,
+    remove: bool,
+    add_msg: &'static str,
+    remove_msg: &'static str,
+) -> &'static str {
+    if !ok {
+        "変更はありませんでした。"
+    } else if remove {
+        remove_msg
+    } else {
+        add_msg
+    }
+}
+
+async fn audit_change(db: &Db, uid: &str, action: &str, target: &str) {
+    yuuka_auth::audit::add_audit_log(db, uid, action, Some(target), None).await;
 }
 
 // ─── POST /api/bots/assistant/persona（Bot 単位ペルソナ・owner/Admin） ───────
@@ -861,5 +1089,103 @@ mod tests {
         )
         .await;
         assert_eq!(st, StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn assistant_allowlists_guilds_members_roles() {
+        let app = app();
+        let g = "111111111111111111";
+        let u = "222222222222222222";
+        let r = "333333333333333333";
+
+        // guilds: 不正 → 400。
+        let (st, _) = send(
+            &app,
+            "POST",
+            "/api/bots/assistant/guilds",
+            "owner",
+            r#"{"botId":"b1","guildId":"12"}"#,
+        )
+        .await;
+        assert_eq!(st, StatusCode::BAD_REQUEST);
+        // guilds: 追加 → 一覧に出る。
+        let (st, j) = send(
+            &app,
+            "POST",
+            "/api/bots/assistant/guilds",
+            "owner",
+            &format!(r#"{{"botId":"b1","guildId":"{g}"}}"#),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(j["message"], "応答許可ギルドへ追加しました。");
+        assert_eq!(j["guilds"].as_array().unwrap()[0]["guild_id"], g);
+        // 二重追加は「変更はありませんでした。」。
+        let (_st, j) = send(
+            &app,
+            "POST",
+            "/api/bots/assistant/guilds",
+            "owner",
+            &format!(r#"{{"botId":"b1","guildId":"{g}"}}"#),
+        )
+        .await;
+        assert_eq!(j["message"], "変更はありませんでした。");
+        // 削除。
+        let (_st, j) = send(
+            &app,
+            "POST",
+            "/api/bots/assistant/guilds",
+            "owner",
+            &format!(r#"{{"botId":"b1","guildId":"{g}","action":"remove"}}"#),
+        )
+        .await;
+        assert_eq!(j["message"], "応答許可ギルドから削除しました。");
+        assert_eq!(j["guilds"].as_array().unwrap().len(), 0);
+        // 非所有者 403。
+        let (st, _) = send(
+            &app,
+            "POST",
+            "/api/bots/assistant/guilds",
+            "other",
+            &format!(r#"{{"botId":"b1","guildId":"{g}"}}"#),
+        )
+        .await;
+        assert_eq!(st, StatusCode::FORBIDDEN);
+
+        // members: 不正（userId 欠落）→ 400。
+        let (st, _) = send(
+            &app,
+            "POST",
+            "/api/bots/assistant/members",
+            "owner",
+            &format!(r#"{{"botId":"b1","guildId":"{g}"}}"#),
+        )
+        .await;
+        assert_eq!(st, StatusCode::BAD_REQUEST);
+        // members: 追加。
+        let (st, j) = send(
+            &app,
+            "POST",
+            "/api/bots/assistant/members",
+            "owner",
+            &format!(r#"{{"botId":"b1","guildId":"{g}","userId":"{u}"}}"#),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(j["members"].as_array().unwrap()[0]["user_id"], u);
+
+        // roles: 追加（roleName 付き）。
+        let (st, j) = send(
+            &app,
+            "POST",
+            "/api/bots/assistant/roles",
+            "owner",
+            &format!(r#"{{"botId":"b1","guildId":"{g}","roleId":"{r}","roleName":"VIP"}}"#),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK);
+        let role0 = &j["roles"].as_array().unwrap()[0];
+        assert_eq!(role0["role_id"], r);
+        assert_eq!(role0["role_name"], "VIP");
     }
 }
