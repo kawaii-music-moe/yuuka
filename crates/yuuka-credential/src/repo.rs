@@ -217,7 +217,7 @@ impl<'a> CredentialRepo<'a> {
 }
 
 /// サービス名の正規化（trim + 小文字化）。Node `normalizeServiceName` と同一。
-fn normalize_service_name(service_name: &str) -> String {
+pub(crate) fn normalize_service_name(service_name: &str) -> String {
     service_name.trim().to_lowercase()
 }
 

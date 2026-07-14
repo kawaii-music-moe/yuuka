@@ -15,11 +15,13 @@
 //! - grant/revoke（`grantCredentialToOwnerBots` / `deleteAllGrantsForCredential`）連携。
 //! - 復号を伴う record 取得（`getCredentialRecord`・secretService 経由のみ）。
 
+pub mod access;
 pub mod dto;
 pub mod repo;
 pub mod routes;
 pub mod tools;
 
+pub use access::CredentialAccessRepo;
 pub use routes::routes;
 pub use tools::tools;
 
