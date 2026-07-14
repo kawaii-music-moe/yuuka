@@ -80,7 +80,7 @@ async fn list(
     let expenses = repo.list(&scope).await?;
     let total = repo.monthly_total(&scope, "expense", year, month).await?;
     let income_total = repo.monthly_total(&scope, "income", year, month).await?;
-    let breakdown = repo.monthly_category_breakdown(&scope, year, month).await?;
+    let breakdown = repo.monthly_category_breakdown(&scope, year, month, "expense").await?;
     let trend = repo.monthly_trend(&scope, 6).await?;
     Ok(Json(Envelope::ok(ExpenseListData {
         expenses,

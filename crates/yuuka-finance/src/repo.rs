@@ -219,21 +219,23 @@ impl<'a> ExpenseRepo<'a> {
         scope: &UserScope,
         year: i64,
         month: i64,
+        etype: &str,
     ) -> Result<Vec<CategoryTotal>, DbError> {
         let (uid, bid) = scope_keys(scope);
         let like = format!("{}-{:02}%", year, month);
+        let etype = etype.to_owned();
         self.read
             .read(move |conn| {
                 let mut stmt = conn
                     .prepare(
                         "SELECT category, SUM(amount) AS total, COUNT(*) AS count \
                          FROM expenses \
-                         WHERE user_id = ?1 AND bot_id = ?2 AND type = 'expense' AND date LIKE ?3 \
+                         WHERE user_id = ?1 AND bot_id = ?2 AND type = ?3 AND date LIKE ?4 \
                          GROUP BY category ORDER BY total DESC",
                     )
                     .map_err(map_sqlite)?;
                 let rows = stmt
-                    .query_map(params![uid, bid, like], |row| {
+                    .query_map(params![uid, bid, etype, like], |row| {
                         Ok(CategoryTotal {
                             category: row.get("category")?,
                             total: row.get("total")?,

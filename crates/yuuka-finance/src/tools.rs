@@ -36,9 +36,68 @@ pub fn tools(db: Db) -> Result<Vec<Arc<dyn Tool>>, ToolError> {
         }),
         Arc::new(ListRecentExpensesTool {
             name: ToolName::checked("listRecentExpenses".to_owned())?,
+            db: db.clone(),
+        }),
+        Arc::new(GetMonthlySummaryTool {
+            name: ToolName::checked("getMonthlySummary".to_owned())?,
+            db: db.clone(),
+        }),
+        Arc::new(GetCategoryBreakdownTool {
+            name: ToolName::checked("getCategoryBreakdown".to_owned())?,
+            db: db.clone(),
+        }),
+        Arc::new(GetBudgetLimitsTool {
+            name: ToolName::checked("getBudgetLimits".to_owned())?,
+            db: db.clone(),
+        }),
+        Arc::new(SetBudgetLimitTool {
+            name: ToolName::checked("setBudgetLimit".to_owned())?,
+            db: db.clone(),
+        }),
+        Arc::new(DeleteBudgetLimitTool {
+            name: ToolName::checked("deleteBudgetLimit".to_owned())?,
             db,
         }),
     ])
+}
+
+/// 支出カテゴリの許容一覧（Node `expenseRepo.CATEGORIES`）。setBudgetLimit の検証に使う。
+const CATEGORIES: [&str; 9] = [
+    "食費", "日用品", "交通費", "光熱費", "通信費", "医療費", "娯楽", "衣服", "その他",
+];
+
+/// カテゴリ一覧を `, ` 連結（Node `CATEGORY_LIST`・エラーメッセージ用）。
+fn category_list() -> String {
+    CATEGORIES.join(", ")
+}
+
+/// `¥` + 3 桁区切り（Node `formatCurrency` 相当・LLM 向け案内文用）。
+fn format_yen(n: i64) -> String {
+    let neg = n < 0;
+    let digits = n.unsigned_abs().to_string();
+    let len = digits.len();
+    let mut grouped = String::with_capacity(len + len / 3);
+    for (i, ch) in digits.chars().enumerate() {
+        if i != 0 && (len - i).is_multiple_of(3) {
+            grouped.push(',');
+        }
+        grouped.push(ch);
+    }
+    format!("{}¥{grouped}", if neg { "-" } else { "" })
+}
+
+/// `asOptionalInt`（number のみ・trunc・Node は文字列を受けない）。年月・金額に使う。
+fn arg_int(args: &Value, key: &str) -> Option<i64> {
+    args.get(key)
+        .and_then(|v| v.as_i64().or_else(|| v.as_f64().map(|f| f.trunc() as i64)))
+}
+
+/// 集計対象の年月を解決する（引数が無ければ当月）。
+async fn resolve_year_month(repo: &ExpenseRepo<'_>, args: &Value) -> Result<(i64, i64), DbError> {
+    let (cur_year, cur_month) = repo.current_year_month().await?;
+    let year = arg_int(args, "year").unwrap_or(cur_year);
+    let month = arg_int(args, "month").unwrap_or(cur_month);
+    Ok((year, month))
 }
 
 // ─── 共通ヘルパ（todo/tools.rs と同一規約） ──────────────────────────────────────
@@ -265,6 +324,342 @@ impl Tool for ListRecentExpensesTool {
     }
 }
 
+/// 'YYYY年M月' ラベル（Node `currentMonthLabel`）。
+fn month_label(year: i64, month: i64) -> String {
+    format!("{year}年{month}月")
+}
+
+// ─── getMonthlySummary ───────────────────────────────────────────────────────
+
+struct GetMonthlySummaryTool {
+    name: ToolName,
+    db: Db,
+}
+
+#[async_trait]
+impl Tool for GetMonthlySummaryTool {
+    fn declaration(&self) -> FunctionDeclaration {
+        FunctionDeclaration {
+            name: self.name.clone(),
+            description: "指定した月の収支まとめ（収入合計・支出合計・差額・支出のカテゴリ別内訳）を返す。\
+                「今月いくら使った？」等で呼ぶ。年と月を省くと今月のまとめを返す。\
+                カテゴリの細かい内訳だけ見たい時は getCategoryBreakdown を使う。"
+                .to_owned(),
+            parameters_json_schema: json!({
+                "type": "object",
+                "properties": {
+                    "year": { "type": "number", "description": "年。4桁（例: 2026）。省略=今年" },
+                    "month": { "type": "number", "description": "月。1〜12。省略=今月" }
+                }
+            }),
+            requires_confirmation: false,
+        }
+    }
+
+    async fn call(&self, ctx: &ToolContext, args: Value) -> Result<ToolOutcome, ToolError> {
+        let scope = scope_of(ctx);
+        let repo = ExpenseRepo::new(&self.db);
+        let (year, month) = resolve_year_month(&repo, &args).await.map_err(exec_err)?;
+        let label = month_label(year, month);
+        let income = repo.monthly_total(&scope, "income", year, month).await.map_err(exec_err)?;
+        let expense = repo.monthly_total(&scope, "expense", year, month).await.map_err(exec_err)?;
+        let balance = income - expense;
+        let breakdown = repo
+            .monthly_category_breakdown(&scope, year, month, "expense")
+            .await
+            .map_err(exec_err)?;
+
+        if income == 0 && expense == 0 {
+            return Ok(ToolOutcome::from_payload(ok_payload(
+                format!("{label}の収支記録はありません。"),
+                json!({ "income": 0, "expense": 0, "balance": 0, "breakdown": [] }),
+            )));
+        }
+        let mut lines = vec![
+            format!("📈 収入: {}", format_yen(income)),
+            format!("📉 支出: {}", format_yen(expense)),
+            format!("💰 収支差: {}", format_yen(balance)),
+        ];
+        if !breakdown.is_empty() {
+            lines.push("───────────".to_owned());
+            lines.push("支出の内訳:".to_owned());
+            for c in &breakdown {
+                lines.push(format!("  {}: {} ({}件)", c.category, format_yen(c.total), c.count));
+            }
+        }
+        Ok(ToolOutcome::from_payload(ok_payload(
+            lines.join("\n"),
+            json!({ "income": income, "expense": expense, "balance": balance, "breakdown": breakdown }),
+        )))
+    }
+}
+
+// ─── getCategoryBreakdown ────────────────────────────────────────────────────
+
+struct GetCategoryBreakdownTool {
+    name: ToolName,
+    db: Db,
+}
+
+#[async_trait]
+impl Tool for GetCategoryBreakdownTool {
+    fn declaration(&self) -> FunctionDeclaration {
+        FunctionDeclaration {
+            name: self.name.clone(),
+            description: "指定した月のカテゴリ別の内訳（金額・件数・割合）を返す。\
+                type で支出（既定）か収入かを切り替える。\
+                収支の合計や差額も見たい時は getMonthlySummary を使う。"
+                .to_owned(),
+            parameters_json_schema: json!({
+                "type": "object",
+                "properties": {
+                    "year": { "type": "number", "description": "年。4桁。省略=今年" },
+                    "month": { "type": "number", "description": "月。1〜12。省略=今月" },
+                    "type": { "type": "string", "description": "'expense'（既定）|'income'" }
+                }
+            }),
+            requires_confirmation: false,
+        }
+    }
+
+    async fn call(&self, ctx: &ToolContext, args: Value) -> Result<ToolOutcome, ToolError> {
+        let etype = if args.get("type").and_then(Value::as_str) == Some("income") {
+            "income"
+        } else {
+            "expense"
+        };
+        let type_label = if etype == "income" { "収入" } else { "支出" };
+        let scope = scope_of(ctx);
+        let repo = ExpenseRepo::new(&self.db);
+        let (year, month) = resolve_year_month(&repo, &args).await.map_err(exec_err)?;
+        let label = month_label(year, month);
+        let breakdown = repo
+            .monthly_category_breakdown(&scope, year, month, etype)
+            .await
+            .map_err(exec_err)?;
+        let total = repo.monthly_total(&scope, etype, year, month).await.map_err(exec_err)?;
+
+        if breakdown.is_empty() {
+            return Ok(ToolOutcome::from_payload(ok_payload(
+                format!("{label}の{type_label}記録はありません。"),
+                json!({ "type": etype, "total": 0, "breakdown": [] }),
+            )));
+        }
+        let lines: Vec<String> = breakdown
+            .iter()
+            .map(|c| {
+                let ratio = if total > 0 {
+                    format!("{:.1}", (c.total as f64 / total as f64) * 100.0)
+                } else {
+                    "0".to_owned()
+                };
+                format!("{}: {} ({}%, {}件)", c.category, format_yen(c.total), ratio, c.count)
+            })
+            .collect();
+        let message = format!(
+            "{label}の{type_label}カテゴリ別内訳:\n{}\n合計: {}",
+            lines.join("\n"),
+            format_yen(total),
+        );
+        Ok(ToolOutcome::from_payload(ok_payload(
+            message,
+            json!({ "type": etype, "total": total, "breakdown": breakdown }),
+        )))
+    }
+}
+
+// ─── getBudgetLimits ─────────────────────────────────────────────────────────
+
+struct GetBudgetLimitsTool {
+    name: ToolName,
+    db: Db,
+}
+
+#[async_trait]
+impl Tool for GetBudgetLimitsTool {
+    fn declaration(&self) -> FunctionDeclaration {
+        FunctionDeclaration {
+            name: self.name.clone(),
+            description: "カテゴリごとの毎月の予算上限と、今月の使用額・使用率を返す。\
+                予算を新しく決めたり変えたい時は setBudgetLimit を使う。"
+                .to_owned(),
+            parameters_json_schema: json!({ "type": "object", "properties": {} }),
+            requires_confirmation: false,
+        }
+    }
+
+    async fn call(&self, ctx: &ToolContext, _args: Value) -> Result<ToolOutcome, ToolError> {
+        let scope = scope_of(ctx);
+        let repo = ExpenseRepo::new(&self.db);
+        let limits = repo.list_budget_limits(&scope).await.map_err(exec_err)?;
+        if limits.is_empty() {
+            return Ok(ToolOutcome::from_payload(ok_payload(
+                "予算上限が設定されているカテゴリはありません。setBudgetLimit で設定できます。",
+                json!({ "limits": [] }),
+            )));
+        }
+        // 当月の支出内訳から消化額を突き合わせる。
+        let (year, month) = repo.current_year_month().await.map_err(exec_err)?;
+        let breakdown = repo
+            .monthly_category_breakdown(&scope, year, month, "expense")
+            .await
+            .map_err(exec_err)?;
+        let entries: Vec<Value> = limits
+            .iter()
+            .map(|l| {
+                let spent = breakdown
+                    .iter()
+                    .find(|c| c.category == l.category)
+                    .map_or(0, |c| c.total);
+                let ratio = if l.limit_amount > 0 {
+                    ((spent as f64 / l.limit_amount as f64) * 100.0).round() as i64
+                } else {
+                    0
+                };
+                json!({
+                    "category": l.category,
+                    "limit_amount": l.limit_amount,
+                    "spent": spent,
+                    "ratio_percent": ratio,
+                })
+            })
+            .collect();
+        let lines: Vec<String> = entries
+            .iter()
+            .map(|e| {
+                let ratio = e["ratio_percent"].as_i64().unwrap_or(0);
+                let warn = if ratio >= 100 {
+                    " ⚠️超過"
+                } else if ratio >= 80 {
+                    " ⚠️"
+                } else {
+                    ""
+                };
+                format!(
+                    "{}: {}（今月の消化: {} / {}%{}）",
+                    e["category"].as_str().unwrap_or(""),
+                    format_yen(e["limit_amount"].as_i64().unwrap_or(0)),
+                    format_yen(e["spent"].as_i64().unwrap_or(0)),
+                    ratio,
+                    warn,
+                )
+            })
+            .collect();
+        Ok(ToolOutcome::from_payload(ok_payload(
+            format!("設定済み予算上限と今月の消化状況:\n{}", lines.join("\n")),
+            json!({ "limits": entries }),
+        )))
+    }
+}
+
+// ─── setBudgetLimit ──────────────────────────────────────────────────────────
+
+struct SetBudgetLimitTool {
+    name: ToolName,
+    db: Db,
+}
+
+#[async_trait]
+impl Tool for SetBudgetLimitTool {
+    fn declaration(&self) -> FunctionDeclaration {
+        FunctionDeclaration {
+            name: self.name.clone(),
+            description: format!(
+                "カテゴリの毎月の予算上限を決める、または変える。「食費の予算を3万円にして」等で呼ぶ。\
+                 カテゴリは次から選ぶ: {}。今の予算や残りを見るだけなら getBudgetLimits を使う。",
+                category_list()
+            ),
+            parameters_json_schema: json!({
+                "type": "object",
+                "properties": {
+                    "category": { "type": "string", "description": format!("予算を決めるカテゴリ。次のどれか: {}", category_list()) },
+                    "limit_amount": { "type": "number", "description": "毎月の予算上限。円単位の1以上の整数（例: 30000）" }
+                },
+                "required": ["category", "limit_amount"]
+            }),
+            requires_confirmation: false,
+        }
+    }
+
+    async fn call(&self, ctx: &ToolContext, args: Value) -> Result<ToolOutcome, ToolError> {
+        let category = arg_str(&args, "category");
+        let valid = category
+            .as_deref()
+            .is_some_and(|c| CATEGORIES.contains(&c));
+        if !valid {
+            let raw = args.get("category").and_then(Value::as_str).unwrap_or("");
+            return Ok(fail_payload(format!(
+                "無効なカテゴリです: {raw}。有効なカテゴリ: {}",
+                category_list()
+            )));
+        }
+        let limit_amount = arg_int(&args, "limit_amount");
+        let Some(limit_amount) = limit_amount.filter(|n| *n > 0) else {
+            return Ok(fail_payload(
+                "limit_amount は1以上の整数（円）で指定してください。",
+            ));
+        };
+        let category = category.unwrap_or_default();
+        ExpenseRepo::new(&self.db)
+            .upsert_budget_limit(&scope_of(ctx), category.clone(), limit_amount)
+            .await
+            .map_err(exec_err)?;
+        Ok(ToolOutcome::from_payload(ok_payload(
+            format!(
+                "{category} の月次予算上限を {} に設定しました。",
+                format_yen(limit_amount)
+            ),
+            json!({}),
+        )))
+    }
+}
+
+// ─── deleteBudgetLimit ───────────────────────────────────────────────────────
+
+struct DeleteBudgetLimitTool {
+    name: ToolName,
+    db: Db,
+}
+
+#[async_trait]
+impl Tool for DeleteBudgetLimitTool {
+    fn declaration(&self) -> FunctionDeclaration {
+        FunctionDeclaration {
+            name: self.name.clone(),
+            description: "カテゴリの毎月の予算上限を消す。「食費の予算設定を消して」等で呼ぶ。\
+                金額を変えたいだけなら setBudgetLimit を使う。"
+                .to_owned(),
+            parameters_json_schema: json!({
+                "type": "object",
+                "properties": {
+                    "category": { "type": "string", "description": "予算上限を消すカテゴリ" }
+                },
+                "required": ["category"]
+            }),
+            requires_confirmation: false,
+        }
+    }
+
+    async fn call(&self, ctx: &ToolContext, args: Value) -> Result<ToolOutcome, ToolError> {
+        let Some(category) = arg_str(&args, "category") else {
+            return Ok(fail_payload("category を指定してください。"));
+        };
+        let deleted = ExpenseRepo::new(&self.db)
+            .delete_budget_limit(&scope_of(ctx), category.clone())
+            .await
+            .map_err(exec_err)?;
+        if !deleted {
+            return Ok(fail_payload(format!(
+                "{category} には予算上限が設定されていません。"
+            )));
+        }
+        Ok(ToolOutcome::from_payload(ok_payload(
+            format!("{category} の予算上限を削除しました。"),
+            json!({}),
+        )))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -291,6 +686,16 @@ mod tests {
         created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
     );";
 
+    // budget_limits を FK 無しで先に作る（V17 の users FK を避ける・todo tools テストと同方針）。
+    const BUDGET_LIMITS_DDL: &str = "CREATE TABLE budget_limits (
+        user_id TEXT NOT NULL,
+        bot_id TEXT NOT NULL DEFAULT 'system_default',
+        category TEXT NOT NULL,
+        limit_amount INTEGER NOT NULL DEFAULT 50000,
+        updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+        PRIMARY KEY (user_id, bot_id, category)
+    );";
+
     fn seed_db() -> Db {
         let seq = SEQ.fetch_add(1, Ordering::Relaxed);
         let path = std::env::temp_dir().join(format!(
@@ -300,6 +705,7 @@ mod tests {
         {
             let conn = Connection::open(&path).unwrap();
             conn.execute_batch(EXPENSES_DDL).unwrap();
+            conn.execute_batch(BUDGET_LIMITS_DDL).unwrap();
         }
         Db::open(&path).unwrap()
     }
@@ -428,5 +834,65 @@ mod tests {
         let ctx_b = ToolContext::new(BotId::system_default(), UserId::new("userB"));
         let out = list.call(&ctx_b, json!({})).await.unwrap();
         assert_eq!(out.payload["expenses"].as_array().unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn monthly_summary_breakdown_and_budget_tools() {
+        let db = seed_db();
+        let tools = tools(db).unwrap();
+        let add = find(&tools, "addExpense");
+        let summary = find(&tools, "getMonthlySummary");
+        let breakdown = find(&tools, "getCategoryBreakdown");
+        let get_budget = find(&tools, "getBudgetLimits");
+        let set_budget = find(&tools, "setBudgetLimit");
+        let del_budget = find(&tools, "deleteBudgetLimit");
+
+        // 当月の支出/収入を記録（date 省略=今日）。
+        add.call(&ctx(), json!({"amount": 3000, "category": "食費"})).await.unwrap();
+        add.call(&ctx(), json!({"amount": 2000, "category": "食費"})).await.unwrap();
+        add.call(&ctx(), json!({"amount": 1000, "category": "娯楽"})).await.unwrap();
+        add.call(&ctx(), json!({"amount": 50000, "category": "給与", "type": "income"}))
+            .await
+            .unwrap();
+
+        // getMonthlySummary: 収入50000/支出6000/差44000。
+        let out = summary.call(&ctx(), json!({})).await.unwrap();
+        assert_eq!(out.payload["income"], 50000);
+        assert_eq!(out.payload["expense"], 6000);
+        assert_eq!(out.payload["balance"], 44000);
+        assert_eq!(out.payload["breakdown"].as_array().unwrap().len(), 2);
+
+        // getCategoryBreakdown（支出既定）: 食費5000（合計6000の内訳）。
+        let out = breakdown.call(&ctx(), json!({})).await.unwrap();
+        assert_eq!(out.payload["type"], "expense");
+        assert_eq!(out.payload["total"], 6000);
+        let bd = out.payload["breakdown"].as_array().unwrap();
+        assert_eq!(bd[0]["category"], "食費");
+        assert_eq!(bd[0]["total"], 5000);
+        // income 指定。
+        let out = breakdown.call(&ctx(), json!({"type": "income"})).await.unwrap();
+        assert_eq!(out.payload["total"], 50000);
+
+        // setBudgetLimit: 無効カテゴリ拒否・非正数拒否・正常設定。
+        let out = set_budget.call(&ctx(), json!({"category": "宇宙旅行", "limit_amount": 10000})).await.unwrap();
+        assert_eq!(out.payload["success"], false);
+        let out = set_budget.call(&ctx(), json!({"category": "食費", "limit_amount": 0})).await.unwrap();
+        assert_eq!(out.payload["success"], false);
+        let out = set_budget.call(&ctx(), json!({"category": "食費", "limit_amount": 4000})).await.unwrap();
+        assert_eq!(out.payload["success"], true);
+
+        // getBudgetLimits: 食費 消化5000/上限4000 → 125%（超過）。
+        let out = get_budget.call(&ctx(), json!({})).await.unwrap();
+        let limits = out.payload["limits"].as_array().unwrap();
+        assert_eq!(limits.len(), 1);
+        assert_eq!(limits[0]["category"], "食費");
+        assert_eq!(limits[0]["spent"], 5000);
+        assert_eq!(limits[0]["ratio_percent"], 125);
+
+        // deleteBudgetLimit: 設定済みは削除成功、未設定は fail。
+        let out = del_budget.call(&ctx(), json!({"category": "食費"})).await.unwrap();
+        assert_eq!(out.payload["success"], true);
+        let out = del_budget.call(&ctx(), json!({"category": "食費"})).await.unwrap();
+        assert_eq!(out.payload["success"], false);
     }
 }

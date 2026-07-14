@@ -224,7 +224,7 @@ mod tests {
         assert_eq!(repo.monthly_total(&s, "expense", 2026, 4).await.unwrap(), 0);
 
         // カテゴリ別内訳は金額降順・件数付き（食費 1500/2件 → 交通費 200/1件）。
-        let bd = repo.monthly_category_breakdown(&s, 2026, 3).await.unwrap();
+        let bd = repo.monthly_category_breakdown(&s, 2026, 3, "expense").await.unwrap();
         assert_eq!(bd.len(), 2);
         assert_eq!(bd[0].category, "食費");
         assert_eq!(bd[0].total, 1500);
