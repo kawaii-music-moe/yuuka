@@ -18,6 +18,7 @@ use yuuka_crypto::SystemCrypto;
 use yuuka_web::{AdminUser, AppState, AuthenticatedUser, Db};
 
 use crate::bot_repo::{self, EncryptedTriplet};
+use crate::module_catalog;
 use crate::preset::{self, BotPresetId};
 
 /// Gemini キー暗号化用 crypto（省略可・Extension で運ぶ newtype）。
@@ -56,11 +57,176 @@ pub fn routes_with(crypto: Option<Arc<SystemCrypto>>) -> Router<AppState> {
         .route("/api/bots/assistant/members", post(set_member))
         .route("/api/bots/assistant/roles", post(set_role))
         .route("/api/bots/assistant/gemini-key", post(set_gemini_key))
+        .route("/api/bots/modules", get(get_modules).post(set_modules))
         .route(
             "/api/admin/bot-attribute-settings",
             get(admin_get).post(admin_set),
         )
         .layer(Extension(AttrCrypto(crypto)))
+}
+
+// ─── GET/POST /api/bots/modules（有効モジュール・アクセス権のある全ユーザー） ──
+
+#[derive(Debug, Deserialize)]
+struct ModulesQuery {
+    #[serde(default, rename = "botId")]
+    bot_id: Option<String>,
+}
+
+async fn get_modules(
+    user: AuthenticatedUser,
+    State(db): State<Db>,
+    Query(q): Query<ModulesQuery>,
+) -> Response {
+    let uid = user.0.discord_id;
+    // GET は `?botId=` で受ける（Node は body→query だが GET のボディは実質未使用）。
+    let bot_id = q.bot_id.clone().unwrap_or_default();
+    if bot_id.is_empty() || !access_ok(&db, &uid, &bot_id).await {
+        return not_found_bot();
+    }
+    let caps = match resolve_caps(&db, &bot_id).await {
+        Ok(c) => c,
+        Err(_) => return server_error(),
+    };
+    let override_json = match bot_repo::get_user_modules(&db, &bot_id, &uid).await {
+        Ok(o) => o,
+        Err(_) => return server_error(),
+    };
+    let has_override = override_json.is_some();
+    // override あり: `parse(override) ?? 空集合`。無し: Bot 既定（None=全有効）。
+    let enabled = if has_override {
+        Some(parse_enabled_modules(override_json.as_deref()).unwrap_or_default())
+    } else {
+        let default_json = match bot_repo::bot_enabled_modules(&db, &bot_id).await {
+            Ok(d) => d,
+            Err(_) => return server_error(),
+        };
+        parse_enabled_modules(default_json.as_deref())
+    };
+
+    let modules: Vec<Value> = module_catalog::SELECTABLE_MODULES
+        .iter()
+        .filter(|m| m.cap == "core" || caps.has(m.cap))
+        .map(|m| {
+            let enabled_flag = enabled.as_ref().is_none_or(|set| set.contains(m.id));
+            json!({
+                "id": m.id,
+                "cap": m.cap,
+                "label": m.label,
+                "description": m.description,
+                "settingsKey": m.settings_key,
+                "enabled": enabled_flag,
+            })
+        })
+        .collect();
+    (
+        StatusCode::OK,
+        Json(json!({
+            "success": true,
+            "has_override": has_override,
+            "all_enabled": enabled.is_none(),
+            "modules": modules,
+        })),
+    )
+        .into_response()
+}
+
+async fn set_modules(
+    user: AuthenticatedUser,
+    State(db): State<Db>,
+    Json(body): Json<Value>,
+) -> Response {
+    let uid = user.0.discord_id;
+    let bot_id = body
+        .get("botId")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_owned();
+    if bot_id.is_empty() || !access_ok(&db, &uid, &bot_id).await {
+        return not_found_bot();
+    }
+    let raw = body.get("enabledModules");
+    // null / "all" は上書き解除（Bot 既定へ）。
+    if matches!(raw, None | Some(Value::Null)) || raw.and_then(Value::as_str) == Some("all") {
+        if let Err(_e) = bot_repo::set_user_modules(&db, &bot_id, &uid, None).await {
+            return server_error();
+        }
+        return ok_message(
+            "個別設定を解除し、既定に戻しました（次のメッセージ処理から反映されます）。",
+        );
+    }
+    let Some(arr) = raw.and_then(Value::as_array) else {
+        return bad_request("enabledModules は配列または null が必要です。");
+    };
+    let caps = match resolve_caps(&db, &bot_id).await {
+        Ok(c) => c,
+        Err(_) => return server_error(),
+    };
+    // 既知 selectable かつ当該 Bot の capability 配下の ID のみ（重複排除・順序保持）。
+    let mut accepted: Vec<String> = Vec::new();
+    for id in arr.iter().filter_map(Value::as_str) {
+        if accepted.iter().any(|a| a == id) {
+            continue;
+        }
+        if !module_catalog::is_known_selectable(id) {
+            continue;
+        }
+        let cap_ok = module_catalog::find(id).is_some_and(|m| m.cap == "core" || caps.has(m.cap));
+        if cap_ok {
+            accepted.push(id.to_owned());
+        }
+    }
+    if let Err(_e) = bot_repo::set_user_modules(&db, &bot_id, &uid, Some(accepted.clone())).await {
+        return server_error();
+    }
+    (
+        StatusCode::OK,
+        Json(json!({
+            "success": true,
+            "enabledModules": accepted,
+            "message": "有効な機能を更新しました（次のメッセージ処理から反映されます）。",
+        })),
+    )
+        .into_response()
+}
+
+/// アクセス権チェック（system_default は常に可・Node `hasBotAccess`）。エラー時は不可扱い。
+async fn access_ok(db: &Db, uid: &str, bot_id: &str) -> bool {
+    yuuka_web::has_bot_access(db, uid, bot_id)
+        .await
+        .unwrap_or(false)
+}
+
+/// Bot の capability 集合（Node `resolveBotCapabilities`＝bot 存在時 parse・不在は秘書相当フル）。
+async fn resolve_caps(
+    db: &Db,
+    bot_id: &str,
+) -> Result<yuuka_core::CapabilitySet, yuuka_core::DbError> {
+    Ok(bot_repo::get_bot(db, bot_id)
+        .await?
+        .map_or_else(bot_repo::secretary_full_capabilities, |b| {
+            b.capability_set()
+        }))
+}
+
+/// 有効モジュール JSON をパースする（Node `parseEnabledModules`）。`None`=全有効。
+/// 配列は既知 selectable ID のみ採用・非配列/パース不能/None 入力は `None`（安全側で全有効）。
+fn parse_enabled_modules(raw: Option<&str>) -> Option<std::collections::HashSet<String>> {
+    let raw = raw?;
+    match serde_json::from_str::<Value>(raw) {
+        Ok(Value::Array(arr)) => Some(
+            arr.iter()
+                .filter_map(Value::as_str)
+                .filter(|id| module_catalog::is_known_selectable(id))
+                .map(str::to_owned)
+                .collect(),
+        ),
+        _ => None,
+    }
+}
+
+fn not_found_bot() -> Response {
+    status_json(StatusCode::NOT_FOUND, "Botが見つかりません。")
 }
 
 // ─── POST /api/bots/assistant/gemini-key（Bot 専用 Gemini キー・owner/Admin） ─
@@ -1355,5 +1521,71 @@ mod tests {
         )
         .await;
         assert_eq!(st, StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn modules_override_and_defaults() {
+        let app = app();
+
+        // アクセス不可（他人の bot）→ 404。
+        let (st, _) = send(&app, "GET", "/api/bots/modules?botId=b1", "other", "").await;
+        assert_eq!(st, StatusCode::NOT_FOUND);
+
+        // 既定（override 無し）→ 全有効。
+        let (st, j) = send(&app, "GET", "/api/bots/modules?botId=b1", "owner", "").await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(j["has_override"], false);
+        assert_eq!(j["all_enabled"], true);
+        let mods = j["modules"].as_array().unwrap();
+        assert!(mods.len() >= 14);
+        assert!(mods.iter().all(|m| m["enabled"] == true));
+
+        // 上書き設定（todo + note + 不明IDは無視 + 重複除去）。
+        let (st, j) = send(
+            &app,
+            "POST",
+            "/api/bots/modules",
+            "owner",
+            r#"{"botId":"b1","enabledModules":["todo","note","bogus","todo"]}"#,
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(j["enabledModules"], serde_json::json!(["todo", "note"]));
+
+        // GET に反映（has_override + 個別の enabled）。
+        let (_st, j) = send(&app, "GET", "/api/bots/modules?botId=b1", "owner", "").await;
+        assert_eq!(j["has_override"], true);
+        assert_eq!(j["all_enabled"], false);
+        let mods = j["modules"].as_array().unwrap();
+        let todo = mods.iter().find(|m| m["id"] == "todo").unwrap();
+        let finance = mods.iter().find(|m| m["id"] == "finance").unwrap();
+        assert_eq!(todo["enabled"], true);
+        assert_eq!(finance["enabled"], false);
+
+        // 非配列 → 400。
+        let (st, _) = send(
+            &app,
+            "POST",
+            "/api/bots/modules",
+            "owner",
+            r#"{"botId":"b1","enabledModules":"xyz"}"#,
+        )
+        .await;
+        assert_eq!(st, StatusCode::BAD_REQUEST);
+
+        // null で解除 → 既定へ。
+        let (st, j) = send(
+            &app,
+            "POST",
+            "/api/bots/modules",
+            "owner",
+            r#"{"botId":"b1","enabledModules":null}"#,
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK);
+        assert!(j["message"].as_str().unwrap().contains("既定に戻しました"));
+        let (_st, j) = send(&app, "GET", "/api/bots/modules?botId=b1", "owner", "").await;
+        assert_eq!(j["has_override"], false);
+        assert_eq!(j["all_enabled"], true);
     }
 }

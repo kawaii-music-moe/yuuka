@@ -460,6 +460,89 @@ pub async fn update_bot_gemini_key(
         .await
 }
 
+/// Bot 既定の有効モジュール JSON（`bots.enabled_modules`・NULL は `None`＝全有効）。
+///
+/// # Errors
+/// 読み取り失敗時 [`DbError`]。
+pub async fn bot_enabled_modules(db: &Db, bot_id: &str) -> Result<Option<String>, DbError> {
+    let bot_id = bot_id.to_owned();
+    db.read
+        .read(move |conn| {
+            conn.query_row(
+                "SELECT enabled_modules FROM bots WHERE id = ?1",
+                params![bot_id],
+                |r| r.get::<_, Option<String>>(0),
+            )
+            .optional()
+            .map(Option::flatten)
+            .map_err(map_sqlite)
+        })
+        .await
+}
+
+/// ユーザー個別の有効モジュール上書き JSON（無ければ `None`・Node `getUserModulesJson`）。
+///
+/// # Errors
+/// 読み取り失敗時 [`DbError`]。
+pub async fn get_user_modules(
+    db: &Db,
+    bot_id: &str,
+    user_id: &str,
+) -> Result<Option<String>, DbError> {
+    let (b, u) = (bot_id.to_owned(), user_id.to_owned());
+    db.read
+        .read(move |conn| {
+            conn.query_row(
+                "SELECT enabled_modules FROM bot_user_modules WHERE bot_id = ?1 AND user_id = ?2",
+                params![b, u],
+                |r| r.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(map_sqlite)
+        })
+        .await
+}
+
+/// ユーザー個別の有効モジュール上書きを保存する（Node `setUserModules`）。
+/// `Some(ids)` は JSON で upsert・`None` は行削除（Bot 既定へフォールバック）。
+///
+/// # Errors
+/// 書き込み失敗時 [`DbError`]。
+pub async fn set_user_modules(
+    db: &Db,
+    bot_id: &str,
+    user_id: &str,
+    modules: Option<Vec<String>>,
+) -> Result<(), DbError> {
+    let (b, u) = (bot_id.to_owned(), user_id.to_owned());
+    db.writer
+        .transaction(move |tx| {
+            match modules {
+                None => {
+                    tx.execute(
+                        "DELETE FROM bot_user_modules WHERE bot_id = ?1 AND user_id = ?2",
+                        params![b, u],
+                    )
+                    .map_err(map_sqlite)?;
+                }
+                Some(ids) => {
+                    let json = serde_json::to_string(&ids).unwrap_or_else(|_| "[]".to_owned());
+                    tx.execute(
+                        "INSERT INTO bot_user_modules (bot_id, user_id, enabled_modules) \
+                         VALUES (?1, ?2, ?3) \
+                         ON CONFLICT(bot_id, user_id) DO UPDATE SET \
+                           enabled_modules = excluded.enabled_modules, \
+                           updated_at = datetime('now','localtime')",
+                        params![b, u, json],
+                    )
+                    .map_err(map_sqlite)?;
+                }
+            }
+            Ok(())
+        })
+        .await
+}
+
 /// Discord プロフィール（名前・アバター・application id）を DB へ同期（Node `updateBotDiscordProfile`・
 /// `COALESCE` で未指定は据え置き）。書き込みは writer actor 上。
 ///
