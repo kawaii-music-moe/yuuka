@@ -910,21 +910,123 @@ pub async fn accept_share(db: &Db, bot_id: &str, shared_user: &str) -> Result<()
         .await
 }
 
-/// 共有招待を辞退・取消（→revoked・Node `revokeShare`）。
+/// 共有招待を辞退・取消（→revoked・Node `revokeShare`）。行が動いたら `true`（Web の `{success}` 用）。
 ///
 /// # Errors
 /// 書き込み失敗時 [`DbError`]。
-pub async fn revoke_share(db: &Db, bot_id: &str, shared_user: &str) -> Result<(), DbError> {
+pub async fn revoke_share(db: &Db, bot_id: &str, shared_user: &str) -> Result<bool, DbError> {
     let (bot_id, shared_user) = (bot_id.to_owned(), shared_user.to_owned());
     db.writer
         .transaction(move |tx| {
+            let n = tx
+                .execute(
+                    "UPDATE bot_shares SET status = 'revoked', updated_at = datetime('now','localtime') \
+                     WHERE bot_id = ?1 AND shared_user_id = ?2",
+                    params![bot_id, shared_user],
+                )
+                .map_err(map_sqlite)?;
+            Ok(n > 0)
+        })
+        .await
+}
+
+/// `bot_shares` 1 行（Web 共有設定一覧・Node `BotShareRecord` 全列）。
+#[derive(Debug, Clone)]
+pub struct BotShareRow {
+    pub id: i64,
+    pub bot_id: String,
+    pub owner_id: String,
+    pub shared_user_id: String,
+    pub status: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+fn row_to_bot_share(row: &rusqlite::Row) -> rusqlite::Result<BotShareRow> {
+    Ok(BotShareRow {
+        id: row.get("id")?,
+        bot_id: row.get("bot_id")?,
+        owner_id: row.get("owner_id")?,
+        shared_user_id: row.get("shared_user_id")?,
+        status: row.get("status")?,
+        created_at: row.get("created_at")?,
+        updated_at: row.get("updated_at")?,
+    })
+}
+
+/// 共有招待を作成する（pending・既存は pending へ戻す・Node `createShareInvite`）。作成後の行を返す。
+///
+/// # Errors
+/// 書き込み・取得失敗時 [`DbError`]。
+pub async fn create_share_invite(
+    db: &Db,
+    bot_id: &str,
+    owner_id: &str,
+    shared_user_id: &str,
+) -> Result<BotShareRow, DbError> {
+    let (bot_id, owner_id, shared_user_id) = (
+        bot_id.to_owned(),
+        owner_id.to_owned(),
+        shared_user_id.to_owned(),
+    );
+    db.writer
+        .transaction(move |tx| {
             tx.execute(
-                "UPDATE bot_shares SET status = 'revoked', updated_at = datetime('now','localtime') \
-                 WHERE bot_id = ?1 AND shared_user_id = ?2",
-                params![bot_id, shared_user],
+                "INSERT INTO bot_shares (bot_id, owner_id, shared_user_id, status) \
+                 VALUES (?1, ?2, ?3, 'pending') \
+                 ON CONFLICT(bot_id, shared_user_id) \
+                 DO UPDATE SET status = 'pending', updated_at = datetime('now','localtime')",
+                params![bot_id, owner_id, shared_user_id],
             )
             .map_err(map_sqlite)?;
-            Ok(())
+            tx.query_row(
+                "SELECT * FROM bot_shares WHERE bot_id = ?1 AND shared_user_id = ?2",
+                params![bot_id, shared_user_id],
+                row_to_bot_share,
+            )
+            .map_err(map_sqlite)
+        })
+        .await
+}
+
+/// 指定 Bot の共有一覧（Node `listSharesForBot`・created_at ASC）。
+///
+/// # Errors
+/// 読み取り失敗時 [`DbError`]。
+pub async fn list_shares_for_bot(db: &Db, bot_id: &str) -> Result<Vec<BotShareRow>, DbError> {
+    let bot_id = bot_id.to_owned();
+    db.read
+        .read(move |conn| {
+            let mut stmt = conn
+                .prepare("SELECT * FROM bot_shares WHERE bot_id = ?1 ORDER BY created_at ASC")
+                .map_err(map_sqlite)?;
+            let rows = stmt
+                .query_map(params![bot_id], row_to_bot_share)
+                .map_err(map_sqlite)?;
+            let mut out = Vec::new();
+            for row in rows {
+                out.push(row.map_err(map_sqlite)?);
+            }
+            Ok(out)
+        })
+        .await
+}
+
+/// ユーザーの表示名を引く（無ければ `None`・Node `getUserByDiscordId(...)?.username`）。
+///
+/// # Errors
+/// 読み取り失敗時 [`DbError`]。
+pub async fn get_username(db: &Db, discord_id: &str) -> Result<Option<String>, DbError> {
+    let uid = discord_id.to_owned();
+    db.read
+        .read(move |conn| {
+            conn.query_row(
+                "SELECT username FROM users WHERE discord_id = ?1",
+                params![uid],
+                |r| r.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(map_sqlite)
         })
         .await
 }

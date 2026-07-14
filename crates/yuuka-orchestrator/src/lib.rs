@@ -14,6 +14,7 @@ pub mod guild_prompt;
 pub mod member_routes;
 pub mod message_log;
 pub mod persona;
+pub mod share_routes;
 pub mod system_prompt;
 pub mod user;
 
@@ -21,4 +22,7 @@ pub use discord_ports::{DbBotDirectory, DbMembership, InMemoryRateLimiter};
 pub use engine::{ChatEngine, GeminiFactory, RealGeminiFactory};
 pub use member_routes::{
     routes as member_request_routes, routes_with as member_request_routes_with, NullMemberDmSender,
+};
+pub use share_routes::{
+    routes as bot_share_routes, routes_with as bot_share_routes_with, NullShareInviteDm,
 };
