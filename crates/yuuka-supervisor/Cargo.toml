@@ -26,6 +26,7 @@ yuuka-personal.workspace = true
 yuuka-credential.workspace = true
 yuuka-playbook.workspace = true
 yuuka-persona.workspace = true
+yuuka-botassistant.workspace = true
 yuuka-admin.workspace = true
 yuuka-settings.workspace = true
 yuuka-auth.workspace = true

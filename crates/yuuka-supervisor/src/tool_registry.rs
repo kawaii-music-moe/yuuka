@@ -48,6 +48,9 @@ fn all_domain_tools(db: &Db) -> Result<Vec<Arc<dyn Tool>>, ToolError> {
     all.extend(yuuka_personal::tools(db.clone())?);
     all.extend(yuuka_credential::tools(db.clone())?);
     all.extend(yuuka_playbook::tools(db.clone())?);
+    // guild-assistant（汎用モード）ツール。露出は Tool::exposure（guild_assistant + memory 能力）で
+    // 選別されるため、秘書経路のスナップショットには現れない。
+    all.extend(yuuka_botassistant::tools(db.clone())?);
     // persona はツール関数を持たない（web 管理）。
     Ok(all)
 }
