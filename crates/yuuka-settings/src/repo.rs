@@ -5,10 +5,315 @@
 //! `salt` 列は**絶対に変更しない**（ユーザー鍵導出＝保存済み資格情報の復号に使うため）。
 
 use rusqlite::types::Value;
-use rusqlite::{params, params_from_iter, ErrorCode};
+use rusqlite::{params, params_from_iter, ErrorCode, OptionalExtension};
 use yuuka_core::DbError;
 use yuuka_db::map_sqlite;
 use yuuka_web::Db;
+
+/// ユーザーが Admin ロールか（Node `isAdmin`）。行が無ければ `false`。
+///
+/// # Errors
+/// 読み取り失敗時 [`DbError`]。
+pub async fn is_admin(db: &Db, discord_id: &str) -> Result<bool, DbError> {
+    let id = discord_id.to_owned();
+    db.read
+        .read(move |conn| {
+            let role: Option<String> = conn
+                .query_row(
+                    "SELECT role FROM users WHERE discord_id = ?1",
+                    params![id],
+                    |r| r.get::<_, String>(0),
+                )
+                .optional()
+                .map_err(map_sqlite)?;
+            Ok(role.as_deref() == Some("admin"))
+        })
+        .await
+}
+
+/// Bot の Discord トークン設定状態（オーナー識別 + suspend + トークン 3 列）。
+#[derive(Debug, Clone)]
+pub struct BotDiscordRow {
+    /// Bot 作成者（オーナー）の discord_id。
+    pub user_id: String,
+    /// 管理者による停止処分中か。
+    pub suspended: bool,
+    /// トークン暗号文（未設定は `None`）。
+    pub token_encrypted: Option<String>,
+    /// トークン IV。
+    pub token_iv: Option<String>,
+    /// トークン auth tag。
+    pub token_tag: Option<String>,
+}
+
+impl BotDiscordRow {
+    /// 3 列が揃っていればトークン設定済み（Node `hasToken`）。
+    #[must_use]
+    pub fn has_token(&self) -> bool {
+        self.token_encrypted.as_deref().is_some_and(|s| !s.is_empty())
+            && self.token_iv.is_some()
+            && self.token_tag.is_some()
+    }
+}
+
+/// Bot 1 件の Discord トークン設定を引く（Node `getBotById` + `getBotDiscordConfig` 相当）。不在は `None`。
+///
+/// # Errors
+/// 読み取り失敗時 [`DbError`]。
+pub async fn get_bot_discord(db: &Db, bot_id: &str) -> Result<Option<BotDiscordRow>, DbError> {
+    let bot_id = bot_id.to_owned();
+    db.read
+        .read(move |conn| {
+            conn.query_row(
+                "SELECT user_id, suspended, discord_token_encrypted, discord_token_iv, discord_token_tag \
+                 FROM bots WHERE id = ?1",
+                params![bot_id],
+                |r| {
+                    Ok(BotDiscordRow {
+                        user_id: r.get(0)?,
+                        suspended: r.get::<_, i64>(1)? != 0,
+                        token_encrypted: r.get(2)?,
+                        token_iv: r.get(3)?,
+                        token_tag: r.get(4)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(map_sqlite)
+        })
+        .await
+}
+
+/// Bot の Discord トークン 3 列を更新する（Node `updateBotDiscordToken`・全て NULL でクリア）。
+///
+/// # Errors
+/// 書き込み失敗時 [`DbError`]。
+pub async fn update_bot_discord_token(
+    db: &Db,
+    bot_id: &str,
+    encrypted: Option<String>,
+    iv: Option<String>,
+    tag: Option<String>,
+) -> Result<(), DbError> {
+    let bot_id = bot_id.to_owned();
+    db.writer
+        .transaction(move |tx| {
+            tx.execute(
+                "UPDATE bots SET discord_token_encrypted = ?1, discord_token_iv = ?2, \
+                 discord_token_tag = ?3, updated_at = datetime('now', 'localtime') WHERE id = ?4",
+                params![encrypted, iv, tag, bot_id],
+            )
+            .map_err(map_sqlite)?;
+            Ok(())
+        })
+        .await
+}
+
+/// `/api/status` ダッシュボード集計のスナップショット（`(user_id, bot_id)` スコープ・単一読み取り）。
+#[derive(Debug, Clone)]
+pub struct StatusSnapshot {
+    pub tasks: i64,
+    pub pending_tasks: i64,
+    /// `[low/その他, medium, high]`（応答キー `0/1/2` に対応）。
+    pub priorities: [i64; 3],
+    pub schedules: i64,
+    pub schedule_trend: Vec<i64>,
+    pub expenses: i64,
+    pub expense_trend: Vec<i64>,
+    pub username: Option<String>,
+    pub gemini_model: Option<String>,
+    pub gemini_key_present: bool,
+    pub backup_enabled: bool,
+    pub backup_folder_id: Option<String>,
+    pub backup_interval_hours: i64,
+    pub backup_generations: i64,
+    pub backup_last_run_at: Option<String>,
+    pub rich_reply_enabled: bool,
+    pub remind_default_minutes: i64,
+    pub notify_target_type: String,
+    pub notify_target_id: Option<String>,
+    pub active_persona_id: Option<i64>,
+}
+
+/// `/api/status` の集計を単一接続で行う（Node の複数 prepare を 1 read closure に集約）。
+///
+/// 日付トレンドは SQLite `date('now', ?)`（UTC・Node の `toISOString().slice(0,10)` と一致）で生成する。
+///
+/// # Errors
+/// 読み取り失敗時 [`DbError`]。
+#[allow(clippy::too_many_lines)]
+pub async fn status_snapshot(
+    db: &Db,
+    user_id: &str,
+    bot_id: &str,
+) -> Result<StatusSnapshot, DbError> {
+    let user_id = user_id.to_owned();
+    let bot_id = bot_id.to_owned();
+    db.read
+        .read(move |conn| {
+            let scoped = |sql: &str| -> Result<i64, DbError> {
+                conn.query_row(sql, params![user_id, bot_id], |r| r.get::<_, i64>(0))
+                    .map_err(map_sqlite)
+            };
+            let tasks = scoped(
+                "SELECT COUNT(*) FROM todos WHERE user_id = ?1 AND bot_id = ?2 AND parent_id IS NULL",
+            )?;
+            let pending_tasks = scoped(
+                "SELECT COUNT(*) FROM todos WHERE user_id = ?1 AND bot_id = ?2 AND status = 'open' AND parent_id IS NULL",
+            )?;
+            let schedules =
+                scoped("SELECT COUNT(*) FROM schedules WHERE user_id = ?1 AND bot_id = ?2")?;
+            let expenses =
+                scoped("SELECT COUNT(*) FROM expenses WHERE user_id = ?1 AND bot_id = ?2")?;
+
+            // 優先度別の未完了 ToDo（high→[2] / medium→[1] / それ以外→[0]）。
+            let mut priorities = [0i64; 3];
+            {
+                let mut stmt = conn
+                    .prepare(
+                        "SELECT priority, COUNT(*) FROM todos \
+                         WHERE user_id = ?1 AND bot_id = ?2 AND status = 'open' AND parent_id IS NULL \
+                         GROUP BY priority",
+                    )
+                    .map_err(map_sqlite)?;
+                let rows = stmt
+                    .query_map(params![user_id, bot_id], |r| {
+                        Ok((r.get::<_, Option<String>>(0)?, r.get::<_, i64>(1)?))
+                    })
+                    .map_err(map_sqlite)?;
+                for row in rows {
+                    let (pri, cnt) = row.map_err(map_sqlite)?;
+                    match pri.as_deref() {
+                        Some("high") => priorities[2] += cnt,
+                        Some("medium") => priorities[1] += cnt,
+                        _ => priorities[0] += cnt,
+                    }
+                }
+            }
+
+            // スケジュール: 今日〜+4 日のイベント数（UTC 日付）。
+            let mut schedule_trend = Vec::with_capacity(5);
+            for i in 0..5 {
+                let modifier = format!("+{i} day");
+                let c: i64 = conn
+                    .query_row(
+                        "SELECT COUNT(*) FROM schedules \
+                         WHERE user_id = ?1 AND bot_id = ?2 AND date(start_at) = date('now', ?3)",
+                        params![user_id, bot_id, modifier],
+                        |r| r.get(0),
+                    )
+                    .map_err(map_sqlite)?;
+                schedule_trend.push(c);
+            }
+
+            // 経費: 4 日前〜今日の支出額（UTC 日付・SUM NULL は 0）。
+            let mut expense_trend = Vec::with_capacity(5);
+            for i in (0..5).rev() {
+                let modifier = format!("-{i} day");
+                let total: Option<i64> = conn
+                    .query_row(
+                        "SELECT SUM(amount) FROM expenses \
+                         WHERE user_id = ?1 AND bot_id = ?2 AND type = 'expense' AND date = date('now', ?3)",
+                        params![user_id, bot_id, modifier],
+                        |r| r.get(0),
+                    )
+                    .map_err(map_sqlite)?;
+                expense_trend.push(total.unwrap_or(0));
+            }
+
+            // users 行（存在すれば設定を読む・不在は既定へ）。
+            type UserRow = (
+                Option<String>,
+                Option<String>,
+                bool,
+                bool,
+                Option<String>,
+                i64,
+                i64,
+                Option<String>,
+                bool,
+                i64,
+                String,
+                Option<String>,
+            );
+            let urow: Option<UserRow> = conn
+                .query_row(
+                    "SELECT username, gemini_model, gemini_api_key_encrypted, backup_enabled, \
+                     backup_folder_id, backup_interval_hours, backup_generations, backup_last_run_at, \
+                     rich_reply_enabled, remind_default_minutes, notify_target_type, notify_target_id \
+                     FROM users WHERE discord_id = ?1",
+                    params![user_id],
+                    |r| {
+                        Ok((
+                            r.get::<_, Option<String>>(0)?,
+                            r.get::<_, Option<String>>(1)?,
+                            r.get::<_, Option<String>>(2)?.is_some(),
+                            r.get::<_, i64>(3)? != 0,
+                            r.get::<_, Option<String>>(4)?,
+                            r.get::<_, i64>(5)?,
+                            r.get::<_, i64>(6)?,
+                            r.get::<_, Option<String>>(7)?,
+                            r.get::<_, i64>(8)? != 0,
+                            r.get::<_, i64>(9)?,
+                            r.get::<_, String>(10)?,
+                            r.get::<_, Option<String>>(11)?,
+                        ))
+                    },
+                )
+                .optional()
+                .map_err(map_sqlite)?;
+
+            let active_persona_id: Option<i64> = conn
+                .query_row(
+                    "SELECT persona_id FROM bot_active_personas WHERE user_id = ?1 AND bot_id = ?2",
+                    params![user_id, bot_id],
+                    |r| r.get::<_, i64>(0),
+                )
+                .optional()
+                .map_err(map_sqlite)?;
+
+            let (
+                username,
+                gemini_model,
+                gemini_key_present,
+                backup_enabled,
+                backup_folder_id,
+                backup_interval_hours,
+                backup_generations,
+                backup_last_run_at,
+                rich_reply_enabled,
+                remind_default_minutes,
+                notify_target_type,
+                notify_target_id,
+            ) = urow.unwrap_or((
+                None, None, false, false, None, 24, 7, None, true, 10, "dm".to_owned(), None,
+            ));
+
+            Ok(StatusSnapshot {
+                tasks,
+                pending_tasks,
+                priorities,
+                schedules,
+                schedule_trend,
+                expenses,
+                expense_trend,
+                username,
+                gemini_model,
+                gemini_key_present,
+                backup_enabled,
+                backup_folder_id,
+                backup_interval_hours,
+                backup_generations,
+                backup_last_run_at,
+                rich_reply_enabled,
+                remind_default_minutes,
+                notify_target_type,
+                notify_target_id,
+                active_persona_id,
+            })
+        })
+        .await
+}
 
 /// `/api/settings/user` の部分更新パッチ（present なフィールドのみ UPDATE する・Node `key in body` 意味論）。
 #[derive(Debug, Default)]

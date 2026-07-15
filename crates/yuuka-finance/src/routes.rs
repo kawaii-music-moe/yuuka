@@ -10,20 +10,39 @@
 //! breakdown/trend）。receipt OCR（upload-receipt）は Gemini vision 経路の supervisor 層配線
 //! が必要なため deferred。
 
+use std::sync::Arc;
+
 use axum::extract::{Query, State};
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
-use axum::{Json, Router};
+use axum::{Extension, Json, Router};
 use serde::Deserialize;
+use serde_json::json;
 use yuuka_core::WebError;
 use yuuka_types::{EmptyData, Envelope};
-use yuuka_web::{resolve_scope, ApiError, AppState, AuthenticatedUser, Db, ScopedJson};
+use yuuka_web::{
+    has_bot_access, resolve_scope, ApiError, AppState, AuthenticatedUser, Db, ScopedJson,
+};
 
 use crate::dto::{
     BudgetLimitListData, DeleteBudgetLimit, ExpenseData, ExpenseListData, NewExpense,
     NewPlannedPayment, PlannedPaymentData, PlannedPaymentId, PlannedPaymentListData,
     SetBudgetLimit, SettlePlanData,
 };
+use crate::receipt::{ReceiptError, ReceiptParser};
 use crate::repo::ExpenseRepo;
+
+/// レシート画像の MIME 許可リスト（LLM に渡せる画像形式に限定・Node `ALLOWED_RECEIPT_MIME`）。
+const ALLOWED_RECEIPT_MIME: [&str; 7] = [
+    "image/png",
+    "image/jpeg",
+    "image/jpg",
+    "image/webp",
+    "image/heic",
+    "image/heif",
+    "image/gif",
+];
 
 #[derive(Debug, Deserialize)]
 struct BotQuery {
@@ -47,8 +66,16 @@ struct PlansQuery {
     include_paid: Option<String>,
 }
 
-/// finance ドメインのルータ（`AppState` 上でマージされる）。
+/// finance ドメインのルータ（既定は receipt 解析 Null シーム・`AppState` 上でマージされる）。
 pub fn routes() -> Router<AppState> {
+    routes_with(Arc::new(crate::receipt::NullReceiptParser))
+}
+
+/// receipt パーサ（Gemini vision シーム）を注入して finance ルータを組む。
+///
+/// `parser` は `upload-receipt` の解析ポート。ChatEngine 配線時に実装を渡せば live 化する（既定は
+/// [`NullReceiptParser`](crate::receipt::NullReceiptParser)＝利用不可へ縮退）。
+pub fn routes_with(parser: Arc<dyn ReceiptParser>) -> Router<AppState> {
     Router::new()
         .route("/api/expenses", get(list))
         .route("/api/expenses/add", post(add))
@@ -64,6 +91,91 @@ pub fn routes() -> Router<AppState> {
         .route("/api/expenses/plans/add", post(add_plan))
         .route("/api/expenses/plans/pay", post(pay_plan))
         .route("/api/expenses/plans/delete", post(delete_plan))
+        .route("/api/expenses/upload-receipt", post(upload_receipt))
+        .layer(Extension(parser))
+}
+
+// ─── POST /api/expenses/upload-receipt（レシート画像解析・Gemini vision シーム） ──
+
+#[derive(Debug, Deserialize)]
+struct UploadReceiptInput {
+    #[serde(default, rename = "botId")]
+    bot_id: Option<String>,
+    #[serde(default, rename = "imageBase64")]
+    image_base64: Option<String>,
+    #[serde(default, rename = "mimeType")]
+    mime_type: Option<String>,
+    #[serde(default, rename = "additionalText")]
+    additional_text: Option<String>,
+}
+
+fn receipt_error(status: StatusCode, message: &str) -> Response {
+    (status, Json(json!({ "success": false, "message": message }))).into_response()
+}
+
+async fn upload_receipt(
+    user: AuthenticatedUser,
+    State(db): State<Db>,
+    Extension(parser): Extension<Arc<dyn ReceiptParser>>,
+    Json(body): Json<UploadReceiptInput>,
+) -> Response {
+    let image = body.image_base64.unwrap_or_default();
+    let mime = body.mime_type.unwrap_or_default();
+    if image.is_empty() || mime.is_empty() {
+        return receipt_error(
+            StatusCode::BAD_REQUEST,
+            "画像データ(base64)とMIMEタイプが必要です。",
+        );
+    }
+    // MIME 検証: `toLowerCase().split(";")[0].trim()` で画像形式のみ許可する。
+    let mime_key = mime
+        .to_lowercase()
+        .split(';')
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_owned();
+    if !ALLOWED_RECEIPT_MIME.contains(&mime_key.as_str()) {
+        return receipt_error(
+            StatusCode::BAD_REQUEST,
+            "対応していない画像形式です（png/jpeg/webp/heic/gif）。",
+        );
+    }
+
+    // resolvedBotId = botId && hasBotAccess ? botId : system_default。
+    let bot_id = match body.bot_id.as_deref() {
+        Some(b) if !b.is_empty() => match has_bot_access(&db, &user.0.discord_id, b).await {
+            Ok(true) => b.to_owned(),
+            Ok(false) => "system_default".to_owned(),
+            Err(_) => {
+                return receipt_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "処理に失敗しました。",
+                )
+            }
+        },
+        _ => "system_default".to_owned(),
+    };
+
+    // Node: additionalText || undefined（空文字は None）。
+    let additional = body.additional_text.as_deref().filter(|s| !s.is_empty());
+    match parser
+        .parse_receipt(&bot_id, &user.0.discord_id, &image, &mime, additional)
+        .await
+    {
+        Ok(response) => {
+            (StatusCode::OK, Json(json!({ "success": true, "response": response }))).into_response()
+        }
+        // レート超過はコスト増幅 DoS 対策の 429（Node `rateLimitMessage`）。
+        Err(ReceiptError::RateLimited(msg)) => {
+            receipt_error(StatusCode::TOO_MANY_REQUESTS, &msg)
+        }
+        // Gemini vision 未配線（縮退）。Node は上流エラーで 500 に落ちるが、明示 503 で伝える。
+        Err(ReceiptError::Unavailable) => receipt_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "レシートの解析に失敗しました。",
+        ),
+    }
 }
 
 async fn list(

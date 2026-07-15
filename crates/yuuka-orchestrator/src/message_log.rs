@@ -346,6 +346,45 @@ pub async fn clear_context(db: &Db, user_id: &str, bot_id: &str) -> Result<(), D
         .await
 }
 
+/// Bot 単位の日次利用件数（Node `countBotDailyUsage`・`role='user'` を日付集計・降順）。
+///
+/// `days` は `[1,90]` に floor + clamp する。`created_at >= date('now','localtime','-N days')` で範囲を
+/// 絞り、`date(created_at)`（localtime 修飾子なし＝列 DEFAULT が既に localtime のため二重変換を避ける）で
+/// グルーピングする。`assistant-config` のコスト可視化用（`user_id` 全件走査の明示的例外）。
+///
+/// # Errors
+/// 読み取り失敗時 [`DbError`]。
+pub async fn count_bot_daily_usage(
+    db: &Db,
+    bot_id: &str,
+    days: i64,
+) -> Result<Vec<(String, i64)>, DbError> {
+    let clamped = days.clamp(1, 90);
+    let modifier = format!("-{clamped} days");
+    let bot_id = bot_id.to_owned();
+    db.read
+        .read(move |conn| {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT date(created_at) AS date, COUNT(*) AS count FROM message_logs \
+                     WHERE bot_id = ?1 AND role = 'user' AND created_at >= date('now', 'localtime', ?2) \
+                     GROUP BY date(created_at) ORDER BY date DESC",
+                )
+                .map_err(map_sqlite)?;
+            let rows = stmt
+                .query_map(params![bot_id, modifier], |r| {
+                    Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+                })
+                .map_err(map_sqlite)?;
+            let mut out = Vec::new();
+            for row in rows {
+                out.push(row.map_err(map_sqlite)?);
+            }
+            Ok(out)
+        })
+        .await
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};

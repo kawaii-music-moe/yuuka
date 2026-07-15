@@ -24,6 +24,10 @@ pub struct WebConfig {
     /// 公開ベース URL（`config.base_url`・Webhook 受信 URL の生成等に使う）。`None`（`BASE_URL` 未設定）は
     /// 相対 URL へフォールバックする（Node `buildHookUrl`）。
     pub base_url: Option<String>,
+    /// SQLite DB パス（`config.db_path`・`/api/status` の設定表示に返す・Node `config.dbPath`）。
+    pub db_path: String,
+    /// リマインダー cron 式（`config.reminder_cron`・`/api/status` の設定表示に返す・Node `config.reminderCron`）。
+    pub reminder_cron: String,
 }
 
 impl WebConfig {
@@ -38,6 +42,8 @@ impl WebConfig {
             trusted_proxies: cfg.trusted_proxies.clone(),
             media_dir: std::path::PathBuf::from("data/media"),
             base_url: cfg.base_url.clone(),
+            db_path: cfg.db_path.to_string_lossy().into_owned(),
+            reminder_cron: cfg.reminder_cron.clone(),
         }
     }
 }

@@ -1,0 +1,25 @@
+[package]
+name = "yuuka-google"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "yuuka Google 連携の共有層（user_google_accounts / bot_google_account リポジトリ + OAuth/Calendar/Drive シーム）— Node googleAccountRepo / googleCalendarService / backupService パリティ"
+
+[dependencies]
+yuuka-core.workspace = true
+yuuka-db.workspace = true
+yuuka-web.workspace = true
+async-trait.workspace = true
+rusqlite.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+getrandom.workspace = true
+hex.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+
+[lints]
+workspace = true

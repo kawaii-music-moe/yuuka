@@ -17,16 +17,20 @@
 
 use std::sync::Arc;
 
-use axum::routing::post;
+use axum::routing::{get, post};
 use axum::{Extension, Router};
 use yuuka_admin::BotRuntime;
 use yuuka_auth::SessionStore;
 use yuuka_crypto::SystemCrypto;
+use yuuka_google::{BackupPort, CalendarPort, GoogleOAuthPort, OAuthStateStore};
 use yuuka_web::AppState;
 
+mod discord;
 mod dto;
+mod google;
 mod repo;
 mod routes;
+mod status;
 
 /// 設定ルートが使う実行時依存（`Extension` で各ハンドラへ注入）。
 pub struct SettingsRuntime {
@@ -34,26 +38,43 @@ pub struct SettingsRuntime {
     sessions: SessionStore,
     /// セッション TTL（秒・Cookie `Max-Age` と Redis EX に使う）。
     session_ttl_secs: u64,
-    /// Gemini API キーの暗号化に使う（未設定＝暗号鍵無しなら gemini 更新は 500 に縮退）。
+    /// Gemini API キー / Discord トークンの暗号化に使う（未設定＝暗号鍵無しなら暗号化更新は 500 に縮退）。
     crypto: Option<Arc<SystemCrypto>>,
-    /// 所有 Bot 停止の runtime シーム（Discord gateway 未配線時は `NullBotRuntime`）。
+    /// 所有 Bot 停止/再起動の runtime シーム（Discord gateway 未配線時は `NullBotRuntime`）。
     bots: Arc<dyn BotRuntime>,
+    /// Google OAuth2 認可フローのシーム（未配線時は `NullGoogleOAuth`＝未設定扱い）。
+    oauth: Arc<dyn GoogleOAuthPort>,
+    /// Google Calendar 取得/無効化のシーム（未配線時は `NullCalendar`＝空一覧）。
+    calendar: Arc<dyn CalendarPort>,
+    /// 手動バックアップのシーム（未配線時は `NullBackup`＝常に失敗＝500）。
+    backup: Arc<dyn BackupPort>,
+    /// OAuth の CSRF state nonce ストア（in-memory・web 再起動を跨ぐよう main で 1 度生成）。
+    oauth_state: Arc<OAuthStateStore>,
 }
 
 impl SettingsRuntime {
     /// 実行時依存を束ねる。`session_ttl_days` から Cookie/Redis TTL（秒）を導出する。
     #[must_use]
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         sessions: SessionStore,
         session_ttl_days: u32,
         crypto: Option<Arc<SystemCrypto>>,
         bots: Arc<dyn BotRuntime>,
+        oauth: Arc<dyn GoogleOAuthPort>,
+        calendar: Arc<dyn CalendarPort>,
+        backup: Arc<dyn BackupPort>,
+        oauth_state: Arc<OAuthStateStore>,
     ) -> Self {
         Self {
             sessions,
             session_ttl_secs: u64::from(session_ttl_days) * 24 * 60 * 60,
             crypto,
             bots,
+            oauth,
+            calendar,
+            backup,
+            oauth_state,
         }
     }
 }
@@ -67,5 +88,23 @@ pub fn routes(runtime: Arc<SettingsRuntime>) -> Router<AppState> {
         .route("/api/settings/user", post(routes::user_settings))
         .route("/api/settings/gemini", post(routes::gemini))
         .route("/api/settings/backup", post(routes::backup))
+        .route("/api/status", get(status::status))
+        .route(
+            "/api/settings/discord",
+            get(discord::get_discord).post(discord::post_discord),
+        )
+        .route(
+            "/api/settings/google/oauth/url",
+            get(google::oauth_url),
+        )
+        .route(
+            "/api/settings/google/oauth/callback",
+            get(google::oauth_callback),
+        )
+        .route("/api/settings/calendars", post(google::calendars))
+        .route(
+            "/api/settings/backup/trigger",
+            post(google::backup_trigger),
+        )
         .layer(Extension(runtime))
 }

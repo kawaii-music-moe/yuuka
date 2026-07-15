@@ -140,15 +140,44 @@ async fn run() -> Result<(), String> {
     ));
     let admin_routes = yuuka_admin::routes(admin_runtime);
 
-    // 設定ルータ（/api/settings/*）。セッション再発行/一括失効は auth と同一ストア、Gemini キー暗号化は
-    // 同じ crypto、所有 Bot 停止は admin と同一の BotRuntime シームを共有する。
+    // 設定ルータ（/api/settings/*・/api/status）。セッション再発行/一括失効は auth と同一ストア、Gemini
+    // キー/Discord トークン暗号化は同じ crypto、所有 Bot 停止/再起動は admin と同一の BotRuntime シームを
+    // 共有する。Google OAuth/Calendar/Drive バックアップは HTTP サブシステム未配線のため Null シームへ
+    // 縮退する（DB 効果＝アカウント行・カレンダー列・トークン列は常に完全に働く）。OAuth state ストアは
+    // web 再起動を跨ぐよう main で 1 度だけ生成する。
+    let google_oauth: Arc<dyn yuuka_google::GoogleOAuthPort> = Arc::new(yuuka_google::NullGoogleOAuth);
+    let google_calendar: Arc<dyn yuuka_google::CalendarPort> = Arc::new(yuuka_google::NullCalendar);
+    let google_backup: Arc<dyn yuuka_google::BackupPort> = Arc::new(yuuka_google::NullBackup);
+    let oauth_state = Arc::new(yuuka_google::OAuthStateStore::new());
     let settings_runtime = Arc::new(yuuka_settings::SettingsRuntime::new(
         sessions.clone(),
         cfg.session_ttl_days,
         crypto.clone(),
         bot_runtime.clone(),
+        google_oauth.clone(),
+        google_calendar.clone(),
+        google_backup.clone(),
+        oauth_state.clone(),
     ));
     let settings_routes = yuuka_settings::routes(settings_runtime);
+
+    // MCP ルータ（サーバー管理 + ダッシュボードプロキシ）。auth_credential 暗号化に crypto を注入し、
+    // proxy token は in-memory（web 再起動を跨ぐよう main で 1 度生成）。MCP サーバーへの実 HTTP
+    // （tools/list・dashboard・proxy）は未配線のため NullMcpClient へ縮退する（DB 効果は常に働く）。
+    let mcp_routes = yuuka_mcp::routes(Arc::new(yuuka_mcp::McpRuntime::new(
+        crypto.clone(),
+        Arc::new(yuuka_mcp::NullMcpClient),
+        Arc::new(yuuka_mcp::ProxyTokenManager::new()),
+    )));
+
+    // 統合設定ルータ（overview / bot lifecycle / grants / google accounts）。Bot 起動停止は Discord
+    // gateway 未配線のため NullBotLifecycle、カレンダー取得は settings と同一の Null シームを共有する。
+    let integrated_routes = yuuka_integrated::routes(Arc::new(
+        yuuka_integrated::IntegratedRuntime::new(
+            Arc::new(yuuka_integrated::NullBotLifecycle),
+            google_calendar.clone(),
+        ),
+    ));
 
     // Webhook ルータ（シークレット暗号化に crypto を注入・受信の実処理は未配線のため Null プロセッサへ縮退）。
     let webhook_routes = yuuka_webhook::routes_with(
@@ -205,6 +234,8 @@ async fn run() -> Result<(), String> {
         credential_routes,
         device_auth_routes,
         ws_routes: chat_ws_routes,
+        mcp_routes,
+        integrated_routes,
         addr,
         dist_dir,
     });
@@ -436,6 +467,10 @@ struct WebService {
     device_auth_routes: Router<AppState>,
     /// 会話 WS ルータ（`ChatEngine` を `Extension` で内包済み・`/ws/chat`）。
     ws_routes: Router<AppState>,
+    /// MCP ルータ（`McpRuntime` を `Extension` で内包済み・`/api/mcp-servers*` + `/proxy/mcp/:id/mcp`）。
+    mcp_routes: Router<AppState>,
+    /// 統合設定ルータ（`IntegratedRuntime` を `Extension` で内包済み・`/api/integrated/*`）。
+    integrated_routes: Router<AppState>,
     addr: SocketAddr,
     dist_dir: Option<PathBuf>,
 }
@@ -457,6 +492,8 @@ impl SupervisedService for WebService {
             self.credential_routes.clone(),
             self.device_auth_routes.clone(),
             self.ws_routes.clone(),
+            self.mcp_routes.clone(),
+            self.integrated_routes.clone(),
             self.dist_dir.as_deref(),
         );
         let listener = tokio::net::TcpListener::bind(self.addr)

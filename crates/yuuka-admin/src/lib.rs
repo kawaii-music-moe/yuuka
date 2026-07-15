@@ -37,6 +37,8 @@ pub trait BotRuntime: Send + Sync {
     async fn stop(&self, bot_id: &str);
     /// システムデフォルト Bot を新トークンで再起動する（Node `restartDefaultBot`）。
     async fn restart_default(&self, token: &str);
+    /// 独自 Bot を保存済みトークンで（再）起動する（Node `startCustomBot`）。fire-and-forget。
+    async fn start_custom(&self, bot_id: &str);
 }
 
 /// Discord gateway 未配線時の縮退実装（no-op・常に非稼働扱い）。
@@ -49,6 +51,7 @@ impl BotRuntime for NullBotRuntime {
     }
     async fn stop(&self, _bot_id: &str) {}
     async fn restart_default(&self, _token: &str) {}
+    async fn start_custom(&self, _bot_id: &str) {}
 }
 
 /// 管理ルートが使う実行時依存（`Extension` で各ハンドラへ注入）。

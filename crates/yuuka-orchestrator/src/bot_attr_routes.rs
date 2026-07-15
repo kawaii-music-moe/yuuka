@@ -14,10 +14,15 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::collections::HashSet;
+
 use yuuka_crypto::SystemCrypto;
 use yuuka_web::{AdminUser, AppState, AuthenticatedUser, Db};
 
+use crate::assistant_config;
 use crate::bot_repo::{self, EncryptedTriplet};
+use crate::discord_live::{DiscordLive, NullDiscordLive};
+use crate::message_log;
 use crate::module_catalog;
 use crate::preset::{self, BotPresetId};
 
@@ -48,6 +53,11 @@ pub fn routes_with(crypto: Option<Arc<SystemCrypto>>) -> Router<AppState> {
     Router::new()
         .route("/api/bots/presets", get(list_presets))
         .route("/api/bots/attributes", post(change_attributes))
+        .route("/api/bots/assistant-config", get(assistant_config_get))
+        .route(
+            "/api/bots/assistant/guild-options",
+            get(guild_options_get),
+        )
         .route(
             "/api/bots/assistant/guild-note",
             get(guild_note_get).post(guild_note_set),
@@ -70,6 +80,10 @@ pub fn routes_with(crypto: Option<Arc<SystemCrypto>>) -> Router<AppState> {
             get(admin_get).post(admin_set),
         )
         .layer(Extension(AttrCrypto(crypto)))
+        // guild-options の Discord ライブ照会シーム（gateway 未配線時は Null＝利用不可・空一覧）。
+        .layer(Extension(
+            Arc::new(NullDiscordLive) as Arc<dyn DiscordLive>,
+        ))
 }
 
 // ─── GET /api/bots/usage（API 利用量サマリ・アクセス権のある全ユーザー・読み取り専用） ──
@@ -952,6 +966,178 @@ async fn guild_note_set(
         Json(json!({ "success": true, "message": "共有ノートを保存しました。" })),
     )
         .into_response()
+}
+
+// ─── GET /api/bots/assistant-config（汎用モード設定タブの一括取得・owner/Admin） ──
+
+/// `GET /api/bots/assistant-config`（Node）。プリセット/能力/キー有無/ペルソナ/MCP/ギルド設定/利用量/
+/// レート制限を 1 応答に集約する（読み取り専用）。
+async fn assistant_config_get(
+    user: AuthenticatedUser,
+    State(db): State<Db>,
+    Query(q): Query<BotIdQuery>,
+) -> Response {
+    let bot = match require_owned_bot(&db, &user.0.discord_id, q.bot_id.as_deref().unwrap_or_default())
+        .await
+    {
+        Ok(b) => b,
+        Err(resp) => return resp,
+    };
+    let caps = bot.capability_set();
+    let preset = preset::preset_id_for_capabilities(&caps).as_str();
+
+    let own = match assistant_config::list_own_personas(&db, &bot.owner_id).await {
+        Ok(v) => v,
+        Err(_) => return server_error(),
+    };
+    let own_ids: HashSet<i64> = own.iter().map(|(id, _)| *id).collect();
+    let public = match assistant_config::list_public_personas(&db).await {
+        Ok(v) => v,
+        Err(_) => return server_error(),
+    };
+    let mut personas: Vec<Value> = own
+        .iter()
+        .map(|(id, name)| json!({ "id": id, "name": name, "scope": "own" }))
+        .collect();
+    for (id, name, owner_username) in &public {
+        if own_ids.contains(id) {
+            continue;
+        }
+        personas.push(json!({
+            "id": id,
+            "name": format!("{name}（公開: {owner_username}）"),
+            "scope": "public",
+        }));
+    }
+
+    let servers = match assistant_config::list_servers_granted_to_bot(&db, &bot.id).await {
+        Ok(v) => v,
+        Err(_) => return server_error(),
+    };
+    let mcp_servers: Vec<Value> = servers
+        .iter()
+        .map(|s| json!({ "id": s.id, "name": s.name, "enabled": s.enabled, "system": s.system }))
+        .collect();
+
+    let guilds = match bot_repo::list_allowed_guilds(&db, &bot.id).await {
+        Ok(g) => g,
+        Err(_) => return server_error(),
+    };
+    let guilds: Vec<Value> = guilds
+        .iter()
+        .map(|g| json!({ "bot_id": g.bot_id, "guild_id": g.guild_id, "created_at": g.created_at }))
+        .collect();
+    let members = match bot_repo::list_bot_members(&db, &bot.id).await {
+        Ok(m) => m,
+        Err(_) => return server_error(),
+    };
+    let members: Vec<Value> = members
+        .iter()
+        .map(|m| {
+            json!({
+                "bot_id": m.bot_id, "guild_id": m.guild_id, "user_id": m.user_id,
+                "added_by": m.added_by, "created_at": m.created_at,
+            })
+        })
+        .collect();
+    let roles = match bot_repo::list_allowed_roles(&db, &bot.id).await {
+        Ok(r) => r,
+        Err(_) => return server_error(),
+    };
+    let roles: Vec<Value> = roles
+        .iter()
+        .map(|r| {
+            json!({
+                "bot_id": r.bot_id, "guild_id": r.guild_id, "role_id": r.role_id,
+                "role_name": r.role_name, "added_by": r.added_by, "created_at": r.created_at,
+            })
+        })
+        .collect();
+
+    let usage = match message_log::count_bot_daily_usage(&db, &bot.id, 14).await {
+        Ok(v) => v,
+        Err(_) => return server_error(),
+    };
+    let usage: Vec<Value> = usage
+        .iter()
+        .map(|(date, count)| json!({ "date": date, "count": count }))
+        .collect();
+
+    let rate_limits = match rate_limits_json(&db).await {
+        Ok(v) => v,
+        Err(_) => return server_error(),
+    };
+
+    let has_discord_token = match bot_repo::bot_discord_token(&db, &bot.id).await {
+        Ok(t) => t.is_some(),
+        Err(_) => return server_error(),
+    };
+
+    Json(json!({
+        "success": true,
+        "preset": preset,
+        "capabilities": caps.granted(),
+        "has_gemini_key": bot.has_gemini_key,
+        "has_discord_token": has_discord_token,
+        "persona_id": bot.persona_id,
+        "personas": personas,
+        "mcp_servers": mcp_servers,
+        "guilds": guilds,
+        "members": members,
+        "roles": roles,
+        "usage": usage,
+        "rate_limits": rate_limits,
+    }))
+    .into_response()
+}
+
+// ─── GET /api/bots/assistant/guild-options（ロール/メンバー候補・owner/Admin・Discord live） ──
+
+#[derive(Debug, Deserialize)]
+struct GuildOptionsQuery {
+    #[serde(default, rename = "botId")]
+    bot_id: Option<String>,
+    #[serde(default, rename = "guildId")]
+    guild_id: Option<String>,
+}
+
+/// `GET /api/bots/assistant/guild-options`（Node）。指定ギルドのロール/メンバー候補を Discord ライブから引く
+/// （gateway 未配線時は `available:false`・空一覧）。
+async fn guild_options_get(
+    user: AuthenticatedUser,
+    State(db): State<Db>,
+    Extension(live): Extension<Arc<dyn DiscordLive>>,
+    Query(q): Query<GuildOptionsQuery>,
+) -> Response {
+    let bot = match require_owned_bot(&db, &user.0.discord_id, q.bot_id.as_deref().unwrap_or_default())
+        .await
+    {
+        Ok(b) => b,
+        Err(resp) => return resp,
+    };
+    let guild_id = q.guild_id.unwrap_or_default();
+    if !is_snowflake(&guild_id) {
+        return bad_request("guildId が必要です。");
+    }
+    let opts = live.guild_options(&bot.id, &guild_id).await;
+    let roles: Vec<Value> = opts
+        .roles
+        .iter()
+        .map(|e| json!({ "id": e.id, "name": e.name }))
+        .collect();
+    let members: Vec<Value> = opts
+        .members
+        .iter()
+        .map(|e| json!({ "id": e.id, "name": e.name }))
+        .collect();
+    Json(json!({
+        "success": true,
+        "roles": roles,
+        "members": members,
+        "members_complete": opts.members_complete,
+        "available": opts.available,
+    }))
+    .into_response()
 }
 
 /// requireOwnedBot（botId 必須→404→owner/Admin 403・Node）。エラー時は応答を `Err` で返す。

@@ -46,6 +46,8 @@ pub fn build_app(
     credential_routes: Router<AppState>,
     device_auth_routes: Router<AppState>,
     ws_routes: Router<AppState>,
+    mcp_routes: Router<AppState>,
+    integrated_routes: Router<AppState>,
     dist_dir: Option<&Path>,
 ) -> Router {
     let routes = framework_routes()
@@ -57,6 +59,8 @@ pub fn build_app(
         .merge(credential_routes)
         .merge(device_auth_routes)
         .merge(ws_routes)
+        .merge(mcp_routes)
+        .merge(integrated_routes)
         .merge(yuuka_todo::routes())
         .merge(yuuka_finance::routes())
         .merge(yuuka_schedule::routes())
@@ -162,12 +166,17 @@ mod tests {
             String::new(),
             String::new(),
         ));
-        // 設定ルータ（in-memory セッション・NullBotRuntime・暗号なし）を組んで merge を検証する。
+        // 設定ルータ（in-memory セッション・NullBotRuntime・暗号なし・Google は Null シーム）を組んで
+        // merge を検証する。
         let settings_runtime = std::sync::Arc::new(yuuka_settings::SettingsRuntime::new(
             yuuka_auth::SessionStore::in_memory(),
             7,
             None,
             std::sync::Arc::new(yuuka_admin::NullBotRuntime),
+            std::sync::Arc::new(yuuka_google::NullGoogleOAuth),
+            std::sync::Arc::new(yuuka_google::NullCalendar),
+            std::sync::Arc::new(yuuka_google::NullBackup),
+            std::sync::Arc::new(yuuka_google::OAuthStateStore::new()),
         ));
         super::build_app(
             AppState::new(Arc::new(FakeAuth), WebConfig::default(), test_db()),
@@ -184,6 +193,19 @@ mod tests {
             yuuka_auth::device_auth_routes(yuuka_auth::DeviceAuthStore::new(String::new())),
             // WS ルータは merge 検証には不要（ChatEngine 構築を避け空ルータを渡す）。
             axum::Router::new(),
+            // MCP ルータ（NullMcpClient・暗号なし・in-memory token）を merge して検証する。
+            yuuka_mcp::routes(std::sync::Arc::new(yuuka_mcp::McpRuntime::new(
+                None,
+                std::sync::Arc::new(yuuka_mcp::NullMcpClient),
+                std::sync::Arc::new(yuuka_mcp::ProxyTokenManager::new()),
+            ))),
+            // 統合設定ルータ（NullBotLifecycle・NullCalendar）を merge して検証する。
+            yuuka_integrated::routes(std::sync::Arc::new(
+                yuuka_integrated::IntegratedRuntime::new(
+                    std::sync::Arc::new(yuuka_integrated::NullBotLifecycle),
+                    std::sync::Arc::new(yuuka_google::NullCalendar),
+                ),
+            )),
             None,
         )
     }

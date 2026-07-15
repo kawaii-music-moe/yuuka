@@ -54,6 +54,13 @@ pub struct Config {
     /// デスクトップ `/ws/chat` の 1 メッセージ添付上限（MB・`DESKTOP_MAX_UPLOAD_MB`・既定 20・
     /// Node `config.desktopMaxUploadMb`）。
     pub desktop_max_upload_mb: u32,
+    /// リマインダーのポーリング cron 式（`REMINDER_CRON`・既定 `* * * * *`・Node `config.reminderCron`）。
+    /// `/api/status` の設定表示に返す。
+    pub reminder_cron: String,
+    /// Google OAuth2 クライアント ID（`GOOGLE_CLIENT_ID`・未設定は Google 連携無効・Node `config.googleClientId`）。
+    pub google_client_id: Option<String>,
+    /// Google OAuth2 クライアントシークレット（`GOOGLE_CLIENT_SECRET`・同上・Node `config.googleClientSecret`）。
+    pub google_client_secret: Option<String>,
 }
 
 impl Config {
@@ -110,6 +117,9 @@ impl Config {
                 "DESKTOP_MAX_UPLOAD_MB",
                 &get("DESKTOP_MAX_UPLOAD_MB").unwrap_or_else(|| "20".to_owned()),
             )?,
+            reminder_cron: get("REMINDER_CRON").unwrap_or_else(|| "* * * * *".to_owned()),
+            google_client_id: non_empty(get("GOOGLE_CLIENT_ID")),
+            google_client_secret: non_empty(get("GOOGLE_CLIENT_SECRET")),
         };
         cfg.validate()?;
         Ok(cfg)

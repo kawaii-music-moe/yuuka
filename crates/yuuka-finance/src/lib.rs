@@ -6,10 +6,12 @@
 //! receipt OCR (upload-receipt) は Gemini vision 経路の supervisor 層配線待ちで deferred。
 
 pub mod dto;
+pub mod receipt;
 pub mod repo;
 pub mod routes;
 pub mod tools;
 
+pub use receipt::{NullReceiptParser, ReceiptError, ReceiptParser};
 pub use routes::routes;
 pub use tools::tools;
 

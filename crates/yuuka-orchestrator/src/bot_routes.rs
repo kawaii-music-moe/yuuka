@@ -20,9 +20,10 @@ use base64::Engine as _;
 use serde_json::{json, Value};
 use yuuka_core::CapabilitySet;
 use yuuka_crypto::SystemCrypto;
-use yuuka_web::{AppState, AuthenticatedUser, Db};
+use yuuka_web::{has_bot_access, AppState, AuthenticatedUser, Db};
 
 use crate::bot_repo::{self, BotDetail};
+use crate::discord_live::{DiscordLive, NullDiscordLive};
 use crate::preset::{self, BotPresetId};
 
 /// Bot ランタイムのシーム（稼働状態の問い合わせ + カスタム Bot の停止・Node の `client`/`customClients`）。
@@ -73,8 +74,13 @@ pub fn routes_with(
             get(list_bots).post(create_bot).delete(delete_bot),
         )
         .route("/api/bots/profile", post(update_profile))
+        .route("/api/bots/sync-discord", post(sync_discord))
         .layer(Extension(runtime))
         .layer(Extension(ViewCrypto(crypto)))
+        // sync-discord の Discord ライブ照会シーム（gateway 未配線時は Null＝Bot ユーザー無し）。
+        .layer(Extension(
+            Arc::new(NullDiscordLive) as Arc<dyn DiscordLive>,
+        ))
 }
 
 // ─── GET /api/bots ───────────────────────────────────────────────────────────
@@ -251,6 +257,76 @@ async fn update_profile(
     (
         StatusCode::OK,
         Json(json!({ "success": true, "message": "Botのプロフィールを更新しました。" })),
+    )
+        .into_response()
+}
+
+// ─── POST /api/bots/sync-discord（Discord プロフィール同期・Discord live 依存） ──
+
+async fn sync_discord(
+    user: AuthenticatedUser,
+    State(db): State<Db>,
+    Extension(live): Extension<Arc<dyn DiscordLive>>,
+    Json(body): Json<Value>,
+) -> Response {
+    let uid = user.0.discord_id;
+    let bot_id = str_field(&body, "botId");
+    if bot_id.is_empty() {
+        return bad_request("botId が必要です。");
+    }
+    // 共有可のアクセス権（オーナー限定ではない・Node `hasBotAccess`）。
+    match has_bot_access(&db, &uid, &bot_id).await {
+        Ok(true) => {}
+        Ok(false) => return status_json(StatusCode::FORBIDDEN, "アクセス権限がありません。"),
+        Err(_) => return server_error(),
+    }
+    // Bot の実在確認。
+    match bot_repo::get_bot(&db, &bot_id).await {
+        Ok(Some(_)) => {}
+        Ok(None) => return status_json(StatusCode::NOT_FOUND, "Bot が見つかりません。"),
+        Err(_) => return server_error(),
+    }
+    // トークン設定有無（起動していないがトークンはある → 400 誘導）。
+    let has_token = match bot_repo::bot_discord_token(&db, &bot_id).await {
+        Ok(t) => t.is_some(),
+        Err(_) => return server_error(),
+    };
+
+    // Node: customClients → (token あり&未起動=400) → defaultBotClient → 無ければ 503。
+    let bot_user = if let Some(u) = live.custom_bot_user(&bot_id).await {
+        Some(u)
+    } else if has_token {
+        return bad_request("Botクライアントが起動していません。先にBotを起動してください。");
+    } else {
+        live.default_bot_user().await
+    };
+    let Some(bot_user) = bot_user else {
+        return status_json(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Discordクライアントが準備できていません。サーバーを確認してください。",
+        );
+    };
+
+    if let Err(_e) = bot_repo::update_discord_profile(
+        &db,
+        &bot_id,
+        &bot_user.username,
+        &bot_user.avatar_url,
+        &bot_user.id,
+    )
+    .await
+    {
+        return server_error();
+    }
+    (
+        StatusCode::OK,
+        Json(json!({
+            "success": true,
+            "discord_username": bot_user.username,
+            "discord_avatar_url": bot_user.avatar_url,
+            "discord_application_id": bot_user.id,
+            "message": format!("Discordプロフィールを同期しました: {}", bot_user.username),
+        })),
     )
         .into_response()
 }
