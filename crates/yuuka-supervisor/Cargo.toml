@@ -31,6 +31,7 @@ yuuka-briefing.workspace = true
 yuuka-conversation.workspace = true
 yuuka-richcontent.workspace = true
 yuuka-browser.workspace = true
+yuuka-chart.workspace = true
 yuuka-webhook.workspace = true
 yuuka-admin.workspace = true
 yuuka-settings.workspace = true

@@ -17,6 +17,13 @@ deny = [
 # advisory DB を取得してセキュリティ勧告をチェック（ネットワーク要）。
 # bans だけ高速に回すなら CI で `cargo deny check bans`（ネットワーク不要）。
 yanked = "deny"
+# 逸脱#3（2026-07-15・sendChart・ユーザーのポリシー承認）: ttf-parser は unmaintained だが、
+# Rust の TTF テキスト描画（ab_glyph/font-kit/rusttype いずれも）が不可避に依存する。フォント
+# パーサの非メンテのみでセキュリティ影響は小さく、sendChart のグラフラベル描画に必須のため 1 件
+# ignore する（advisories クリーン必須方針の唯一の例外・ユーザー承認済み）。
+ignore = [
+    "RUSTSEC-2026-0192", # ttf-parser unmaintained（ab_glyph 経由・sendChart のラベル描画）
+]
 
 [licenses]
 # foundation 依存のライセンス許可リスト。bans/advisories はクリーン必須、

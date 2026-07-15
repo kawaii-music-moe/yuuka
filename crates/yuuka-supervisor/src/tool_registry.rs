@@ -80,6 +80,8 @@ fn all_domain_tools(
     all.extend(yuuka_conversation::tools(db.clone())?);
     // リッチ返信 Embed（core・秘書/汎用モード両経路で常時露出・db 非依存）。
     all.extend(yuuka_richcontent::tools()?);
+    // sendChart（secretary・image+ab_glyph でローカル PNG 生成・db 非依存）。
+    all.extend(yuuka_chart::tools()?);
     // browser 系（secretary・chromium）。batch1（CLI）+ batch2（対話 6・CDP）。共有 manager 注入。
     all.extend(yuuka_browser::tools(browser_manager)?);
     // persona はツール関数を持たない（web 管理）。
