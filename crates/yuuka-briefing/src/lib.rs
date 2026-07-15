@@ -11,6 +11,7 @@
 
 mod repo;
 mod routes;
+mod service;
 mod tools;
 
 pub use routes::{routes, routes_with, DeliveryRunner, NullDeliveryRunner};

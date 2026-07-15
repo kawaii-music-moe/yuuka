@@ -9,10 +9,13 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use yuuka_core::tool::FunctionDeclaration;
-use yuuka_core::{Tool, ToolContext, ToolError, ToolName, ToolOutcome};
+use yuuka_core::{
+    EmbedFieldPart, EmbedPart, ResponsePart, Tool, ToolContext, ToolError, ToolName, ToolOutcome,
+};
 use yuuka_web::Db;
 
 use crate::repo::{self, BriefingConfig, ReportConfig};
+use crate::service;
 
 /// このクレートが公開するツール（configureReport / getBriefingConfig）。
 ///
@@ -30,6 +33,10 @@ pub fn tools(db: Db) -> Result<Vec<Arc<dyn Tool>>, ToolError> {
         }),
         Arc::new(ConfigureBriefingTool {
             name: ToolName::checked("configureBriefing".to_owned())?,
+            db: db.clone(),
+        }),
+        Arc::new(RunBriefingNowTool {
+            name: ToolName::checked("runBriefingNow".to_owned())?,
             db,
         }),
     ])
@@ -353,6 +360,73 @@ fn report_view(c: &ReportConfig) -> Value {
     })
 }
 
+// ─── runBriefingNow ──────────────────────────────────────────────────────────
+
+/// 朝報を今すぐ生成して**この返信にインライン表示**する（Node `runBriefingNow`）。
+///
+/// **意図的 divergence**: Node は設定した配信先（DM/channel）へ Discord 送信し「テスト配信しました」
+/// と返す。Rust は Discord 配信（Messenger）が Discord live 配線時のシームのため、手動 runBriefingNow
+/// は**生成した朝報をインライン Embed で返す**（今すぐ確認できて有用）。定時配信（cron→配信先）は
+/// DeliveryRunner シームが担い、同じ [`service::build_briefing`] 生成ロジックを再利用する。
+struct RunBriefingNowTool {
+    name: ToolName,
+    db: Db,
+}
+
+#[async_trait]
+impl Tool for RunBriefingNowTool {
+    fn declaration(&self) -> FunctionDeclaration {
+        FunctionDeclaration {
+            name: self.name.clone(),
+            description: "設定済みの朝報（天気・ニュース）を今すぐ生成して見せる。\n\
+                ・「朝報を出して」「今日の天気とニュースまとめて」等で呼ぶ。\n\
+                ・先に configureBriefing で天気の地点やニュースのRSSフィードを設定しておく必要がある。"
+                .to_owned(),
+            parameters_json_schema: json!({ "type": "object", "properties": {} }),
+            requires_confirmation: false,
+        }
+    }
+
+    async fn call(&self, ctx: &ToolContext, _args: Value) -> Result<ToolOutcome, ToolError> {
+        let content = service::build_briefing(&self.db, ctx.user_id.as_str(), ctx.bot_id.as_str())
+            .await
+            .map_err(exec_err)?;
+        let Some(content) = content else {
+            return Ok(fail(
+                "朝報がまだ設定されていません。先に configureBriefing で天気の地点やニュースフィードを設定してください。",
+            ));
+        };
+
+        let fields: Vec<EmbedFieldPart> = content
+            .fields
+            .into_iter()
+            .map(|(name, value)| EmbedFieldPart {
+                name,
+                value,
+                inline: false,
+            })
+            .collect();
+        let description = if content.has_content {
+            None
+        } else {
+            Some(service::BRIEFING_EMPTY_DESC.to_owned())
+        };
+
+        let embed = EmbedPart {
+            title: Some(service::BRIEFING_TITLE.to_owned()),
+            description,
+            color: service::BRIEFING_COLOR,
+            fields,
+            footer: Some(service::BRIEFING_FOOTER.to_owned()),
+        };
+
+        Ok(ToolOutcome {
+            payload: json!({ "success": true, "message": "朝報を生成しました🌅" }),
+            parts: vec![ResponsePart::Embed(embed)],
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -564,5 +638,20 @@ mod tests {
                 .len(),
             1
         );
+    }
+
+    #[tokio::test]
+    async fn run_briefing_now_fails_when_unconfigured() {
+        let db = seed_db();
+        let tools = tools(db).unwrap();
+        let run = find(&tools, "runBriefingNow");
+        // 設定行が無い → 「まだ設定されていません」で fail（build_briefing が None）。
+        let out = run.call(&ctx(), json!({})).await.unwrap();
+        assert_eq!(out.payload["success"], false);
+        assert!(out.payload["message"]
+            .as_str()
+            .unwrap()
+            .contains("朝報がまだ設定されていません"));
+        assert!(out.parts.is_empty());
     }
 }
