@@ -13,6 +13,7 @@ yuuka-crypto.workspace = true
 yuuka-db.workspace = true
 yuuka-types.workspace = true
 yuuka-web.workspace = true
+yuuka-browser.workspace = true       # browserFillCredential が対話ブラウザ（BrowserManager）へ復号値を入力
 axum.workspace = true
 rusqlite.workspace = true
 serde.workspace = true

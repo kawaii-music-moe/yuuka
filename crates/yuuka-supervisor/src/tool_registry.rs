@@ -54,6 +54,10 @@ fn all_domain_tools(
     crypto: Option<Arc<SystemCrypto>>,
     recorder: Option<Arc<ActionRecorder>>,
 ) -> Result<Vec<Arc<dyn Tool>>, ToolError> {
+    // 対話ブラウザの共有マネージャ。browser 対話 6 ツールと credential の browserFillCredential が
+    // **同一 chromium セッション**を共有するため、ここで 1 つ作って両方へ注入する。
+    let browser_manager = Arc::new(yuuka_browser::BrowserManager::new());
+
     let mut all: Vec<Arc<dyn Tool>> = Vec::new();
     all.extend(yuuka_todo::tools(db.clone())?);
     all.extend(yuuka_finance::tools(db.clone())?);
@@ -61,7 +65,12 @@ fn all_domain_tools(
     all.extend(yuuka_timeline::tools(db.clone())?);
     all.extend(yuuka_reminder::tools(db.clone())?);
     all.extend(yuuka_personal::tools(db.clone())?);
-    all.extend(yuuka_credential::tools(db.clone(), crypto)?);
+    // credential: browserFillCredential が復号値を対話ブラウザへ入力するため manager を注入。
+    all.extend(yuuka_credential::tools(
+        db.clone(),
+        crypto,
+        Some(Arc::clone(&browser_manager)),
+    )?);
     all.extend(yuuka_playbook::tools(db.clone(), recorder)?);
     // guild-assistant（汎用モード）ツール。露出は Tool::exposure（guild_assistant + memory 能力）で
     // 選別されるため、秘書経路のスナップショットには現れない。
@@ -71,9 +80,8 @@ fn all_domain_tools(
     all.extend(yuuka_conversation::tools(db.clone())?);
     // リッチ返信 Embed（core・秘書/汎用モード両経路で常時露出・db 非依存）。
     all.extend(yuuka_richcontent::tools()?);
-    // browser 系（secretary・chromium CLI + reqwest/scraper・db 非依存）。searchWeb/fetchDynamicPage/
-    // takePageScreenshot。対話セッション 6 本は後続増分。
-    all.extend(yuuka_browser::tools()?);
+    // browser 系（secretary・chromium）。batch1（CLI）+ batch2（対話 6・CDP）。共有 manager 注入。
+    all.extend(yuuka_browser::tools(browser_manager)?);
     // persona はツール関数を持たない（web 管理）。
     Ok(all)
 }

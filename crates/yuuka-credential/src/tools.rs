@@ -12,12 +12,10 @@
 //! 露出しない**（repo が SELECT しない・§6.4）。パスワード値はツールの応答に一切含めない。
 //!
 //! 移植済み: listCredentialServices / deleteCredential / addCredential / updateCredential
-//! （ユーザー鍵暗号化 = `SystemCrypto::encrypt_for_user`・salt は `users.salt`・crypto 注入）。
-//! **未移植（deferred）**:
-//! - `browserFillCredential`: 平文パスワードの復号（`getDecryptedCredential`）と browserService への
-//!   直接入力が必要で、repo `get`（クリーンビュー・パスワード非含有）では代替不能。
-//! - listCredentialServices / deleteCredential の `bot_credential_access` 許可フィルタ・grant 掃除も
-//!   deferred（HTTP route と同じく本コア CRUD では扱わない）。
+//! （ユーザー鍵暗号化 = `SystemCrypto::encrypt_for_user`・salt は `users.salt`・crypto 注入）+
+//! **browserFillCredential**（2026-07-15o＝Bot 許可ゲート〔`is_granted`〕→`get_full`+`decrypt_for_user`
+//! で復号→共有 `BrowserManager::type_text` へ**直接入力**〔復号値は LLM 応答・ログに非露出・§6.3.2〕・
+//! 失敗文言は秘匿値を除去〔`sanitize_error`〕）。許可フィルタ・grant 掃除も配線済み（2026-07-15a）。
 
 use std::sync::Arc;
 
@@ -27,6 +25,7 @@ use yuuka_core::tool::FunctionDeclaration;
 use yuuka_core::{DbError, Tool, ToolContext, ToolError, ToolName, ToolOutcome, UserScope};
 use yuuka_web::Db;
 
+use yuuka_browser::BrowserManager;
 use yuuka_crypto::SystemCrypto;
 
 use crate::access::CredentialAccessRepo;
@@ -40,7 +39,11 @@ use crate::repo::{check_field_lengths, CredentialRepo};
 /// ツール名が Gemini 制約に反する場合 [`ToolError`]（コンパイル時定数なので通常発生しない）。
 /// `crypto` は保存時暗号化（ユーザー鍵）に使う。未設定（暗号鍵無し）なら add/update は 500 相当で
 /// 縮退する（register/update は暗号化できないため）。
-pub fn tools(db: Db, crypto: Option<Arc<SystemCrypto>>) -> Result<Vec<Arc<dyn Tool>>, ToolError> {
+pub fn tools(
+    db: Db,
+    crypto: Option<Arc<SystemCrypto>>,
+    browser: Option<Arc<BrowserManager>>,
+) -> Result<Vec<Arc<dyn Tool>>, ToolError> {
     Ok(vec![
         Arc::new(ListCredentialServicesTool {
             name: ToolName::checked("listCredentialServices".to_owned())?,
@@ -57,8 +60,14 @@ pub fn tools(db: Db, crypto: Option<Arc<SystemCrypto>>) -> Result<Vec<Arc<dyn To
         }),
         Arc::new(UpdateCredentialTool {
             name: ToolName::checked("updateCredential".to_owned())?,
+            db: db.clone(),
+            crypto: crypto.clone(),
+        }),
+        Arc::new(BrowserFillCredentialTool {
+            name: ToolName::checked("browserFillCredential".to_owned())?,
             db,
             crypto,
+            browser,
         }),
     ])
 }
@@ -469,6 +478,146 @@ impl Tool for UpdateCredentialTool {
     }
 }
 
+// ─── browserFillCredential ───────────────────────────────────────────────────
+
+/// エラー文言から秘匿値を除去する（Node `sanitizeErrorMessage`）。
+fn sanitize_error(message: &str, secrets: &[&str]) -> String {
+    let mut out = message.to_owned();
+    for secret in secrets {
+        if !secret.is_empty() && out.contains(secret) {
+            out = out.replace(secret, "***");
+        }
+    }
+    out
+}
+
+/// 保管庫の資格情報を、開いている対話ブラウザの入力欄へ直接入力する（Node `browserFillCredential`）。
+///
+/// 復号値（ユーザー名・パスワード）は `BrowserManager` へ**直接**渡し、LLM 応答・ログには一切
+/// 含めない（§6.3.2）。Bot 許可（`bot_credential_access`）ゲート必須。
+struct BrowserFillCredentialTool {
+    name: ToolName,
+    db: Db,
+    crypto: Option<Arc<SystemCrypto>>,
+    browser: Option<Arc<BrowserManager>>,
+}
+
+#[async_trait]
+impl Tool for BrowserFillCredentialTool {
+    fn declaration(&self) -> FunctionDeclaration {
+        FunctionDeclaration {
+            name: self.name.clone(),
+            description: "保管庫のログイン情報を、いま開いているブラウザのページの入力欄へ直接打ち込む。\n\
+                ・ユーザー名とパスワードはブラウザにだけ渡り、あなた（LLM）には返らない。\n\
+                ・ユーザーが「ログインして」などはっきり頼んだ時だけ使う。\n\
+                ・自動ログインの手順: (1)browserInteractiveOpen でログインページを開く (2)browserInteractiveStatus で入力欄の数値IDを調べる (3)この関数で username_selector / password_selector に数値IDを渡して入力 (4)browserInteractiveClick でログインボタンを押す。\n\
+                ・セレクタには browserInteractiveStatus に出る数値ID（data-yuuka-id）かCSSセレクタを使う。\n\
+                ・ユーザー名だけ入れたい時は username_selector だけ指定する。"
+                .to_owned(),
+            parameters_json_schema: json!({
+                "type": "object",
+                "properties": {
+                    "service_name": { "type": "string", "description": "入力するログイン情報のサービス名。listCredentialServices で確認できる。" },
+                    "username_selector": { "type": "string", "description": "ユーザー名の入力欄を指すセレクタ（browserInteractiveStatus で調べた数値ID か CSSセレクタ）。省略するとユーザー名は入れない。" },
+                    "password_selector": { "type": "string", "description": "パスワードの入力欄を指すセレクタ（browserInteractiveStatus で調べた数値ID か CSSセレクタ）。省略するとパスワードは入れない。" }
+                },
+                "required": ["service_name"]
+            }),
+            requires_confirmation: false,
+        }
+    }
+
+    async fn call(&self, ctx: &ToolContext, args: Value) -> Result<ToolOutcome, ToolError> {
+        let Some(service_name) = arg_str(&args, "service_name") else {
+            return Ok(fail_payload("service_name を指定してください。"));
+        };
+        let username_selector = arg_str(&args, "username_selector");
+        let password_selector = arg_str(&args, "password_selector");
+        if username_selector.is_none() && password_selector.is_none() {
+            return Ok(fail_payload(
+                "入力先フィールドが指定されていません。先に browserInteractiveStatus を呼び出してページ内のユーザー名・パスワード入力欄の数値ID（data-yuuka-id）を確認し、username_selector / password_selector に指定して再度呼び出してください。",
+            ));
+        }
+
+        let clean = service_name.trim().to_lowercase();
+        let uid = ctx.user_id.as_str();
+
+        // Bot 許可ゲート（Node `isCredentialGrantedToBot`）。
+        let granted = CredentialAccessRepo::new(&self.db)
+            .is_granted(ctx.bot_id.as_str(), uid, &clean)
+            .await
+            .map_err(|e| ToolError::Execution(e.to_string()))?;
+        if !granted {
+            return Ok(fail_payload(format!(
+                "このBotは認証情報「{clean}」の利用を許可されていません。統合管理ページ（Bot統合管理）で当該Botへ利用を許可してください。"
+            )));
+        }
+
+        // 復号（username は平文列・password のみ暗号化）。crypto/ salt 無しは縮退。
+        let Some(crypto) = &self.crypto else {
+            return Ok(fail_payload("暗号化が未設定のため復号できません。"));
+        };
+        let repo = CredentialRepo::new(&self.db);
+        let Some((username, _url, enc, iv, tag)) = repo
+            .get_full(&scope_of(ctx), &service_name)
+            .await
+            .map_err(|e| ToolError::Execution(e.to_string()))?
+        else {
+            return Ok(fail_payload(format!(
+                "サービス「{service_name}」の認証情報が見つかりません。listCredentialServices で登録済みサービス名を確認してください。"
+            )));
+        };
+        let salt = repo
+            .user_salt(uid)
+            .await
+            .map_err(|e| ToolError::Execution(e.to_string()))?;
+        let Some(salt) = salt else {
+            return Ok(fail_payload("ユーザー情報が見つかりません。"));
+        };
+        let Ok(password) = crypto.decrypt_for_user(&salt, &enc, &iv, &tag) else {
+            return Ok(fail_payload("パスワードの復号に失敗しました。"));
+        };
+
+        let Some(browser) = &self.browser else {
+            return Ok(fail_payload("ブラウザが利用できません。"));
+        };
+
+        // 復号値をブラウザへ直接入力（LLM 応答・ログに含めない・§6.3.2）。失敗文言は秘匿値を除去。
+        let secrets = [password.as_str(), username.as_str()];
+        let mut filled: Vec<&str> = Vec::new();
+        if let Some(sel) = &username_selector {
+            if let Err(e) = browser.type_text(uid, sel, &username).await {
+                return Ok(fail_payload(fill_error(&filled, &sanitize_error(&e, &secrets))));
+            }
+            filled.push("ユーザー名");
+        }
+        if let Some(sel) = &password_selector {
+            if let Err(e) = browser.type_text(uid, sel, &password).await {
+                return Ok(fail_payload(fill_error(&filled, &sanitize_error(&e, &secrets))));
+            }
+            filled.push("パスワード");
+        }
+
+        Ok(ToolOutcome::from_payload(json!({
+            "success": true,
+            "message": format!(
+                "「{clean}」の{}を入力しました。続けて browserInteractiveClick でログインボタンを押下してください。",
+                filled.join("と")
+            ),
+        })))
+    }
+}
+
+/// 入力失敗時の文言（Node の分岐: 一部入力済みなら「〜の入力後にエラー」）。
+fn fill_error(filled: &[&str], detail: &str) -> String {
+    let prefix = if filled.is_empty() {
+        "入力に失敗しました: ".to_owned()
+    } else {
+        format!("{}の入力後にエラーが発生しました: ", filled.join("と"))
+    };
+    format!("{prefix}{detail} browserInteractiveStatus で入力欄の数値IDを確認し直してください。")
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -554,7 +703,7 @@ mod tests {
         // 応対 Bot（ctx=system_default）へ両 service を許可（未許可は list に出ない）。
         grant_at(&path, "system_default", "userA", "github");
         grant_at(&path, "system_default", "userA", "aws");
-        let tools = tools(db, None).unwrap();
+        let tools = tools(db, None, None).unwrap();
 
         // 宣言名は bare（Node system prompt と一致）。
         let names: Vec<String> = tools
@@ -603,7 +752,7 @@ mod tests {
     #[tokio::test]
     async fn delete_validates_and_list_empty_message() {
         let (db, _path) = seed_db_at();
-        let tools = tools(db, None).unwrap();
+        let tools = tools(db, None, None).unwrap();
 
         // service_name 欠落 → fail。
         let delete = find(&tools, "deleteCredential");
@@ -625,7 +774,7 @@ mod tests {
         // 各 owner の service を応対 Bot（system_default）へ許可。
         grant_at(&path, "system_default", "userA", "github");
         grant_at(&path, "system_default", "userB", "aws");
-        let tools = tools(db, None).unwrap();
+        let tools = tools(db, None, None).unwrap();
         let list = find(&tools, "listCredentialServices");
 
         // 別ユーザーには自分の分だけ。
@@ -668,7 +817,7 @@ mod tests {
         }
         let crypto =
             Arc::new(SystemCrypto::new(secrecy::SecretString::from("master-secret")).unwrap());
-        let tool_set = tools(db, Some(crypto)).unwrap();
+        let tool_set = tools(db, Some(crypto), None).unwrap();
         let add = find(&tool_set, "addCredential");
         let list = find(&tool_set, "listCredentialServices");
         let update = find(&tool_set, "updateCredential");
@@ -755,7 +904,7 @@ mod tests {
 
         // crypto 未設定なら add は縮退（保存不可）。
         let (db2, _p2) = seed_db_at();
-        let tools_no_crypto = tools(db2, None).unwrap();
+        let tools_no_crypto = tools(db2, None, None).unwrap();
         let add2 = find(&tools_no_crypto, "addCredential");
         let out = add2
             .call(
@@ -765,5 +914,62 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(out.payload["success"], false);
+    }
+
+    #[test]
+    fn sanitize_error_masks_secrets() {
+        let msg = "要素 hunter2 の入力に失敗: alice";
+        let out = sanitize_error(msg, &["hunter2", "alice"]);
+        assert!(!out.contains("hunter2"));
+        assert!(!out.contains("alice"));
+        assert!(out.contains("***"));
+    }
+
+    #[test]
+    fn fill_error_prefixes_by_progress() {
+        assert!(fill_error(&[], "boom").starts_with("入力に失敗しました: "));
+        assert!(fill_error(&["ユーザー名"], "boom").starts_with("ユーザー名の入力後にエラーが発生しました: "));
+    }
+
+    #[tokio::test]
+    async fn browser_fill_requires_a_selector() {
+        let (db, _p) = seed_db_at();
+        // browser 無し（None）でも、セレクタ検証は browser/DB より前なので到達しない。
+        let tools = tools(db, None, None).unwrap();
+        let fill = find(&tools, "browserFillCredential");
+        // service_name 無し → fail。
+        let out = fill.call(&ctx("userA"), json!({})).await.unwrap();
+        assert_eq!(out.payload["success"], false);
+        // service_name あり・セレクタ無し → fail（入力先未指定の案内）。
+        let out = fill
+            .call(&ctx("userA"), json!({"service_name": "github"}))
+            .await
+            .unwrap();
+        assert_eq!(out.payload["success"], false);
+        assert!(out.payload["message"]
+            .as_str()
+            .unwrap()
+            .contains("入力先フィールドが指定されていません"));
+    }
+
+    #[tokio::test]
+    async fn browser_fill_blocks_ungranted_bot() {
+        let (db, path) = seed_db_at();
+        insert_at(&path, "userA", "github", "alice", "https://gh.test");
+        // grant しない → 未許可 Bot は利用不可（decrypt/browser へ到達しない）。
+        let tools = tools(db, None, None).unwrap();
+        let fill = find(&tools, "browserFillCredential");
+        let out = fill
+            .call(
+                &ctx("userA"),
+                json!({"service_name": "github", "username_selector": "2"}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(out.payload["success"], false);
+        assert!(out.payload["message"]
+            .as_str()
+            .unwrap()
+            .contains("利用を許可されていません"));
     }
 }

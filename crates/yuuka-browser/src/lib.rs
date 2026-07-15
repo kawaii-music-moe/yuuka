@@ -14,4 +14,7 @@ mod search;
 mod ssrf;
 mod tools;
 
+/// 対話ブラウザの per-user セッション管理。supervisor が 1 つ生成し、対話 6 ツールと
+/// `browserFillCredential`（yuuka-credential）へ同じ Arc を注入する。
+pub use interactive::BrowserManager;
 pub use tools::tools;

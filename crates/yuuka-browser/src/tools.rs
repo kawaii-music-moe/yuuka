@@ -24,9 +24,9 @@ const MIN_STATIC_LEN: usize = 100;
 ///
 /// # Errors
 /// ツール名が Gemini 制約に反する場合（コンパイル時定数のため通常発生しない）。
-pub fn tools() -> Result<Vec<Arc<dyn Tool>>, ToolError> {
-    // 対話ブラウザは per-user chromium を管理する 1 つの共有マネージャ（6 ツールで共有）。
-    let manager = Arc::new(BrowserManager::new());
+pub fn tools(manager: Arc<BrowserManager>) -> Result<Vec<Arc<dyn Tool>>, ToolError> {
+    // 対話ブラウザは per-user chromium を管理する共有マネージャ（対話 6 ツール + browserFillCredential
+    //〔yuuka-credential〕が同一インスタンスを共有＝supervisor が 1 つ生成し注入する）。
     Ok(vec![
         Arc::new(SearchWebTool {
             name: ToolName::checked("searchWeb".to_owned())?,
@@ -500,7 +500,7 @@ mod tests {
 
     #[test]
     fn tools_expose_nine_bare_names() {
-        let t = tools().unwrap();
+        let t = tools(Arc::new(BrowserManager::new())).unwrap();
         let names: Vec<String> = t.iter().map(|x| x.declaration().name.to_string()).collect();
         for expected in [
             "searchWeb",
@@ -522,7 +522,7 @@ mod tests {
     #[test]
     fn browser_tools_are_secretary_exposure() {
         // 既定露出（secretary）= Node browserModule cap:"secretary"。
-        let t = tools().unwrap();
+        let t = tools(Arc::new(BrowserManager::new())).unwrap();
         for tool in &t {
             let e = tool.exposure();
             assert!(e.secretary, "secretary 経路で露出する");
@@ -544,7 +544,7 @@ mod tests {
 
     #[tokio::test]
     async fn fetch_rejects_ssrf_url() {
-        let t = tools().unwrap();
+        let t = tools(Arc::new(BrowserManager::new())).unwrap();
         let fetch = t
             .iter()
             .find(|x| x.declaration().name.as_str() == "fetchDynamicPage")

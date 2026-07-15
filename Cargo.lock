@@ -3721,6 +3721,7 @@ dependencies = [
  "tokio",
  "tower",
  "ts-rs",
+ "yuuka-browser",
  "yuuka-core",
  "yuuka-crypto",
  "yuuka-db",

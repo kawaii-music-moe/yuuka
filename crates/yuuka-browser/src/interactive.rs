@@ -215,7 +215,8 @@ impl BrowserManager {
     }
 
     /// browserInteractiveType（Node）。CSS 入力 + 属性部分一致フォールバック。
-    pub(crate) async fn type_text(&self, user: &str, selector: &str, text: &str) -> Result<Value, String> {
+    /// `browserFillCredential`（別クレート）も復号値の入力にこれを使うため pub。
+    pub async fn type_text(&self, user: &str, selector: &str, text: &str) -> Result<Value, String> {
         let arc = self.get_or_launch(user).await?;
         let sess = arc.lock().await;
         let actual = resolve_selector(selector);
