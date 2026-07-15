@@ -7,21 +7,24 @@
 
 use std::sync::Arc;
 
-use yuuka_core::{Tool, ToolError};
+use yuuka_core::{ActionRecorder, Tool, ToolError};
 use yuuka_crypto::SystemCrypto;
 use yuuka_tools::{NativeProvider, ToolRegistry};
 use yuuka_web::Db;
 
 /// 全ドメインの Native ツールを登録した [`NativeProvider`] を作る。
 ///
+/// `recorder` は操作履歴レコーダー（`getRecentActionHistory` が読む）。FC ループにも同じ Arc を渡す。
+///
 /// # Errors
 /// ドメインの `tools(db)` 構築失敗、または名前重複時に [`ToolError`]。
 pub fn build_native_provider(
     db: &Db,
     crypto: Option<Arc<SystemCrypto>>,
+    recorder: Option<Arc<ActionRecorder>>,
 ) -> Result<NativeProvider, ToolError> {
     let mut provider = NativeProvider::new();
-    for tool in all_domain_tools(db, crypto)? {
+    for tool in all_domain_tools(db, crypto, recorder)? {
         provider.register(tool)?;
     }
     Ok(provider)
@@ -34,8 +37,9 @@ pub fn build_native_provider(
 pub fn build_tool_registry(
     db: &Db,
     crypto: Option<Arc<SystemCrypto>>,
+    recorder: Option<Arc<ActionRecorder>>,
 ) -> Result<ToolRegistry, ToolError> {
-    let provider = build_native_provider(db, crypto)?;
+    let provider = build_native_provider(db, crypto, recorder)?;
     Ok(ToolRegistry::new().with_provider(Arc::new(provider)))
 }
 
@@ -48,6 +52,7 @@ pub fn build_tool_registry(
 fn all_domain_tools(
     db: &Db,
     crypto: Option<Arc<SystemCrypto>>,
+    recorder: Option<Arc<ActionRecorder>>,
 ) -> Result<Vec<Arc<dyn Tool>>, ToolError> {
     let mut all: Vec<Arc<dyn Tool>> = Vec::new();
     all.extend(yuuka_todo::tools(db.clone())?);
@@ -57,7 +62,7 @@ fn all_domain_tools(
     all.extend(yuuka_reminder::tools(db.clone())?);
     all.extend(yuuka_personal::tools(db.clone())?);
     all.extend(yuuka_credential::tools(db.clone(), crypto)?);
-    all.extend(yuuka_playbook::tools(db.clone())?);
+    all.extend(yuuka_playbook::tools(db.clone(), recorder)?);
     // guild-assistant（汎用モード）ツール。露出は Tool::exposure（guild_assistant + memory 能力）で
     // 選別されるため、秘書経路のスナップショットには現れない。
     all.extend(yuuka_botassistant::tools(db.clone())?);
@@ -117,7 +122,7 @@ mod tests {
     fn registry_aggregates_all_domains_without_name_collision() {
         let db = seed_db();
         // build_native_provider が Ok = 全ドメイン横断で重複ツール名が無いことの保証。
-        let provider = build_native_provider(&db, None).unwrap();
+        let provider = build_native_provider(&db, None, None).unwrap();
         let decls = provider.list(&ctx());
         let names: Vec<String> = decls.iter().map(|d| d.name.to_string()).collect();
 
@@ -172,7 +177,7 @@ mod tests {
         // ★Phase 2 全鎖の統合検証: gemini FC ループ → RegistrySnapshot → NativeProvider →
         //   yuuka-todo の addTodo ツール → TodoRepo → 実 SQLite。
         let db = seed_db();
-        let registry = build_tool_registry(&db, None).unwrap();
+        let registry = build_tool_registry(&db, None, None).unwrap();
         let snapshot = registry.snapshot(&ctx());
 
         let resp = |v: serde_json::Value| -> GenerateContentResponse {

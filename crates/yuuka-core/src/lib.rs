@@ -4,6 +4,7 @@
 //! DAG: `types → core`, `db → core`, `all → core`。**core は誰にも依存しない**。
 //! 本クレートの契約は Phase 0（契約凍結）で確定し、以後変更しない（§12.2）。
 
+pub mod action_history;
 pub mod config;
 pub mod error;
 pub mod ids;
@@ -13,6 +14,7 @@ pub mod telemetry;
 pub mod tool;
 
 // よく使う型を crate ルートへ再エクスポート（feature crate の import を短くする）。
+pub use action_history::{ActionRecorder, RecordedAction};
 pub use config::Config;
 pub use error::{
     AppError, AuthError, ConfigError, DbError, DiscordError, Fatality, GeminiError, IpcError,

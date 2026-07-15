@@ -121,6 +121,7 @@ fn engine_with(db: Db, crypto: Option<Arc<SystemCrypto>>, text: &str) -> ChatEng
         Arc::new(FakeFactory {
             text: text.to_owned(),
         }),
+        None,
     )
 }
 

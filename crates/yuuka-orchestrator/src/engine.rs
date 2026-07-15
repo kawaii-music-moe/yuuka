@@ -14,7 +14,8 @@ use async_trait::async_trait;
 use base64::Engine as _;
 use secrecy::SecretString;
 use yuuka_core::{
-    BotId, DbError, GeminiError, GuildId, ResponsePart, ToolContext, TurnMode, UserId,
+    ActionRecorder, BotId, DbError, GeminiError, GuildId, ResponsePart, ToolContext, TurnMode,
+    UserId,
 };
 use yuuka_crypto::SystemCrypto;
 use yuuka_discord::{
@@ -120,6 +121,9 @@ pub struct ChatEngine {
     registry: ToolRegistry,
     /// backend ファクトリ（本番 `GeminiClient` / テスト fake）。
     factory: Arc<dyn GeminiFactory>,
+    /// 操作履歴レコーダー（秘書経路の FC ループへ渡して dispatch を記録・`getRecentActionHistory` が
+    /// 読む）。`None` なら記録しない（ツール側は「履歴なし」として振る舞う）。
+    recorder: Option<Arc<ActionRecorder>>,
 }
 
 impl ChatEngine {
@@ -130,12 +134,14 @@ impl ChatEngine {
         crypto: Option<Arc<SystemCrypto>>,
         registry: ToolRegistry,
         factory: Arc<dyn GeminiFactory>,
+        recorder: Option<Arc<ActionRecorder>>,
     ) -> Self {
         Self {
             db,
             crypto,
             registry,
             factory,
+            recorder,
         }
     }
 
@@ -145,8 +151,9 @@ impl ChatEngine {
         db: Db,
         crypto: Option<Arc<SystemCrypto>>,
         registry: ToolRegistry,
+        recorder: Option<Arc<ActionRecorder>>,
     ) -> Self {
-        Self::new(db, crypto, registry, Arc::new(RealGeminiFactory))
+        Self::new(db, crypto, registry, Arc::new(RealGeminiFactory), recorder)
     }
 
     /// 発話ユーザーが Gemini キーを設定済みか（WS の事前チェック `error/no_gemini_key` 用）。
@@ -268,8 +275,10 @@ impl ChatEngine {
         ctx.capabilities = caps;
         ctx.mode = TurnMode::Secretary;
         let snapshot = self.registry.snapshot(&ctx);
+        // 秘書経路のみ操作履歴を記録する（Node `processMessage` は recordActions:true・guild/DM は false）。
         let opts = LoopOptions {
             on_status: Some(status_bridge(status)),
+            action_recorder: self.recorder.clone(),
             ..LoopOptions::default()
         };
         let result = match run_function_calling_loop(

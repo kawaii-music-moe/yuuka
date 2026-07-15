@@ -131,6 +131,7 @@ async fn ws_chat_ready_then_msg_returns_done() {
         Arc::new(FakeFactory {
             text: "こんにちは！".to_owned(),
         }),
+        None,
     ));
     let state = AppState::new(Arc::new(FakeAuth), WebConfig::default(), db);
     let app = build_app(
@@ -198,6 +199,7 @@ async fn ws_chat_rejects_cookie_only_auth() {
         Arc::new(FakeFactory {
             text: "x".to_owned(),
         }),
+        None,
     ));
     let state = AppState::new(Arc::new(CookieAndBearerAuth), WebConfig::default(), db);
     let app = build_app(

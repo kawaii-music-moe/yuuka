@@ -15,7 +15,9 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use yuuka_core::tool::FunctionDeclaration;
-use yuuka_core::{DbError, Tool, ToolContext, ToolError, ToolName, ToolOutcome, UserScope};
+use yuuka_core::{
+    ActionRecorder, DbError, Tool, ToolContext, ToolError, ToolName, ToolOutcome, UserScope,
+};
 use yuuka_web::Db;
 
 use crate::dto::NewPlaybook;
@@ -23,11 +25,16 @@ use crate::repo::PlaybookRepo;
 
 /// このドメインが公開する Native ツール一式を作る。
 ///
-/// assembly 層（bot/WS）が `NativeProvider::register` で束ねる。
+/// assembly 層（bot/WS）が `NativeProvider::register` で束ねる。`recorder` は操作履歴
+/// レコーダー（`getRecentActionHistory` が読む・FC ループが書く）。`None` の場合は履歴が常に空
+/// （記録が無効の環境）として振る舞う。
 ///
 /// # Errors
 /// ツール名が Gemini 制約に反する場合 [`ToolError`]（コンパイル時定数なので通常発生しない）。
-pub fn tools(db: Db) -> Result<Vec<Arc<dyn Tool>>, ToolError> {
+pub fn tools(
+    db: Db,
+    recorder: Option<Arc<ActionRecorder>>,
+) -> Result<Vec<Arc<dyn Tool>>, ToolError> {
     Ok(vec![
         Arc::new(SavePlaybookTool {
             name: ToolName::checked("savePlaybook".to_owned())?,
@@ -44,6 +51,10 @@ pub fn tools(db: Db) -> Result<Vec<Arc<dyn Tool>>, ToolError> {
         Arc::new(DeletePlaybookTool {
             name: ToolName::checked("deletePlaybook".to_owned())?,
             db,
+        }),
+        Arc::new(GetRecentActionHistoryTool {
+            name: ToolName::checked("getRecentActionHistory".to_owned())?,
+            recorder,
         }),
     ])
 }
@@ -314,6 +325,56 @@ impl Tool for DeletePlaybookTool {
     }
 }
 
+// ─── getRecentActionHistory ──────────────────────────────────────────────────
+
+/// 直近の FC 操作履歴を取り出す（Node `getRecentActionHistory`）。実行ベースのマクロ登録準備。
+///
+/// 履歴は [`ActionRecorder`]（プロセス内・TTL 2h）から読む。`recorder` が `None`、または記録が無い
+/// 場合は空扱い（Node の「履歴なし」分岐と同じ案内文）。
+struct GetRecentActionHistoryTool {
+    name: ToolName,
+    recorder: Option<Arc<ActionRecorder>>,
+}
+
+#[async_trait]
+impl Tool for GetRecentActionHistoryTool {
+    fn declaration(&self) -> FunctionDeclaration {
+        FunctionDeclaration {
+            name: self.name.clone(),
+            description: "このユーザーとの会話で直近にやったツール操作の履歴を取得する（操作をマクロ化する準備に使う）。\n\
+                ・例:「今の操作を覚えておいて」「これを記憶して」。\n\
+                ・取得した履歴を手順としてMarkdownにまとめ、マクロ候補（呼び出し名・説明・手順）をユーザーに見せ、承認を得てから savePlaybook で保存する。"
+                .to_owned(),
+            parameters_json_schema: json!({ "type": "object", "properties": {} }),
+            requires_confirmation: false,
+        }
+    }
+
+    async fn call(&self, ctx: &ToolContext, _args: Value) -> Result<ToolOutcome, ToolError> {
+        let actions = self
+            .recorder
+            .as_ref()
+            .map(|r| r.recent(ctx.user_id.as_str()))
+            .unwrap_or_default();
+
+        if actions.is_empty() {
+            return Ok(ToolOutcome::from_payload(ok_payload(
+                "直近の操作履歴がありません（履歴は2時間で揮発します）。ユーザーに手順を説明してもらい、説明ベースで登録してください。",
+                json!({ "count": 0, "actions": [] }),
+            )));
+        }
+
+        let count = actions.len();
+        // RecordedAction は Serialize 導出済み（失敗し得ないが lint 準拠で空配列フォールバック）。
+        let actions_json =
+            serde_json::to_value(&actions).unwrap_or_else(|_| Value::Array(Vec::new()));
+        Ok(ToolOutcome::from_payload(ok_payload(
+            "直近の操作履歴です。この履歴から再実行可能な手順をMarkdownに要約し、マクロ候補（呼び出し名・説明・手順）をユーザーに提示して、承認を得てから savePlaybook で保存してください。",
+            json!({ "count": count, "actions": actions_json }),
+        )))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -366,7 +427,7 @@ mod tests {
     #[tokio::test]
     async fn save_find_run_delete_roundtrip() {
         let db = seed_db();
-        let tools = tools(db).unwrap();
+        let tools = tools(db, None).unwrap();
 
         // 宣言名は bare（Node system prompt と一致）。
         let names: Vec<String> = tools
@@ -443,7 +504,7 @@ mod tests {
     #[tokio::test]
     async fn save_validates_required_fields() {
         let db = seed_db();
-        let tools = tools(db).unwrap();
+        let tools = tools(db, None).unwrap();
         let save = find(&tools, "savePlaybook");
 
         // title 欠落 → fail。
@@ -464,7 +525,7 @@ mod tests {
     #[tokio::test]
     async fn find_empty_reports_message() {
         let db = seed_db();
-        let tools = tools(db).unwrap();
+        let tools = tools(db, None).unwrap();
         let list = find(&tools, "findPlaybooks");
 
         // 無し・query 無し。
@@ -485,7 +546,7 @@ mod tests {
     #[tokio::test]
     async fn scope_isolation_across_users() {
         let db = seed_db();
-        let tools = tools(db).unwrap();
+        let tools = tools(db, None).unwrap();
         let save = find(&tools, "savePlaybook");
         let list = find(&tools, "findPlaybooks");
 
@@ -496,6 +557,49 @@ mod tests {
         // 別ユーザーには見えない。
         let ctx_b = ToolContext::new(BotId::system_default(), UserId::new("userB"));
         let out = list.call(&ctx_b, json!({})).await.unwrap();
+        assert_eq!(out.payload["count"], 0);
+    }
+
+    #[tokio::test]
+    async fn recent_action_history_reads_recorder() {
+        let db = seed_db();
+        let recorder = Arc::new(ActionRecorder::new());
+        let tools = tools(db, Some(Arc::clone(&recorder))).unwrap();
+        let hist = find(&tools, "getRecentActionHistory");
+
+        // 記録が無ければ「履歴なし」分岐（count 0・案内文）。
+        let out = hist.call(&ctx(), json!({})).await.unwrap();
+        assert_eq!(out.payload["success"], true);
+        assert_eq!(out.payload["count"], 0);
+        assert!(out.payload["message"]
+            .as_str()
+            .unwrap()
+            .contains("直近の操作履歴がありません"));
+
+        // レコーダへ 2 件記録（getRecentActionHistory 自身は除外されるので数に入らない）。
+        recorder.record("userA", "addTodo", &json!({"title": "牛乳"}));
+        recorder.record("userA", "getRecentActionHistory", &json!({}));
+        recorder.record("userA", "addExpense", &json!({"amount": 300}));
+
+        let out = hist.call(&ctx(), json!({})).await.unwrap();
+        assert_eq!(out.payload["count"], 2);
+        assert_eq!(out.payload["actions"][0]["name"], "addTodo");
+        assert_eq!(out.payload["actions"][1]["name"], "addExpense");
+        assert_eq!(out.payload["actions"][0]["argsSummary"], "title=牛乳");
+
+        // 別ユーザーには見えない（recorder は user 単位）。
+        let ctx_b = ToolContext::new(BotId::system_default(), UserId::new("userB"));
+        let out = hist.call(&ctx_b, json!({})).await.unwrap();
+        assert_eq!(out.payload["count"], 0);
+    }
+
+    #[tokio::test]
+    async fn recent_action_history_empty_without_recorder() {
+        let db = seed_db();
+        let tools = tools(db, None).unwrap();
+        let hist = find(&tools, "getRecentActionHistory");
+        let out = hist.call(&ctx(), json!({})).await.unwrap();
+        assert_eq!(out.payload["success"], true);
         assert_eq!(out.payload["count"], 0);
     }
 }

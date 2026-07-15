@@ -16,6 +16,7 @@ secrecy.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 async-trait.workspace = true
+chrono.workspace = true              # 操作履歴レコーダーの記録時刻（Node `new Date().toISOString()`）
 
 [dev-dependencies]
 tempfile = "3"

@@ -3254,6 +3254,7 @@ name = "yuuka-core"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "chrono",
  "secrecy",
  "serde",
  "serde_json",

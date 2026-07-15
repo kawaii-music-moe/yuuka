@@ -9,7 +9,9 @@ use std::sync::Arc;
 
 use serde_json::json;
 use yuuka_core::tool::FunctionDeclaration as CoreFnDecl;
-use yuuka_core::{GeminiError, ResponsePart, ToolContext, ToolName, ToolProvider};
+use yuuka_core::{
+    ActionRecorder, GeminiError, ResponsePart, ToolContext, ToolName, ToolProvider,
+};
 
 use crate::client::GenerateBackend;
 use crate::wire::{Content, FunctionDeclaration, FunctionResponse, Part, Role, ToolConfig};
@@ -40,6 +42,9 @@ pub struct LoopOptions {
     pub allowed_tool_names: Option<Vec<String>>,
     /// ステータス通知（thinking/writing）。
     pub on_status: Option<StatusCb>,
+    /// 操作履歴レコーダー（Node `recordFunctionCall`）。dispatch 毎に記録し
+    /// `getRecentActionHistory` へ供給する。None なら記録しない。
+    pub action_recorder: Option<Arc<ActionRecorder>>,
 }
 
 impl Default for LoopOptions {
@@ -49,6 +54,7 @@ impl Default for LoopOptions {
             max_corrections: 2,
             allowed_tool_names: None,
             on_status: None,
+            action_recorder: None,
         }
     }
 }
@@ -230,6 +236,10 @@ pub async fn run_function_calling_loop(
         // 並行呼び出し公式サポート。id を相関に保持する（独立ツールの並行実行は将来最適化）。
         for fc in &calls {
             result.tool_calls.push(fc.name.clone());
+            // 操作履歴に記録（Node `recordFunctionCall`・除外/秘匿はレコーダ内で判定・応答を妨げない）。
+            if let Some(recorder) = &opts.action_recorder {
+                recorder.record(ctx.user_id.as_str(), &fc.name, &fc.args);
+            }
             let response =
                 dispatch_one(provider, ctx, &fc.name, fc.args.clone(), &mut result).await;
             response_parts.push(Part::function_response(FunctionResponse {
