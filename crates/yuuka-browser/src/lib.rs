@@ -8,6 +8,7 @@
 //! （secretary・Node browserModule `cap:"secretary"`）。
 
 mod chromium;
+mod interactive;
 mod markdown;
 mod search;
 mod ssrf;

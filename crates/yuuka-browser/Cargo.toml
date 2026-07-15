@@ -13,6 +13,10 @@ scraper = "0.27"                     # HTML→markdown 変換・検索結果パ�
 ego-tree = "0.11"                    # scraper の DOM ツリー型（traverse 再帰の NodeRef・scraper 0.27 整合）
 url = "2"                            # assertSafeOutboundUrl の URL パース（scheme/host/userinfo）
 reqwest = { workspace = true, features = ["gzip", "brotli", "deflate"] }  # 検索/静的 fetch（圧縮対応）
+# 対話ブラウザ（browserInteractive*）の CDP クライアント。default-features=false で fetcher(anyhow
+# ＝ban 済) と TLS(aws-lc) を落とす＝chromium は Docker 同梱・CDP は local chrome へ ws:// 接続。
+chromiumoxide = { version = "0.9", default-features = false }
+futures = "0.3"                      # chromiumoxide の Handler ストリーム駆動（StreamExt::next）
 tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true

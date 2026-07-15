@@ -12,6 +12,7 @@ use serde_json::{json, Value};
 use yuuka_core::tool::FunctionDeclaration;
 use yuuka_core::{Tool, ToolContext, ToolError, ToolName, ToolOutcome};
 
+use crate::interactive::BrowserManager;
 use crate::{chromium, markdown, search, ssrf};
 
 /// markdown 上限（Node の 30000 文字 slice）。
@@ -24,6 +25,8 @@ const MIN_STATIC_LEN: usize = 100;
 /// # Errors
 /// ツール名が Gemini 制約に反する場合（コンパイル時定数のため通常発生しない）。
 pub fn tools() -> Result<Vec<Arc<dyn Tool>>, ToolError> {
+    // 対話ブラウザは per-user chromium を管理する 1 つの共有マネージャ（6 ツールで共有）。
+    let manager = Arc::new(BrowserManager::new());
     Ok(vec![
         Arc::new(SearchWebTool {
             name: ToolName::checked("searchWeb".to_owned())?,
@@ -33,6 +36,30 @@ pub fn tools() -> Result<Vec<Arc<dyn Tool>>, ToolError> {
         }),
         Arc::new(TakePageScreenshotTool {
             name: ToolName::checked("takePageScreenshot".to_owned())?,
+        }),
+        Arc::new(InteractiveOpenTool {
+            name: ToolName::checked("browserInteractiveOpen".to_owned())?,
+            manager: Arc::clone(&manager),
+        }),
+        Arc::new(InteractiveClickTool {
+            name: ToolName::checked("browserInteractiveClick".to_owned())?,
+            manager: Arc::clone(&manager),
+        }),
+        Arc::new(InteractiveTypeTool {
+            name: ToolName::checked("browserInteractiveType".to_owned())?,
+            manager: Arc::clone(&manager),
+        }),
+        Arc::new(InteractiveWaitTool {
+            name: ToolName::checked("browserInteractiveWait".to_owned())?,
+            manager: Arc::clone(&manager),
+        }),
+        Arc::new(InteractiveStatusTool {
+            name: ToolName::checked("browserInteractiveStatus".to_owned())?,
+            manager: Arc::clone(&manager),
+        }),
+        Arc::new(InteractiveCloseTool {
+            name: ToolName::checked("browserInteractiveClose".to_owned())?,
+            manager,
         }),
     ])
 }
@@ -232,17 +259,263 @@ impl Tool for TakePageScreenshotTool {
     }
 }
 
+// ─── browserInteractive*（対話セッション・要 CDP） ─────────────────────────────
+
+/// timeoutMs を取り出す（数値・省略は 5000＝Node 既定）。
+fn arg_timeout(args: &Value) -> u64 {
+    args.get("timeoutMs")
+        .and_then(Value::as_u64)
+        .filter(|n| *n > 0)
+        .unwrap_or(5000)
+}
+
+/// status 用スクショ保存先（data/screenshots/interactive_screenshot_{ts}.png・cwd 相対）。
+fn interactive_screenshot_path() -> Result<PathBuf, String> {
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let dir: PathBuf = ["data", "screenshots"].iter().collect();
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(dir.join(format!("interactive_screenshot_{stamp}.png")))
+}
+
+struct InteractiveOpenTool {
+    name: ToolName,
+    manager: Arc<BrowserManager>,
+}
+
+#[async_trait]
+impl Tool for InteractiveOpenTool {
+    fn declaration(&self) -> FunctionDeclaration {
+        FunctionDeclaration {
+            name: self.name.clone(),
+            description: "操作用ブラウザのセッションを開始（または再利用）して、指定したURLを開く。\n\
+                ・ログインやページ操作を代行したい時の、いちばん最初の手順として呼ぶ。"
+                .to_owned(),
+            parameters_json_schema: json!({
+                "type": "object",
+                "properties": {
+                    "url": { "type": "string", "description": "操作ブラウザで開きたいウェブページのURL" }
+                },
+                "required": ["url"]
+            }),
+            requires_confirmation: false,
+        }
+    }
+
+    async fn call(&self, ctx: &ToolContext, args: Value) -> Result<ToolOutcome, ToolError> {
+        let Some(url) = arg_str(&args, "url") else {
+            return Ok(fail("URL を指定してください。"));
+        };
+        if let Err(msg) = ssrf::assert_safe_outbound_url(&url).await {
+            return Ok(fail(msg));
+        }
+        match self.manager.open(ctx.user_id.as_str(), &url).await {
+            Ok(v) => Ok(ToolOutcome::from_payload(v)),
+            Err(e) => Ok(fail(e)),
+        }
+    }
+}
+
+struct InteractiveClickTool {
+    name: ToolName,
+    manager: Arc<BrowserManager>,
+}
+
+#[async_trait]
+impl Tool for InteractiveClickTool {
+    fn declaration(&self) -> FunctionDeclaration {
+        FunctionDeclaration {
+            name: self.name.clone(),
+            description: "操作用ブラウザで今開いているページ上の、指定した要素をクリックする。\n\
+                ・操作できる要素には [ID: 数値] や [Button ID: 数値] のように番号が振ってある。\n\
+                ・selector には、まずその数値ID（例: '3'）をそのまま入れるのが一番確実。\n\
+                ・CSSセレクタや要素内のテキストでも指定できるが、数値IDを優先する。"
+                .to_owned(),
+            parameters_json_schema: json!({
+                "type": "object",
+                "properties": {
+                    "selector": { "type": "string", "description": "クリックする要素の数値ID（最優先、例: '3'）。またはCSSセレクタ／要素内のテキストでも可" }
+                },
+                "required": ["selector"]
+            }),
+            requires_confirmation: false,
+        }
+    }
+
+    async fn call(&self, ctx: &ToolContext, args: Value) -> Result<ToolOutcome, ToolError> {
+        let Some(selector) = arg_str(&args, "selector") else {
+            return Ok(fail("selector を指定してください。"));
+        };
+        match self.manager.click(ctx.user_id.as_str(), &selector).await {
+            Ok(v) => Ok(ToolOutcome::from_payload(v)),
+            Err(e) => Ok(fail(e)),
+        }
+    }
+}
+
+struct InteractiveTypeTool {
+    name: ToolName,
+    manager: Arc<BrowserManager>,
+}
+
+#[async_trait]
+impl Tool for InteractiveTypeTool {
+    fn declaration(&self) -> FunctionDeclaration {
+        FunctionDeclaration {
+            name: self.name.clone(),
+            description: "操作用ブラウザで今開いているページの、指定した入力欄に文字を打ち込む。\n\
+                ・入力欄には [Input (text) ID: 数値] のように番号が振ってある。\n\
+                ・selector には、まずその数値ID（例: '2'）をそのまま入れるのが一番確実。\n\
+                ・CSSセレクタやプレースホルダー名でも指定できるが、数値IDを優先する。\n\
+                ・パスワードの入力にはこれを使わず、必ず browserFillCredential を使う。"
+                .to_owned(),
+            parameters_json_schema: json!({
+                "type": "object",
+                "properties": {
+                    "selector": { "type": "string", "description": "文字を入れる入力欄の数値ID（最優先、例: '2'）。またはCSSセレクタ／プレースホルダー名／name属性の一部でも可" },
+                    "text": { "type": "string", "description": "打ち込む文字の内容" }
+                },
+                "required": ["selector", "text"]
+            }),
+            requires_confirmation: false,
+        }
+    }
+
+    async fn call(&self, ctx: &ToolContext, args: Value) -> Result<ToolOutcome, ToolError> {
+        let Some(selector) = arg_str(&args, "selector") else {
+            return Ok(fail("selector を指定してください。"));
+        };
+        // text は空文字も許容（Node は String(args.text)）。
+        let text = args.get("text").and_then(Value::as_str).unwrap_or("");
+        match self
+            .manager
+            .type_text(ctx.user_id.as_str(), &selector, text)
+            .await
+        {
+            Ok(v) => Ok(ToolOutcome::from_payload(v)),
+            Err(e) => Ok(fail(e)),
+        }
+    }
+}
+
+struct InteractiveWaitTool {
+    name: ToolName,
+    manager: Arc<BrowserManager>,
+}
+
+#[async_trait]
+impl Tool for InteractiveWaitTool {
+    fn declaration(&self) -> FunctionDeclaration {
+        FunctionDeclaration {
+            name: self.name.clone(),
+            description: "操作用ブラウザで今開いているページの読み込みや表示を待つ。\n\
+                ・指定したミリ秒だけ待つか、指定したCSSセレクタの要素が画面に出るまで待つ。"
+                .to_owned(),
+            parameters_json_schema: json!({
+                "type": "object",
+                "properties": {
+                    "selector": { "type": "string", "description": "出現を待ちたい要素のCSSセレクタ（省略可）" },
+                    "timeoutMs": { "type": "number", "description": "待つ時間（ミリ秒）。省略=5000ミリ秒（5秒）" }
+                }
+            }),
+            requires_confirmation: false,
+        }
+    }
+
+    async fn call(&self, ctx: &ToolContext, args: Value) -> Result<ToolOutcome, ToolError> {
+        let selector = arg_str(&args, "selector");
+        let timeout = arg_timeout(&args);
+        match self
+            .manager
+            .wait(ctx.user_id.as_str(), selector.as_deref(), timeout)
+            .await
+        {
+            Ok(v) => Ok(ToolOutcome::from_payload(v)),
+            Err(e) => Ok(fail(e)),
+        }
+    }
+}
+
+struct InteractiveStatusTool {
+    name: ToolName,
+    manager: Arc<BrowserManager>,
+}
+
+#[async_trait]
+impl Tool for InteractiveStatusTool {
+    fn declaration(&self) -> FunctionDeclaration {
+        FunctionDeclaration {
+            name: self.name.clone(),
+            description: "操作用ブラウザの今の状態を取り出す（今のURL・タイトル・最新スクショ画像のパス・読みやすく整えた本文）。\n\
+                ・クリックや文字入力をした後は、画面がどう変わったか確認するために必ずこれを呼ぶ。"
+                .to_owned(),
+            parameters_json_schema: json!({ "type": "object", "properties": {} }),
+            requires_confirmation: false,
+        }
+    }
+
+    async fn call(&self, ctx: &ToolContext, _args: Value) -> Result<ToolOutcome, ToolError> {
+        let path = match interactive_screenshot_path() {
+            Ok(p) => p,
+            Err(e) => return Ok(fail(format!("保存先を用意できません: {e}"))),
+        };
+        match self.manager.status(ctx.user_id.as_str(), &path).await {
+            Ok(v) => Ok(ToolOutcome::from_payload(v)),
+            Err(e) => Ok(fail(e)),
+        }
+    }
+}
+
+struct InteractiveCloseTool {
+    name: ToolName,
+    manager: Arc<BrowserManager>,
+}
+
+#[async_trait]
+impl Tool for InteractiveCloseTool {
+    fn declaration(&self) -> FunctionDeclaration {
+        FunctionDeclaration {
+            name: self.name.clone(),
+            description: "操作用ブラウザのセッションを終了し、ブラウザを完全に閉じてリソースを解放する。\n\
+                ・一連の操作の代行がすべて終わったら、最後にこれを呼ぶ。"
+                .to_owned(),
+            parameters_json_schema: json!({ "type": "object", "properties": {} }),
+            requires_confirmation: false,
+        }
+    }
+
+    async fn call(&self, ctx: &ToolContext, _args: Value) -> Result<ToolOutcome, ToolError> {
+        match self.manager.close(ctx.user_id.as_str()).await {
+            Ok(v) => Ok(ToolOutcome::from_payload(v)),
+            Err(e) => Ok(fail(e)),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn tools_expose_three_bare_names() {
+    fn tools_expose_nine_bare_names() {
         let t = tools().unwrap();
         let names: Vec<String> = t.iter().map(|x| x.declaration().name.to_string()).collect();
-        assert!(names.contains(&"searchWeb".to_owned()));
-        assert!(names.contains(&"fetchDynamicPage".to_owned()));
-        assert!(names.contains(&"takePageScreenshot".to_owned()));
+        for expected in [
+            "searchWeb",
+            "fetchDynamicPage",
+            "takePageScreenshot",
+            "browserInteractiveOpen",
+            "browserInteractiveClick",
+            "browserInteractiveType",
+            "browserInteractiveWait",
+            "browserInteractiveStatus",
+            "browserInteractiveClose",
+        ] {
+            assert!(names.contains(&expected.to_owned()), "missing: {expected}");
+        }
+        assert_eq!(t.len(), 9);
         assert!(!names.iter().any(|n| n.contains(':')), "native は bare 名");
     }
 

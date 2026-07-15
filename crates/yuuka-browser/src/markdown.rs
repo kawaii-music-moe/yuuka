@@ -175,7 +175,8 @@ fn traverse(node: ego_tree::NodeRef<'_, Node>, is_pre: bool) -> String {
 }
 
 /// 連続空行を 1 行に潰す等の整形（Node crawler `cleanMarkdown`）。コードブロック内は保全する。
-fn clean_markdown(s: &str) -> String {
+/// 対話ページの `extractPageMarkdown` 後処理でも共有する。
+pub(crate) fn clean_markdown(s: &str) -> String {
     let mut lines: Vec<String> = Vec::new();
     let mut in_code_block = false;
     let mut consecutive_empty = 0;
