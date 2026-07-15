@@ -7,8 +7,8 @@
 //!
 //! 参照スコープ = コア CRUD の list/add に加え、予算上限（budget_limits）・支払い予定
 //! （planned_payments・消込含む）・月次集計（`GET /api/expenses` の total/incomeTotal/
-//! breakdown/trend）。receipt OCR（upload-receipt）は Gemini vision 経路の supervisor 層配線
-//! が必要なため deferred。
+//! breakdown/trend）・receipt OCR（upload-receipt・`ReceiptParser` シーム経由・supervisor が実
+//! `ChatEngine` へ配線）。
 
 use std::sync::Arc;
 

@@ -48,6 +48,7 @@ pub fn build_app(
     ws_routes: Router<AppState>,
     mcp_routes: Router<AppState>,
     integrated_routes: Router<AppState>,
+    finance_routes: Router<AppState>,
     dist_dir: Option<&Path>,
 ) -> Router {
     let routes = framework_routes()
@@ -61,8 +62,8 @@ pub fn build_app(
         .merge(ws_routes)
         .merge(mcp_routes)
         .merge(integrated_routes)
+        .merge(finance_routes)
         .merge(yuuka_todo::routes())
-        .merge(yuuka_finance::routes())
         .merge(yuuka_schedule::routes())
         .merge(yuuka_timeline::routes())
         .merge(yuuka_reminder::routes())
@@ -206,6 +207,8 @@ mod tests {
                     std::sync::Arc::new(yuuka_google::NullCalendar),
                 ),
             )),
+            // finance ルータ（既定 NullReceiptParser）を merge して検証する。
+            yuuka_finance::routes(),
             None,
         )
     }

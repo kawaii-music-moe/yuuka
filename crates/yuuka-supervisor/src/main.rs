@@ -19,7 +19,7 @@ use yuuka_auth::{AuthRuntime, CompositeAuth, SessionStore};
 use yuuka_core::secrets::ExposeSecret;
 use yuuka_core::{Config, DbError};
 use yuuka_crypto::{rotate_secret_key, SystemCrypto, LEGACY_FALLBACK_SECRET};
-use yuuka_discord::{DiscordManager, ManagerPorts, Prepared};
+use yuuka_discord::{rate_limit_message, DiscordManager, ManagerPorts, Prepared, RateLimiter};
 use yuuka_orchestrator::{ChatEngine, DbBotDirectory, DbMembership, InMemoryRateLimiter};
 use yuuka_services::{MetricsRegistry, ServiceContext};
 use yuuka_supervisor::{
@@ -179,6 +179,13 @@ async fn run() -> Result<(), String> {
         ),
     ));
 
+    // finance ルータ（A1 配線）: upload-receipt を実 ChatEngine の秘書ターン（画像 OCR）へ橋渡す。
+    // レート制限は web 受付専用の in-memory カウンタ（guildId スロット="web"）。
+    let finance_routes = yuuka_finance::routes_with(Arc::new(ReceiptParserAdapter {
+        engine: chat_engine.clone(),
+        rate_limiter: Arc::new(InMemoryRateLimiter::new(db.clone())),
+    }));
+
     // Webhook ルータ（シークレット暗号化に crypto を注入・受信の実処理は未配線のため Null プロセッサへ縮退）。
     let webhook_routes = yuuka_webhook::routes_with(
         crypto.clone(),
@@ -236,6 +243,7 @@ async fn run() -> Result<(), String> {
         ws_routes: chat_ws_routes,
         mcp_routes,
         integrated_routes,
+        finance_routes,
         addr,
         dist_dir,
     });
@@ -331,6 +339,63 @@ impl yuuka_services::PlaybookRunner for PlaybookRunnerAdapter {
         {
             Ok(reply) => Ok(reply.text),
             Err(e) => Err(e.to_string()),
+        }
+    }
+}
+
+/// finance の `upload-receipt` を実 [`ChatEngine`] の秘書ターン（画像 OCR）へ橋渡すアダプタ（A1 配線・
+/// Node `receiptParser.parseReceipt` パリティ）。services→orchestrator の逆依存を避けるため、両者を知る
+/// supervisor 層で注入する（[`PlaybookRunnerAdapter`] と同思想）。**コスト増幅 DoS 対策**で LLM 呼び出し
+/// 前にレート制限を消費する（Node `consumeRateLimit(botId, "web", userId)`＝web 管理画面は guildId スロット
+/// に `"web"` を使う）。応答はフロント `ReceiptResultModal` の `{ response: string }` 契約に合わせ秘書ターン
+/// のテキストを返す（記帳自体は system prompt の OCR ルール + ツール呼び出しでサーバ側実行）。
+struct ReceiptParserAdapter {
+    engine: Arc<ChatEngine>,
+    rate_limiter: Arc<InMemoryRateLimiter>,
+}
+
+#[async_trait]
+impl yuuka_finance::ReceiptParser for ReceiptParserAdapter {
+    async fn parse_receipt(
+        &self,
+        bot_id: &str,
+        user_id: &str,
+        image_base64: &str,
+        mime_type: &str,
+        additional_text: Option<&str>,
+    ) -> Result<serde_json::Value, yuuka_finance::ReceiptError> {
+        let bid = yuuka_core::BotId::new(bot_id);
+        let uid = yuuka_core::UserId::new(user_id);
+        // LLM 呼び出し前にレート制限を消費（超過は 429・Node `rateLimitMessage`）。
+        let decision = self
+            .rate_limiter
+            .consume(&bid, &yuuka_core::GuildId::new("web"), &uid)
+            .await;
+        if let Some(exceeded) = decision.exceeded {
+            return Err(yuuka_finance::ReceiptError::RateLimited(rate_limit_message(
+                exceeded,
+            )));
+        }
+        // InlineMedia は `;` 以降を除去した MIME を要求する（Gemini inlineData 用）。
+        let clean_mime = mime_type
+            .split(';')
+            .next()
+            .unwrap_or(mime_type)
+            .trim()
+            .to_owned();
+        let msg = yuuka_discord::IncomingChat {
+            text: additional_text.unwrap_or_default().to_owned(),
+            image: Some(yuuka_discord::InlineMedia {
+                data_base64: image_base64.to_owned(),
+                mime_type: clean_mime,
+            }),
+            ..Default::default()
+        };
+        let status: yuuka_discord::StatusSink = Arc::new(|_| {});
+        match self.engine.secretary_turn(&bid, &uid, msg, &status).await {
+            Ok(reply) => Ok(serde_json::Value::String(reply.text)),
+            // 秘書ターンの hard failure（LLM ソフトエラーは Ok(reply) に畳まれる）→ 503。
+            Err(_) => Err(yuuka_finance::ReceiptError::Unavailable),
         }
     }
 }
@@ -471,6 +536,8 @@ struct WebService {
     mcp_routes: Router<AppState>,
     /// 統合設定ルータ（`IntegratedRuntime` を `Extension` で内包済み・`/api/integrated/*`）。
     integrated_routes: Router<AppState>,
+    /// finance ルータ（`ReceiptParser` を `Extension` で内包済み・`/api/expenses/*`・upload-receipt live）。
+    finance_routes: Router<AppState>,
     addr: SocketAddr,
     dist_dir: Option<PathBuf>,
 }
@@ -494,6 +561,7 @@ impl SupervisedService for WebService {
             self.ws_routes.clone(),
             self.mcp_routes.clone(),
             self.integrated_routes.clone(),
+            self.finance_routes.clone(),
             self.dist_dir.as_deref(),
         );
         let listener = tokio::net::TcpListener::bind(self.addr)

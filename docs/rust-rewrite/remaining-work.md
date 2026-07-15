@@ -185,7 +185,7 @@
 - [x] `/api/status`（ダッシュボード集計・2026-07-15r・`yuuka-settings`）・`/api/setup/status`（既済）
 - [~] ドメイン別の残ルート（2026-07-13 `b77506d` で todo/finance/timeline/personal/playbook を拡張）:
   - [x] todo（9/9）: detail / gantt / progress / someday / update を追加（子孫は再帰 CTE でスコープ収集・`PriorityUpdate` 3 値 parity）
-  - [x] finance（9/9）: budget-limits / plans/* / **月次集計（total・incomeTotal・breakdown・trend）**（2026-07-14）+ **upload-receipt（2026-07-15r・`ReceiptParser` シーム＝Gemini vision）**。入力検証（画像/MIME 400）は完全動作・vision 実処理は Null シーム（未配線時 503）
+  - [x] finance（9/9）: budget-limits / plans/* / **月次集計（total・incomeTotal・breakdown・trend）**（2026-07-14）+ **upload-receipt（2026-07-15r・`ReceiptParser` シーム）**。**2026-07-15s（A1 配線）＝実 `ChatEngine` の秘書ターン（画像 OCR）へ配線済み**（supervisor `ReceiptParserAdapter`＝`InMemoryRateLimiter`〔guildId="web"〕でコスト増幅 DoS レート制限 → `secretary_turn` に画像付き IncomingChat → 応答テキストを `{response:string}` で返す・フロント `ReceiptResultModal` 契約）。`routes()` 既定は `NullReceiptParser`（503）、supervisor が `routes_with(adapter)` で live 化
   - [x] timeline（8/8）: plan/*・**media（`/api/timeline/media*` base64 アップロード + 認証付き配信）**・**cross-domain 副作用（`type=expense`→expenses 二重登録・`type=task_done`→todos 完了）**（2026-07-14）を追加
   - [x] personal（6/6）: clipboard（GET/delete）/ context-note に加え **`addClipboardEntry` ツール**（2026-07-14）。TTL 一括削除 cron（`deleteExpired`）は `ClipboardCleanupService` で稼働済み
   - [x] credential（3/3）: register 実装済（2026-07-15a・crypto 注入 `routes_with`・owner-Bot 一括付与・GET 許可フィルタ・delete 掃除）

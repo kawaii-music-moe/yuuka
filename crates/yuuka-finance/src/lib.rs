@@ -2,8 +2,9 @@
 //!
 //! DAG: `finance → web, db, types, core`。ルータは supervisor が共通レイヤ配下にマージする。
 //! 参照スコープ = コア CRUD（expense の list/add/get/delete）・予算上限 (budget_limits)・
-//! 支払い予定 (planned_payments)・月次集計 (total/incomeTotal/breakdown/trend)。
-//! receipt OCR (upload-receipt) は Gemini vision 経路の supervisor 層配線待ちで deferred。
+//! 支払い予定 (planned_payments)・月次集計 (total/incomeTotal/breakdown/trend)・receipt OCR
+//! (upload-receipt)。receipt は [`ReceiptParser`] シーム越しで、既定は [`NullReceiptParser`]（503）、
+//! supervisor が実 `ChatEngine`（Gemini vision 秘書ターン）へ配線する（A1・`routes_with`）。
 
 pub mod dto;
 pub mod receipt;
@@ -12,7 +13,7 @@ pub mod routes;
 pub mod tools;
 
 pub use receipt::{NullReceiptParser, ReceiptError, ReceiptParser};
-pub use routes::routes;
+pub use routes::{routes, routes_with};
 pub use tools::tools;
 
 use std::path::Path;
