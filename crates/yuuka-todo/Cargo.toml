@@ -18,6 +18,7 @@ serde.workspace = true
 serde_json.workspace = true
 ts-rs.workspace = true
 async-trait.workspace = true
+chrono.workspace = true              # 優先度整理 1 段目が LLM へ渡す現在時刻（Node `new Date().toISOString()`）
 
 [dev-dependencies]
 tokio.workspace = true

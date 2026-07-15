@@ -111,6 +111,34 @@ impl<'a> TodoRepo<'a> {
             .await
     }
 
+    /// 未完了 ToDo を**平坦**に全件返す（親・サブタスクを区別せず・Node `listTodos({status:"open"})`）。
+    ///
+    /// 優先度整理 1 段目（`organizeTaskPriorities`）が LLM へ渡す素材。ネスト・進捗算出は不要なので
+    /// [`list_tree`](Self::list_tree) ではなく素の行を [`ORDER_CLAUSE`] 順で返す。
+    ///
+    /// # Errors
+    /// クエリ失敗時 [`DbError`]。
+    pub async fn list_open_flat(&self, scope: &UserScope) -> Result<Vec<Todo>, DbError> {
+        let (uid, bid) = scope_keys(scope);
+        self.read
+            .read(move |conn| {
+                let sql = format!(
+                    "SELECT {TODO_COLUMNS} FROM todos \
+                     WHERE user_id = ?1 AND bot_id = ?2 AND status = 'open'{ORDER_CLAUSE}"
+                );
+                let mut stmt = conn.prepare(&sql).map_err(map_sqlite)?;
+                let rows = stmt
+                    .query_map(params![uid, bid], row_to_todo)
+                    .map_err(map_sqlite)?;
+                let mut out = Vec::new();
+                for row in rows {
+                    out.push(row.map_err(map_sqlite)?);
+                }
+                Ok(out)
+            })
+            .await
+    }
+
     /// スコープ内の単一 todo を取得する（無ければ `None`）。
     ///
     /// # Errors
@@ -576,6 +604,36 @@ impl<'a> TodoRepo<'a> {
             // UPDATE が 0 行 = 対象不在（スコープ外含む）→ None。
             UpdateOutcome::Missing => Ok(None),
         }
+    }
+
+    /// 複数 ToDo の優先度を一括確定する（Node `updateTodoPriorities`）。1 トランザクション内で
+    /// `status = 'open'` の行だけを更新し、**実際に変更された行数の合計**を返す（見つからない・完了済み
+    /// はスキップ＝0 加算）。
+    ///
+    /// # Errors
+    /// 書き込み失敗時 [`DbError`]。
+    pub async fn update_priorities(
+        &self,
+        scope: &UserScope,
+        items: Vec<(i64, String)>,
+    ) -> Result<usize, DbError> {
+        let (uid, bid) = scope_keys(scope);
+        self.writer
+            .transaction(move |tx| {
+                let mut updated = 0usize;
+                for (id, priority) in &items {
+                    updated += tx
+                        .execute(
+                            "UPDATE todos SET priority = ?1, \
+                             updated_at = datetime('now', 'localtime') \
+                             WHERE user_id = ?2 AND bot_id = ?3 AND id = ?4 AND status = 'open'",
+                            params![priority, uid, bid, id],
+                        )
+                        .map_err(map_sqlite)?;
+                }
+                Ok(updated)
+            })
+            .await
     }
 
     /// 進捗を更新し進捗ログを 1 件追記する（トランザクション・Node `updateProgress`）。

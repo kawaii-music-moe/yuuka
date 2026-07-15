@@ -21,7 +21,7 @@ use yuuka_core::tool::FunctionDeclaration;
 use yuuka_core::{DbError, Tool, ToolContext, ToolError, ToolName, ToolOutcome, UserScope};
 use yuuka_web::Db;
 
-use crate::dto::{normalize_priority, NewTodo, PriorityUpdate, TodoUpdate};
+use crate::dto::{normalize_priority, NewTodo, PriorityUpdate, Todo, TodoUpdate};
 use crate::repo::{effective_progress, TodoRepo};
 
 /// このドメインが公開する Native ツール一式を作る。
@@ -81,6 +81,14 @@ pub fn tools(db: Db) -> Result<Vec<Arc<dyn Tool>>, ToolError> {
         }),
         Arc::new(StopTodoRoutineTool {
             name: ToolName::checked("stopTodoRoutine".to_owned())?,
+            db: db.clone(),
+        }),
+        Arc::new(OrganizeTaskPrioritiesTool {
+            name: ToolName::checked("organizeTaskPriorities".to_owned())?,
+            db: db.clone(),
+        }),
+        Arc::new(ApplyTaskPrioritiesTool {
+            name: ToolName::checked("applyTaskPriorities".to_owned())?,
             db,
         }),
     ])
@@ -1109,6 +1117,169 @@ impl Tool for StopTodoRoutineTool {
     }
 }
 
+// ─── 優先度整理（organizeTaskPriorities / applyTaskPriorities） ──────────────────
+
+/// `Todo` を Node `toTodoEntry` 形状（`todo_id` へ改名・timestamps 省略）へ整形する。
+fn to_todo_entry(t: &Todo) -> Value {
+    json!({
+        "todo_id": t.id,
+        "title": t.title,
+        "description": t.description,
+        "due_date": t.due_date,
+        "start_date": t.start_date,
+        "priority": t.priority,
+        "tags": t.tags,
+        "status": t.status,
+        "progress": t.progress,
+        "parent_id": t.parent_id,
+        "repeat_rule": t.repeat_rule,
+        "repeat_until": t.repeat_until,
+        "repeat_count": t.repeat_count,
+    })
+}
+
+/// item.priority を厳密検証する（Node `asOptionalPriority`＝**文字列 high/medium/low のみ**採用・
+/// 数値は不可。`normalize_priority` の数値許容とは意図的に別契約）。
+fn as_valid_priority(v: &Value) -> Option<String> {
+    match v.get("priority").and_then(Value::as_str) {
+        Some(p @ ("high" | "medium" | "low")) => Some(p.to_owned()),
+        _ => None,
+    }
+}
+
+/// 優先度整理 1 段目（取得＋提案要求）。Node `organizeTaskPriorities`。
+struct OrganizeTaskPrioritiesTool {
+    name: ToolName,
+    db: Db,
+}
+
+#[async_trait]
+impl Tool for OrganizeTaskPrioritiesTool {
+    fn declaration(&self) -> FunctionDeclaration {
+        FunctionDeclaration {
+            name: self.name.clone(),
+            description: "優先度の整理の1段目。未完了タスク全部を、期限・タグ・今の優先度つきで取り出す。\n\
+                ・例:「タスクを整理して」「優先順位をつけて」と頼まれた時に呼ぶ。\n\
+                ・取り出した結果から、期限の近さ・タイトルや説明から分かる大事さ・タグを見て、各タスクの優先度（high/medium/low）を【提案】としてユーザーに見せ、OKをもらう。\n\
+                ・承認をもらってから applyTaskPriorities を呼んで確定する。提案だけにとどめ、勝手に確定しない。"
+                .to_owned(),
+            parameters_json_schema: json!({ "type": "object", "properties": {} }),
+            requires_confirmation: false,
+        }
+    }
+
+    async fn call(&self, ctx: &ToolContext, _args: Value) -> Result<ToolOutcome, ToolError> {
+        let todos = TodoRepo::new(&self.db)
+            .list_open_flat(&scope_of(ctx))
+            .await
+            .map_err(exec_err)?;
+
+        if todos.is_empty() {
+            return Ok(ToolOutcome::from_payload(ok_payload(
+                "未完了のToDoがないため、優先度整理の対象はありません。",
+                json!({ "todos": [] }),
+            )));
+        }
+
+        // now: Node `new Date().toISOString()`（UTC・ミリ秒・`Z`）。
+        let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        let entries: Vec<Value> = todos.iter().map(to_todo_entry).collect();
+        let msg = format!(
+            "未完了ToDo {}件を取得しました。期限の近さ・タイトルや説明から読み取れる重要度・タグを考慮して各ToDoの優先度（high/medium/low）を分析し、提案として理由付きでユーザーに提示してください。\
+             ユーザーの承認を得てから applyTaskPriorities で確定すること。承認前に勝手に確定してはいけません（§3.2.3）。",
+            todos.len()
+        );
+        Ok(ToolOutcome::from_payload(ok_payload(
+            msg,
+            json!({ "now": now, "todos": entries }),
+        )))
+    }
+}
+
+/// 優先度整理 2 段目（承認後の一括確定）。Node `applyTaskPriorities`。
+struct ApplyTaskPrioritiesTool {
+    name: ToolName,
+    db: Db,
+}
+
+#[async_trait]
+impl Tool for ApplyTaskPrioritiesTool {
+    fn declaration(&self) -> FunctionDeclaration {
+        FunctionDeclaration {
+            name: self.name.clone(),
+            description: "優先度の整理の2段目（確定）。複数タスクの優先度をまとめて保存する。\n\
+                ・organizeTaskPriorities で出した提案を、ユーザーが承認した後だけ呼ぶ。\n\
+                ・ユーザーの承認がないうちは絶対に呼ばない。"
+                .to_owned(),
+            parameters_json_schema: json!({
+                "type": "object",
+                "properties": {
+                    "items": {
+                        "type": "array",
+                        "description": "確定する優先度のリスト。承認された提案の内容とそろえる",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "todo_id": { "type": "number", "description": "対象タスクのID" },
+                                "priority": {
+                                    "type": "string",
+                                    "description": "確定する優先度: 'high'（高）| 'medium'（中）| 'low'（低）"
+                                }
+                            },
+                            "required": ["todo_id", "priority"]
+                        }
+                    }
+                },
+                "required": ["items"]
+            }),
+            requires_confirmation: false,
+        }
+    }
+
+    async fn call(&self, ctx: &ToolContext, args: Value) -> Result<ToolOutcome, ToolError> {
+        let raw_items = args.get("items").and_then(Value::as_array);
+        let Some(raw_items) = raw_items.filter(|a| !a.is_empty()) else {
+            return Ok(fail_payload(
+                "items に {todo_id, priority} の配列を1件以上指定してください。",
+            ));
+        };
+
+        let mut items: Vec<(i64, String)> = Vec::with_capacity(raw_items.len());
+        for raw in raw_items {
+            match (arg_i64(raw, "todo_id"), as_valid_priority(raw)) {
+                (Some(id), Some(priority)) => items.push((id, priority)),
+                _ => {
+                    return Ok(fail_payload(format!(
+                        "不正な項目があります: {raw}（todo_id は数値、priority は 'high'|'medium'|'low'）"
+                    )));
+                }
+            }
+        }
+
+        let total = items.len();
+        let updated = TodoRepo::new(&self.db)
+            .update_priorities(&scope_of(ctx), items)
+            .await
+            .map_err(exec_err)?;
+        if updated == 0 {
+            return Ok(fail_payload(
+                "更新対象が見つかりませんでした。IDが正しいか、ToDoが未完了かを確認してください。",
+            ));
+        }
+
+        let skipped = total - updated;
+        let msg = if skipped > 0 {
+            format!("{updated}件のToDoの優先度を確定しました🗂️（{skipped}件は見つからない・完了済みのためスキップ）")
+        } else {
+            format!("{updated}件のToDoの優先度を確定しました🗂️")
+        };
+        Ok(ToolOutcome::from_payload(ok_payload(
+            msg,
+            json!({ "updated_count": updated }),
+        )))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -1489,5 +1660,69 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(out.payload["success"], false);
+    }
+
+    #[tokio::test]
+    async fn organize_then_apply_priorities_flow() {
+        let db = seed_db();
+        let tools = tools(db).unwrap();
+        let add = find(&tools, "addTodo");
+        let complete = find(&tools, "completeTodo");
+        let organize = find(&tools, "organizeTaskPriorities");
+        let apply = find(&tools, "applyTaskPriorities");
+
+        // 対象なし → 案内メッセージ・todos 空。
+        let out = organize.call(&ctx(), json!({})).await.unwrap();
+        assert_eq!(out.payload["success"], true);
+        assert_eq!(out.payload["todos"].as_array().unwrap().len(), 0);
+
+        // 2 件追加（priority 未設定）。
+        let a = add.call(&ctx(), json!({"title": "A"})).await.unwrap().payload["todo"]["id"]
+            .as_i64()
+            .unwrap();
+        let b = add.call(&ctx(), json!({"title": "B"})).await.unwrap().payload["todo"]["id"]
+            .as_i64()
+            .unwrap();
+
+        // organize は flat な todos と now を返す（todo_id 形状）。
+        let out = organize.call(&ctx(), json!({})).await.unwrap();
+        assert_eq!(out.payload["todos"].as_array().unwrap().len(), 2);
+        assert!(out.payload["now"].is_string());
+        assert!(out.payload["todos"][0]["todo_id"].is_number());
+
+        // 完了済みタスクは apply でスキップ（更新数に数えない）。
+        complete.call(&ctx(), json!({"todo_id": b})).await.unwrap();
+
+        // apply: 空 items → fail。
+        let out = apply.call(&ctx(), json!({"items": []})).await.unwrap();
+        assert_eq!(out.payload["success"], false);
+
+        // apply: 不正 priority → fail（文字列 high/medium/low のみ）。
+        let out = apply
+            .call(&ctx(), json!({"items": [{"todo_id": a, "priority": 2}]}))
+            .await
+            .unwrap();
+        assert_eq!(out.payload["success"], false);
+
+        // apply: A=high は更新、B=low は完了済みでスキップ → updated_count=1。
+        let out = apply
+            .call(
+                &ctx(),
+                json!({"items": [
+                    {"todo_id": a, "priority": "high"},
+                    {"todo_id": b, "priority": "low"}
+                ]}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(out.payload["success"], true);
+        assert_eq!(out.payload["updated_count"], 1);
+
+        // A の優先度が high に確定している。
+        let list = find(&tools, "listTodos");
+        let out = list.call(&ctx(), json!({"status": "open"})).await.unwrap();
+        let todos = out.payload["todos"].as_array().unwrap();
+        assert_eq!(todos.len(), 1);
+        assert_eq!(todos[0]["priority"], "high");
     }
 }
