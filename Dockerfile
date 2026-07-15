@@ -6,11 +6,13 @@
 #   stage frontend-builder : Vite で SPA を `dist/public` へビルド
 #   stage runtime          : debian-slim に **バイナリ + SPA のみ**を載せた最小実行イメージ
 #
-# 設計: 出荷物は Rust バイナリ `yuuka` と、それが配信する SPA（`dist/public`）だけ。
-#   Node ランタイム / node_modules / dist/index.js（Node サーバ束）/ chromium / フォント /
-#   yuuka-crawler / yuuka-synapse / デスクトップ exe は Rust 直起動では未使用のため**同梱しない**。
-#   （Rust は外部プロセスを spawn せず、reqwest=rustls で OpenSSL 不要、migration はコンパイル時 embed。
-#    実行時の外部依存は config.yaml と dist/public のみ・ライブ検証済み。）
+# 設計: 出荷物は Rust バイナリ `yuuka` と、それが配信する SPA（`dist/public`）＋ browser ツール用
+#   chromium。Node ランタイム / node_modules / dist/index.js（Node サーバ束）/ yuuka-crawler /
+#   yuuka-synapse / デスクトップ exe は Rust 直起動では未使用のため**同梱しない**。
+#   （Rust は browser ツール以外で外部プロセスを spawn せず、reqwest=rustls で OpenSSL 不要、
+#    migration はコンパイル時 embed。実行時の外部依存は config.yaml と dist/public のみ。）
+#   **chromium + fonts-noto-cjk は browser ツール（fetchDynamicPage/takePageScreenshot）用に同梱**
+#   （2026-07-15・ユーザー承認でスリム方針を部分反転。searchWeb のみ chromium 非依存）。
 #
 # 実行時トポロジ: 本イメージは **Rust 単独**（現行 CMD と同一）。Node strangler（経路A）を併走
 #   させる構成は別途フロント段プロキシが必要（docs/rust-rewrite/remaining-work.md B1 参照）。
@@ -58,11 +60,16 @@ FROM debian:bookworm-slim AS runtime
 # 壁時計を扱う。slim は既定 UTC のため tzdata と併せ JST に固定する（未設定だと 9 時間ずれる）。
 # YUUKA_RUST_CRON=1: 本イメージは Rust が cron を所有する（Node cron と同時起動しないこと）。
 ENV TZ=Asia/Tokyo \
-    YUUKA_RUST_CRON=1
+    YUUKA_RUST_CRON=1 \
+    CHROME_EXECUTABLE_PATH=/usr/bin/chromium
 # ca-certificates: 上流 HTTPS（Gemini/Discord/Google）用のルート証明書。tzdata: JST 解決用。
 # OpenSSL は使わない（reqwest=rustls）ため libssl3 は入れない。
+# chromium + fonts-noto-cjk: browser ツール（fetchDynamicPage=--dump-dom / takePageScreenshot=
+# --screenshot）が chromium バイナリを CLI 起動する。日本語ページのスクショに CJK フォントが要る。
+# CHROME_EXECUTABLE_PATH で find_chrome を確定させる。イメージは肥大するが browser ツール同梱の
+# ためユーザー承認済み（2026-07-15・スリム方針の部分反転）。searchWeb は chromium 非依存。
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates tzdata \
+ && apt-get install -y --no-install-recommends ca-certificates tzdata chromium fonts-noto-cjk \
  && rm -rf /var/lib/apt/lists/* \
  && groupadd -g 1000 yuuka \
  && useradd -u 1000 -g 1000 -m -s /usr/sbin/nologin yuuka
