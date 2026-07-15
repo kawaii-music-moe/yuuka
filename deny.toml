@@ -24,7 +24,12 @@ yanked = "deny"
 # CDLA-Permissive-2.0: webpki-roots / webpki-root-certs 1.0.x（Mozilla CA 証明書バンドル）が
 # Phase 3（twilight-http/tokio-websockets の rustls ルート＋reqwest rustls-tls）で持ち込む。
 # データ用の緩やかな許諾（Community Data License Agreement Permissive）で、証明書データ配布に限る。
-allow = ["MIT", "Apache-2.0", "BSD-3-Clause", "ISC", "Unicode-3.0", "Zlib", "CDLA-Permissive-2.0"]
+# MPL-2.0: 逸脱#2（2026-07-15・browser ツール）。scraper 0.27（servo html5ever/markup5ever/
+# selectors/cssparser/servo_arc）が持ち込む弱コピーレフト。**ファイル単位**のコピーレフトで、
+# 未改変のライブラリを依存として利用する限り自社コードへ伝播しない（Firefox/servo と同じ許諾）。
+# browser 系ツールの HTML→markdown 変換・検索結果パースに scraper を再利用するため許可（crawler
+# の既存ロジック流用）。改変時のみ当該ファイル開示義務が生じるが、フォークせず利用する方針。
+allow = ["MIT", "Apache-2.0", "BSD-3-Clause", "ISC", "Unicode-3.0", "Zlib", "CDLA-Permissive-2.0", "MPL-2.0"]
 confidence-threshold = 0.9
 # 第一者（未公開・path）クレートはライセンス検査対象外にする。プロジェクト自体は MIT
 # かつ private（package.json）で、workspace メンバーは crates.io へ公開しない。

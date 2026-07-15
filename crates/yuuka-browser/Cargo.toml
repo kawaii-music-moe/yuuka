@@ -1,0 +1,25 @@
+[package]
+name = "yuuka-browser"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "yuuka browser ツール（searchWeb/fetchDynamicPage/takePageScreenshot・chromium CLI + reqwest/scraper）"
+
+[dependencies]
+yuuka-core.workspace = true
+scraper = "0.27"                     # HTML→markdown 変換・検索結果パース（Node crawler 流用・MPL-2.0 逸脱#2）
+ego-tree = "0.11"                    # scraper の DOM ツリー型（traverse 再帰の NodeRef・scraper 0.27 整合）
+url = "2"                            # assertSafeOutboundUrl の URL パース（scheme/host/userinfo）
+reqwest = { workspace = true, features = ["gzip", "brotli", "deflate"] }  # 検索/静的 fetch（圧縮対応）
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+async-trait.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true }
+
+[lints]
+workspace = true

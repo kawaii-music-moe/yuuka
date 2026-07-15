@@ -71,6 +71,9 @@ fn all_domain_tools(
     all.extend(yuuka_conversation::tools(db.clone())?);
     // リッチ返信 Embed（core・秘書/汎用モード両経路で常時露出・db 非依存）。
     all.extend(yuuka_richcontent::tools()?);
+    // browser 系（secretary・chromium CLI + reqwest/scraper・db 非依存）。searchWeb/fetchDynamicPage/
+    // takePageScreenshot。対話セッション 6 本は後続増分。
+    all.extend(yuuka_browser::tools()?);
     // persona はツール関数を持たない（web 管理）。
     Ok(all)
 }
