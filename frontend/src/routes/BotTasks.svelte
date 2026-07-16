@@ -223,13 +223,13 @@
 				type="button"
 				class="btn btn-filter"
 				class:active={viewMode === "list"}
-				onclick={() => (viewMode = "list")}>📋 一覧</button
+				onclick={() => (viewMode = "list")}><Icon name="view_list" size={16} /> 一覧</button
 			>
 			<button
 				type="button"
 				class="btn btn-filter"
 				class:active={viewMode === "gantt"}
-				onclick={() => (viewMode = "gantt")}>📊 ガント</button
+				onclick={() => (viewMode = "gantt")}><Icon name="bar_chart" size={16} /> ガント</button
 			>
 		</div>
 		<div class="tasks-actions-right">
@@ -289,7 +289,7 @@
 			<!-- いつかやる（日付未設定タスク）。0件時は非表示（旧仕様）。 -->
 			{#if somedayTasks.length > 0}
 				<div class="tasks-someday-section">
-					<h3 class="tasks-someday-heading">🕗 いつかやる（日付未設定）</h3>
+					<h3 class="tasks-someday-heading"><Icon name="schedule" size={18} /> いつかやる（日付未設定）</h3>
 					<div class="list-container">
 						{#each somedayTasks as task (task.id)}
 							<TaskCard

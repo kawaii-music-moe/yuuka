@@ -9,9 +9,9 @@ import type { TodoWithSubtasks } from "$lib/api/types";
 
 /** 旧 app.js:2241 PRIORITY_LABELS */
 export const PRIORITY_LABELS: Record<string, string> = {
-	high: "🔴 高",
-	medium: "🟡 中",
-	low: "🔵 低",
+	high: "高",
+	medium: "中",
+	low: "低",
 };
 
 export function priorityLabel(priority: string | null | undefined): string {

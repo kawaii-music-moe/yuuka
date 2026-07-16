@@ -31,12 +31,15 @@
 						期限（締め切り）と開始日を設定できます。両方を持つタスクはガントチャートにバーで表示されます。
 					</li>
 					<li>
-						<strong>優先度：</strong> 🔴高 / 🟡中 / 🔵低
+						<strong>優先度：</strong>
+						<span class="material-symbols-outlined" style="color:#e5484d;font-size:0.95rem;font-variation-settings:'FILL' 1">circle</span>高
+						/ <span class="material-symbols-outlined" style="color:#f5a623;font-size:0.95rem;font-variation-settings:'FILL' 1">circle</span>中
+						/ <span class="material-symbols-outlined" style="color:#3b82f6;font-size:0.95rem;font-variation-settings:'FILL' 1">circle</span>低
 						で重要度を表します。「タスクを整理して」と頼むと、AIが期限や内容から優先度を提案します（確定は承認後）。
 					</li>
 					<li>
 						<strong>いつかやる：</strong>
-						期限も開始日も決めていないタスクは「🕗 いつかやる」にまとまります。
+						期限も開始日も決めていないタスクは「<Icon name="schedule" size={16} /> いつかやる」にまとまります。
 					</li>
 				</ul>
 			</div>
