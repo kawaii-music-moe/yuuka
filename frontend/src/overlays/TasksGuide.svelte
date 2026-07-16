@@ -32,9 +32,9 @@
 					</li>
 					<li>
 						<strong>優先度：</strong>
-						<span class="material-symbols-outlined" style="color:#e5484d;font-size:0.95rem;font-variation-settings:'FILL' 1">circle</span>高
-						/ <span class="material-symbols-outlined" style="color:#f5a623;font-size:0.95rem;font-variation-settings:'FILL' 1">circle</span>中
-						/ <span class="material-symbols-outlined" style="color:#3b82f6;font-size:0.95rem;font-variation-settings:'FILL' 1">circle</span>低
+						<Icon name="circle" size="0.95rem" fill class="prio-dot-high" />高
+						/ <Icon name="circle" size="0.95rem" fill class="prio-dot-mid" />中
+						/ <Icon name="circle" size="0.95rem" fill class="prio-dot-low" />低
 						で重要度を表します。「タスクを整理して」と頼むと、AIが期限や内容から優先度を提案します（確定は承認後）。
 					</li>
 					<li>
@@ -127,6 +127,16 @@
 </div>
 
 <style>
+	/* 優先度ドット（Icon の class 経由。Icon 内部要素のため :global が必要） */
+	.usage-section :global(.prio-dot-high) {
+		color: #e5484d;
+	}
+	.usage-section :global(.prio-dot-mid) {
+		color: #f5a623;
+	}
+	.usage-section :global(.prio-dot-low) {
+		color: #3b82f6;
+	}
 	.usage-title-row {
 		display: flex;
 		align-items: center;

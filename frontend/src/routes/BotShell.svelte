@@ -12,7 +12,8 @@
 	//   - サイドバー（Bot一覧へ戻る / Bot ブランディング / プリセット別メニュー・active）
 	//   - ヘッダ（現タブタイトル・Bot切替バッジ・ユーザーバッジ・テーマトグル・ログアウト）
 	//   - タブ切替は navigateTo('/bot/<tab>')。表示中タブは props.tab を受ける。
-	//   - 秘書/汎用プリセット別タブフィルタ（SECRETARY_ONLY / ASSISTANT_ONLY）。
+	//   - 秘書/汎用プリセット別タブフィルタ（SECRETARY_ONLY_TABS）+ 設定ハブ
+	//     2階層化（設定系タブは $lib/botTabs を単一情報源に /bot/settings 配下）。
 	// ─────────────────────────────────────────────────────────────────────────
 	import type { Component } from "svelte";
 	import { derived } from "svelte/store";
@@ -21,7 +22,8 @@
 	import { theme, toggleTheme } from "$lib/stores/theme";
 	import { authApi } from "$lib/api/services";
 	import { pushToast } from "$lib/stores/toast";
-	import { navigateTo, type BotTab } from "$lib/router";
+	import { navigateTo, DEFAULT_BOT_TAB, type BotTab } from "$lib/router";
+	import { SETTINGS_CHILD_TABS, botPreset } from "$lib/botTabs";
 	import { Icon } from "$lib/components/ui";
 
 	// §P1b ルート遅延ロード: 16タブの静的 import を loader マップに変換する。
@@ -50,8 +52,8 @@
 		settings: () => import("./BotSettingsHub.svelte"),
 	};
 
-	// 現在表示中のタブ（App/router から渡される。未指定は既定 config）。
-	let { tab = "config" as BotTab }: { tab?: BotTab } = $props();
+	// 現在表示中のタブ（App/router から渡される。未指定は既定 DEFAULT_BOT_TAB）。
+	let { tab = DEFAULT_BOT_TAB }: { tab?: BotTab } = $props();
 
 	// §8 プリセット別タブフィルタ（旧 app.js:157-170）。
 	// 2階層化: 設定系（personas/delivery/webhooks/mcp/playbooks/discord/config/
@@ -65,21 +67,8 @@
 		"personal",
 	];
 
-	// 設定ハブ配下のタブ。サイドバーでは「Bot設定」をアクティブ表示し、
-	// ヘッダタイトルは「Bot設定 › <ページ名>」のパンくずにする。
-	const SETTINGS_TABS: BotTab[] = [
-		"settings",
-		"config",
-		"personas",
-		"playbooks",
-		"mcp",
-		"delivery",
-		"webhooks",
-		"discord",
-		"devices",
-	];
-
 	// サイドバー項目（日常機能のみ + 設定ハブ）。
+	// 設定ハブ配下のタブ集合は $lib/botTabs の SETTINGS_CHILD_TABS（単一情報源）。
 	const ALL_MENU: { tab: BotTab; label: string; icon: string }[] = [
 		{ tab: "dashboard", label: "一般情報", icon: "info" },
 		{ tab: "tasks", label: "タスク管理", icon: "checklist" },
@@ -112,9 +101,9 @@
 	};
 
 	// プリセット別に絞り込んだメニュー配列（derived(activeBot)）。
-	// 設定系タブの表示条件は BotSettingsHub 側で同じ規約により絞り込む。
+	// 設定系タブの表示条件は BotSettingsHub が $lib/botTabs の同じ規約で絞り込む。
 	const menuItems = derived(activeBot, ($bot) => {
-		const isAssistant = ($bot?.preset ?? "secretary") === "mcp_assistant";
+		const isAssistant = botPreset($bot) === "mcp_assistant";
 		return ALL_MENU.filter((m) => {
 			if (SECRETARY_ONLY_TABS.includes(m.tab)) return !isAssistant;
 			return true;
@@ -146,10 +135,13 @@
 	// tab をキーに $derived で一度だけ Promise を生成することで、tab 変更時のみ
 	// import() が再評価される。同一タブ内の他の再レンダリングでは同じ Promise 参照の
 	// ままなので無駄なフェッチが起きない（Vite の module cache で実 fetch も1回）。
-	const modulePromise = $derived((TAB_LOADERS[tab] ?? TAB_LOADERS.config)());
-	// 設定ハブ配下ページはパンくず表記（現在地が「Bot設定」内であることを示す）。
+	const modulePromise = $derived(
+		(TAB_LOADERS[tab] ?? TAB_LOADERS[DEFAULT_BOT_TAB])(),
+	);
+	// 設定ハブ配下ページか（パンくず表記とサイドバー「Bot設定」アクティブ判定に使用）。
+	const inSettingsChild = $derived(SETTINGS_CHILD_TABS.includes(tab));
 	const title = $derived(
-		tab !== "settings" && SETTINGS_TABS.includes(tab)
+		inSettingsChild
 			? `Bot設定 › ${TAB_TITLES[tab]}`
 			: (TAB_TITLES[tab] ?? "ダッシュボード"),
 	);
@@ -203,7 +195,7 @@
 					type="button"
 					class="menu-item"
 					class:active={item.tab === tab ||
-						(item.tab === "settings" && SETTINGS_TABS.includes(tab))}
+						(item.tab === "settings" && inSettingsChild)}
 					class:menu-item-settings={item.tab === "settings"}
 					data-tab={item.tab}
 					onclick={() => go(item.tab)}

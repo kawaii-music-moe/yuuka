@@ -16,6 +16,7 @@
 	import { selectBot } from "$lib/stores/activeBot";
 	import { theme, setTheme, type Theme } from "$lib/stores/theme";
 	import { navigateTo } from "$lib/router";
+	import ManagementOverlayShell from "./ManagementOverlayShell.svelte";
 
 	// ── Gemini 設定 ──
 	let geminiApiKey = $state("");
@@ -111,21 +112,8 @@
 	}
 </script>
 
-<div class="overlay active" id="account-overlay">
-	<div class="management-overlay-card">
-		<div class="management-overlay-header">
-			<h1>
-				<span class="material-symbols-outlined" style="vertical-align:middle;font-size:1.6rem;"
-					>manage_accounts</span
-				> アカウント管理
-			</h1>
-			<button type="button" class="btn btn-secondary" onclick={() => navigateTo("/")}>
-				<Icon name="arrow_back" class="icon-button-left" /> Bot選択に戻る
-			</button>
-		</div>
-
-		<div class="management-overlay-body">
-			<section id="tab-account">
+<ManagementOverlayShell id="account-overlay" icon="manage_accounts" title="アカウント管理">
+	<section id="tab-account">
 				<p class="description-text" style="margin-bottom: 16px;">
 					表示名・外観テーマ・ログインパスワードなど、特定のBotに依存しないアカウント共通の設定です。
 				</p>
@@ -268,10 +256,8 @@
 						</button>
 					</form>
 				</details>
-			</section>
-		</div>
-	</div>
-</div>
+	</section>
+</ManagementOverlayShell>
 
 <style>
 	.theme-option {

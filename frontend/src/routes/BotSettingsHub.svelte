@@ -5,85 +5,15 @@
 	// サイドバー2階層化に伴い、低頻度の設定系タブ（ペルソナ/Playbook/MCP/
 	// 配信/Webhook/Discord/Bot基本設定/接続端末）の入口をカード一覧に集約する。
 	// 各カードは既存の /bot/<tab> へ遷移するだけで、遷移先ページ自体は不変。
-	// プリセット別の表示条件は旧サイドバーの SECRETARY/ASSISTANT_ONLY と同一。
+	// カード定義・プリセット別表示条件は $lib/botTabs が単一情報源
+	// （BotShell のパンくず/アクティブ判定も同じ集合を参照する）。
 	// ─────────────────────────────────────────────────────────────────────────
-	import { derived } from "svelte/store";
-	import { navigateTo, type BotTab } from "$lib/router";
+	import { navigateTo } from "$lib/router";
 	import { activeBot } from "$lib/stores/activeBot";
+	import { botPreset, filterHubItems } from "$lib/botTabs";
 	import { Icon } from "$lib/components/ui";
 
-	interface HubItem {
-		tab: BotTab;
-		label: string;
-		icon: string;
-		desc: string;
-		/** 表示プリセット限定（未指定は両方）。 */
-		only?: "secretary" | "assistant";
-	}
-
-	const ALL_ITEMS: HubItem[] = [
-		{
-			tab: "config",
-			label: "Bot 基本設定",
-			icon: "smart_toy",
-			desc: "トークン・モデル・基本動作などのシステム設定",
-		},
-		{
-			tab: "personas",
-			label: "ペルソナ",
-			icon: "theater_comedy",
-			desc: "口調・性格など応答スタイルの管理",
-		},
-		{
-			tab: "playbooks",
-			label: "Playbook 管理",
-			icon: "description",
-			desc: "自動化手順書と定期実行スケジュール",
-			only: "secretary",
-		},
-		{
-			tab: "mcp",
-			label: "MCPサーバー",
-			icon: "extension",
-			desc: "MCP サーバーの接続とツール利用設定",
-		},
-		{
-			tab: "delivery",
-			label: "配信設定",
-			icon: "campaign",
-			desc: "活動サマリーなどの定期配信設定",
-			only: "secretary",
-		},
-		{
-			tab: "webhooks",
-			label: "Webhook",
-			icon: "webhook",
-			desc: "外部サービスからの Webhook 連携",
-			only: "secretary",
-		},
-		{
-			tab: "discord",
-			label: "Discord連携",
-			icon: "forum",
-			desc: "Discord Bot の連携設定",
-			only: "assistant",
-		},
-		{
-			tab: "devices",
-			label: "接続端末",
-			icon: "devices",
-			desc: "ログイン中の接続端末の確認・管理",
-		},
-	];
-
-	// プリセット別に絞り込んだカード配列（BotShell の menuItems と同じ規約）。
-	const items = derived(activeBot, ($bot) => {
-		const isAssistant = ($bot?.preset ?? "secretary") === "mcp_assistant";
-		return ALL_ITEMS.filter((i) => {
-			if (!i.only) return true;
-			return i.only === (isAssistant ? "assistant" : "secretary");
-		});
-	});
+	const items = $derived(filterHubItems(botPreset($activeBot)));
 </script>
 
 <section class="tab-view">
@@ -92,10 +22,10 @@
 	</p>
 
 	<div class="settings-hub-grid">
-		{#each $items as item (item.tab)}
+		{#each items as item (item.tab)}
 			<button
 				type="button"
-				class="glass hover-lift settings-hub-card"
+				class="hover-lift settings-hub-card"
 				onclick={() => navigateTo(`/bot/${item.tab}`)}
 			>
 				<Icon name={item.icon} size={28} class="settings-hub-icon" />
