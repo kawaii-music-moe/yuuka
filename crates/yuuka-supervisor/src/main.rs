@@ -23,8 +23,9 @@ use yuuka_discord::{rate_limit_message, DiscordManager, ManagerPorts, Prepared, 
 use yuuka_orchestrator::{ChatEngine, DbBotDirectory, DbMembership, InMemoryRateLimiter};
 use yuuka_services::{MetricsRegistry, ServiceContext};
 use yuuka_supervisor::{
-    build_app, build_supervised_services, build_tool_registry, ws_routes, DiscordTenantService,
-    MessengerRegistrationDm, ServiceError, ShutdownToken, SupervisedService, Supervisor,
+    build_app, build_supervised_services, build_tool_registry, ws_routes, MessengerRegistrationDm,
+    RegistryBotRuntime, RegistryLifecycle, ServiceError, ShutdownToken, SupervisedService,
+    Supervisor, TenantRegistry,
 };
 use yuuka_web::{AppState, Db, WebConfig};
 
@@ -166,13 +167,23 @@ async fn run() -> Result<(), String> {
     //      共有 Messenger を作る（ここでは twilight REST クライアント生成のみ・gateway 未接続）。
     //      Messenger は登録コード DM（下）・cron 通知（P1-4）の共通配信基盤として使う。gateway の
     //      起動は後述の YUUKA_RUST_DISCORD ゲートで制御する（二重 gateway ＝二重応答の回避）。
-    let discord_manager = DiscordManager::new(ManagerPorts {
+    let discord_manager = Arc::new(DiscordManager::new(ManagerPorts {
         directory: Arc::new(DbBotDirectory::new(db.clone(), crypto.clone())),
         rate_limiter: Arc::new(InMemoryRateLimiter::new(db.clone())),
         processor: chat_engine.clone(),
         membership: Arc::new(DbMembership::new(db.clone())),
-    });
+    }));
     let Prepared { runners, messenger } = discord_manager.prepare().await;
+
+    // Discord テナントの live ライフサイクルレジストリ（web ⇄ gateway 配線）。gateway を Rust が
+    // 所有する時のみ作る（Node 所有時に web から起動すると二重 gateway＝二重応答になるため、
+    // その間は Null シーム縮退を維持する）。
+    let tenant_registry = rust_discord_enabled().then(|| {
+        Arc::new(TenantRegistry::new(
+            discord_manager.clone(),
+            messenger.clone(),
+        ))
+    });
 
     match yuuka_auth::invite::seed_initial_codes(&db, &cfg.invite_codes).await {
         Ok(n) if n > 0 => tracing::info!(seeded = n, "招待コードをシードしました"),
@@ -183,8 +194,12 @@ async fn run() -> Result<(), String> {
     // が未起動（トークン未登録）なら送信は false を返し `/api/register` は 502 に縮退する（従来と同挙動）。
     // 管理ルータ（/api/admin/*）。セッション一括失効は auth と同一ストアを共有（ロール変更/削除の
     // 即時反映）、デフォルト Bot トークン暗号化は同じ crypto を使う。runtime 効果（Bot 再起動/停止/
-    // 稼働状態）は Discord gateway 未配線のため NullBotRuntime へ縮退する（DB 効果は常に完全に働く）。
-    let bot_runtime: Arc<dyn yuuka_admin::BotRuntime> = Arc::new(yuuka_admin::NullBotRuntime);
+    // 稼働状態）は Rust が gateway を所有する時のみ live（TenantRegistry）、Node 所有時は
+    // NullBotRuntime へ縮退する（DB 効果は常に完全に働く）。
+    let bot_runtime: Arc<dyn yuuka_admin::BotRuntime> = match &tenant_registry {
+        Some(reg) => Arc::new(RegistryBotRuntime(reg.clone())),
+        None => Arc::new(yuuka_admin::NullBotRuntime),
+    };
     // `http_client`（共有 reqwest）・`mcp_client`（共有 HttpMcpClient）は上（ChatEngine 構築前）で 1 度だけ
     // 生成済み。以降の Google クライアント・MCP ルートはそれを再利用する（接続プール/セッションキャッシュ統一）。
     let admin_runtime = Arc::new(yuuka_admin::AdminRuntime::new(
@@ -247,13 +262,16 @@ async fn run() -> Result<(), String> {
         Arc::new(yuuka_mcp::ProxyTokenManager::new()),
     )));
 
-    // 統合設定ルータ（overview / bot lifecycle / grants / google accounts）。Bot 起動停止は Discord
-    // gateway 未配線のため NullBotLifecycle、カレンダー取得は settings と同一の Null シームを共有する。
-    let integrated_routes =
-        yuuka_integrated::routes(Arc::new(yuuka_integrated::IntegratedRuntime::new(
-            Arc::new(yuuka_integrated::NullBotLifecycle),
-            google_calendar.clone(),
-        )));
+    // 統合設定ルータ（overview / bot lifecycle / grants / google accounts）。Bot 起動停止は Rust が
+    // gateway を所有する時のみ live（TenantRegistry）、Node 所有時は NullBotLifecycle へ縮退する。
+    // カレンダー取得は settings と同一のシームを共有する。
+    let bot_lifecycle: Arc<dyn yuuka_integrated::BotLifecycle> = match &tenant_registry {
+        Some(reg) => Arc::new(RegistryLifecycle(reg.clone())),
+        None => Arc::new(yuuka_integrated::NullBotLifecycle),
+    };
+    let integrated_routes = yuuka_integrated::routes(Arc::new(
+        yuuka_integrated::IntegratedRuntime::new(bot_lifecycle, google_calendar.clone()),
+    ));
 
     // finance ルータ（A1 配線）: upload-receipt を実 ChatEngine の秘書ターン（画像 OCR）へ橋渡す。
     // レート制限は web 受付専用の in-memory カウンタ（guildId スロット="web"）。
@@ -330,7 +348,7 @@ async fn run() -> Result<(), String> {
     //      Node bot を停止したら `YUUKA_RUST_DISCORD=1` で各テナント（Shard poll ループ）を監督下へ置く
     //      （panic 隔離 + 指数バックオフ・恒久クローズ=無効トークン等は再起動しない）。REST 送信（登録
     //      DM・通知）は gateway 非依存のため本ゲートに関わらず messenger 経由で機能する。
-    if rust_discord_enabled() {
+    if let Some(reg) = &tenant_registry {
         if runners.is_empty() {
             tracing::warn!(
                 "YUUKA_RUST_DISCORD 有効ですが起動対象 Bot がありません（トークン未登録 or 暗号鍵未設定）"
@@ -338,7 +356,7 @@ async fn run() -> Result<(), String> {
         }
         for runner in runners {
             tracing::info!(bot_id = %runner.bot_id(), "Discord テナントを監督下に配置");
-            supervisor = supervisor.service(Arc::new(DiscordTenantService::new(runner)));
+            reg.adopt(runner);
         }
     } else {
         drop(runners);
@@ -387,6 +405,11 @@ async fn run() -> Result<(), String> {
 
     tracing::info!(%addr, "yuuka supervisor 起動（web を監督下に配置）");
     supervisor.run(shutdown_signal()).await;
+    // テナントはレジストリ所有（動的 start/stop のため Supervisor 外）。ここで graceful に閉じる
+    // （close フレーム送出＝Discord セッションを綺麗に終える。旧 supervisor 配置時と同じ終端）。
+    if let Some(reg) = &tenant_registry {
+        reg.shutdown().await;
+    }
     tracing::info!("yuuka supervisor stopped");
     Ok(())
 }

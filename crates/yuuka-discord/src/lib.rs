@@ -31,7 +31,7 @@ mod text;
 pub use idempotent::MessageDedup;
 pub use manager::{DiscordManager, DiscordMessenger, ManagerPorts, Prepared, TenantRunner};
 pub use presence::build_presence;
-pub use tenant::{default_intents, run_tenant, TenantConfig};
+pub use tenant::{default_intents, run_tenant, TenantConfig, TenantStatus};
 pub use text::{split_message, to_discord_markdown};
 
 // よく使う契約を crate ルートへ再エクスポート（実装側の import を短くする）。

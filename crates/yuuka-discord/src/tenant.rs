@@ -8,6 +8,7 @@
 //! メッセージ/インタラクションは `tokio::spawn` で処理する（poll ループを塞がずハートビートを維持）。
 
 use std::future::Future;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use secrecy::{ExposeSecret, SecretString};
 use twilight_gateway::{
@@ -32,6 +33,27 @@ pub struct TenantConfig {
     pub token: SecretString,
 }
 
+/// テナントの gateway 接続状態（web 層の稼働表示・起動完了待ちに使う）。
+///
+/// READY 受信で `connected=true`、poll ループ終了（graceful 停止・恒久クローズ・一過性断の
+/// 再接続待ち）で `false`。twilight の自動再接続で再 READY すれば再び `true` に戻る。
+#[derive(Default)]
+pub struct TenantStatus {
+    connected: AtomicBool,
+}
+
+impl TenantStatus {
+    /// gateway 接続済み（READY 受信済み）か。
+    #[must_use]
+    pub fn connected(&self) -> bool {
+        self.connected.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn set_connected(&self, value: bool) {
+        self.connected.store(value, Ordering::Relaxed);
+    }
+}
+
 /// 現行 `DISCORD_CLIENT_OPTIONS.intents`（GUILDS/GUILD_MESSAGES/MESSAGE_CONTENT/DIRECT_MESSAGES）。
 #[must_use]
 pub fn default_intents() -> Intents {
@@ -47,6 +69,7 @@ pub async fn run_tenant(
     cfg: &TenantConfig,
     flow: FlowDeps,
     interaction_deps: InteractionDeps,
+    status: &TenantStatus,
     cancel: impl Future<Output = ()> + Send,
 ) -> Result<(), DiscordError> {
     let mut shard = Shard::new(
@@ -85,6 +108,7 @@ pub async fn run_tenant(
                         // 非 Sync なので、保持すると future が !Send になり supervisor に載らない）。
                         let sender = shard.sender();
                         runtime = Some(on_ready(cfg, &flow, sender, &ready.user).await);
+                        status.set_connected(true);
                     }
                     Event::MessageCreate(msg) => {
                         if let Some(rt) = runtime.clone() {
@@ -106,8 +130,11 @@ pub async fn run_tenant(
                         if is_fatal_close(frame.as_ref()) {
                             let code = frame.as_ref().map(|f| f.code);
                             tracing::error!(bot_id = %cfg.bot_id, ?code, "恒久クローズ（再起動しない）");
+                            status.set_connected(false);
                             return Err(DiscordError::ShardClosedFatal { code });
                         }
+                        // 自動再接続待ちの間は未接続扱い（再 READY で true に戻る）。
+                        status.set_connected(false);
                         tracing::warn!(bot_id = %cfg.bot_id, "gateway close（自動再接続）");
                     }
                     _ => {}
@@ -117,6 +144,7 @@ pub async fn run_tenant(
     }
 
     // 停止協調/ストリーム終了で抜けた。close フレームを送って gateway セッションを綺麗に閉じる。
+    status.set_connected(false);
     // twilight は close フレームを **次 poll で** 送出するため、送出完了（Close 受領 or ストリーム終了）
     // まで短時間だけ poll し続ける（現行 destroy 相当）。無限待ちを避けるためタイムアウトで打ち切る。
     shard.close(CloseFrame::NORMAL);
