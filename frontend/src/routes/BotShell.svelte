@@ -280,17 +280,24 @@
 	.menu-item {
 		background: none;
 		border: none;
-		width: 100%;
 		cursor: pointer;
 		font: inherit;
-		text-align: left;
 	}
-	/* 設定ハブ項目は日常機能と視覚的に区切る（2階層化） */
-	.menu-item-settings {
-		margin-top: 10px;
-		border-top: 1px solid var(--border-divider);
-		border-radius: 0;
-		padding-top: 14px;
+	/* PC（縦サイドバー）のみ全幅・左寄せ。スマホは styles.css のボトムナビ規則
+	   （flex:0 0 auto・縦積み中央寄せ）に委ねる — scoped セレクタの方が詳細度が
+	   高く、無条件の width:100% はボトムナビで各ボタンが画面幅いっぱいになるため */
+	@media (min-width: 769px) {
+		.menu-item {
+			width: 100%;
+			text-align: left;
+		}
+		/* 設定ハブ項目は日常機能と視覚的に区切る（2階層化） */
+		.menu-item-settings {
+			margin-top: 10px;
+			border-top: 1px solid var(--border-divider);
+			border-radius: 0;
+			padding-top: 14px;
+		}
 	}
 	.bot-context-badge {
 		background: none;
