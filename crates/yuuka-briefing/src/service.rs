@@ -309,6 +309,38 @@ pub(crate) const BRIEFING_FOOTER: &str = "データ提供: Open-Meteo / 登録RS
 pub(crate) const BRIEFING_EMPTY_DESC: &str =
     "朝報に表示する内容がまだ設定されていません。天気の地点（緯度経度）やニュースのRSSフィードを設定してください。";
 
+/// 生成した朝報を**プレーンテキスト**へ整形する（定時配信の [`crate::cron::run_due_briefings`] 用）。
+///
+/// **意図的 divergence**: Node は Embed（`{ embeds: [embed] }`）で配信するが、Rust の通知ポート
+/// （`yuuka_services::Notifier`）は現状 text 経路のみを持つ（Embed は後続拡張）。ここでは Embed の
+/// タイトル・各フィールド（`名: 値`）・フッタを Discord のマークダウンで縦に積んだ text 本文にする
+/// （runBriefingNow の「インライン Embed で返す」divergence と同系統・情報は等価）。空コンテンツ時は
+/// [`BRIEFING_EMPTY_DESC`] を本文に入れる（Node の `setDescription` と等価）。
+#[must_use]
+pub fn render_briefing_text(content: &BriefingContent) -> String {
+    let mut out = String::new();
+    out.push_str("**");
+    out.push_str(BRIEFING_TITLE);
+    out.push_str("**\n");
+    if content.has_content {
+        for (name, value) in &content.fields {
+            out.push('\n');
+            out.push_str("**");
+            out.push_str(name);
+            out.push_str("**\n");
+            out.push_str(value);
+            out.push('\n');
+        }
+    } else {
+        out.push('\n');
+        out.push_str(BRIEFING_EMPTY_DESC);
+        out.push('\n');
+    }
+    out.push('\n');
+    out.push_str(BRIEFING_FOOTER);
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -342,5 +374,35 @@ mod tests {
     #[test]
     fn decode_min_unescapes_entities() {
         assert_eq!(decode_min("A &amp; B &lt;x&gt;"), "A & B <x>");
+    }
+
+    #[test]
+    fn render_text_includes_title_fields_and_footer() {
+        let content = BriefingContent {
+            fields: vec![
+                ("🌤️ 東京 の天気".to_owned(), "**今日**: 晴れ　20℃〜28℃".to_owned()),
+                ("📰 今朝のニュース".to_owned(), "・記事A\n・記事B".to_owned()),
+            ],
+            has_content: true,
+        };
+        let text = render_briefing_text(&content);
+        assert!(text.contains(BRIEFING_TITLE));
+        assert!(text.contains("🌤️ 東京 の天気"));
+        assert!(text.contains("**今日**: 晴れ"));
+        assert!(text.contains("・記事A"));
+        assert!(text.contains(BRIEFING_FOOTER));
+    }
+
+    #[test]
+    fn render_text_uses_empty_desc_when_no_content() {
+        let content = BriefingContent {
+            fields: vec![],
+            has_content: false,
+        };
+        let text = render_briefing_text(&content);
+        assert!(text.contains(BRIEFING_TITLE));
+        assert!(text.contains(BRIEFING_EMPTY_DESC));
+        // 本文は非空（NullNotifier 以外なら配信される）。
+        assert!(!text.trim().is_empty());
     }
 }

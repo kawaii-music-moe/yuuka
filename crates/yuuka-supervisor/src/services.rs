@@ -92,7 +92,7 @@ mod tests {
     #[test]
     fn builds_all_services_with_cron_prefixed_names() {
         let svcs = build_supervised_services(&ctx());
-        // 実装 7（playbook 含む）+ 予約シーム 3（report/briefing/backup）= 10。
+        // 実装 8（playbook/briefing 含む）+ 予約シーム 2（report/backup）= 10。
         assert_eq!(svcs.len(), 10);
         let names: Vec<String> = svcs.iter().map(|s| s.name()).collect();
         assert!(names.iter().all(|n| n.starts_with("cron:")));

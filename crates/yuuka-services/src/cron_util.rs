@@ -6,7 +6,7 @@
 //! （currentDate を含まない次回）と意味を合わせる。日時は他モジュールと同じ DB 文字列
 //! `'YYYY-MM-DD HH:MM:SS'`（ローカル）／`'YYYY-MM-DD'` で入出力する。
 
-use chrono::{DateTime, Local, NaiveDate, TimeZone};
+use chrono::{DateTime, Datelike, Duration, Local, NaiveDate, TimeZone, Timelike};
 use croner::Cron;
 
 /// 5-field cron 式を parse する（失敗は `None`＝壊れた式は呼び出し側でスキップ）。
@@ -18,6 +18,28 @@ fn parse(expr: &str) -> Option<Cron> {
 #[must_use]
 pub fn next_after(expr: &str, after: DateTime<Local>) -> Option<DateTime<Local>> {
     parse(expr)?.find_next_occurrence(&after, false).ok()
+}
+
+/// cron 式が「この 1 分」にマッチするか（Node `reportService.cronMatchesNow` パリティ）。
+///
+/// Node と同一アルゴリズム: 60 秒前を起点に**厳密に後**の次回発火を求め、その分（年月日時分）が
+/// `now` の分と一致すれば true。壊れた式は `next_after` が `None`＝false（Node の `catch → false`）。
+/// これにより「分境界で発火する EveryMinute tick」が現在分の設定を **1 回だけ**配信できる
+/// （last_run 列を持たない briefing/report の冪等判定・croner が `*`/範囲/リストを解釈）。
+#[must_use]
+pub fn cron_matches_now(expr: &str, now: DateTime<Local>) -> bool {
+    let Some(base) = now.checked_sub_signed(Duration::seconds(60)) else {
+        return false;
+    };
+    let Some(next) = next_after(expr, base) else {
+        return false;
+    };
+    // 分単位で一致判定（秒以下は無視・Node は getMinutes までを比較）。
+    next.year() == now.year()
+        && next.month() == now.month()
+        && next.day() == now.day()
+        && next.hour() == now.hour()
+        && next.minute() == now.minute()
 }
 
 /// DB 保存形式 `'YYYY-MM-DD HH:MM:SS'`（ローカル）へ整形する（Node `toDbDateTime` と同形）。
@@ -138,5 +160,42 @@ mod tests {
     fn recurring_broken_rule_is_none() {
         let today = at(2026, 7, 8, 9, 0);
         assert!(next_recurring_due_date("garbage", "2026-07-08", today).is_none());
+    }
+
+    #[test]
+    fn cron_matches_now_hits_exact_minute() {
+        // "0 7 * * *"（毎朝 7:00）は 7:00 の分にマッチし、7:01/6:59 にはマッチしない。
+        assert!(cron_matches_now("0 7 * * *", at(2026, 7, 8, 7, 0)));
+        assert!(!cron_matches_now("0 7 * * *", at(2026, 7, 8, 7, 1)));
+        assert!(!cron_matches_now("0 7 * * *", at(2026, 7, 8, 6, 59)));
+    }
+
+    #[test]
+    fn cron_matches_now_every_minute_always_true() {
+        // "* * * * *" は任意の分にマッチする。
+        assert!(cron_matches_now("* * * * *", at(2026, 7, 8, 7, 0)));
+        assert!(cron_matches_now("* * * * *", at(2026, 7, 8, 23, 59)));
+    }
+
+    #[test]
+    fn cron_matches_now_supports_lists_and_ranges() {
+        // 分リスト "0,30"・時範囲 "9-17"（croner が解釈・Node cron-parser パリティ）。
+        assert!(cron_matches_now("0,30 9-17 * * *", at(2026, 7, 8, 9, 0)));
+        assert!(cron_matches_now("0,30 9-17 * * *", at(2026, 7, 8, 17, 30)));
+        assert!(!cron_matches_now("0,30 9-17 * * *", at(2026, 7, 8, 9, 15)));
+        assert!(!cron_matches_now("0,30 9-17 * * *", at(2026, 7, 8, 8, 0)));
+    }
+
+    #[test]
+    fn cron_matches_now_respects_day_of_week() {
+        // "0 9 * * 1"（毎週月曜 9:00）。2026-07-06 は月曜、07-08 は水曜。
+        assert!(cron_matches_now("0 9 * * 1", at(2026, 7, 6, 9, 0)));
+        assert!(!cron_matches_now("0 9 * * 1", at(2026, 7, 8, 9, 0)));
+    }
+
+    #[test]
+    fn cron_matches_now_broken_expr_is_false() {
+        assert!(!cron_matches_now("not a cron", at(2026, 7, 8, 7, 0)));
+        assert!(!cron_matches_now("99 99 * * *", at(2026, 7, 8, 7, 0)));
     }
 }

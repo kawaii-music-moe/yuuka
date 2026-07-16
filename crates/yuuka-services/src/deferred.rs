@@ -10,10 +10,11 @@
 //! 保留理由（各サービスが必要とする未整備基盤）:
 //! - **report**（現行 `reportService.ts`）: `report_configs`/`message_logs` repo、Gemini 補助生成
 //!   （`generateAuxText` = gemini オーケストレーション上位層）、グラフ埋め込み、Notifier。
-//! - **briefing**（現行 `briefingService.ts`）: `briefing_configs` repo、天気 API・RSS 取得
-//!   （外部 HTTP＋SSRF ガード）、`generateAuxText`、Notifier。
 //! - **backup**（現行 `backupService.ts`）: ユーザー別 Google Drive OAuth クライアント、SQLite
 //!   バックアップ＋zip、`users` の Drive 連携メタ。
+//!
+//! （**briefing** は本体実装済み＝[`crate::briefing::BriefingService`]。天気/RSS 生成 +
+//! テキスト整形は `yuuka-briefing` の各プリミティブを再利用し、cron due 判定 + Notifier 配線を持つ。）
 
 use async_trait::async_trait;
 
@@ -55,18 +56,13 @@ deferred_service!(
     "report_configs/message_logs + Gemini 補助生成"
 );
 deferred_service!(
-    BriefingService,
-    "briefing",
-    Schedule::EveryMinute,
-    "briefing_configs + 天気/RSS + Gemini 補助生成"
-);
-deferred_service!(
     BackupService,
     "backup",
     Schedule::Cron("15 * * * *"),
     "ユーザー別 Google Drive クライアント"
 );
-// playbook-schedule は本体実装済み（[`crate::playbook_schedule::PlaybookScheduleService`]）。
+// playbook-schedule / briefing は本体実装済み
+// （[`crate::playbook_schedule::PlaybookScheduleService`] / [`crate::briefing::BriefingService`]）。
 
 #[cfg(test)]
 mod tests {
@@ -79,6 +75,6 @@ mod tests {
             BackupService.schedule(),
             Schedule::Cron("15 * * * *")
         ));
-        assert!(!BriefingService.run_on_start());
+        assert!(!ReportService.run_on_start());
     }
 }

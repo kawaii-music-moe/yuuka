@@ -12,9 +12,10 @@
 //!
 //! # 実装済み / 予約シーム
 //! - 実装: metrics / clipboard / reminder / todo-recurrence / payment-recurrence / birthday /
-//!   **playbook-schedule**（マクロ定期実行・[`turn::PlaybookRunner`] ポート経由で会話エンジンを起動）
-//! - 予約シーム（本体 deferred）: report / briefing / backup
-//!   — gemini 補助生成（`generateAuxText`）・Google Drive・天気/RSS 等の未整備基盤に依存。
+//!   **playbook-schedule**（マクロ定期実行・[`turn::PlaybookRunner`] ポート経由で会話エンジンを起動）/
+//!   **briefing**（朝報の天気/RSS 定時配信・`yuuka-briefing` の生成プリミティブを再利用）
+//! - 予約シーム（本体 deferred）: report / backup
+//!   — gemini 補助生成（`generateAuxText`）・Google Drive 等の未整備基盤に依存。
 
 use std::sync::Arc;
 
@@ -26,6 +27,7 @@ pub mod schedule;
 pub mod turn;
 
 mod birthday;
+mod briefing;
 mod clipboard;
 mod deferred;
 mod payment_recurrence;
@@ -45,7 +47,7 @@ pub use turn::{NullPlaybookRunner, PlaybookRunner};
 
 /// 全 cron サービスを構築して返す（登録レジストリ）。supervisor はこれを監督下タスクへ変換する。
 ///
-/// 予約シーム（report/briefing/backup）は本体 deferred だが**スケジュール上は起動**し、tick で
+/// 予約シーム（report/backup）は本体 deferred だが**スケジュール上は起動**し、tick で
 /// 「未実装（依存基盤待ち）」を warn する（配線を実証し、後で本体を埋めるだけにする）。
 #[must_use]
 pub fn build_services() -> Vec<Arc<dyn CronService>> {
@@ -58,9 +60,9 @@ pub fn build_services() -> Vec<Arc<dyn CronService>> {
         Arc::new(clipboard::ClipboardCleanupService),
         Arc::new(metrics::MetricsLogService),
         Arc::new(playbook_schedule::PlaybookScheduleService),
+        Arc::new(briefing::BriefingService),
         // ── 予約シーム（本体 deferred・依存基盤待ち） ──
         Arc::new(deferred::ReportService),
-        Arc::new(deferred::BriefingService),
         Arc::new(deferred::BackupService),
     ]
 }

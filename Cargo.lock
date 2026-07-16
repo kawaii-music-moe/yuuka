@@ -4127,6 +4127,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "tracing",
+ "yuuka-briefing",
  "yuuka-core",
  "yuuka-db",
  "yuuka-personal",

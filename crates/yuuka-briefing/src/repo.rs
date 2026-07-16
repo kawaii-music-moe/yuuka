@@ -6,7 +6,7 @@
 
 use rusqlite::params;
 use serde_json::Value;
-use yuuka_core::DbError;
+use yuuka_core::{CrossUserAccess, DbError};
 use yuuka_db::map_sqlite;
 use yuuka_web::Db;
 
@@ -107,6 +107,60 @@ pub async fn find_briefing(
                 Some(v) => Ok(Some(v.map_err(map_sqlite)?)),
                 None => Ok(None),
             }
+        })
+        .await
+}
+
+/// cron 走査用の有効 briefing 設定 1 件（所有者列 `user_id`/`bot_id` + due 判定用 `schedule_cron`）。
+///
+/// 定時配信ループはこの一覧を走査し、`schedule_cron` が現在分にマッチする設定について
+/// [`crate::build_briefing`]（`user_id`/`bot_id` で本人設定を再読込）→配信を行う。
+#[derive(Debug, Clone)]
+pub struct EnabledBriefing {
+    pub user_id: String,
+    pub bot_id: String,
+    pub schedule_cron: String,
+    /// 'dm' | 'channel'。
+    pub target_type: String,
+    pub target_id: Option<String>,
+}
+
+/// 有効な（`enabled=1`）朝報設定を**全ユーザー横断**で返す（Node `listEnabledBriefingConfigsAcrossUsers`
+/// ＝`SELECT * FROM briefing_configs WHERE enabled = 1`）。cron 式の due 判定は呼び出し側（croner 保持層）。
+///
+/// 横断アクセスは cron/バッチ起点でしか作れない（[`CrossUserAccess`] 証憑必須・§7.3）。playbook の
+/// `list_enabled_schedules` と同規律で `UserScope` 経路から隔離する。
+///
+/// # Errors
+/// クエリ失敗時 [`DbError`]。
+pub async fn list_enabled_briefings(
+    db: &Db,
+    _cross: CrossUserAccess,
+) -> Result<Vec<EnabledBriefing>, DbError> {
+    db.read
+        .read(move |conn| {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT user_id, bot_id, schedule_cron, target_type, target_id \
+                     FROM briefing_configs WHERE enabled = 1 ORDER BY user_id ASC, bot_id ASC",
+                )
+                .map_err(map_sqlite)?;
+            let rows = stmt
+                .query_map([], |row| {
+                    Ok(EnabledBriefing {
+                        user_id: row.get(0)?,
+                        bot_id: row.get(1)?,
+                        schedule_cron: row.get(2)?,
+                        target_type: row.get(3)?,
+                        target_id: row.get(4)?,
+                    })
+                })
+                .map_err(map_sqlite)?;
+            let mut out = Vec::new();
+            for row in rows {
+                out.push(row.map_err(map_sqlite)?);
+            }
+            Ok(out)
         })
         .await
 }
