@@ -19,5 +19,6 @@ services:
   app:
     image: yuuka:dev-rust
     pull_policy: never
-    # environment:
-    #   - YUUKA_RUST_DISCORD   # dev Discord bot を live 化する時のみ（既定 off）
+    environment:
+      # dev Discord bot を Rust で live 化（instance.env の YUUKA_RUST_DISCORD から補間・既定 0=off）。
+      - YUUKA_RUST_DISCORD=${YUUKA_RUST_DISCORD:-0}
