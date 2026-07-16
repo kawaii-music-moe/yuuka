@@ -99,11 +99,41 @@ async fn run() -> Result<(), String> {
     let action_recorder = Arc::new(yuuka_core::ActionRecorder::new());
     let tool_registry = build_tool_registry(&db, crypto.clone(), Some(action_recorder.clone()))
         .map_err(|e| format!("build tool registry: {e}"))?;
+    // Google/MCP の実 HTTP に使う共有 reqwest クライアント（接続プール共有・30s タイムアウト）。MCP 実 HTTP
+    // クライアントは ChatEngine（動的ツール探索）と MCP ルート（tools/list・dashboard・proxy）で同一
+    // インスタンスを共有し、`Mcp-Session-Id` のプロセス内キャッシュを 1 つに統一する（A4・SSRF ガード付き）。
+    let http_client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .unwrap_or_default();
+    let mcp_client = Arc::new(yuuka_mcp::HttpMcpClient::new(
+        crypto.clone(),
+        http_client.clone(),
+    ));
+    // 4.6.5) シナプス認知エンジン（in-process・旧 rust_synapse daemon をライブラリ吸収）。起動時に DB を
+    //        read-only で読み RAM ベクトル索引を 1 度だけ構築する（Node「DB から N 件のシナプスを RAM
+    //        索引へロード」相当）。DB が読めなくても空索引で起動を継続する（想起は "" へデグレード・
+    //        panic 厳禁）。ChatEngine の想起（read）と抽出（write）で単一の索引を Arc<Mutex> 共有する。
+    let synapse_engine = {
+        let (engine, outcome) =
+            yuuka_synapse::SynapseEngine::boot(cfg.db_path.clone(), yuuka_synapse::DEFAULT_DIM);
+        match outcome {
+            yuuka_synapse::LoadOutcome::Loaded(n) => {
+                tracing::info!(loaded = n, db = ?cfg.db_path, "DB から {n} 件のシナプスを RAM 索引へロードしました");
+            }
+            yuuka_synapse::LoadOutcome::Empty(e) => {
+                tracing::warn!(error = %e, db = ?cfg.db_path, "シナプス索引を読めませんでした（空索引で起動を継続します）");
+            }
+        }
+        Arc::new(tokio::sync::Mutex::new(engine))
+    };
     let chat_engine = Arc::new(ChatEngine::with_real_gemini(
         db.clone(),
         crypto.clone(),
         tool_registry,
         Some(action_recorder),
+        mcp_client.clone(),
+        Some(synapse_engine),
     ));
     let chat_ws_routes = ws_routes(chat_engine.clone(), cfg.desktop_max_upload_mb);
 
@@ -131,11 +161,8 @@ async fn run() -> Result<(), String> {
     // 即時反映）、デフォルト Bot トークン暗号化は同じ crypto を使う。runtime 効果（Bot 再起動/停止/
     // 稼働状態）は Discord gateway 未配線のため NullBotRuntime へ縮退する（DB 効果は常に完全に働く）。
     let bot_runtime: Arc<dyn yuuka_admin::BotRuntime> = Arc::new(yuuka_admin::NullBotRuntime);
-    // Google/MCP の実 HTTP に使う共有 reqwest クライアント（接続プール共有・30s タイムアウト）。
-    let http_client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-        .unwrap_or_default();
+    // `http_client`（共有 reqwest）・`mcp_client`（共有 HttpMcpClient）は上（ChatEngine 構築前）で 1 度だけ
+    // 生成済み。以降の Google クライアント・MCP ルートはそれを再利用する（接続プール/セッションキャッシュ統一）。
     let admin_runtime = Arc::new(yuuka_admin::AdminRuntime::new(
         sessions.clone(),
         crypto.clone(),
@@ -153,7 +180,7 @@ async fn run() -> Result<(), String> {
     // Google OAuth/Calendar は実 HTTP クライアント（A3・reqwest）。暗号鍵があれば GoogleHttpClient
     // （リフレッシュトークン復号 + Google API）、無ければ Null へ縮退する。`is_configured()` が
     // GOOGLE_CLIENT_ID/SECRET 未設定を自己判定するため、client の有無に依らず oauth ルートは安全に振る舞う。
-    // Drive バックアップ（BackupPort）は別途のため NullBackup 据え置き（backup/trigger は 500）。
+    // Drive バックアップ（BackupPort）は下でゲート付きに配線する（crypto + ID/SECRET 揃えば live）。
     let (google_oauth, google_calendar): (
         Arc<dyn yuuka_google::GoogleOAuthPort>,
         Arc<dyn yuuka_google::CalendarPort>,
@@ -172,7 +199,28 @@ async fn run() -> Result<(), String> {
             Arc::new(yuuka_google::NullCalendar),
         )
     };
-    let google_backup: Arc<dyn yuuka_google::BackupPort> = Arc::new(yuuka_google::NullBackup);
+    // Drive バックアップ（BackupPort）: 暗号鍵 + GOOGLE_CLIENT_ID/SECRET が揃えば実 Drive アップロード
+    // （GoogleBackupClient・OAuth と同一のトークン経路）、揃わなければ NullBackup（backup/trigger は 500）。
+    // A3 の GoogleHttpClient と同じゲート（crypto 有無 + is_configured 相当の ID/SECRET 存在）で判定する。
+    // 同一 Arc を settings ルート（手動 trigger）と cron 常駐サービス（定期実行）へ共有する。
+    let google_backup_client: Option<Arc<yuuka_google::GoogleBackupClient>> = match crypto.clone() {
+        Some(crypto)
+            if cfg.google_client_id.is_some() && cfg.google_client_secret.is_some() =>
+        {
+            Some(Arc::new(yuuka_google::GoogleBackupClient::new(
+                cfg.google_client_id.clone().unwrap_or_default(),
+                cfg.google_client_secret.clone().unwrap_or_default(),
+                crypto,
+                db.clone(),
+                http_client.clone(),
+            )))
+        }
+        _ => None,
+    };
+    let google_backup: Arc<dyn yuuka_google::BackupPort> = match &google_backup_client {
+        Some(client) => client.clone(),
+        None => Arc::new(yuuka_google::NullBackup),
+    };
     let oauth_state = Arc::new(yuuka_google::OAuthStateStore::new());
     let settings_runtime = Arc::new(yuuka_settings::SettingsRuntime::new(
         sessions.clone(),
@@ -191,10 +239,9 @@ async fn run() -> Result<(), String> {
     // （tools/list・dashboard・proxy）は HttpMcpClient（A4・SSRF ガード + JSON-RPC/SSE）で処理する。
     let mcp_routes = yuuka_mcp::routes(Arc::new(yuuka_mcp::McpRuntime::new(
         crypto.clone(),
-        Arc::new(yuuka_mcp::HttpMcpClient::new(
-            crypto.clone(),
-            http_client.clone(),
-        )),
+        // ChatEngine と同一の HttpMcpClient を共有（tools/list・dashboard・proxy と動的ツール探索で
+        // `Mcp-Session-Id` キャッシュを 1 つに統一する）。
+        mcp_client.clone(),
         Arc::new(yuuka_mcp::ProxyTokenManager::new()),
     )));
 
@@ -310,7 +357,7 @@ async fn run() -> Result<(), String> {
     if rust_cron_enabled() {
         // マクロ定期実行（playbook）は会話エンジンを秘書ターンとして起動する。services→orchestrator の
         // 逆依存を避けるため、両者を知る supervisor 層でアダプタ経由に注入する（P2 縮退の解消）。
-        let service_ctx = ServiceContext::new(
+        let mut service_ctx = ServiceContext::new(
             db,
             messenger,
             Arc::new(MetricsRegistry::new()),
@@ -318,6 +365,12 @@ async fn run() -> Result<(), String> {
                 engine: chat_engine.clone(),
             }),
         );
+        // 定期バックアップの実行ポートを注入（実 Drive クライアントがあれば live・無ければ NullBackupRunner
+        // 据え置き＝走査はするが実行は失敗）。手動 trigger（settings）と同一の GoogleBackupClient を共有する。
+        if let Some(client) = google_backup_client.clone() {
+            service_ctx =
+                service_ctx.with_backup(Arc::new(BackupRunnerAdapter { client }));
+        }
         let cron = build_supervised_services(&service_ctx);
         tracing::warn!(
             count = cron.len(),
@@ -368,6 +421,26 @@ impl yuuka_services::PlaybookRunner for PlaybookRunnerAdapter {
             Ok(reply) => Ok(reply.text),
             Err(e) => Err(e.to_string()),
         }
+    }
+}
+
+/// 定期バックアップの [`yuuka_services::BackupRunner`] を実 [`yuuka_google::GoogleBackupClient`] へ
+/// 橋渡すアダプタ。`services → google` の逆依存を避けるため、両者を知る supervisor 層で注入する
+/// （[`PlaybookRunnerAdapter`] と同思想）。手動 trigger（settings の `BackupPort`）と同一クライアントを
+/// 共有し、`run_backup` は Node `runBackup`（export → zip → Drive アップロード → 世代管理 → last_run 更新）
+/// をそのまま起動する。失敗は [`yuuka_google::GoogleError`] を人間可読な文言へ写す。
+struct BackupRunnerAdapter {
+    client: Arc<yuuka_google::GoogleBackupClient>,
+}
+
+#[async_trait]
+impl yuuka_services::BackupRunner for BackupRunnerAdapter {
+    async fn run_backup(&self, user_id: &str) -> Result<String, String> {
+        use yuuka_google::BackupPort as _;
+        self.client
+            .run_backup(user_id)
+            .await
+            .map_err(|e| format!("{e:?}"))
     }
 }
 

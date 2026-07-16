@@ -26,11 +26,15 @@ use yuuka_gemini::{
     run_function_calling_loop, Content, GeminiClient, GenerateBackend, LoopOptions, Part, Role,
     Status, StatusCb,
 };
+use yuuka_mcp::{McpClient, McpProvider};
+use yuuka_synapse::{Scope as SynapseScope, SynapseEngine};
 use yuuka_tools::ToolRegistry;
 use yuuka_web::Db;
 
 use crate::guild_prompt::{self, GuildScope};
 use crate::message_log::{self, ContextEntry};
+use crate::synapse_extract::{self, ExtractScope};
+use crate::synapse_recall;
 use crate::{bot_repo, persona, system_prompt, user};
 
 /// 空応答時の既定文（Node `runPlannedTurn` の `fallbackText` 既定）。
@@ -124,10 +128,19 @@ pub struct ChatEngine {
     /// 操作履歴レコーダー（秘書経路の FC ループへ渡して dispatch を記録・`getRecentActionHistory` が
     /// 読む）。`None` なら記録しない（ツール側は「履歴なし」として振る舞う）。
     recorder: Option<Arc<ActionRecorder>>,
+    /// MCP 動的ツール用の外部 MCP クライアント（秘書ターンで [`McpProvider`] を探索するのに使う）。
+    /// main.rs で MCP ルートと同一の [`yuuka_mcp::HttpMcpClient`] を共有注入する（セッションキャッシュ統一）。
+    /// 未配線時は [`yuuka_mcp::NullMcpClient`]（探索は空・tools/call は失敗）へ縮退する。
+    mcp_client: Arc<dyn McpClient>,
+    /// シナプス認知エンジン（in-process・唯一の RAM 索引）。想起（read）と索引化（write）で共有する。
+    /// `None` なら現行挙動（直近履歴のみ）へデグレード（想起は `""`・抽出は no-op）。main.rs で
+    /// [`SynapseEngine::boot`] して 1 つだけ注入する。`Mutex` は唯一の可変索引を直列化する。
+    synapse: Option<Arc<tokio::sync::Mutex<SynapseEngine>>>,
 }
 
 impl ChatEngine {
-    /// 依存を注入して構築する。
+    /// 依存を注入して構築する。`mcp_client` は MCP 動的ツール探索に使う（未配線は
+    /// [`yuuka_mcp::NullMcpClient`] を渡す）。
     #[must_use]
     pub fn new(
         db: Db,
@@ -135,6 +148,8 @@ impl ChatEngine {
         registry: ToolRegistry,
         factory: Arc<dyn GeminiFactory>,
         recorder: Option<Arc<ActionRecorder>>,
+        mcp_client: Arc<dyn McpClient>,
+        synapse: Option<Arc<tokio::sync::Mutex<SynapseEngine>>>,
     ) -> Self {
         Self {
             db,
@@ -142,6 +157,8 @@ impl ChatEngine {
             registry,
             factory,
             recorder,
+            mcp_client,
+            synapse,
         }
     }
 
@@ -152,8 +169,18 @@ impl ChatEngine {
         crypto: Option<Arc<SystemCrypto>>,
         registry: ToolRegistry,
         recorder: Option<Arc<ActionRecorder>>,
+        mcp_client: Arc<dyn McpClient>,
+        synapse: Option<Arc<tokio::sync::Mutex<SynapseEngine>>>,
     ) -> Self {
-        Self::new(db, crypto, registry, Arc::new(RealGeminiFactory), recorder)
+        Self::new(
+            db,
+            crypto,
+            registry,
+            Arc::new(RealGeminiFactory),
+            recorder,
+            mcp_client,
+            synapse,
+        )
     }
 
     /// 発話ユーザーが Gemini キーを設定済みか（WS の事前チェック `error/no_gemini_key` 用）。
@@ -240,11 +267,25 @@ impl ChatEngine {
         let persona_prompt = persona::active_persona_prompt(&self.db, uid, bid)
             .await
             .map_err(db_fail)?;
-        let sys = system_prompt::build_system_instruction(
+        let mut sys = system_prompt::build_system_instruction(
             persona_prompt.as_deref(),
             rich,
             &system_prompt::now_date_time_ja(),
         );
+
+        // 3.5. L2 連想想起（シナプス）を systemInstruction 末尾へ追記（Node `buildRecallSection`）。
+        //      秘書モードのスコープは (userId, botId)・guild_id なし（DM/秘書利用）。返信チェーンは
+        //      Rust では縮退シーム（空）＝クエリは現発話。エンジン未配線/想起 0 件なら "" で不変。
+        if let Some(engine) = &self.synapse {
+            let scope = SynapseScope {
+                user_id: uid.to_owned(),
+                bot_id: bid.to_owned(),
+                guild_id: None,
+            };
+            let query = synapse_recall::build_recall_query(&msg.text, &[]);
+            let section = synapse_recall::build_recall_section(&self.db, engine, &scope, &query).await;
+            sys.push_str(&section);
+        }
 
         // 4. ユーザーの Gemini キー（未設定は ⚠️ 応答）。⚠️ 定型応答は履歴に**保存しない**
         //    （Node `processMessage` の catch は `saveAssistant` を通らず返すだけ＝キー未設定/レート/
@@ -274,7 +315,23 @@ impl ChatEngine {
         ctx.rich_reply_enabled = rich;
         ctx.capabilities = caps;
         ctx.mode = TurnMode::Secretary;
-        let snapshot = self.registry.snapshot(&ctx);
+        // MCP 動的ツール: `mcp` 能力があるときだけ発話者スコープで探索し、そのターン限りの provider として
+        // snapshot へ層状に足す（Node `resolveMcpModule`: `caps.has("mcp")` ガード → getMcpFunctionModuleForBot）。
+        // 探索は DB + tools/list（ネットワーク）を伴うため FC ループ直前に一度だけ行う。取得失敗でも空 provider。
+        let mcp_provider: Option<Arc<dyn yuuka_core::ToolProvider>> = if ctx.capabilities.has("mcp") {
+            Some(Arc::new(
+                McpProvider::discover(
+                    self.db.clone(),
+                    Arc::clone(&self.mcp_client),
+                    bid,
+                    uid,
+                )
+                .await,
+            ))
+        } else {
+            None
+        };
+        let snapshot = self.registry.snapshot_with(&ctx, mcp_provider.as_ref());
         // 秘書経路のみ操作履歴を記録する（Node `processMessage` は recordActions:true・guild/DM は false）。
         let opts = LoopOptions {
             on_status: Some(status_bridge(status)),
@@ -316,12 +373,41 @@ impl ChatEngine {
             .await
             .map_err(db_fail)?;
 
+        // R1: 確定した最終ターンからシナプス（記憶の断片）を抽出して長期記憶へ蓄積する（Node `onFinal`）。
+        //     ユーザー発話が空（添付のみ等 log_text="" ）なら抽出しない（Node は logText 有りで呼ぶ）。
+        //     fire-and-forget＝ターンの戻りをブロックせず、失敗も呼び出し側へ投げない（Node パリティ）。
+        self.spawn_extraction(
+            ExtractScope {
+                user_id: uid.to_owned(),
+                bot_id: bid.to_owned(),
+                guild_id: None,
+            },
+            &log_text,
+        );
+
         Ok(TurnReply {
             text: reply_text,
             embeds: rich_parts_to_embeds(&result.rich_parts),
             files: rich_parts_to_files(&result.rich_parts),
             ..TurnReply::default()
         })
+    }
+
+    /// シナプス抽出をバックグラウンド（fire-and-forget）で起動する（Node `maybeExtractSynapse` の
+    /// post-turn 呼び出し）。エンジン未配線・`user_text` 空なら何もしない。抽出関数は内部で失敗を握って
+    /// warn ログのみ出す（ターンの結果には一切影響しない）。
+    fn spawn_extraction(&self, scope: ExtractScope, user_text: &str) {
+        let Some(engine) = self.synapse.clone() else {
+            return;
+        };
+        if user_text.trim().is_empty() {
+            return;
+        }
+        let db = self.db.clone();
+        let user_text = user_text.to_owned();
+        tokio::spawn(async move {
+            synapse_extract::maybe_extract_synapse(&db, &engine, scope, &user_text, None).await;
+        });
     }
 
     /// 汎用モード（ギルド常駐 / owner DM）の 1 ターンを処理する（Node `processGuildMessage` /
@@ -454,7 +540,7 @@ impl ChatEngine {
         let personal_note = bot_repo::bot_user_note(&self.db, bid, uid)
             .await
             .map_err(db_fail)?;
-        let sys = guild_prompt::build_guild_system_instruction(
+        let mut sys = guild_prompt::build_guild_system_instruction(
             persona_prompt.as_deref(),
             scope,
             &speaker.display_name,
@@ -463,6 +549,22 @@ impl ChatEngine {
             &personal_note,
             &system_prompt::now_date_time_ja(),
         );
+
+        // 3.5. L2 連想想起（シナプス）を汎用モードでも systemInstruction 末尾へ追記する。
+        //      **Node からの意図的拡張**（Node の guild/DM 経路は想起を組まないが、本タスク指示で
+        //      経路×能力の 2 軸スコープ（guild_id 付き）を活かして記憶を共有する）。スコープは
+        //      guild 経路は (uid, bid, guildId)・DM 経路は (uid, bid, None)。想起 0 件/未配線は不変。
+        if let Some(engine) = &self.synapse {
+            let sscope = SynapseScope {
+                user_id: uid.to_owned(),
+                bot_id: bid.to_owned(),
+                guild_id: gid.map(str::to_owned),
+            };
+            let query = synapse_recall::build_recall_query(&msg.text, &[]);
+            let section =
+                synapse_recall::build_recall_section(&self.db, engine, &sscope, &query).await;
+            sys.push_str(&section);
+        }
 
         // 4. Bot 専用 Gemini キー（未設定: guild は黙殺・DM は ⚠️ 応答）。
         let Some(triplet) = bot_repo::bot_gemini(&self.db, bid).await.map_err(db_fail)? else {
@@ -555,6 +657,17 @@ impl ChatEngine {
             }
         }
         .map_err(db_fail)?;
+
+        // R1: 汎用モードのターンからもシナプス抽出（**Node からの意図的拡張**・本タスク指示）。
+        //     スコープは guild 経路は (uid, bid, guildId)・DM 経路は (uid, bid, None)。fire-and-forget。
+        self.spawn_extraction(
+            ExtractScope {
+                user_id: uid.to_owned(),
+                bot_id: bid.to_owned(),
+                guild_id: gid.map(str::to_owned),
+            },
+            &log_text,
+        );
 
         Ok(TurnReply {
             text: reply_text,

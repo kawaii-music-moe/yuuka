@@ -117,6 +117,44 @@ pub fn parse_tools_cache(server: &McpServerRecord) -> Vec<SafeTool> {
         .collect()
 }
 
+/// tools_cache（JSON）を FC ループ用の完全な [`crate::McpTool`]（name/description/inputSchema）へパースする。
+///
+/// [`parse_tools_cache`]（安全ビュー・name/description のみ）と異なり `inputSchema` を保持する。
+/// Node `parseToolsCache`（`McpToolDef[]` をそのまま返す）+ [`crate::McpProvider`] の消費に対応。非配列/
+/// パース失敗は空 vec・各要素は object のみ・`name` 空は落とす（動的ツール名を作れないため）。
+#[must_use]
+pub fn parse_tools_cache_full(server: &McpServerRecord) -> Vec<crate::McpTool> {
+    let raw = if server.tools_cache.is_empty() {
+        "[]"
+    } else {
+        server.tools_cache.as_str()
+    };
+    let Ok(Value::Array(items)) = serde_json::from_str::<Value>(raw) else {
+        return Vec::new();
+    };
+    items
+        .into_iter()
+        .filter_map(|t| {
+            let obj = t.as_object()?;
+            let name = obj.get("name").and_then(Value::as_str).unwrap_or_default();
+            if name.is_empty() {
+                return None;
+            }
+            let description = obj
+                .get("description")
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty())
+                .map(str::to_owned);
+            let input_schema = obj.get("inputSchema").filter(|s| s.is_object()).cloned();
+            Some(crate::McpTool {
+                name: name.to_owned(),
+                description,
+                input_schema,
+            })
+        })
+        .collect()
+}
+
 /// 対象サーバーの操作権限を検証する（Node `canManage`）。本人所有、または（システム登録かつ Admin）。
 #[must_use]
 pub fn can_manage(server: &McpServerRecord, user_id: &str, is_admin: bool) -> bool {
@@ -231,6 +269,77 @@ pub async fn list_system_servers(db: &Db) -> Result<Vec<McpServerRecord>, DbErro
         None,
     )
     .await
+}
+
+/// 当該 Bot に許可された MCP サーバー一覧（Node `listServersGrantedToBot`）。
+///
+/// = `bot_mcp_access` で許可されたサーバー（owner 所有）+ システムレベル登録（`user_id IS NULL`・全 Bot 利用可）。
+/// 単一所有 Bot のランタイム解決に使う（共有秘書 `system_default` では
+/// [`list_servers_granted_to_bot_scoped`] を使いクロステナント露出を防ぐ）。
+///
+/// # Errors
+/// 読み取り失敗時 [`DbError`]。
+pub async fn list_servers_granted_to_bot(db: &Db, bot_id: &str) -> Result<Vec<McpServerRecord>, DbError> {
+    let bot_id = bot_id.to_owned();
+    db.read
+        .read(move |conn| {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT s.* FROM mcp_servers s \
+                     JOIN bot_mcp_access a ON a.mcp_server_id = s.id AND a.bot_id = ?1 \
+                     UNION \
+                     SELECT s.* FROM mcp_servers s WHERE s.user_id IS NULL \
+                     ORDER BY created_at ASC",
+                )
+                .map_err(map_sqlite)?;
+            let rows = stmt
+                .query_map(params![bot_id], McpServerRecord::from_row)
+                .map_err(map_sqlite)?;
+            let mut out = Vec::new();
+            for row in rows {
+                out.push(row.map_err(map_sqlite)?);
+            }
+            Ok(out)
+        })
+        .await
+}
+
+/// 発話者スコープの MCP サーバー一覧（Node `listServersGrantedToBotScoped`・ランタイムのセキュリティゲート）。
+///
+/// 当該 Bot に「発話者（`speaker_user_id`）が付与した」許可分（`owner_id = speaker_user_id`）と、
+/// システムレベル登録（`user_id IS NULL`・全 Bot 利用可）の和。共有秘書（`system_default`）は全ユーザーが
+/// 会話するため、他人が付与した許可（他人の認証情報を抱えた MCP サーバー）が発話者の会話へ注入されない
+/// ように発話者所有分のみへ限定する。
+///
+/// # Errors
+/// 読み取り失敗時 [`DbError`]。
+pub async fn list_servers_granted_to_bot_scoped(
+    db: &Db,
+    bot_id: &str,
+    speaker_user_id: &str,
+) -> Result<Vec<McpServerRecord>, DbError> {
+    let (bot_id, speaker) = (bot_id.to_owned(), speaker_user_id.to_owned());
+    db.read
+        .read(move |conn| {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT s.* FROM mcp_servers s \
+                     JOIN bot_mcp_access a ON a.mcp_server_id = s.id AND a.bot_id = ?1 AND a.owner_id = ?2 \
+                     UNION \
+                     SELECT s.* FROM mcp_servers s WHERE s.user_id IS NULL \
+                     ORDER BY created_at ASC",
+                )
+                .map_err(map_sqlite)?;
+            let rows = stmt
+                .query_map(params![bot_id, speaker], McpServerRecord::from_row)
+                .map_err(map_sqlite)?;
+            let mut out = Vec::new();
+            for row in rows {
+                out.push(row.map_err(map_sqlite)?);
+            }
+            Ok(out)
+        })
+        .await
 }
 
 /// 当該サーバーの利用を許可されている Bot ID 一覧（重複排除・Node `listBotIdsForServer`）。

@@ -18,26 +18,33 @@ use async_trait::async_trait;
 use axum::body::Bytes;
 use axum::routing::{get, options, post};
 use axum::{Extension, Router};
+use serde_json::Value;
 use yuuka_crypto::SystemCrypto;
 use yuuka_web::AppState;
 
 mod http_client;
-mod repo;
+pub mod provider;
+pub mod repo;
 mod routes;
 mod tokens;
 
 pub use http_client::HttpMcpClient;
+pub use provider::{mcp_function_name, McpProvider, TOOLS_CACHE_TTL};
+pub use repo::McpServerRecord;
 pub use tokens::ProxyTokenManager;
 
 // ─── 外部 MCP サーバー HTTP シーム ───────────────────────────────────────────
 
-/// 外部 MCP サーバーが公開する 1 ツール（`tools/list` 由来・Node `McpToolDef` の name/description 部分）。
+/// 外部 MCP サーバーが公開する 1 ツール（`tools/list` 由来・Node `McpToolDef`）。
 #[derive(Debug, Clone)]
 pub struct McpTool {
     /// ツール名。
     pub name: String,
     /// 説明（省略可）。
     pub description: Option<String>,
+    /// 入力パラメータの JSON Schema（`tools/list` の `inputSchema`・省略可・Node `McpToolDef.inputSchema`）。
+    /// FC ループの `parametersJsonSchema` 生成（動的ツール登録）に使う。
+    pub input_schema: Option<Value>,
 }
 
 /// 上流 MCP サーバーからのプロキシ応答（Node の `upstreamRes` 転送に対応）。
@@ -77,6 +84,20 @@ pub trait McpClient: Send + Sync {
     /// 到達不可・プロトコルエラー等で `Err(message)`。
     async fn refresh_tools(&self, server: &repo::McpServerRecord) -> Result<Vec<McpTool>, String>;
 
+    /// `tools/call` を実行して結果テキスト（`content` の text 部分を連結）を返す（Node `callTool`）。
+    ///
+    /// トランスポート/セッション由来エラーは Node `callRpc` と同じく 1 度だけ再初期化して再試行する。
+    /// ツール側エラー（`isError:true`）は再試行しない（副作用の二重実行を避ける）。
+    ///
+    /// # Errors
+    /// 到達不可・タイムアウト・RPC エラー・ツールエラー（`isError`）等で `Err(message)`。
+    async fn call_tool(
+        &self,
+        server: &repo::McpServerRecord,
+        tool_name: &str,
+        arguments: Value,
+    ) -> Result<String, String>;
+
     /// エンドポイントへ 1 リクエストを中継する（Node の `fetch(server.endpoint_url, ...)` 転送）。
     ///
     /// # Errors
@@ -114,6 +135,15 @@ impl McpClient for NullMcpClient {
     }
 
     async fn refresh_tools(&self, _server: &repo::McpServerRecord) -> Result<Vec<McpTool>, String> {
+        Err("MCP クライアントが配線されていません".to_owned())
+    }
+
+    async fn call_tool(
+        &self,
+        _server: &repo::McpServerRecord,
+        _tool_name: &str,
+        _arguments: Value,
+    ) -> Result<String, String> {
         Err("MCP クライアントが配線されていません".to_owned())
     }
 

@@ -3213,6 +3213,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "typed-path"
+version = "0.12.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8e28f89b80c87b8fb0cf04ab448d5dd0dd0ade2f8891bae878de66a75a28600e"
+
+[[package]]
 name = "typenum"
 version = "1.20.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3924,17 +3930,21 @@ name = "yuuka-google"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "chrono",
  "getrandom 0.2.17",
  "hex",
  "reqwest 0.12.28",
  "rusqlite",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
+ "tracing",
  "yuuka-core",
  "yuuka-crypto",
  "yuuka-db",
  "yuuka-web",
+ "zip",
 ]
 
 [[package]]
@@ -3969,6 +3979,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "sha1",
  "tokio",
  "tower",
  "tracing",
@@ -4004,6 +4015,8 @@ dependencies = [
  "yuuka-db",
  "yuuka-discord",
  "yuuka-gemini",
+ "yuuka-mcp",
+ "yuuka-synapse",
  "yuuka-tools",
  "yuuka-types",
  "yuuka-web",
@@ -4208,12 +4221,24 @@ dependencies = [
  "yuuka-schedule",
  "yuuka-services",
  "yuuka-settings",
+ "yuuka-synapse",
  "yuuka-timeline",
  "yuuka-todo",
  "yuuka-tools",
  "yuuka-types",
  "yuuka-web",
  "yuuka-webhook",
+]
+
+[[package]]
+name = "yuuka-synapse"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -4396,6 +4421,19 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "zip"
+version = "8.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2d04a6b5381502aa6087c94c669499eb1602eb9c5e8198e534de571f7154809b"
+dependencies = [
+ "crc32fast",
+ "flate2",
+ "indexmap",
+ "memchr",
+ "typed-path",
 ]
 
 [[package]]

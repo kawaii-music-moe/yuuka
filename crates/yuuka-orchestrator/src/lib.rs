@@ -21,6 +21,9 @@ pub mod module_catalog;
 pub mod persona;
 pub mod preset;
 pub mod share_routes;
+pub mod synapse_extract;
+pub mod synapse_recall;
+pub mod synapse_repo;
 pub mod system_prompt;
 pub mod user;
 

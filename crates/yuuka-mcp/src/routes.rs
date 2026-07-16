@@ -215,13 +215,24 @@ pub(crate) async fn add(
         .into_response())
 }
 
-/// [`McpTool`](crate::McpTool) 一覧を tools_cache 用 JSON（`{name, description?}[]`）へ整形する。
+/// [`McpTool`](crate::McpTool) 一覧を tools_cache 用 JSON（`{name, description?, inputSchema?}[]`）へ整形する。
+///
+/// Node `updateToolsCache(JSON.stringify(McpToolDef[]))` パリティ: `description`/`inputSchema` は
+/// 存在時のみ載せる。`inputSchema` を保持することで、FC ループの動的ツール登録（[`crate::McpProvider`]）が
+/// キャッシュヒット時にもパラメータスキーマを復元できる。
 fn tools_to_cache_json(tools: &[crate::McpTool]) -> String {
     let arr: Vec<Value> = tools
         .iter()
-        .map(|t| match &t.description {
-            Some(d) => json!({ "name": t.name, "description": d }),
-            None => json!({ "name": t.name }),
+        .map(|t| {
+            let mut obj = serde_json::Map::new();
+            obj.insert("name".to_owned(), json!(t.name));
+            if let Some(d) = &t.description {
+                obj.insert("description".to_owned(), json!(d));
+            }
+            if let Some(schema) = &t.input_schema {
+                obj.insert("inputSchema".to_owned(), schema.clone());
+            }
+            Value::Object(obj)
         })
         .collect();
     serde_json::to_string(&arr).unwrap_or_else(|_| "[]".to_owned())

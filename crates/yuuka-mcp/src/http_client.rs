@@ -283,6 +283,30 @@ impl HttpMcpClient {
         Ok(parse_tools_result(rpc.as_ref()))
     }
 
+    /// `tools/call` を 1 回だけ実行して結果を整形する（`call_tool` の 1 試行分）。
+    ///
+    /// `Err(ToolCallError::Tool)` はツール側エラー（再試行不可）、`Err(ToolCallError::Transport)` は
+    /// RPC/接続/セッションエラー（セッション由来なら 1 度だけ再試行対象）。
+    async fn tools_call_once(
+        &self,
+        server: &McpServerRecord,
+        tool_name: &str,
+        arguments: &Value,
+    ) -> Result<String, ToolCallError> {
+        let id = self.next_request_id();
+        let rpc = self
+            .rpc_request(
+                server,
+                "tools/call",
+                Some(json!({ "name": tool_name, "arguments": arguments })),
+                false,
+                Some(id),
+            )
+            .await
+            .map_err(ToolCallError::Transport)?;
+        parse_tool_call_result(rpc.as_ref())
+    }
+
     /// Bearer 付き GET を送る（Node `authedGet`）。SSRF 再検証・タイムアウト付き。
     async fn authed_get(&self, server: &McpServerRecord, url: &str) -> Result<reqwest::Response, String> {
         assert_safe_outbound_url(url).await?;
@@ -347,12 +371,73 @@ fn parse_tools_result(rpc: Option<&Value>) -> Vec<McpTool> {
                 .and_then(Value::as_str)
                 .filter(|s| !s.is_empty())
                 .map(str::to_owned);
+            // inputSchema は object のときのみ採用（Node `t.inputSchema && typeof === "object"`）。
+            let input_schema = obj
+                .get("inputSchema")
+                .filter(|s| s.is_object())
+                .cloned();
             Some(McpTool {
                 name: name.to_owned(),
                 description,
+                input_schema,
             })
         })
         .collect()
+}
+
+/// `tools/call` の `content[]` から text 部分を連結する（Node `callTool` の texts.join）。
+///
+/// `Err(joined)` はツール側エラー（`isError:true`）を表す（トランスポート/セッション障害ではない）。
+/// Node の `McpToolError` に対応し、呼び出し側は再試行しない（副作用の二重実行を避ける）。
+fn parse_tool_call_result(rpc: Option<&Value>) -> Result<String, ToolCallError> {
+    let Some(result) = rpc.and_then(|v| v.get("result")) else {
+        // result 欠落は空文字（Node `if (!result) return ""`）。
+        return Ok(String::new());
+    };
+    let texts: Vec<String> = result
+        .get("content")
+        .and_then(Value::as_array)
+        .map(|arr| {
+            arr.iter()
+                .filter(|c| {
+                    // type === "text" もしくは text フィールドを持つ（Node のフィルタ）。
+                    c.get("type").and_then(Value::as_str) == Some("text")
+                        || c.get("text").is_some()
+                })
+                .filter_map(|c| c.get("text").and_then(Value::as_str))
+                .filter(|t| !t.is_empty())
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default();
+    let joined = texts.join("\n");
+    if result.get("isError").and_then(Value::as_bool) == Some(true) {
+        // ツール側のエラー（Node は McpToolError を throw・callRpc は再試行しない）。
+        let msg = if joined.is_empty() {
+            "MCP Tool がエラーを返しました".to_owned()
+        } else {
+            joined
+        };
+        return Err(ToolCallError::Tool(msg));
+    }
+    Ok(joined)
+}
+
+/// `call_tool` 内部のエラー種別（再試行可否の判定に使う）。
+#[derive(Debug)]
+enum ToolCallError {
+    /// ツール側エラー（`isError:true`）。再試行しない。
+    Tool(String),
+    /// トランスポート/RPC/セッションエラー（メッセージ）。セッション由来なら 1 度だけ再試行する。
+    Transport(String),
+}
+
+impl ToolCallError {
+    fn into_message(self) -> String {
+        match self {
+            ToolCallError::Tool(m) | ToolCallError::Transport(m) => m,
+        }
+    }
 }
 
 /// セッション未確立/失効由来のエラーか（Node `isSessionError`）。
@@ -418,6 +503,28 @@ impl McpClient for HttpMcpClient {
                 self.tools_list_once(server).await
             }
             Err(e) => Err(e),
+        }
+    }
+
+    async fn call_tool(
+        &self,
+        server: &McpServerRecord,
+        tool_name: &str,
+        arguments: Value,
+    ) -> Result<String, String> {
+        // Node `callRpc`: まず直接実行し、セッションエラーに限り一度だけ再初期化して再試行する。
+        // ツール側エラー（`isError`）・タイムアウト・ネットワーク断は再試行しない（副作用の二重実行回避）。
+        match self.tools_call_once(server, tool_name, &arguments).await {
+            Ok(text) => Ok(text),
+            Err(ToolCallError::Tool(m)) => Err(m),
+            Err(ToolCallError::Transport(e)) if is_session_error(&e) => {
+                self.forget_session(server.id);
+                self.ensure_initialized(server).await?;
+                self.tools_call_once(server, tool_name, &arguments)
+                    .await
+                    .map_err(ToolCallError::into_message)
+            }
+            Err(e) => Err(e.into_message()),
         }
     }
 
@@ -685,6 +792,72 @@ mod tests {
         assert_eq!(tools.get(1).unwrap().description, None);
         assert_eq!(tools.get(2).unwrap().name, "empty-desc");
         assert_eq!(tools.get(2).unwrap().description, None);
+    }
+
+    #[test]
+    fn tools_result_captures_input_schema() {
+        let rpc = json!({
+            "result": {
+                "tools": [
+                    { "name": "with_schema", "inputSchema": { "type": "object", "properties": { "x": { "type": "string" } } } },
+                    { "name": "no_schema" },
+                    { "name": "bad_schema", "inputSchema": "not-an-object" }, // 非 object → None
+                ]
+            }
+        });
+        let tools = parse_tools_result(Some(&rpc));
+        assert_eq!(tools.len(), 3);
+        assert!(tools[0].input_schema.as_ref().unwrap().is_object());
+        assert_eq!(
+            tools[0].input_schema.as_ref().unwrap()["type"],
+            json!("object")
+        );
+        assert_eq!(tools[1].input_schema, None);
+        assert_eq!(tools[2].input_schema, None);
+    }
+
+    // ── tools/call 結果パース（text 連結・isError 判定） ─────────────────────────
+
+    #[test]
+    fn tool_call_joins_text_and_skips_non_text() {
+        let rpc = json!({
+            "result": {
+                "content": [
+                    { "type": "text", "text": "line1" },
+                    { "type": "image", "data": "..." },        // text 無し → 落とす
+                    { "text": "line2" },                        // type 無しでも text あり → 拾う
+                    { "type": "text", "text": "" },             // 空 text → 落とす
+                ]
+            }
+        });
+        let out = parse_tool_call_result(Some(&rpc)).expect("ok");
+        assert_eq!(out, "line1\nline2");
+    }
+
+    #[test]
+    fn tool_call_missing_result_is_empty() {
+        assert_eq!(parse_tool_call_result(None).unwrap(), "");
+        assert_eq!(parse_tool_call_result(Some(&json!({}))).unwrap(), "");
+        // content 欠落は空文字。
+        assert_eq!(
+            parse_tool_call_result(Some(&json!({ "result": {} }))).unwrap(),
+            ""
+        );
+    }
+
+    #[test]
+    fn tool_call_is_error_maps_to_tool_error() {
+        let rpc = json!({
+            "result": { "isError": true, "content": [{ "type": "text", "text": "boom" }] }
+        });
+        let err = parse_tool_call_result(Some(&rpc)).unwrap_err();
+        assert!(matches!(err, ToolCallError::Tool(ref m) if m == "boom"));
+        // Transport とは区別される（再試行しない側）。
+        assert!(!is_session_error(&err.into_message()));
+        // 空 content の isError は既定文言。
+        let rpc2 = json!({ "result": { "isError": true, "content": [] } });
+        let err2 = parse_tool_call_result(Some(&rpc2)).unwrap_err();
+        assert!(matches!(err2, ToolCallError::Tool(ref m) if m.contains("エラー")));
     }
 
     #[test]

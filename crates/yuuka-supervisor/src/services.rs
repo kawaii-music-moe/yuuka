@@ -92,7 +92,9 @@ mod tests {
     #[test]
     fn builds_all_services_with_cron_prefixed_names() {
         let svcs = build_supervised_services(&ctx());
-        // 実装 8（playbook/briefing 含む）+ 予約シーム 2（report/backup）= 10。
+        // 実装済み 10（reminder/todo-recurrence/payment-recurrence/birthday/clipboard/metrics/
+        // playbook-schedule/briefing/report/backup）。backup は deferred シームから live へ差し替え済み
+        // （実 Drive アップロードは BackupRunner ポート経由）で総数は据え置き。
         assert_eq!(svcs.len(), 10);
         let names: Vec<String> = svcs.iter().map(|s| s.name()).collect();
         assert!(names.iter().all(|n| n.starts_with("cron:")));

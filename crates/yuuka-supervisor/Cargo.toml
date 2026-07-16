@@ -42,6 +42,7 @@ yuuka-auth.workspace = true
 yuuka-tools.workspace = true
 yuuka-gemini.workspace = true
 yuuka-orchestrator.workspace = true    # 会話エンジン（ChatEngine）— /ws/chat の駆動（P1-2）
+yuuka-synapse.workspace = true         # シナプス認知エンジン（in-process・起動時ロード + ChatEngine へ注入）
 yuuka-discord.workspace = true
 yuuka-services.workspace = true
 axum.workspace = true

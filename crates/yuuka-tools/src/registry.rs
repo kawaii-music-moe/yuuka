@@ -42,9 +42,24 @@ impl ToolRegistry {
     /// クラッシュさせないため。native 内部の重複は `NativeProvider::register` が別途 `Err`）。
     #[must_use]
     pub fn snapshot(&self, ctx: &ToolContext) -> RegistrySnapshot {
+        self.snapshot_with(ctx, None)
+    }
+
+    /// [`Self::snapshot`] に**そのターン限りの追加 provider**（例: 発話者スコープで探索した
+    /// `McpProvider`）を末尾に重ねる。追加 provider は最後に評価されるため、既存 Native ツール名と
+    /// 衝突した場合は先勝ちで無視される（不正な外部ツールが内蔵ツールを乗っ取れない）。
+    ///
+    /// MCP/WASM の動的ツールは `ctx`（発話者・Bot）に依存し起動時には確定しないため、レジストリへ
+    /// 常設せず会話 1 ターンごとにここで層として足す（Node が FC ループ前に MCP モジュールをマージするのと同義）。
+    #[must_use]
+    pub fn snapshot_with(
+        &self,
+        ctx: &ToolContext,
+        extra: Option<&Arc<dyn ToolProvider>>,
+    ) -> RegistrySnapshot {
         let mut declarations: Vec<FunctionDeclaration> = Vec::new();
         let mut index: HashMap<ToolName, Arc<dyn ToolProvider>> = HashMap::new();
-        for provider in &self.providers {
+        for provider in self.providers.iter().chain(extra) {
             for decl in provider.list(ctx) {
                 if index.contains_key(&decl.name) {
                     tracing::warn!(

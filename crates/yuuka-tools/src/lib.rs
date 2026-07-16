@@ -172,6 +172,47 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn snapshot_with_extra_layers_dynamic_provider() {
+        // ターン限りの追加 provider（MCP 相当）が snapshot に層として足され、dispatch も届く。
+        let base = ToolRegistry::new().with_provider(Arc::new(
+            NativeProvider::new()
+                .with_tool(Arc::new(EchoTool::new("add_todo")))
+                .unwrap(),
+        ));
+        let extra: Arc<dyn ToolProvider> = Arc::new(
+            NativeProvider::new()
+                .with_tool(Arc::new(EchoTool::new("mcp_tool")))
+                .unwrap(),
+        );
+        // extra 無し → 1 ツール。
+        assert_eq!(base.snapshot(&ctx()).len(), 1);
+        // extra あり → 2 ツール、追加分も dispatch できる。
+        let snap = base.snapshot_with(&ctx(), Some(&extra));
+        assert_eq!(snap.len(), 2);
+        let name = ToolName::namespaced("native", "mcp_tool").unwrap();
+        assert!(snap.has(&name));
+        let out = snap.dispatch(&name, json!({"a": 1}), &ctx()).await.unwrap();
+        assert_eq!(out.payload["tool"], "native:mcp_tool");
+    }
+
+    #[tokio::test]
+    async fn snapshot_with_extra_loses_collision_to_base() {
+        // 追加 provider が既存 Native ツール名と衝突したら先勝ち（base）が残る。
+        let base = ToolRegistry::new().with_provider(Arc::new(
+            NativeProvider::new()
+                .with_tool(Arc::new(EchoTool::new("dup")))
+                .unwrap(),
+        ));
+        let extra: Arc<dyn ToolProvider> = Arc::new(
+            NativeProvider::new()
+                .with_tool(Arc::new(EchoTool::new("dup")))
+                .unwrap(),
+        );
+        let snap = base.snapshot_with(&ctx(), Some(&extra));
+        assert_eq!(snap.len(), 1, "衝突名は 1 宣言に集約（base 先勝ち）");
+    }
+
+    #[tokio::test]
     async fn cross_provider_name_collision_first_wins() {
         // 2 provider が同名を公開 → 宣言は 1 つ、dispatch は先勝ち provider へ。
         let first = Arc::new(

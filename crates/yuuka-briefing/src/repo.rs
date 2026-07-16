@@ -245,6 +245,65 @@ pub async fn upsert_briefing(
     Ok(out)
 }
 
+/// cron 走査用の有効 report 設定 1 件（所有者列 `user_id`/`bot_id` + type + due 判定用 `schedule_cron`）。
+///
+/// 定時配信ループはこの一覧を走査し、`schedule_cron` が現在分にマッチする設定について
+/// 当該期間（daily/weekly）の活動データを集約→配信する。
+#[derive(Debug, Clone)]
+pub struct EnabledReport {
+    pub user_id: String,
+    pub bot_id: String,
+    /// 'daily' | 'weekly'。
+    pub r#type: String,
+    pub schedule_cron: String,
+    /// 'dm' | 'channel'。
+    pub target_type: String,
+    pub target_id: Option<String>,
+}
+
+/// 有効な（`enabled=1`）レポート設定を**全ユーザー横断**で返す（Node
+/// `listEnabledReportConfigsAcrossUsers` ＝`SELECT * FROM report_configs WHERE enabled = 1`）。
+/// cron 式の due 判定は呼び出し側（croner 保持層）。
+///
+/// 横断アクセスは cron/バッチ起点でしか作れない（[`CrossUserAccess`] 証憑必須・§7.3）。
+/// [`list_enabled_briefings`] と同規律で `UserScope` 経路から隔離する。
+///
+/// # Errors
+/// クエリ失敗時 [`DbError`]。
+pub async fn list_enabled_reports(
+    db: &Db,
+    _cross: CrossUserAccess,
+) -> Result<Vec<EnabledReport>, DbError> {
+    db.read
+        .read(move |conn| {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT user_id, bot_id, type, schedule_cron, target_type, target_id \
+                     FROM report_configs WHERE enabled = 1 \
+                     ORDER BY user_id ASC, bot_id ASC, type ASC",
+                )
+                .map_err(map_sqlite)?;
+            let rows = stmt
+                .query_map([], |row| {
+                    Ok(EnabledReport {
+                        user_id: row.get(0)?,
+                        bot_id: row.get(1)?,
+                        r#type: row.get(2)?,
+                        schedule_cron: row.get(3)?,
+                        target_type: row.get(4)?,
+                        target_id: row.get(5)?,
+                    })
+                })
+                .map_err(map_sqlite)?;
+            let mut out = Vec::new();
+            for row in rows {
+                out.push(row.map_err(map_sqlite)?);
+            }
+            Ok(out)
+        })
+        .await
+}
+
 /// report 設定一覧を type 昇順で返す（Node `getReportConfigs`）。
 ///
 /// # Errors

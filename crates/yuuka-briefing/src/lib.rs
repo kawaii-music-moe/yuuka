@@ -19,7 +19,7 @@ mod routes;
 mod service;
 mod tools;
 
-pub use repo::{list_enabled_briefings, EnabledBriefing};
+pub use repo::{list_enabled_briefings, list_enabled_reports, EnabledBriefing, EnabledReport};
 pub use routes::{routes, routes_with, DeliveryRunner, NullDeliveryRunner};
 pub use service::{build_briefing, render_briefing_text, BriefingContent};
 pub use tools::tools;

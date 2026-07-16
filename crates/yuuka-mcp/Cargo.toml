@@ -20,6 +20,7 @@ serde_json.workspace = true
 async-trait.workspace = true
 getrandom.workspace = true
 hex.workspace = true
+sha1 = "0.10"                       # 動的ツール名の衝突退避に使う決定的短ハッシュ（Node createHash("sha1") パリティ・lockfile 既存版）
 # 実 MCP HTTP クライアント（HttpMcpClient）: tools/list JSON-RPC + SSE + ダッシュボード取得 + プロキシ中継。
 reqwest.workspace = true            # 外部 MCP サーバーへの HTTP（json/stream/rustls・workspace 固定）
 url = "2"                           # endpoint_url の origin 抽出・SSRF ガードの scheme/host/userinfo パース

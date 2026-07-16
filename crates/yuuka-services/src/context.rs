@@ -9,6 +9,7 @@ use std::sync::Arc;
 use yuuka_core::CrossUserAccess;
 use yuuka_web::Db;
 
+use crate::backup::{BackupRunner, NullBackupRunner};
 use crate::metrics::MetricsRegistry;
 use crate::notifier::Notifier;
 use crate::turn::PlaybookRunner;
@@ -24,12 +25,15 @@ pub struct ServiceContext {
     pub metrics: Arc<MetricsRegistry>,
     /// マクロ定期実行の秘書ターン起動ポート（未配線時は [`crate::turn::NullPlaybookRunner`]）。
     pub playbook_runner: Arc<dyn PlaybookRunner>,
+    /// 定期バックアップの実行ポート（未配線時は [`NullBackupRunner`]・[`crate::backup::BackupService`] が使う）。
+    pub backup: Arc<dyn BackupRunner>,
     /// 横断（全ユーザー跨ぎ）アクセス証憑。cron の起点はここに限定される。
     pub cross: CrossUserAccess,
 }
 
 impl ServiceContext {
-    /// 依存を束ねてコンテキストを作る（横断証憑はここで発行＝cron 起点）。
+    /// 依存を束ねてコンテキストを作る（横断証憑はここで発行＝cron 起点）。バックアップは
+    /// [`ServiceContext::with_backup`] で live 実行ポートを注入する（既定は [`NullBackupRunner`]）。
     #[must_use]
     pub fn new(
         db: Db,
@@ -42,7 +46,15 @@ impl ServiceContext {
             notifier,
             metrics,
             playbook_runner,
+            backup: Arc::new(NullBackupRunner),
             cross: CrossUserAccess::for_scheduled_task(),
         }
+    }
+
+    /// バックアップ実行ポートを差し替える（main が `GoogleBackupClient` アダプタを注入する）。
+    #[must_use]
+    pub fn with_backup(mut self, backup: Arc<dyn BackupRunner>) -> Self {
+        self.backup = backup;
+        self
     }
 }

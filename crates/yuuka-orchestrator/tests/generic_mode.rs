@@ -157,6 +157,8 @@ fn engine_with(db: Db, crypto: Arc<SystemCrypto>, text: &str) -> ChatEngine {
             text: text.to_owned(),
         }),
         None,
+        Arc::new(yuuka_mcp::NullMcpClient),
+        None,
     )
 }
 

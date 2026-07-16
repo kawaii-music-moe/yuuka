@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use yuuka_web::Db;
 
+use crate::backup::BackupRunner;
 use crate::context::ServiceContext;
 use crate::metrics::MetricsRegistry;
 use crate::notifier::{Notification, Notifier, NullNotifier};
@@ -59,6 +60,17 @@ pub fn ctx_full(
         Arc::new(MetricsRegistry::new()),
         playbook_runner,
     )
+}
+
+/// 任意の [`BackupRunner`] 付きコンテキスト（バックアップ定期実行のテスト用）。
+pub fn ctx_with_backup(db: Db, backup: Arc<dyn BackupRunner>) -> ServiceContext {
+    ServiceContext::new(
+        db,
+        Arc::new(NullNotifier),
+        Arc::new(MetricsRegistry::new()),
+        Arc::new(NullPlaybookRunner),
+    )
+    .with_backup(backup)
 }
 
 /// 送信を記録するテスト用 notifier（`succeed` で成功/失敗を切り替える）。

@@ -1,9 +1,12 @@
 # workspace ルート Cargo.toml。Phase 0（契約凍結）で新設。
 # 絶対制約1（anyhow等の握り潰し禁止）の機械強制。検証: docs/rust-rewrite/verification/rpt-clippy-cargodeny.md
 #
-# 逸脱#1（本タスク指示）: yuuka-synapse / yuuka-crawler はまだ members に入れない（daemon 吸収は最終 Phase H）。
-# また既存/独立の nested Cargo.toml（src/rust_synapse, src/rust_crawler, clients/desktop,
-# .claude/worktrees 配下のコピー）を本 workspace に取り込まないよう exclude する。
+# 逸脱#1（本タスク指示）: yuuka-synapse は Phase H で daemon をライブラリ吸収し、workspace
+# member（crates/yuuka-synapse）へ取り込み済み（deps=tokio 不要の serde/serde_json/rusqlite/base64
+# のみでクリーン・deny 影響なし）。yuuka-crawler は依然 members に入れない（fxhash unmaintained /
+# MPL-2.0 の未整理が残るため）。また既存/独立の nested Cargo.toml（旧 src/rust_synapse[非採用]・
+# src/rust_crawler・clients/desktop・.claude/worktrees 配下のコピー）は本 workspace に取り込まない
+# よう exclude する。
 
 [workspace]
 resolver = "2"
@@ -41,16 +44,18 @@ members = [
     "crates/yuuka-richcontent",
     "crates/yuuka-browser",
     "crates/yuuka-chart",
+    "crates/yuuka-synapse",
     "xtask",
 ]
 exclude = [
     ".claude",
     "clients/desktop",
-    # 逸脱#1（本ファイル冒頭）へ復帰: crawler/synapse は daemon 吸収（最終 Phase H）まで
-    # workspace members に入れない。members にあると cargo deny が赤（fxhash unmaintained
-    # RUSTSEC-2025-0057 / MPL-2.0 ×4 未許可 / license 欄欠落で unlicensed）になるため exclude へ戻す。
-    # 取り込みは Phase H で license 欄追加 + deny.toml 調整とセットで行う（remaining-work.md P1-7）。
+    # crawler は依然 members に入れない（fxhash unmaintained RUSTSEC-2025-0057 / MPL-2.0 ×4 未許可 /
+    # license 欄欠落で unlicensed）。取り込みは license 欄追加 + deny.toml 調整とセットで行う。
     "src/rust_crawler",
+    # 旧 synapse daemon（Phase H で crates/yuuka-synapse へライブラリ吸収済み）。旧ディレクトリは
+    # 独立 nested Cargo.toml を持つため、二重定義を避けるよう本 workspace からは exclude し続ける
+    # （新実装は crates/yuuka-synapse が正）。
     "src/rust_synapse",
 ]
 
@@ -134,6 +139,8 @@ tracing-subscriber       = { version = "0.3", features = ["env-filter", "fmt"] }
 serde_yaml               = "0.9"
 chrono                   = { version = "0.4", default-features = false, features = ["clock", "std"] }  # cron スケジューラのローカル壁時計（node-cron はローカル時刻）。SQLite datetime とは別用途
 croner                   = "2"                                                  # 5-field cron 式の次回発火計算（node-cron / cron-parser パリティ）
+zip                      = { version = "8", default-features = false, features = ["deflate-flate2"] }  # バックアップ ZIP（Node archiver 相当）。deflate のみ（bzip2/zstd/lzma/aes 非有効＝MIT/Apache/Zlib のみに限定）
+tempfile                 = "3"                                                  # バックアップの一時 SQLite/ZIP（scratch ディレクトリ相当）
 
 # yuuka クレート間の内部依存（パス依存）
 yuuka-core   = { path = "crates/yuuka-core" }
@@ -168,3 +175,4 @@ yuuka-richcontent = { path = "crates/yuuka-richcontent" }
 yuuka-browser    = { path = "crates/yuuka-browser" }
 yuuka-chart      = { path = "crates/yuuka-chart" }
 yuuka-services   = { path = "crates/yuuka-services" }
+yuuka-synapse    = { path = "crates/yuuka-synapse" }
