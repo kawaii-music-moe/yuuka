@@ -1,7 +1,7 @@
 # yuuka バックエンド Rust 移行 — ドキュメント索引
 
-このディレクトリは、yuuka バックエンド（現行 Node.js/TypeScript）を **Rust へ全面書き換え**する計画・実装ドキュメント一式。
-ブランチ `feature/rust-rewrite`（2026-07-01 起票）。**実装は進行中**（Phase 0〜5 着地: 契約凍結・Web/認証/ドメイン CRUD・Gemini FC ループ・Discord 転送層・cron 常駐・Dockerfile/nginx カットオーバー・保存時暗号化）。本番投入までの残作業は **[remaining-work.md](remaining-work.md)**（P0 データ安全〜P3 衛生）を参照。
+このディレクトリは、yuuka バックエンド（Node.js/TypeScript）を **Rust へ全面書き換え**する計画・実装ドキュメント一式。
+ブランチ `feature/rust-rewrite`（2026-07-01 起票）。**実装フェーズは完了（2026-07-16）**: 機能パリティ 100%（Web ルート **152/152**・LLM ツール **85/85 + MCP 動的**・常駐サービス予約シーム 0・synapse 吸収）・全ゲート緑（build / clippy -D / **test 717** / deny exit 0）・**dev 環境は web/API/cron/Discord すべて Rust で本稼働中**（`yuuka:dev-rust`・:7855）。**残るのは prod カットオーバー（ユーザー最終判断）のみ**。現況・指摘・残オペレーションは **[remaining-work.md](remaining-work.md)** 冒頭の「移行完了宣言（2026-07-16c）」を参照。
 
 ## 読む順序
 
@@ -45,9 +45,9 @@
 
 > `verification/verify-*.md`（小サイズ）は親エージェントの中間メモ。詳細は上記 `rpt-*.md` を参照。
 
-## 残作業ロードマップ
+## 残作業ロードマップ（→ 移行完了・実施記録）
 
-- **[remaining-work.md](remaining-work.md)** — **本番投入までの ToDo 全集**（2026-07-14 実測に更新）。判定=経路 A（strangler カナリア）= GO・経路 B（単独ほぼ本番）は no-go／機械ゲート全緑（build/clippy -D/**test 402**/deny exit 0）／被覆率（Web ~39% [59/152]・ツール ~31% [27/87]・WS `/ws/chat` 実装済）／縮退シーム（後退機能）5 件を 2026-07-14 に解消（finance 月次集計・timeline cross-domain/media・clipboard addEntry・playbook 実行エンジン）／P0 データ安全〜P3 衛生の優先度別チェックリスト／strangler カナリアと単独本番の 2 経路。
+- **[remaining-work.md](remaining-work.md)** — **移行の進捗トラッカー兼実施記録**（2026-07-16 移行完了宣言に更新）。P0〜P3 のチェックリストはほぼ全消化＝機能パリティ 100%（Web **152/152**・ツール **85/85 + MCP 動的**・常駐 cron 全実装・synapse 吸収）・全ゲート緑（**test 717**）・**dev カットオーバー完了**（経路 B を dev で実証・bot 鬼方カヨコ live・prod 無影響）。**残**: prod カットオーバー（push → CI 緑 → `yuuka:latest` Rust ビルド → dev と同手順・ユーザー最終判断）／Gemini `generateAuxText` 上位層（意図的 defer）／live HTTP 実クレデンシャル疎通の実運用検証。日付付き追記が各セッションの実装記録（新しい順）。
 
 ## 実装レビュー
 
@@ -56,8 +56,11 @@
 - [review-2026-07-07-batch1.md](review-2026-07-07-batch1.md) — **Batch 1（`9c8688d`）の修正レビュー: 承認**。完了条件全達成・テスト 90→97・gen-types ドリフトなし。reminder の snake_case 例外を Node 実測で正当と確認。所見は LOW 1 件（float priority の受理幅）と記録事項のみ。
 - [review-2026-07-09-batch4-6.md](review-2026-07-09-batch4-6.md) — **Batch 4/5/6（M-6）＋migration hazard の修正レビュー: 承認**（M-1 認証縮退・M-2 413/空ボディ・M-4 Auth fatality・M-5 writer panic 隔離・M-6 連鎖削除・baseline 冪等化＋schema_version 刻印）。clippy -D クリーン・対象 4 クレート 60 テスト全緑。運用注意 1 件: V17 書き換えによる refinery checksum divergence（旧バイナリ適用済み DB は履歴削除が必要・カットオーバー後は baseline 変更禁止）。
 
-## 次のアクション（実装開始前）
+## 次のアクション（prod カットオーバー・ユーザー判断）
 
-1. [00-decisions.md](00-decisions.md) 末尾および [PLAN.md §14](PLAN.md) の**オープンな決定事項5件**をユーザーが判断（ts-rs/utoipa, rusqlite/sqlx, generateContent/Interactions, edition, プラグイン初期スコープ）。
-2. [scaffold/](scaffold/) を実クレートへ展開し、foundation クレート（core/db/型契約）を凍結。
-3. [PLAN.md §12](PLAN.md) のワークフロー分解に従い、サブエージェント並行実装を開始。
+1. **push → CI 緑確認** — ブランチは origin より 5 コミット先行の未 push（P2 完遂コミット群では `rust-ci.yml` 未実行・ローカルゲート緑のみ）。
+2. **`yuuka:latest` を Rust でビルド** — `docker build -t yuuka:latest -f Dockerfile .`（現 Dockerfile は Rust CMD・chromium 同梱で実測 ~932MB・Node 版 1.4GB より約 470MB 減）。
+3. **prod カットオーバー** — [deploy/cutover-dev-rust.sh](../../deploy/cutover-dev-rust.sh) の手順を prod へ写像（DB バックアップ → Node 停止〔SQLite 単一ライター・P0-2〕→ Rust 起動 → `/` + `/api/setup/status` ヘルス → 失敗時ロールバック）。`YUUKA_RUST_DISCORD=1` は Node bot 停止後に有効化。
+4. **カットオーバー後の実運用検証** — live HTTP（Google OAuth/Drive backup/MCP・code-complete/live-unverified）・briefing/report/backup 常駐 cron の実配信・V17 冪等適用の確認（dev では実証済み）。
+
+> 実装開始前の意思決定記録（オープン事項 5 件の判断・scaffold 展開・並行実装ワークフロー）は [00-decisions.md](00-decisions.md) / [PLAN.md](PLAN.md) §12–14 に完了済みの記録として残る。

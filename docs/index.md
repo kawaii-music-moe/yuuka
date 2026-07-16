@@ -18,11 +18,12 @@ docs/
 │   └── bot_attributes_requirements.md
 ├── skills/                  ← LLM 実行時に注入されるスキル仕様
 │   └── search_skills.md
-└── design/                  ← 設計方針（一部は実装済み・架構規範へ昇格）
-    ├── function_modularization.md          ← 機能モジュール化（P1〜P6 実装済み）
-    ├── synapse_cognitive_architecture.md   ← 設計思想・研究裏付け（R0/R1 実装済み）
-    ├── architecture_renewal_v3.md          ← 全体アーキテクチャ一新案（Rustエンジン/トポロジ）
-    └── desktop_client/                     ← 汎用チャットAPI/デスクトップ（Phase 0/1 実装済み）
+├── design/                  ← 設計方針（一部は実装済み・架構規範へ昇格）
+│   ├── function_modularization.md          ← 機能モジュール化（P1〜P6 実装済み）
+│   ├── synapse_cognitive_architecture.md   ← 設計思想・研究裏付け（R0/R1 実装済み）
+│   ├── architecture_renewal_v3.md          ← 全体アーキテクチャ一新案（Rustエンジン/トポロジ）
+│   └── desktop_client/                     ← 汎用チャットAPI/デスクトップ（Phase 0/1 実装済み）
+└── rust-rewrite/            ← バックエンド Rust 全面書き換え（実装完了・dev 稼働中・prod カットオーバー待ち）
 ```
 
 ---
@@ -39,6 +40,7 @@ docs/
 | 機能モジュールのユーザー×Bot単位ON/OFF（設計・実装済み） | [design/function_modularization.md](design/function_modularization.md) |
 | シナプス認知アーキテクチャ（記憶層 R0/R1 実装済み） | [architecture/architecture_v2.md](architecture/architecture_v2.md) §13 |
 | 汎用チャットAPI・デスクトップクライアント（Phase 0/1 実装済み） | [architecture/architecture_v2.md](architecture/architecture_v2.md) §15 / [design/desktop_client/](design/desktop_client/index.md) |
+| **バックエンド Rust 全面書き換え**（実装完了・dev 稼働中・残=prod カットオーバー） | [rust-rewrite/README.md](rust-rewrite/README.md)（索引）/ [rust-rewrite/remaining-work.md](rust-rewrite/remaining-work.md)（現況・実施記録） |
 
 ---
 
