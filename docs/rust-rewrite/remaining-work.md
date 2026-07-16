@@ -1,5 +1,6 @@
 # Rust 移行 — 残作業ロードマップ（本番投入までの ToDo 全集）
 
+- 追記（2026-07-15s）: **Null シームの live 配線（A1/A3/A4）+ 残レビュー指摘 2 件（M-7/M-11）**。2026-07-15r で全 Web ルート（152/152）を Null シーム込みで着地させた各外部 HTTP サブシステムへ、実クライアントを注入した。**A1（`f09ea28`・コミット済）**: `expenses/upload-receipt` を実 `ChatEngine` の秘書ターン（画像 OCR）へ配線（supervisor `ReceiptParserAdapter`＝`InMemoryRateLimiter`〔guildId="web"〕でコスト増幅 DoS を制限 → 画像付き IncomingChat を `secretary_turn` へ → `{response:string}` 返却・`routes()` 既定は `NullReceiptParser`〔503〕、supervisor が `routes_with(adapter)` で live 化）。**A3（未コミット・`GoogleHttpClient`）**: Google OAuth/Calendar を実 reqwest へ（新 `yuuka-google/src/http.rs`・トークン交換〔authorization_code〕/refresh〔refresh_token〕/userinfo/calendarList を Google 固定 REST エンドポイントへ・リフレッシュトークンは **system 鍵で復号**・calendarList は user 単位 5min キャッシュ・**SSRF 不要**＝固定エンドポイント）。main は暗号鍵 + `GOOGLE_CLIENT_ID`/`SECRET` があれば live、無ければ `NullGoogleOAuth`/`NullCalendar` へ縮退（`is_configured()` 自己判定）。**Drive バックアップ（`BackupPort`）のみ `NullBackup` 据え置き**＝`backup/trigger` は 500（**唯一残る Google Null シーム**）。**A4（未コミット・`HttpMcpClient`）**: MCP client を実 reqwest へ（新 `yuuka-mcp/src/http_client.rs`・817 行・MCP Streamable-HTTP JSON-RPC 2.0〔`initialize`→`notifications/initialized`→`tools/list`〕+ SSE〔`text/event-stream`〕`data:` パース + per-server `Mcp-Session-Id` キャッシュ + session エラー時 1 回だけ再初期化再試行 + **自前 SSRF ガード**〔yuuka-browser の同名が非公開のため本 module に最小移植〕+ dashboard 取得 + proxy 中継・`auth_credential` は system 鍵復号）。**M-7（済・P3-3）**: todo 数値 priority の whole-number float 受理（`priority_num_to_i64`＝JS `Number()` パリティ・`2.0`→`2`・小数部/範囲外は None・3 箇所へ適用 + テスト 2 本）。**M-11（済・P3-3）**: `GET /api/personas` に `active_persona_id`（Node `getActivePersonaIdForBot`・既存 repo メソッド）を復元し「適用中」表示を回復（delete カスケード掃除は `c520571` で実装済み・本項は表示復元）。**配線**: main で 30s タイムアウトの共有 `reqwest::Client` を 1 度生成し A3/A4 両クライアントへ注入。**依存**: `reqwest` は既存 workspace dep（0.12・rustls-tls・`default-features=false`）＝**新規外部クレートなし**（`yuuka-mcp` の `url="2"` は直接指定だが既に推移的に存在・deny 緑）。**全ゲート緑**: build ✅ / clippy -D ✅〔ts-rs 良性 warning のみ〕/ **test 597→623** ✅ / **deny exit 0** ✅。**live HTTP は実環境検証待ち（code-complete・live-unverified）**＝A3 は実 `GOOGLE_CLIENT_ID`/`SECRET`、A4 は実 MCP サーバー、いずれも純ロジック単体テストのみ（yuuka-browser CDP と同方針）。**⇒2026-07-15s 後に残る Null/欠落**: Drive backup・report/briefing 常駐 cron（P2-C）・synapse（P2-C/Phase H）・MCP 動的ツール（P2-B）・Discord 実トークン カットオーバー（実機）・Redis セッション interop（経路A）。
 - 追記（2026-07-15r）: **Web ルート全実装完了 = 残差分 0（ルート 120→152/152）**。残っていた 32 ルート（意図的 defer の「難所」＝Google OAuth/Discord live/MCP プロキシ/Gemini vision 依存）を一括実装。**内訳**: settings 7（`GET /api/status` 多ドメイン集計 + `GET/POST /api/settings/discord` + Google OAuth `url`/`callback` + `calendars` + `backup/trigger`）/ integrated 12（`overview` + bot lifecycle `start`/`stop`/`restart`/`clear-history` + grants `mcp`/`credential`/`google` + google accounts `primary`/`delete`/`calendars`/`:id/calendars`）/ mcp 9（`GET /api/mcp-servers` + `add`/`refresh`/`toggle`/`delete` + `:id/dashboard`（HTML）+ `:id/dashboard/status` + `OPTIONS`/`POST /proxy/mcp/:id/mcp`）/ misc 4（`assistant-config` 集約 + `assistant/guild-options` + `bots/sync-discord` + `expenses/upload-receipt`）。**新クレート 3**: `yuuka-google`（共有＝`user_google_accounts`/`bot_google_account` repo + OAuth/Calendar/Drive/OAuthStateStore シーム・settings と integrated が共有）/ `yuuka-integrated`（自己完結・overview/lifecycle/grants/google）/ `yuuka-mcp`（server CRUD + proxy token in-memory + dashboard HTML rewrite pipeline〔base 除去/MCP_PATH/tokenFromHash/akizakura CSS inline/token 注入〕+ streaming proxy シーム）。**拡張**: `yuuka-settings`（`SettingsRuntime` に GoogleOAuth/Calendar/Backup/StateStore 追加）/ `yuuka-orchestrator`（`assistant_config` 集約 repo〔personas own/public + mcp granted〕+ `count_bot_daily_usage` + **`DiscordLive` シーム新設**〔guild-options/sync-discord〕）/ `yuuka-finance`（**`ReceiptParser` シーム**＝Gemini vision）/ `yuuka-core::Config`（`reminder_cron`/`google_client_id`/`google_client_secret` 追加）/ `yuuka-web::WebConfig`（`db_path`/`reminder_cron`）/ `yuuka-admin::BotRuntime`（`start_custom` 追加）。**縮退方針（既存パターン踏襲）**: 外部 HTTP サブシステム（Google OAuth/Calendar/Drive・Discord live・MCP client・Gemini vision）は全て **Null シーム**、**DB 効果は常に完全動作**（アカウント行/カレンダー列/トークン列/MCP CRUD/grants/プロフィール同期/context floor）。honest degraded（bot start=502・oauth 未設定=400・backup=500・dashboard=404・proxy=502・receipt=503・guild-options `available:false`・sync-discord トークン有=400/無=503）。`supervisor::build_app` に `mcp_routes`/`integrated_routes` を merge・`main.rs` で Null シーム注入（`google_calendar` は settings/integrated 共有）。**実装分担**: mcp/integrated は並行バックグラウンドサブエージェント（自己完結クレート・各 31/11 テスト・自己敵対検証）、settings/misc/配線は直接。**全ゲート緑**: build ✅ / clippy -D ✅ / **test 552→597** ✅ / deny exit0 ✅・**新規外部依存なし**（全 workspace dep 既存）。ルート差分 Node 166 method+path ↔ Rust 168（+`/ws/chat`・+`/api/reminders/delete`）= **missing 0**。**残（別増分・live 配線）**: 各 Null シームへ実 HTTP 実装を注入すれば live 化（シーム/DB は配線済み）。
 - 最終更新: 2026-07-14（**P2-A/P2-B 18 増分セッション**: admin 15 + settings 6 Web-API（新規 `yuuka-admin`/`yuuka-settings`）+ **todo ツール 4 本 + todo タグ/ガイド 3 本 + finance ツール 9 本**を実装 + 敵対的パリティレビューで確定 0 HIGH。全ゲート緑 — build ✅ / clippy -D ✅ / **test 475** ✅ / deny exit0 ✅・新規依存なし。ルート 120/152・ツール 69/87・**bot 管理系 + Webhook Web-API 完了**）
 - 追記（2026-07-15q）: **runBriefingNow 実装 = LLM ツール完全実装 85/85 達成**（tool 84→85/85）。commit `dc10151`（feat）。Node `briefingFunctions.runBriefingNow`/`briefingService` パリティ。新 `service.rs`＝天気（**Open-Meteo・API キー不要**・weather_code→日本語ラベル・当日/翌日）+ ニュース（登録 RSS 最大10・SSRF ガード付き・最小 RSS/Atom パーサ〔`<item>`/`<entry>` の `<title>`・CDATA/エンティティ対応〕・キーワードフィルタ〔全滅時先頭5件〕・個別失敗無視）。ツールは設定無→fail、有→天気+ニュースを `ResponsePart::Embed`（🌅 0x00b0f4）で組み立て返す。**意図的 divergence**: Node は配信先へ Discord 送信し「テスト配信しました」を返すが、Rust は Discord 配信（Messenger）が Discord live シームのため**手動 runBriefingNow はインライン Embed で返す**（今すぐ確認でき有用・定時配信 cron→配信先は DeliveryRunner シームが同じ `build_briefing` を再利用）。LLM 要約は Gemini 依存でヘッドライン列挙代替。天気/RSS 実 HTTP はサンドボックス非検証（純ロジック単体テスト）。**test 547→552**・全ゲート緑・reqwest は既存 dep。**⇒当セッション tool parity 70→85/85（+15）。**
@@ -38,8 +39,8 @@
 - 追記（2026-07-14j）: **Bot 共有 Web-API（botRoutes shares 3 本）実装**（`yuuka-orchestrator::bot_share_routes`）。commit `c860a83`。`GET /api/bots/shares`（閲覧・作成者のみ・shared_username 付与）・`POST /api/bots/shares/invite`（招待・自己招待 400・未登録 404・公開ペルソナ名 DM 添付・ShareInviteDm シーム）・`POST /api/bots/shares/revoke`（作成者 or Admin・越権時監査）。bot_repo に BotShareRow/create_share_invite/list_shares_for_bot/get_username 追加 + revoke_share を bool 返しへ。**test 455→457**・全ゲート緑・新規外部依存なし。ルート 94→97/152。**残（botRoutes）**: GET/POST/DELETE /api/bots・sync-discord・profile（Discord ランタイム health 依存・別増分）。
 - 追記（2026-07-14i）: **デスクトップ配布 Web-API（desktopClientRoutes 2 本）実装**（supervisor `desktop_dist`）。commit `b9660b7`。`GET /api/desktop/info`（配布バイナリのメタ・未配置は available:false）・`GET /api/desktop/download`（exe 添付配信・未配置 404）。配布 dir は env `DESKTOP_DOWNLOAD_DIR`→既定 `cwd/dist/downloads`。exe 非同梱ランタイムでは available:false/404 だが route surface を完全移植。**test 453→455**・全ゲート緑・新規外部依存なし。ルート 92→94/152。
 - 追記（2026-07-14h）: **利用申請 Web-API（memberRequestRoutes 4 本）実装**（`yuuka-orchestrator::member_request_routes`）。commit `c0f5b20`。`POST /api/bots/member-requests`（申請）・`GET .../mine`（自分の申請）・`GET /api/bots/member-requests`（オーナー一覧・status/botId 絞り・Admin は任意 Bot）・`POST .../{id}/decide`（承認/却下・承認時 bot_members 追加）。既存 bot_repo::submit/decide_member_request を再利用し SubmitResult/DecideResult に code を追加して HTTP status 分岐（Node parity）。member-request 一覧 3 本 + list_bots_owned_by を追加。DM は MemberDmSender シーム（既定 NullMemberDmSender）。**test 449→453**・全ゲート緑・新規外部依存なし（orchestrator へ axum/serde/yuuka-auth を追加）。ルート 88→92/152。
-- 対象ブランチ: `feature/rust-rewrite`（未 push・HEAD=`b77506d` の上に未コミット差分）
-- git HEAD: `b77506d`（P2 ドメイン Web-API 拡張）+ 本セッションの縮退シーム解消差分（未コミット）
+- 対象ブランチ: `feature/rust-rewrite`（未 push・HEAD=`f09ea28` の上に 2026-07-15s の未コミット差分〔A3/A4/M-7/M-11〕）
+- git HEAD: `f09ea28`（A1 配線＝upload-receipt→実 ChatEngine 秘書ターン）+ 2026-07-15s の live 配線差分〔A3 Google/A4 MCP・M-7/M-11〕（未コミット）
 - 前提資料: [review-2026-07-06-fix-policy.md](review-2026-07-06-fix-policy.md)（修正方針の唯一の基準）・[review-2026-07-09-batch4-6.md](review-2026-07-09-batch4-6.md)・[PLAN.md](PLAN.md) §11（移行ロードマップ）
 - **本セッション（2026-07-09e）の成果**: **P1-3 Discord live 化**を実装 — twilight 転送層（既存・不活性）を**起動配線**した。(1) 注入ポートの**本番 DB 実装**を新設（`yuuka-orchestrator`）: `DbBotDirectory`（Node `botRepo`/`botAttributesRepo`/`userRepo` パリティ・Bot メタ/list/共有アクセス/トークン復号[`SystemCrypto`]/メンバー・許可ロール・登録判定）・`DbMembership`（申請 submit/decide=承認で `bot_members` 追加・共有 accept/revoke・公開ペルソナ import・全て writer actor 単一 Tx）・`InMemoryRateLimiter`（Node `botRateLimit` 固定窓 5/分・100/日・1000/ギルド日・`system_settings` 上書き）。(2) **汎用モード**（`ChatEngine::process_guild`/`process_bot_dm`）実装 — Bot 専用 Gemini キー（`getBotGenAI` パリティ・`BOT_DEFAULT_MODEL`）・ギルド/DM 分離コンテキスト（`[名前]:` プレフィックス・guild 30 件/DM 15 件）・Bot 単位ペルソナ + 共有/個人ノートの `buildGuildSystemInstruction` 移植・FC ループ。(3) **`main.rs` 配線** — `DiscordManager::new(ports + processor=ChatEngine)` → `prepare()` で共有 `Messenger` 生成、各 `TenantRunner` を `DiscordTenantService` で **Supervisor 監督下**（panic 隔離 + 指数バックオフ・恒久クローズは非再起動）へ。ゲートウェイ起動は **`YUUKA_RUST_DISCORD` env ゲート**（既定 off＝二重 gateway/二重応答の回避・`YUUKA_RUST_CRON` と同思想）。**P1-4**: cron の `NullNotifier` を `Messenger`（`impl services::Notifier`）へ差し替え＝リマインド等が実 Discord へ配信可能に。**P1-1 残**: 登録コード DM を `MessengerRegistrationDm`（合成ルートアダプタ）で `Messenger` 経由に配線＝`/api/register` が実際に DM を送る。機械ゲート全緑（build/release/clippy-D/deny/**test 303**・+15: ポート DB 実装 7・汎用モード 3・guild prompt 2・build_contents 回帰 3）。
 - **本セッション（2026-07-10）の成果**: **P1-3 未コミット diff の parity レビュー**（7 次元並列 + 各指摘を敵対的検証 = confirmed 14）を通し、確定 6 件を修正した。**(H) build_contents 二重ユーザーターン** — persist-before-load で履歴末尾に既にある発言を `build_contents` が再追加していた（Node `buildContentsFromHistory` は空履歴のときだけ `message.text` を積む）。修正: 空履歴のみ lone user turn・非空は添付のみ末尾 user content へ合流。**(H) notifier の DM フォールバック欠落** — `DiscordMessenger::send_to_user` が Channel 解決失敗で即 `false`（cron 経路は deliver_final を通らないため fallback 不能＝リマインダー永久リトライ）。修正: Channel 解決不能時に DM へフォールバック（Node `sendToUser` notifier.ts:130-142）。**(M) owner DM の context floor** — DM が秘書 floor を流用していた。修正: `recent_bot_dm_context`（floor `context_floor:{botId}:dm:{userId}`・Node `getBotDmContext`）を新設し DM 分岐で使用。**(M) レート制限の日窓** — `:d` 固定キー + 25h TTL の転がり窓だった。修正: `todaySuffix`（ローカル暦日 `YYYYMMDD`）を日キーへ付与し暦日境界でリセット。**(L) describe_incoming の trim**（空白のみを添付プレースホルダへ）・**(L) レート上限設定の parseInt 寛容パース**（先頭数字のみ解釈）。**defer（doc 化済み）**: 利用申請/決定の owner・applicant DM 未送（明示的な縮退シーム＝`DbMembership` への messenger 注入待ち・§P2-A）／`has_gemini_key` は presence 判定で Node `getBotGenAI` の復号検証より弱い（低・むしろ復号エラーを表面化＝ops 良）／汎用モードの LLM エラー文言（rate-limit/server-error 別の ⚠️ ＝`guildErrorResult` 相当）は未分類（低・`TurnError` へ分類貫通が必要）。
@@ -58,20 +59,20 @@
 
 ## 0. 現状サマリ（判定）
 
-**「ほぼ本番（Node 完全置き換え）」としてはまだ使えない。** 基盤設計は堅牢でユニットは全緑だが、ユーザーが実際に触れる経路（ログイン・会話・Discord・通知・秘密情報復号）が揃っていない。
+**実装面はほぼ本番水準に到達。** 基盤設計は堅牢でユニットは全緑（**test 623**）、ユーザーが実際に触れる 5 経路（ログイン・会話・Discord・通知・秘密情報復号）は**すべて実装済み**（P1-1〜P1-7 着地・Web ルート **152/152**・LLM ツール **85/85**）。**残るのは主に「実機/live 検証」と P2 の末端**＝(1) 実 Discord トークンでのメンション/DM 応答と二重処理回避のカットオーバー、(2) Google/MCP の live HTTP を実クレデンシャル/実サーバーで疎通（A3/A4 は code-complete・live-unverified）、(3) 共有 Redis での Cookie 相互運用、加えて P2-C 常駐サービス（report/briefing 常駐 cron・Drive backup・synapse）と MCP 動的ツール。**判定=経路A〔strangler カナリア・単一 vhost HTTPS〕は GO**（2026-07-12 敵対的レビュー・critical/high/medium ゼロ）、**経路B〔Node 撤去〕は上記 live 検証 + デプロイ側ブロッカー（`YUUKA_RUST_DISCORD`/`_CRON` カットオーバー等）の解消が前提**。
 
 | 面 | 実測 |
 |---|---|
 | `cargo build --release --workspace` | ✅ exit 0 |
 | `cargo clippy --workspace --all-targets` | ✅ exit 0（ts-rs 良性 warning のみ） |
-| `cargo test --workspace` | ✅ **510 passed / 0 failed**（2026-07-15 認証情報アクセス制御 + 利用量サマリ + デバイスフロー + **ペルソナドメイン完了(11/11)** で累積） |
+| `cargo test --workspace` | ✅ **623 passed / 0 failed**（2026-07-15s 時点・Web ルート全実装 152/152 + LLM ツール 85/85 + A1/A3/A4 live 配線 + M-7/M-11 で累積） |
 | `cargo deny check` | ✅ **exit 0**（新規依存なし＝既存クレートのみで実装） |
 | 保存時暗号層（Argon2id/AES-256-GCM） | ✅ **実装済**（P1-5・Node ゴールデンベクタでバイト単位パリティ・鍵ローテ起動時配線） |
-| 認証発行（login/setup/logout/register/users） | ✅ **実装済**（P1-1・セッション発行 + bcrypt + 招待 + 監査 + レート制限。**登録 DM は P1-3 で開通**・OAuth は残） |
-| HTTP ルート被覆 | 80 / 152 パス ≒ **53%**（認証 7 + `/api/me` + 9 ドメイン CRUD + 管理系 15 + **設定系 6**〔2026-07-14 settings〕） |
-| Gemini ツール被覆 | 71 / 87 native ≒ **82%**（動的 MCP 0。2026-07-14 に conversation 1 + **richContent(showRichContent) 1**〔Embed 配管新設〕含む多数を追加。残 16 は browser 系 10〔chromium 非同梱で意図的 defer〕/ sendChart〔要チャート描画〕/ runBriefingNow〔weather/RSS HTTP〕/ organize・applyTaskPriorities・getRecentActionHistory〔Node 側で範囲外〕/ MCP 動的） |
+| 認証発行（login/setup/logout/register/users） | ✅ **実装済**（P1-1・セッション発行 + bcrypt + 招待 + 監査 + レート制限。**登録 DM は P1-3 で開通・Google OAuth は 2026-07-15s A3 で live 化**） |
+| HTTP ルート被覆 | **152 / 152 パス ≒ 100%（missing 0）**（認証 + `/api/me` + 9 ドメイン CRUD + 管理 15 + 設定 7 + integrated 12 + mcp 9 + webhook + device/desktop + persona 11 + misc・2026-07-15r 全実装） |
+| Gemini ツール被覆 | **85 / 85 native ≒ 100%**（全 Node ツール移植済＝browser 10 + sendChart + runBriefingNow + 優先度整理 2 + getRecentActionHistory 含む。**動的 MCP ツールのみ別サブシステムで未実装**） |
 | チャットオーケストレーション（秘書ターン） | ✅ **実装済**（P1-2・`yuuka-orchestrator`・実 TurnProcessor・統合テスト緑） |
-| 汎用モード（guild/owner DM ターン） | ✅ **実装済**（P1-3・`process_guild`/`process_bot_dm`・Bot 専用キー + ギルド/DM 分離文脈・統合テスト緑。能力ゲート=全ツール露出は P2-B） |
+| 汎用モード（guild/owner DM ターン） | ✅ **実装済**（P1-3・`process_guild`/`process_bot_dm`・Bot 専用キー + ギルド/DM 分離文脈・統合テスト緑。能力ゲート適用済＝秘書×汎用の 2 軸・残は enabledModules〔P2-B〕） |
 | WebSocket `/ws/chat`（デスクトップ会話） | ✅ **実装済**（P1-2・Bearer 認証 + ready/status/done・live 統合テスト緑。interaction/deferred は縮退） |
 | Discord live（gateway 起動 + Supervisor 監督） | ✅ **配線済**（P1-3・DB ポート + `DiscordManager.prepare` + `DiscordTenantService`。既定 off・`YUUKA_RUST_DISCORD=1` で起動＝Node bot 停止後） |
 | Gemini FC ループ本体 | 1:1 移植 ≒ 95% 完成（秘書 + 汎用モードの両経路から到達可能・P1-2/P1-3） |
@@ -79,8 +80,8 @@
 | 登録 DM ブリッジ | ✅ **配線済**（P1-3・`MessengerRegistrationDm`＝`RegistrationDm`↔`Messenger` の合成アダプタ。`/api/register` が実 DM 送信） |
 
 **進め方の2経路:**
-- **経路 A（strangler 並走カナリア）** — Node が認証/会話/Discord/暗号を担い、Rust は移行済み CRUD の一部だけを共有 Redis セッション前提で配信。§7-A の前提を満たせば数日規模で到達可能。**（P1-1 により Rust 単独でのセッション発行も可能になった＝Rust だけでログイン→CRUD が回る。）**
-- **経路 B（単独ほぼ本番）** — Rust だけで完結。P1-1〜P1-7 は全て着地（残は P1-1 の OAuth のみ＝P2-A へ移送）。残は主に P2（機能パリティ）+ P3（CI/fmt/残指摘）。**Discord ライブ確認**（実トークンでのメンション/DM 応答・二重処理回避のカットオーバー）は要実機検証。
+- **経路 A（strangler 並走カナリア）** — Node が認証/会話/Discord/暗号を担い、Rust は移行済み機能を共有 Redis セッション前提で配信。**いまや Rust は Web ルート 152/152・ツール 85/85 の全面パリティを持つ**ため、カナリアで扱える面は「CRUD の一部」に留まらない（P1-1 で Rust 単独ログイン→機能実行が回る）。到達の律速は Redis Cookie 相互運用の実 Redis 確認のみ。**判定=GO**（2026-07-12 敵対的レビュー）。
+- **経路 B（単独ほぼ本番）** — Rust だけで完結。P1-1〜P1-7 は全て着地（**OAuth も 2026-07-15s の A3 で live 化**）。P2-A〔152/152〕+ P2-B〔85/85〕完了、残 P2 は P2-C 常駐サービス〔report/briefing 常駐 cron・Drive backup・synapse〕+ MCP 動的ツール。**主残は live/実機検証**＝Discord 実トークン応答/カットオーバー・Google/MCP live HTTP・Redis Cookie 相互運用。デプロイ側ブロッカー（CMD/env カットオーバー）はユーザー最終判断。
 
 ---
 
@@ -121,13 +122,13 @@
 
 ## P1 — 致命ブロッカー（単独ほぼ本番に不可欠）
 
-- [~] **P1-1 認証の発行経路** — **資格情報ログインは実装済み・OAuth は残（P2-A へ）**
+- [x] **P1-1 認証の発行経路** — **資格情報ログイン + Google OAuth（2026-07-15s A3）実装済み**（残は共有 Redis 下の Cookie 相互運用 実機検証＝経路A の項）
   - 済（2026-07-09d）: `/api/login` `/api/logout` `/api/register` `/api/register/verify` `/api/setup` `/api/setup/status` `/api/users`（Node `authRoutes.ts` パリティ）を `crates/yuuka-auth/`（`routes.rs`・`AuthRuntime`）に実装。`SessionStore` に**発行**（`create`/`destroy` + in-memory フォールバック）を追加し、`CompositeAuth`（検証）と**同一ストアを共有**（`main.rs` で `sessions.clone()`）。bcrypt cost 12（`$2b$`・Node bcryptjs 相互運用・`spawn_blocking`）、`verifyPasswordConstantTime`（不在ユーザーもダミー比較でタイミングオラクル対策）、パスワードポリシー（8 文字/2 種/denylist fail-open・UTF-16 長）、招待コード（`is_valid`/atomic consume/起動時 seed）、監査ログ、DM チャレンジ登録（`PendingStore` + `RegistrationDm` ポート・`NullRegistrationDm` 縮退）、レート制限（login lockout・register-send window）、`ConnectInfo`+XFF クライアント IP、Cookie 発行（`setSessionCookie` パリティ）。config に `INVITE_CODES`/`ADMIN_DISCORD_IDS` 追加。統合テストで **login/setup → セッション発行 → /api/me 200** を確認。
-  - 残: **Google/Discord OAuth フロー**（`settingsRoutes.ts` の url + callback・`GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET`）は未移植 → **P2-A（設定系ルート）へ移す**。
+  - 済（2026-07-15s・A3）: **Google OAuth フロー**（`settingsRoutes.ts` の url + callback・`GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET`）を実 `GoogleHttpClient`（reqwest・トークン交換/refresh/calendarList）で実装。**live HTTP は実クレデンシャル検証待ち**（code-complete・live-unverified）。
   - 残（P1-3 と一体）: `register` の確認コード DM は `NullRegistrationDm` のため現状 502。Discord live 化で `impl RegistrationDm for DiscordMessenger`（既存 `send_registration_code_dm` へ委譲・notify_bridge と同型）を足し `Arc<DiscordMessenger>` を注入すれば届く。
   - 残（経路 A のライブ確認）: 共有 Redis 稼働下で Node が発行した Cookie を Rust が検証、Rust が発行した Cookie を Node が検証、の相互運用を実 Redis で確認（キー書式・sha256hex・camelCase JSON は一致済み）。
 
-- [~] **P1-2 会話経路** — **オーケストレーション中核（実 TurnProcessor）は実装済み・transport 配線が残**
+- [x] **P1-2 会話経路** — **中核（実 TurnProcessor）+ `/ws/chat` transport 実装済み**（残は任意の縮退シーム本体化＝下記 (2)）
   - 済（2026-07-09d・新 `crates/yuuka-orchestrator`）: **チャットオーケストレーション層 + 実 `TurnProcessor`** を実装。`ChatEngine::secretary_turn`＝Node `processMessage`（秘書経路）パリティ: リッチ返信フラグ → ユーザー発言永続化（`describeIncomingMessage`）→ 直近 15 件を古い順ロード → `contents` 組立（連続同一 role を `\n` 結合・添付 inline data）→ `buildSystemInstruction`（DEFAULT_PERSONA/ペルソナ + 情報保存/承認/リッチ返信/音声/ファクトチェック/機能一覧/システムルール[現在日時・**未実行の完了報告禁止**]を verbatim 移植）→ ユーザーの Gemini キー復号（`SystemCrypto`・秘書経路は `users` の鍵）→ **FC ループ**（既存 `run_function_calling_loop`）→ アシスタント応答を必ず永続化 → `TurnReply`。`message_log`/`user`/`persona` repo 新設（`message_logs` の add/recent_context[floor=`system_settings` `context_floor:`]/clear_context）。`impl TurnProcessor for ChatEngine`（`process_secretary`/`parse_receipt` 実装）。`GeminiFactory` トレイトで fake backend 注入 → 統合テストで user 発言→履歴→鍵復号→FC ループ→assistant 保存→reply を通し検証。
   - 済 **(1) `/ws/chat` WebSocket transport**（2026-07-09d・`crates/yuuka-supervisor/src/ws.rs`）: axum WS upgrade + **Bearer（desktop token）認証**（`AuthenticatedUser` extractor）+ `?botId=` 束縛/`has_bot_access` 検証（未指定 system_default）+ WS-native ping/pong 30s。フレームは `clients/desktop/src/model.rs` 契約と一致: 受信 msg/reset/ping/interaction、送信 **ready/status/done/error**。`ready` は `listBotsForUser`（bots + bot_shares active）を BotInfo 化・束縛 Bot は合成フォールバック（`toBotInfo` パリティ）。msg → Gemini キー事前チェック（`no_gemini_key`）→ `ChatEngine::secretary_turn` → status（thinking/writing）→ done。reset → `clear_context`。送信は split+mpsc の writer タスクへ集約。`build_app` に `ws_routes` 追加・main.rs で `ChatEngine`（tool registry + crypto + db）構築 + 配線。**live 統合テスト**（実 WS クライアント → 実サーバ・fake Gemini）で ready→msg→done を通し検証。
   - 残 **(2) 縮退シームの本体化（後続・任意）**: ターンプランナー・シナプス想起（Phase H daemon）・**非同期配信**（interim/push・deferred）・**interaction 配信**（コンポーネント/update）・**能力ゲート**（現状全ツール露出＝P2-B）・返信チェーン・上限は raw バイト長判定（現状フレーム長概算）。
@@ -167,21 +168,21 @@
 
 ## P2 — 機能パリティ（Node にあって Rust に無い）
 
-### P2-A Web ルート（57/152 → 埋める）
+### P2-A Web ルート（**152/152・missing 0＝完了**）
 
-> 2026-07-13（`b77506d`）で 9 ドメイン CRUD のうち todo/finance/timeline/personal/playbook を拡張済み（下記ドメイン別を参照）。2026-07-14 に管理系（admin）を実装済み。以下の設定・Bot・MCP 系は未着手。
+> **2026-07-15r で全 152 ルート実装完了（missing 0）**。2026-07-13（`b77506d`）で 9 ドメイン CRUD、2026-07-14 に管理系（admin）、2026-07-15r で設定/integrated/MCP/misc を着地。設定・Bot・MCP 系も**すべて実装済み**（下記各項参照）。外部 HTTP は 2026-07-15s の A3（Google OAuth/Calendar）/A4（MCP client）で live 化、**Drive backup のみ Null 据え置き**。
 
 - [x] 管理系 `/api/admin/*`（default-bot/token・stats・system-settings・users/role/delete・audit-logs・bots/suspend/unsuspend・invite-codes CRUD 計 15）— Node `adminRoutes.ts` パリティ（新規 `yuuka-admin` クレート・2026-07-14）。**残**: Discord runtime 効果（Bot 再起動/停止/`isRunning`）は `BotRuntime` シーム＝gateway 配線時に実装注入
-- [x] 設定系 `/api/settings/*` + `/api/status`（`settingsRoutes.ts`）: 全 7 完了（2026-07-15r）＝`/api/status`（多ドメイン集計 + カレンダーシーム）・discord GET/POST（トークン + 再起動シーム）・google OAuth url/callback・calendars・backup/trigger を `yuuka-settings` + 共有 `yuuka-google` で実装。**Google HTTP は Null シーム（DB 効果は完全動作）**。既存 6（profile/password/delete-account/user/gemini/backup）と合わせ settings 完了
+- [x] 設定系 `/api/settings/*` + `/api/status`（`settingsRoutes.ts`）: 全 7 完了（2026-07-15r）＝`/api/status`（多ドメイン集計 + カレンダーシーム）・discord GET/POST（トークン + 再起動シーム）・google OAuth url/callback・calendars・backup/trigger を `yuuka-settings` + 共有 `yuuka-google` で実装。**2026-07-15s（A3）＝Google OAuth/Calendar を実 reqwest（`GoogleHttpClient`）へ配線**（トークン交換/refresh/calendarList・system 鍵でリフレッシュトークン復号・5min キャッシュ・SSRF 不要＝Google 固定エンドポイント・**live HTTP は要 GOOGLE_CLIENT_ID/SECRET 実env検証**）。Drive バックアップ（backup/trigger）のみ NullBackup 据え置き。既存 6 と合わせ settings 完了
 - [x] Bot 管理 `/api/bots` `/profile` `/shares*` `/sync-discord` — `botRoutes.ts`（**sync-discord は 2026-07-15r・`DiscordLive` シーム**・CRUD/shares は既済）
 - [x] Bot 属性 `/api/bots/attributes` `/modules` `/presets` `/assistant/*` `assistant-config`（~14）— `botAttributeRoutes.ts`（**assistant-config 集約 + guild-options〔`DiscordLive`〕は 2026-07-15r**・他は既済）
-- [x] MCP `/api/mcp-servers*` `/proxy/mcp/:id/mcp`（9）— `mcpRoutes.ts`（2026-07-15r・新 `yuuka-mcp`・server CRUD + dashboard proxy + proxy token in-memory・**MCP client HTTP は Null シーム**）
+- [x] MCP `/api/mcp-servers*` `/proxy/mcp/:id/mcp`（9）— `mcpRoutes.ts`（2026-07-15r・新 `yuuka-mcp`・server CRUD + dashboard proxy + proxy token in-memory）。**2026-07-15s（A4）＝MCP client を実 reqwest（`HttpMcpClient`）へ配線**（JSON-RPC tools/list + initialize handshake + SSE パース + session-id キャッシュ + SSRF ガード〔自前移植〕 + dashboard fetch + proxy 中継・auth_credential は system 鍵復号・**live HTTP は要実 MCP サーバー検証**）
 - [x] Webhooks `/api/webhooks*` `/hook/:token`（~6）— `webhookRoutes.ts`
 - [x] Integrated `/api/integrated/*`（google accounts/calendars/grants・bot start/stop/restart 等 12）— `integratedRoutes.ts`（2026-07-15r・新 `yuuka-integrated`・**bot lifecycle は `NullBotLifecycle`〔start=502 honest degraded〕**）
 - [x] Device/Desktop `/api/auth/device/*`（2026-07-15c・`50992fa`・RFC8628 フロー）`/api/devices*`（2026-07-14g・deviceMgmt）`/api/desktop/*`（2026-07-14i・配布）— `deviceAuthRoutes.ts` 他すべて移植済
-- [ ] Delivery `/api/briefing-config` `/briefing/test` `/report-configs*` — `deliveryRoutes.ts`
-- [ ] Member requests `/api/bots/member-requests*` — `memberRequestRoutes.ts`
-- [ ] Persona marketplace `/api/personas/marketplace*` `/activate` `/import` `/publish` `/admin/personas/*`（現状 save/delete/list のみ）
+- [x] Delivery `/api/briefing-config` `/briefing/test` `/report-configs*` — `deliveryRoutes.ts`（2026-07-14f・`67e0805`・6 本・実配信は `DeliveryRunner` シーム〔既定 NullDeliveryRunner〕・route/DB 層は完了）
+- [x] Member requests `/api/bots/member-requests*` — `memberRequestRoutes.ts`（2026-07-14h・`c0f5b20`・申請/mine/一覧/decide 4 本・DM は `MemberDmSender` シーム）
+- [x] Persona `/api/personas/marketplace*` `/import` `/publish` `/activate` `/recommended-persona` `/admin/personas/*`（**ドメイン 11/11 完了**・2026-07-15d〜j）
 - [x] `/api/status`（ダッシュボード集計・2026-07-15r・`yuuka-settings`）・`/api/setup/status`（既済）
 - [~] ドメイン別の残ルート（2026-07-13 `b77506d` で todo/finance/timeline/personal/playbook を拡張）:
   - [x] todo（9/9）: detail / gantt / progress / someday / update を追加（子孫は再帰 CTE でスコープ収集・`PriorityUpdate` 3 値 parity）
@@ -217,17 +218,17 @@
 ### P2-C 常駐サービス（7 実装 + 3 予約シーム + 1 欠落）
 
 - [ ] report（日報/週報）— 予約シーム no-op（Gemini aux-gen + charts 依存）
-- [ ] briefing（朝報/天気/RSS）— 予約シーム no-op（weather/RSS HTTP + SSRF ガード依存）
-- [ ] backup（Google Drive）— 予約シーム no-op。**自動バックアップが走らない**（per-user Drive OAuth 依存）。実データを扱うなら要注意。
+- [ ] briefing（朝報/天気/RSS の**定時配信 常駐 cron**）— 予約シーム no-op（weather/RSS HTTP + SSRF ガード依存・`DeliveryRunner`）。**注**: 手動 `runBriefingNow` ツール（P2-B・Open-Meteo + RSS・インライン Embed）は実装済み＝本項は**常駐サービス本体**が残
+- [ ] backup（Google Drive）— 予約シーム no-op。**自動バックアップが走らない**（per-user Drive OAuth 依存）。実データを扱うなら要注意。**2026-07-15s の A3 で Google OAuth/Calendar は live 化したが `BackupPort` は `NullBackup` 据え置き**（`backup/trigger` は 500・唯一残る Google Null シーム）
 - [x] playbook-schedule（マクロ自動実行）— **実装完了（2026-07-14）**。`PlaybookRunner` ポート + `PlaybookScheduleService`（EveryMinute tick・cron due 判定・run 記録・通知）+ cross-user scan（yuuka-playbook `cron.rs`）+ `PlaybookRunnerAdapter`（main.rs で `ChatEngine` へ橋渡し・循環回避）。`YUUKA_RUST_CRON=1` でマクロ定期実行が実際に走る。tick モデルは復帰直後に取りこぼしを最大 1 回 catch-up（Node は catch-up 無し・意図的差分・有界）。
 - [ ] synapse engine（認知想起）— **予約シームですらなく完全欠落**（Node は外部 Rust synapse daemon を spawn）。Phase H の daemon 吸収で対応。
 
 ### P2-D 設定キーの取り込み
 
-- [ ] `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`（OAuth）
-- [ ] `INVITE_CODES`（起動時シード）
-- [ ] `ADMIN_DISCORD_IDS`（初期 admin bootstrap）
-- [ ] `REMINDER_CRON` 等の cron スケジュール上書きキー（現状 Rust は自前スケジュール固定）
+- [x] `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`（OAuth）— `config.rs` 取込済（`non_empty(get(...))`→`Option`）・2026-07-15s の A3 で `GoogleHttpClient` が消費
+- [x] `INVITE_CODES`（起動時シード）— `config.rs` 取込済（`parse_string_list`）・P1-1 認証発行が消費
+- [x] `ADMIN_DISCORD_IDS`（初期 admin bootstrap）— `config.rs` 取込済（`parse_string_list`）
+- [x] `REMINDER_CRON`（reminder ポーリング cron）— `config.rs` 取込済（既定 `* * * * *`・`/api/status` で露出）。**残**: report/briefing 等 他 cron 上書きキーは常駐サービス側で未配線（P2-C）
 
 ---
 
@@ -235,12 +236,12 @@
 
 - [x] **P3-1 CI ゲートの新設** — 済（2026-07-14・`.github/workflows/rust-ci.yml`＝fmt --check + clippy -D + build --release + test + cargo-deny。push[develop/main/feature/rust-rewrite] + PR で起動）。**残**: `gen-types --check` drift（xtask に cargo alias 未整備・別途）
 - [x] **P3-2 `cargo fmt` 差分の解消** — 済（2026-07-14・`cargo fmt --all` で 103 ファイル一括正規化・P3-1 CI と同一コミット。以後 CI の fmt --check で常時緑を強制）
-- [ ] **P3-3 残レビュー指摘 M-7〜M-11（fail-closed）**:
-  - [ ] M-7 priority 正規化 + float `2.0` 受理幅
+- [~] **P3-3 残レビュー指摘 M-7〜M-11（fail-closed）** — **M-8 のみ残**（M-7/M-9/M-10/M-11 済）:
+  - [x] M-7 priority 正規化 + float `2.0` 受理幅 — **完了**（2026-07-15s）。`deserialize_priority`/`PriorityUpdate`/`normalize_priority` は既に数値+文字列正規化済み。**追加**: `priority_num_to_i64`（whole-number float `2.0`→`2`＝JS `Number()` パリティ・小数部/範囲外は None）。float 受理テスト 2 本追加
   - [ ] M-8 finance amount 検証
   - [x] M-9 reminder `trigger_at` 正規化 — 済（2026-07-12・B4）。`datetime::to_db_datetime` を repo 境界 + tool/web route で適用。**残**: 過去日時の拒否・繰り返しの次回自動前進は未移植（低・own-user・cron next は上位 crate 依存）
   - [x] M-10 credential 許可フィルタ（bot_credential_access）— **配線完了**（2026-07-15a・`d2a7c5b`/`767e265`）。repo 6 メソッド（`92be802`）に加え register の owner-Bot 一括付与 + `grant_to_owner_bots` / GET 許可フィルタ / delete 掃除 / addCredential 応対 Bot 付与 / deleteCredential 掃除 / crypto 注入を配線。敵対的レビューで確定 5 件是正（パスワード非 trim 等）
-  - [ ] M-11 persona 適用中の delete 拒否
+  - [x] M-11 persona 適用中参照の掃除 + 「適用中」表示 — **完了**（2026-07-15s）。delete のトランザクション掃除（`bot_active_personas` CASCADE + `bots.recommended_persona_id` NULL 化）は既に実装済み。**追加**: `GET /api/personas` に `active_persona_id`（`getActivePersonaIdForBot` 相当・repo メソッドは既存）を復元し「適用中」表示を回復（`PersonaListData` にフィールド追加・list route で populate・route テスト強化）
 - [x] **P3-4 README 冒頭の古い記述を修正** — 済（[README.md](README.md) の「実装はまだ開始していない」を Phase 0〜5 着地の現況＋remaining-work.md 参照に更新）。
 - [x] **P3-5 `/api/me` の DB 再取得 + 404 分岐** — 済（`yuuka-web/src/routes.rs`：セッション解決後に `SELECT username, role FROM users WHERE discord_id` を read pool で再取得し、消失時 404 `{success:false,message:"ユーザーが見つかりません。"}`＝Node parity。role は DB 権威。テスト `me_returns_404_when_user_deleted_from_db` 追加・既存 200 テストは users 行を seed）。
 - [ ] **P3-6 index.html への google-site-verification meta 注入**（deferred・`static_files.rs`）。
@@ -254,11 +255,11 @@
 | フェーズ | 内容 | 現在地 |
 |---|---|---|
 | Phase 0 | 契約凍結（core/db/types） | ✅ 完了 |
-| Phase 1 | Web/認証/静的/ドメイン CRUD | 🔶 ほぼ完了（P3 の残指摘・P2-A の深掘り残） |
-| Phase 2 | Gemini + tools + 全ドメインツール登録 | 🔶 FC ループ + 24 ツール（上位層・残ツール未） |
-| Phase 3 | Discord（twilight） | 🔶 転送層のみ（live 未起動 = P1-3） |
-| Phase 4 | 常駐サービス | 🔶 6 実装 / 4 予約シーム（配信橋渡し未 = P1-4） |
-| Phase 5 | Dockerfile/nginx カットオーバー | 🔶 配管切替済（整合は P0-3） |
+| Phase 1 | Web/認証/静的/ドメイン CRUD | ✅ 完了（Web ルート 152/152・残は P3-3 M-8 等の末端指摘のみ） |
+| Phase 2 | Gemini + tools + 全ドメインツール登録 | ✅ 完了（FC ループ + 全 Node ツール 85/85 登録・MCP 動的は別サブシステム） |
+| Phase 3 | Discord（twilight） | 🔶 live 配線済（P1-3 着地・`YUUKA_RUST_DISCORD` で起動）／実トークン カットオーバー実機検証が残 |
+| Phase 4 | 常駐サービス | 🔶 配信橋渡し配線済（P1-4）+ playbook-schedule 稼働／report・briefing 常駐 cron・backup・synapse は予約シーム/欠落（P2-C） |
+| Phase 5 | Dockerfile/nginx カットオーバー | 🔶 配管切替済（P0-3 済・スリム化 P3-7 済／実カットオーバーはユーザー判断） |
 | Phase D/E/G | gemini 上位層 / discord live / services 本体 | ⬜ 主に P1〜P2 |
 | Phase H | synapse/crawler の daemon 吸収 + JoinSet 全体監督 | ⬜ 未 |
 
@@ -276,8 +277,8 @@
 - → これで「非暗号フィールドの CRUD を Rust が捌く」限定 near-prod 検証が可能。
 
 ### 経路 B — 単独ほぼ本番（Node 撤去）
-- [ ] P1-1〜P1-7 を全て解消
-- [ ] P2-A/B/C/D を実用十分な水準まで
+- [x] P1-1〜P1-7 を全て解消（実装完了・OAuth も A3 で live／残る live・Redis interop 検証は別項）
+- [~] P2-A/B/C/D を実用十分な水準まで（**P2-A 152/152・P2-B 85/85 完了**／P2-C 常駐サービス report・briefing 常駐 cron・backup・synapse と MCP 動的が残）
 - [ ] P3-1 CI ゲート常時緑
 - [ ] 実 Redis 稼働下の Cookie 検証ライブ確認（環境に Redis 必要）
 - [ ] push / prod deploy / `YUUKA_RUST_CRON` 本番 ON（= Node cron 停止カットオーバー）は**ユーザー最終判断**
@@ -292,16 +293,18 @@
 | 設定系 API（`/api/settings/*`・セッション再発行） | `crates/yuuka-settings/src/{lib,routes,repo,dto}.rs`, main.rs `SettingsRuntime` |
 | セッション一括失効 | `crates/yuuka-auth/src/session.rs`（`destroy_all_for_user`） |
 | 設定系が再利用する auth 公開 API | `crates/yuuka-auth/src/{users.rs(hash_password),routes.rs(build_session_cookie/SessionCookieToken),desktop.rs(revoke_all_for_user)}` |
-| 起動配線（web のみ監督・discord/cron 未配線） | `crates/yuuka-supervisor/src/main.rs` |
+| 起動配線（web + discord/cron を env ゲートで監督・A3/A4 live クライアント注入） | `crates/yuuka-supervisor/src/main.rs` |
+| Google 実 HTTP（A3・OAuth/Calendar・reqwest） | `crates/yuuka-google/src/http.rs`（`GoogleHttpClient`）, main.rs 注入 |
+| MCP 実 HTTP（A4・JSON-RPC/SSE/dashboard/proxy） | `crates/yuuka-mcp/src/http_client.rs`（`HttpMcpClient`）, main.rs 注入 |
 | 予約シーム 3 no-op（report/briefing/backup） | `crates/yuuka-services/src/deferred.rs`, `.../lib.rs` |
 | playbook 実行エンジン（実装済み） | `crates/yuuka-services/src/{playbook_schedule,turn}.rs`, `crates/yuuka-playbook/src/cron.rs`, main.rs `PlaybookRunnerAdapter` |
 | timeline media | `crates/yuuka-timeline/src/media.rs`, `.../routes.rs`, `crates/yuuka-web/src/config.rs`（`media_dir`） |
 | NullNotifier | `crates/yuuka-services/src/notifier.rs` |
 | Discord 転送層（不活性） | `crates/yuuka-discord/src/{manager,message_flow,ports}.rs` |
 | 未使用アダプタ | `crates/yuuka-supervisor/src/discord.rs` |
-| config ローダ（暗号 env 未読） | `crates/yuuka-core/src/config.rs`, `.../secrets.rs` |
-| 暗号 deferred | `crates/yuuka-credential/src/{lib,routes,tools}.rs` |
-| V17 baseline（未コミット修正） | `crates/yuuka-db/migrations/V17__baseline.sql`, `.../src/schema.rs` |
+| config ローダ（暗号/OAuth/cron env 取込済） | `crates/yuuka-core/src/config.rs`, `.../secrets.rs` |
+| 認証情報 暗号/復号 + Bot 許可（配線済・M-10） | `crates/yuuka-credential/src/{lib,routes,tools,access}.rs` |
+| V17 baseline（コミット済・凍結・変更は V18+） | `crates/yuuka-db/migrations/V17__baseline.sql`, `.../src/schema.rs` |
 | nginx strangler | `deploy/nginx/yuuka.conf` |
 | Dockerfile（`YUUKA_RUST_CRON=1` 焼込・Rust CMD） | `Dockerfile` |
 | Node パリティ基準 | `src/index.ts`（起動）, `src/server/`（ルート）, `src/functions/`（ツール）, `src/services/`（cron）, `src/bot.ts`（Discord）, `src/gemini.ts`（FC + 上位層）, `src/server/chatWebSocket.ts`（WS） |
