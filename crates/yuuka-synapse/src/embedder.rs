@@ -161,7 +161,10 @@ mod tests {
         let b = e.embed("毎朝コーヒーを飲む習慣があります");
         let c = e.embed("量子力学の観測問題について");
         assert!((cosine(&a, &b) - 1.0).abs() < 1e-4, "同文はコサイン≈1");
-        assert!(cosine(&a, &c) < cosine(&a, &b), "無関係な文の方がコサインは低い");
+        assert!(
+            cosine(&a, &c) < cosine(&a, &b),
+            "無関係な文の方がコサインは低い"
+        );
     }
 
     #[test]

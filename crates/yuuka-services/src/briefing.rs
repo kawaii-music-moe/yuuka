@@ -21,7 +21,9 @@
 
 use async_trait::async_trait;
 use chrono::Local;
-use yuuka_briefing::{build_briefing, list_enabled_briefings, render_briefing_text, EnabledBriefing};
+use yuuka_briefing::{
+    build_briefing, list_enabled_briefings, render_briefing_text, EnabledBriefing,
+};
 use yuuka_core::{BotId, DbError, UserId};
 
 use crate::context::ServiceContext;
@@ -135,7 +137,12 @@ mod tests {
     /// 天気・RSS は未設定（`weather_lat/lng` NULL・`news_feeds` 空）にして外部 HTTP を発生させない
     /// ＝`build_briefing` は「コンテンツ無し」の [`yuuka_briefing::BriefingContent`] を返し、
     /// `render_briefing_text` が空案内文（非空 body）を作るので配信判定だけを検証できる。
-    fn seed(enabled: bool, cron: &str, target_type: &str, target_id: Option<&str>) -> (Db, tempfile::TempDir) {
+    fn seed(
+        enabled: bool,
+        cron: &str,
+        target_type: &str,
+        target_id: Option<&str>,
+    ) -> (Db, tempfile::TempDir) {
         let dir = tempfile::tempdir().expect("tempdir");
         let seq = SEQ.fetch_add(1, Ordering::Relaxed);
         let path = dir.path().join(format!("briefing_svc_{seq}.sqlite"));
@@ -194,7 +201,8 @@ mod tests {
 
         // 実行時刻が元日 0:00 でない限り配信されない（テストは通年で安定）。
         let now = Local::now();
-        let is_new_year_midnight = now.month() == 1 && now.day() == 1 && now.hour() == 0 && now.minute() == 0;
+        let is_new_year_midnight =
+            now.month() == 1 && now.day() == 1 && now.hour() == 0 && now.minute() == 0;
         if is_new_year_midnight {
             return; // 極稀な境界（元日 0:00）はスキップ。
         }

@@ -200,7 +200,11 @@ async fn static_markdown(url: &str) -> Option<String> {
 fn first_heading(markdown_text: &str) -> String {
     markdown_text
         .lines()
-        .find_map(|l| l.strip_prefix("# ").map(str::trim).filter(|s| !s.is_empty()))
+        .find_map(|l| {
+            l.strip_prefix("# ")
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+        })
         .map_or_else(|| "無題のページ".to_owned(), str::to_owned)
 }
 
@@ -215,8 +219,9 @@ impl Tool for TakePageScreenshotTool {
     fn declaration(&self) -> FunctionDeclaration {
         FunctionDeclaration {
             name: self.name.clone(),
-            description: "指定したURLのページ全体のスクリーンショットを撮り、画像としてサーバーに保存する。"
-                .to_owned(),
+            description:
+                "指定したURLのページ全体のスクリーンショットを撮り、画像としてサーバーに保存する。"
+                    .to_owned(),
             parameters_json_schema: json!({
                 "type": "object",
                 "properties": {
@@ -290,9 +295,10 @@ impl Tool for InteractiveOpenTool {
     fn declaration(&self) -> FunctionDeclaration {
         FunctionDeclaration {
             name: self.name.clone(),
-            description: "操作用ブラウザのセッションを開始（または再利用）して、指定したURLを開く。\n\
+            description:
+                "操作用ブラウザのセッションを開始（または再利用）して、指定したURLを開く。\n\
                 ・ログインやページ操作を代行したい時の、いちばん最初の手順として呼ぶ。"
-                .to_owned(),
+                    .to_owned(),
             parameters_json_schema: json!({
                 "type": "object",
                 "properties": {
@@ -478,9 +484,10 @@ impl Tool for InteractiveCloseTool {
     fn declaration(&self) -> FunctionDeclaration {
         FunctionDeclaration {
             name: self.name.clone(),
-            description: "操作用ブラウザのセッションを終了し、ブラウザを完全に閉じてリソースを解放する。\n\
+            description:
+                "操作用ブラウザのセッションを終了し、ブラウザを完全に閉じてリソースを解放する。\n\
                 ・一連の操作の代行がすべて終わったら、最後にこれを呼ぶ。"
-                .to_owned(),
+                    .to_owned(),
             parameters_json_schema: json!({ "type": "object", "properties": {} }),
             requires_confirmation: false,
         }
@@ -539,7 +546,10 @@ mod tests {
     #[test]
     fn truncate_chars_caps_length() {
         let s: String = "あ".repeat(40_000);
-        assert_eq!(truncate_chars(&s, MARKDOWN_LIMIT).chars().count(), MARKDOWN_LIMIT);
+        assert_eq!(
+            truncate_chars(&s, MARKDOWN_LIMIT).chars().count(),
+            MARKDOWN_LIMIT
+        );
     }
 
     #[tokio::test]
@@ -558,6 +568,9 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(out.payload["success"], false);
-        assert!(out.payload["message"].as_str().unwrap().contains("内部/予約済み"));
+        assert!(out.payload["message"]
+            .as_str()
+            .unwrap()
+            .contains("内部/予約済み"));
     }
 }

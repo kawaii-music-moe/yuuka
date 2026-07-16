@@ -48,7 +48,13 @@ const MCP_PREFIX: &str = "mcp";
 pub fn mcp_function_name(server_id: i64, tool_name: &str) -> String {
     let sanitized: String = tool_name
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
     let name = format!("{MCP_PREFIX}{server_id}_{sanitized}");
     truncate_chars(&name, MAX_FUNCTION_NAME_LENGTH)
@@ -182,7 +188,8 @@ impl McpProvider {
                 // (3) Function 名（衝突は退避名で一意化・Node buildMcpFunctionModule）。
                 let base = mcp_function_name(server.id, &tool.name);
                 let fn_name = if used_names.contains(&base) {
-                    let disambiguated = disambiguate_function_name(server.id, &tool.name, &used_names);
+                    let disambiguated =
+                        disambiguate_function_name(server.id, &tool.name, &used_names);
                     tracing::warn!(
                         server = %server.name,
                         base = %base,
@@ -264,7 +271,11 @@ impl McpProvider {
     ///
     /// `tools_cache_updated` が null/不正日時は「未取得」とみなし必ず再取得する。再取得失敗は既存キャッシュ
     /// で続行する（FC ループを落とさない）。返り値は最新（または既存）キャッシュの完全ツール定義。
-    async fn ensure_fresh_tools(db: &Db, client: &dyn McpClient, server: &McpServerRecord) -> Vec<McpTool> {
+    async fn ensure_fresh_tools(
+        db: &Db,
+        client: &dyn McpClient,
+        server: &McpServerRecord,
+    ) -> Vec<McpTool> {
         if cache_is_stale(server.tools_cache_updated.as_deref()) {
             match client.refresh_tools(server).await {
                 Ok(tools) => {
@@ -416,7 +427,10 @@ impl ToolProvider for McpProvider {
         };
 
         // セキュリティ: 呼び出し時点でも可用性を再検証する（無効化/削除・スコープ・§4.4.3）。発話者は ctx.user_id。
-        if !self.is_still_available(entry.server_id, ctx.user_id.as_str()).await {
+        if !self
+            .is_still_available(entry.server_id, ctx.user_id.as_str())
+            .await
+        {
             return Ok(ToolOutcome::from_payload(json!({
                 "success": false,
                 "message": "このMCPサーバーは現在利用できません（無効化または削除されています）。",
@@ -479,7 +493,8 @@ impl McpProvider {
     async fn is_still_available(&self, server_id: i64, speaker_user_id: &str) -> bool {
         let servers = match self.scope {
             Scope::SharedSecretary => {
-                repo::list_servers_granted_to_bot_scoped(&self.db, &self.bot_id, speaker_user_id).await
+                repo::list_servers_granted_to_bot_scoped(&self.db, &self.bot_id, speaker_user_id)
+                    .await
             }
             Scope::OwnedBot => repo::list_servers_granted_to_bot(&self.db, &self.bot_id).await,
         };
@@ -557,8 +572,14 @@ mod tests {
         // None は空 object。
         assert_eq!(normalize_schema(None), json!({ "type": "object" }));
         // 非 object（配列/文字列）は空 object へフォールバック。
-        assert_eq!(normalize_schema(Some(json!([1, 2]))), json!({ "type": "object" }));
-        assert_eq!(normalize_schema(Some(json!("x"))), json!({ "type": "object" }));
+        assert_eq!(
+            normalize_schema(Some(json!([1, 2]))),
+            json!({ "type": "object" })
+        );
+        assert_eq!(
+            normalize_schema(Some(json!("x"))),
+            json!({ "type": "object" })
+        );
     }
 
     // ── description 生成 ─────────────────────────────────────────────────────
@@ -674,7 +695,10 @@ mod provider_tests {
         async fn probe_dashboard(&self, _s: &McpServerRecord) -> bool {
             false
         }
-        async fn fetch_dashboard_html(&self, _s: &McpServerRecord) -> Result<(u16, String), String> {
+        async fn fetch_dashboard_html(
+            &self,
+            _s: &McpServerRecord,
+        ) -> Result<(u16, String), String> {
             Err("unused".to_owned())
         }
         async fn refresh_tools(&self, _s: &McpServerRecord) -> Result<Vec<McpTool>, String> {
@@ -786,7 +810,8 @@ mod provider_tests {
     fn secretary_ctx() -> ToolContext {
         let mut c = ToolContext::new(BotId::system_default(), UserId::new("alice"));
         c.mode = TurnMode::Secretary;
-        c.capabilities = CapabilitySet::from_granted(vec!["mcp".to_owned(), "secretary".to_owned()]);
+        c.capabilities =
+            CapabilitySet::from_granted(vec!["mcp".to_owned(), "secretary".to_owned()]);
         c
     }
 
@@ -803,8 +828,7 @@ mod provider_tests {
         grant(&path, "system_default", "alice", sid);
 
         let client = Arc::new(FakeMcpClient::default());
-        let provider =
-            McpProvider::discover(db, client, "system_default", "alice").await;
+        let provider = McpProvider::discover(db, client, "system_default", "alice").await;
 
         let decls = provider.list(&secretary_ctx());
         // name 空は落とす → 1 ツール。名前は `mcp:mcp{id}_echo`。
@@ -836,8 +860,7 @@ mod provider_tests {
             .unwrap()
             .insert("echo".to_owned(), "hello-from-tool".to_owned());
 
-        let provider =
-            McpProvider::discover(db, client.clone(), "system_default", "alice").await;
+        let provider = McpProvider::discover(db, client.clone(), "system_default", "alice").await;
         let ctx = secretary_ctx();
         let name = ToolName::namespaced("mcp", &format!("mcp{sid}_echo")).unwrap();
 
@@ -864,8 +887,7 @@ mod provider_tests {
         grant(&path, "system_default", "alice", sid);
 
         let client = Arc::new(FakeMcpClient::default());
-        let provider =
-            McpProvider::discover(db, client, "system_default", "alice").await;
+        let provider = McpProvider::discover(db, client, "system_default", "alice").await;
         let name = ToolName::namespaced("mcp", &format!("mcp{sid}_boom")).unwrap();
         let out = provider
             .invoke(&name, json!({}), &secretary_ctx())
@@ -884,8 +906,7 @@ mod provider_tests {
         let sid = seed_server(&path, Some("alice"), "MyMcp", r#"[{"name":"echo"}]"#, 1);
         grant(&path, "system_default", "alice", sid);
         let client = Arc::new(FakeMcpClient::default());
-        let provider =
-            McpProvider::discover(db, client.clone(), "system_default", "alice").await;
+        let provider = McpProvider::discover(db, client.clone(), "system_default", "alice").await;
         let name = ToolName::namespaced("mcp", &format!("mcp{sid}_echo")).unwrap();
 
         // 汎用モードでは MCP ツールは list に出ない。
@@ -893,7 +914,10 @@ mod provider_tests {
         generic.mode = TurnMode::GuildAssistant;
         assert_eq!(provider.list(&generic).len(), 0);
         // 汎用モードでの invoke は UnknownTool（露出ゲート）で弾かれ tools/call は呼ばれない。
-        let err = provider.invoke(&name, json!({}), &generic).await.unwrap_err();
+        let err = provider
+            .invoke(&name, json!({}), &generic)
+            .await
+            .unwrap_err();
         assert!(matches!(err, ToolError::UnknownTool(_)));
 
         // 秘書経路でも mcp 能力が無ければ隠れる。
@@ -928,8 +952,7 @@ mod provider_tests {
 
         let client = Arc::new(FakeMcpClient::default());
         // 発話者 alice: 自分の許可 + システムレベルのみ（bob の許可は混ざらない）。
-        let provider =
-            McpProvider::discover(db, client, "system_default", "alice").await;
+        let provider = McpProvider::discover(db, client, "system_default", "alice").await;
         let names: Vec<String> = provider
             .list(&secretary_ctx())
             .iter()
@@ -949,11 +972,13 @@ mod provider_tests {
         let sid = seed_server(&path, Some("alice"), "MyMcp", r#"[{"name":"echo"}]"#, 1);
         grant(&path, "system_default", "alice", sid);
         let client = Arc::new(FakeMcpClient::default());
-        let provider =
-            McpProvider::discover(db, client.clone(), "system_default", "alice").await;
+        let provider = McpProvider::discover(db, client.clone(), "system_default", "alice").await;
         // 探索後にサーバーを無効化 → 呼び出し時の再検証で弾く（§4.4.3）。
         raw(&path)
-            .execute("UPDATE mcp_servers SET enabled = 0 WHERE id = ?1", params![sid])
+            .execute(
+                "UPDATE mcp_servers SET enabled = 0 WHERE id = ?1",
+                params![sid],
+            )
             .unwrap();
         let name = ToolName::namespaced("mcp", &format!("mcp{sid}_echo")).unwrap();
         let out = provider

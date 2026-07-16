@@ -64,7 +64,10 @@ pub async fn build_briefing(
                 fields.push((format!("🌤️ {location} の天気"), lines.join("\n")));
                 has_content = true;
             }
-            _ => fields.push(("🌤️ 天気".to_owned(), "天気情報の取得に失敗しました。".to_owned())),
+            _ => fields.push((
+                "🌤️ 天気".to_owned(),
+                "天気情報の取得に失敗しました。".to_owned(),
+            )),
         }
     }
 
@@ -72,7 +75,10 @@ pub async fn build_briefing(
     if !config.news_feeds.is_empty() {
         let items = fetch_news(&config.news_feeds, &config.news_keywords).await;
         if items.is_empty() {
-            fields.push(("📰 ニュース".to_owned(), "フィードから記事を取得できませんでした。".to_owned()));
+            fields.push((
+                "📰 ニュース".to_owned(),
+                "フィードから記事を取得できませんでした。".to_owned(),
+            ));
         } else {
             let text: String = items
                 .iter()
@@ -86,7 +92,10 @@ pub async fn build_briefing(
         }
     }
 
-    Ok(Some(BriefingContent { fields, has_content }))
+    Ok(Some(BriefingContent {
+        fields,
+        has_content,
+    }))
 }
 
 // ─── 天気（Open-Meteo） ────────────────────────────────────────────────────────
@@ -118,10 +127,14 @@ async fn fetch_weather(lat: f64, lng: f64) -> Option<Vec<WeatherDay>> {
     let codes = daily.get("weather_code").and_then(|v| v.as_array());
     let maxs = daily.get("temperature_2m_max").and_then(|v| v.as_array());
     let mins = daily.get("temperature_2m_min").and_then(|v| v.as_array());
-    let precs = daily.get("precipitation_probability_max").and_then(|v| v.as_array());
+    let precs = daily
+        .get("precipitation_probability_max")
+        .and_then(|v| v.as_array());
 
     let get_f = |arr: Option<&Vec<serde_json::Value>>, i: usize| -> f64 {
-        arr.and_then(|a| a.get(i)).and_then(serde_json::Value::as_f64).unwrap_or(f64::NAN)
+        arr.and_then(|a| a.get(i))
+            .and_then(serde_json::Value::as_f64)
+            .unwrap_or(f64::NAN)
     };
     let out: Vec<WeatherDay> = (0..times.len())
         .map(|i| {
@@ -205,7 +218,9 @@ async fn fetch_news(feeds: &[String], keywords: &[String]) -> Vec<NewsItem> {
         if !resp.status().is_success() {
             continue;
         }
-        let Ok(body) = resp.text().await else { continue };
+        let Ok(body) = resp.text().await else {
+            continue;
+        };
         for title in parse_feed_titles(&body).into_iter().take(10) {
             items.push(NewsItem { title });
         }
@@ -380,8 +395,14 @@ mod tests {
     fn render_text_includes_title_fields_and_footer() {
         let content = BriefingContent {
             fields: vec![
-                ("🌤️ 東京 の天気".to_owned(), "**今日**: 晴れ　20℃〜28℃".to_owned()),
-                ("📰 今朝のニュース".to_owned(), "・記事A\n・記事B".to_owned()),
+                (
+                    "🌤️ 東京 の天気".to_owned(),
+                    "**今日**: 晴れ　20℃〜28℃".to_owned(),
+                ),
+                (
+                    "📰 今朝のニュース".to_owned(),
+                    "・記事A\n・記事B".to_owned(),
+                ),
             ],
             has_content: true,
         };

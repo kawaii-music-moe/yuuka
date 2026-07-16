@@ -358,7 +358,10 @@ mod tests {
         assert_eq!(bytes.len(), 12);
         let back = le_bytes_to_vector(&bytes).expect("復号できる");
         assert_eq!(v, back);
-        assert!(le_bytes_to_vector(&[0u8; 3]).is_none(), "4の倍数でないと None");
+        assert!(
+            le_bytes_to_vector(&[0u8; 3]).is_none(),
+            "4の倍数でないと None"
+        );
     }
 
     #[test]

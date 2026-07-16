@@ -314,10 +314,7 @@ pub async fn list_servers_for_owner(db: &Db, user_id: &str) -> Result<Vec<McpSer
 ///
 /// # Errors
 /// 読み取り失敗時 [`DbError`]。
-pub async fn get_server_owner(
-    db: &Db,
-    server_id: i64,
-) -> Result<Option<Option<String>>, DbError> {
+pub async fn get_server_owner(db: &Db, server_id: i64) -> Result<Option<Option<String>>, DbError> {
     db.read
         .read(move |conn| {
             conn.query_row(

@@ -50,7 +50,9 @@ impl BotDiscordRow {
     /// 3 列が揃っていればトークン設定済み（Node `hasToken`）。
     #[must_use]
     pub fn has_token(&self) -> bool {
-        self.token_encrypted.as_deref().is_some_and(|s| !s.is_empty())
+        self.token_encrypted
+            .as_deref()
+            .is_some_and(|s| !s.is_empty())
             && self.token_iv.is_some()
             && self.token_tag.is_some()
     }

@@ -309,9 +309,13 @@ mod tests {
         let db = seed_db();
         let repo = CredentialAccessRepo::new(&db);
         // 大文字/前後空白は正規化されて保存される。
-        repo.grant("system_default", "owner", "  GitHub  ").await.unwrap();
+        repo.grant("system_default", "owner", "  GitHub  ")
+            .await
+            .unwrap();
         // 冪等: 正規化後同名を再付与してもエラーにならず 1 行のまま。
-        repo.grant("system_default", "owner", "github").await.unwrap();
+        repo.grant("system_default", "owner", "github")
+            .await
+            .unwrap();
         repo.grant("b1", "owner", "GITHUB").await.unwrap();
 
         let mut bots = repo
@@ -322,7 +326,10 @@ mod tests {
         assert_eq!(bots, vec!["b1".to_owned(), "system_default".to_owned()]);
 
         // 正規化により大文字問い合わせでもヒットする。
-        assert!(repo.is_granted("system_default", "owner", "GitHub").await.unwrap());
+        assert!(repo
+            .is_granted("system_default", "owner", "GitHub")
+            .await
+            .unwrap());
         assert!(!repo.is_granted("b1", "owner", "gitlab").await.unwrap());
     }
 
@@ -330,8 +337,12 @@ mod tests {
     async fn list_names_scopes_to_bot_and_owner() {
         let db = seed_db();
         let repo = CredentialAccessRepo::new(&db);
-        repo.grant("system_default", "owner", "github").await.unwrap();
-        repo.grant("system_default", "owner", "gitlab").await.unwrap();
+        repo.grant("system_default", "owner", "github")
+            .await
+            .unwrap();
+        repo.grant("system_default", "owner", "gitlab")
+            .await
+            .unwrap();
         repo.grant("b1", "owner", "aws").await.unwrap();
 
         let mut names = repo
@@ -347,7 +358,9 @@ mod tests {
         let db = seed_db();
         let repo = CredentialAccessRepo::new(&db);
         // owner の全 Bot（b1）＋ system_default へ冪等付与。正規化される。
-        repo.grant_to_owner_bots("owner", "  GitHub ").await.unwrap();
+        repo.grant_to_owner_bots("owner", "  GitHub ")
+            .await
+            .unwrap();
         let mut bots = repo
             .list_bot_ids_for_credential("owner", "github")
             .await
@@ -370,16 +383,25 @@ mod tests {
     async fn revoke_and_delete_all_clear_grants() {
         let db = seed_db();
         let repo = CredentialAccessRepo::new(&db);
-        repo.grant("system_default", "owner", "github").await.unwrap();
+        repo.grant("system_default", "owner", "github")
+            .await
+            .unwrap();
         repo.grant("b1", "owner", "github").await.unwrap();
 
         // revoke は 1 Bot 分のみ消す。
-        repo.revoke("system_default", "owner", "github").await.unwrap();
-        assert!(!repo.is_granted("system_default", "owner", "github").await.unwrap());
+        repo.revoke("system_default", "owner", "github")
+            .await
+            .unwrap();
+        assert!(!repo
+            .is_granted("system_default", "owner", "github")
+            .await
+            .unwrap());
         assert!(repo.is_granted("b1", "owner", "github").await.unwrap());
 
         // delete_all_grants は owner×service の全 Bot 分を掃除する。
-        repo.grant("system_default", "owner", "github").await.unwrap();
+        repo.grant("system_default", "owner", "github")
+            .await
+            .unwrap();
         repo.delete_all_grants("owner", "github").await.unwrap();
         assert!(repo
             .list_bot_ids_for_credential("owner", "github")

@@ -9,9 +9,7 @@ use std::sync::Arc;
 
 use serde_json::json;
 use yuuka_core::tool::FunctionDeclaration as CoreFnDecl;
-use yuuka_core::{
-    ActionRecorder, GeminiError, ResponsePart, ToolContext, ToolName, ToolProvider,
-};
+use yuuka_core::{ActionRecorder, GeminiError, ResponsePart, ToolContext, ToolName, ToolProvider};
 
 use crate::client::GenerateBackend;
 use crate::wire::{Content, FunctionDeclaration, FunctionResponse, Part, Role, ToolConfig};

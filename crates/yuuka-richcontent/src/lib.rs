@@ -87,7 +87,10 @@ impl Tool for ShowRichContentTool {
         }
 
         // title は必須（Node `!data.title` = 空/未指定は fail。trim しない）。
-        let title = args.get("title").and_then(Value::as_str).unwrap_or_default();
+        let title = args
+            .get("title")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         if title.is_empty() {
             return Ok(ToolOutcome::from_payload(json!({
                 "success": false,
@@ -129,7 +132,10 @@ fn build_embed(title: &str, args: &Value) -> EmbedPart {
             arr.iter()
                 .take(25)
                 .map(|f| EmbedFieldPart {
-                    name: clip_chars(f.get("name").and_then(Value::as_str).unwrap_or_default(), 256),
+                    name: clip_chars(
+                        f.get("name").and_then(Value::as_str).unwrap_or_default(),
+                        256,
+                    ),
                     value: clip_chars(
                         f.get("value").and_then(Value::as_str).unwrap_or_default(),
                         1024,

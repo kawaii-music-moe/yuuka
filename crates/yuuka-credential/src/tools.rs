@@ -339,7 +339,8 @@ impl Tool for AddCredentialTool {
             ));
         };
         let url = arg_str(&args, "url");
-        if let Some(msg) = check_field_lengths(&service, Some(&username), Some(&password), url.as_deref())
+        if let Some(msg) =
+            check_field_lengths(&service, Some(&username), Some(&password), url.as_deref())
         {
             return Ok(fail_payload(msg));
         }
@@ -587,13 +588,19 @@ impl Tool for BrowserFillCredentialTool {
         let mut filled: Vec<&str> = Vec::new();
         if let Some(sel) = &username_selector {
             if let Err(e) = browser.type_text(uid, sel, &username).await {
-                return Ok(fail_payload(fill_error(&filled, &sanitize_error(&e, &secrets))));
+                return Ok(fail_payload(fill_error(
+                    &filled,
+                    &sanitize_error(&e, &secrets),
+                )));
             }
             filled.push("ユーザー名");
         }
         if let Some(sel) = &password_selector {
             if let Err(e) = browser.type_text(uid, sel, &password).await {
-                return Ok(fail_payload(fill_error(&filled, &sanitize_error(&e, &secrets))));
+                return Ok(fail_payload(fill_error(
+                    &filled,
+                    &sanitize_error(&e, &secrets),
+                )));
             }
             filled.push("パスワード");
         }
@@ -928,7 +935,8 @@ mod tests {
     #[test]
     fn fill_error_prefixes_by_progress() {
         assert!(fill_error(&[], "boom").starts_with("入力に失敗しました: "));
-        assert!(fill_error(&["ユーザー名"], "boom").starts_with("ユーザー名の入力後にエラーが発生しました: "));
+        assert!(fill_error(&["ユーザー名"], "boom")
+            .starts_with("ユーザー名の入力後にエラーが発生しました: "));
     }
 
     #[tokio::test]

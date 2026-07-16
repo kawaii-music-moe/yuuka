@@ -287,7 +287,11 @@ mod tests {
             },
         );
         assert_eq!(indexed.model_version, MODEL_VERSION);
-        assert_eq!(indexed.embedding.len(), DEFAULT_DIM * 4, "dim*4 バイトの BLOB 契約");
+        assert_eq!(
+            indexed.embedding.len(),
+            DEFAULT_DIM * 4,
+            "dim*4 バイトの BLOB 契約"
+        );
         assert_eq!(engine.total(), 1);
 
         // 意味的に近いクエリで想起できる（同文なので上位ヒット）。
@@ -306,7 +310,9 @@ mod tests {
         // forget で消える。
         assert!(engine.forget(1));
         assert_eq!(engine.total(), 0);
-        assert!(engine.assemble(&scope(), "カレー", None, None, 5).is_empty());
+        assert!(engine
+            .assemble(&scope(), "カレー", None, None, 5)
+            .is_empty());
     }
 
     #[test]

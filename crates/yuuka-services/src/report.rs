@@ -320,7 +320,10 @@ fn render_report_text(data: &ReportData) -> String {
     for t in data.completed_todos.iter().take(8) {
         lines.push(format!("  ・{t}"));
     }
-    lines.push(format!("📌 持ち越しタスク: {}件", data.carry_over_todos.len()));
+    lines.push(format!(
+        "📌 持ち越しタスク: {}件",
+        data.carry_over_todos.len()
+    ));
     for (title, due) in data.carry_over_todos.iter().take(8) {
         let due = due.as_deref().unwrap_or("");
         lines.push(format!("  ・{title}（期限: {due}）"));

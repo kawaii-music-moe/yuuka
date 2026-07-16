@@ -75,14 +75,24 @@ pub fn load_index(
     let expected_bytes = dim * 4;
 
     for row in rows {
-        let (id, user_id, bot_id, guild_id, content, topic_id, embedding, ctx_tod, ctx_dow, created_at) =
-            match row {
-                Ok(r) => r,
-                Err(e) => {
-                    eprintln!("[synapse] 行の取得をスキップ: {e}");
-                    continue;
-                }
-            };
+        let (
+            id,
+            user_id,
+            bot_id,
+            guild_id,
+            content,
+            topic_id,
+            embedding,
+            ctx_tod,
+            ctx_dow,
+            created_at,
+        ) = match row {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("[synapse] 行の取得をスキップ: {e}");
+                continue;
+            }
+        };
 
         let vector = match le_bytes_to_vector(&embedding) {
             Some(v) if v.len() * 4 == expected_bytes => v,

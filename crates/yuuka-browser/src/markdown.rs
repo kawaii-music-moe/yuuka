@@ -63,12 +63,30 @@ const UNWANTED_TAGS: &[&str] = &[
 ];
 
 const NOISE_CLASS_KEYWORDS: &[&str] = &[
-    "footer", "nav", "sidebar", "menu", "ads", "advertisement", "cookie", "popup", "modal",
-    "overlay", "banner", "promo",
+    "footer",
+    "nav",
+    "sidebar",
+    "menu",
+    "ads",
+    "advertisement",
+    "cookie",
+    "popup",
+    "modal",
+    "overlay",
+    "banner",
+    "promo",
 ];
 
 const NOISE_ID_KEYWORDS: &[&str] = &[
-    "footer", "nav", "sidebar", "menu", "ads", "advertisement", "cookie", "popup", "modal",
+    "footer",
+    "nav",
+    "sidebar",
+    "menu",
+    "ads",
+    "advertisement",
+    "cookie",
+    "popup",
+    "modal",
     "overlay",
 ];
 

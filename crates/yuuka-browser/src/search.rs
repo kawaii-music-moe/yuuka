@@ -30,17 +30,13 @@ const UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 \
 /// # Errors
 /// Google/DDG 双方が失敗、または結果が全て空/除外された場合。
 pub async fn search_web(query: &str) -> Result<Vec<SearchResult>, String> {
-    let google_url = format!(
-        "https://www.google.com/search?q={}",
-        encode_query(query)
-    );
+    let google_url = format!("https://www.google.com/search?q={}", encode_query(query));
     let ddg_url = format!(
         "https://html.duckduckgo.com/html/?q={}",
         encode_query(query)
     );
 
-    let (google_res, ddg_res) =
-        tokio::join!(fetch_html(&google_url), fetch_html(&ddg_url));
+    let (google_res, ddg_res) = tokio::join!(fetch_html(&google_url), fetch_html(&ddg_url));
 
     let google = google_res.map(|h| parse_google(&h)).unwrap_or_default();
     let ddg = ddg_res.map(|h| parse_ddg(&h)).unwrap_or_default();
@@ -120,9 +116,19 @@ fn evaluate_authority(url: &str) -> f64 {
         score += 0.3;
     }
     const TRUSTED: &[&str] = &[
-        "itmedia.co.jp", "impress.co.jp", "nikkei.com", "asahi.com", "yomiuri.co.jp",
-        "mainichi.jp", "nhk.or.jp", "wikipedia.org", "github.com", "microsoft.com",
-        "transit.yahoo.co.jp", "weather.yahoo.co.jp", "jma.go.jp",
+        "itmedia.co.jp",
+        "impress.co.jp",
+        "nikkei.com",
+        "asahi.com",
+        "yomiuri.co.jp",
+        "mainichi.jp",
+        "nhk.or.jp",
+        "wikipedia.org",
+        "github.com",
+        "microsoft.com",
+        "transit.yahoo.co.jp",
+        "weather.yahoo.co.jp",
+        "jma.go.jp",
     ];
     for s in TRUSTED {
         if u.contains(s) {
@@ -130,8 +136,17 @@ fn evaluate_authority(url: &str) -> f64 {
         }
     }
     const SPAM: &[&str] = &[
-        "matome", "blog.jp", "livedoor.biz", "2ch", "5ch", "geha", "affiliate", "hachima",
-        "jin115", "matomedane", "togetter",
+        "matome",
+        "blog.jp",
+        "livedoor.biz",
+        "2ch",
+        "5ch",
+        "geha",
+        "affiliate",
+        "hachima",
+        "jin115",
+        "matomedane",
+        "togetter",
     ];
     for s in SPAM {
         if u.contains(s) {
@@ -184,7 +199,12 @@ fn parse_google(html: &str) -> Vec<SearchResult> {
         else {
             continue;
         };
-        let title = title_el.text().collect::<Vec<_>>().join(" ").trim().to_owned();
+        let title = title_el
+            .text()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .trim()
+            .to_owned();
         let url = anchor.attr("href").unwrap_or("").to_owned();
         let mut snippet = String::new();
         for sel in &snippet_sels {
@@ -196,7 +216,11 @@ fn parse_google(html: &str) -> Vec<SearchResult> {
             }
         }
         if !title.is_empty() && !url.is_empty() {
-            results.push(SearchResult { title, url, snippet });
+            results.push(SearchResult {
+                title,
+                url,
+                snippet,
+            });
         }
         if results.len() >= 8 {
             break;
@@ -228,7 +252,11 @@ fn parse_ddg(html: &str) -> Vec<SearchResult> {
             .map(|el| el.text().collect::<Vec<_>>().join(" ").trim().to_owned())
             .unwrap_or_default();
         if !title.is_empty() && !url.is_empty() {
-            results.push(SearchResult { title, url, snippet });
+            results.push(SearchResult {
+                title,
+                url,
+                snippet,
+            });
         }
         if results.len() >= 8 {
             break;

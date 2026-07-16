@@ -261,7 +261,13 @@ impl HttpMcpClient {
         .await?;
         // initialized 通知（失敗は握る）。
         let _ = self
-            .rpc_request(server, "notifications/initialized", Some(json!({})), true, None)
+            .rpc_request(
+                server,
+                "notifications/initialized",
+                Some(json!({})),
+                true,
+                None,
+            )
             .await;
         self.mark_initialized(server.id);
         Ok(())
@@ -308,7 +314,11 @@ impl HttpMcpClient {
     }
 
     /// Bearer 付き GET を送る（Node `authedGet`）。SSRF 再検証・タイムアウト付き。
-    async fn authed_get(&self, server: &McpServerRecord, url: &str) -> Result<reqwest::Response, String> {
+    async fn authed_get(
+        &self,
+        server: &McpServerRecord,
+        url: &str,
+    ) -> Result<reqwest::Response, String> {
         assert_safe_outbound_url(url).await?;
         let mut req = self.http.get(url).timeout(REQUEST_TIMEOUT);
         if let Some(token) = self.bearer_token(server) {
@@ -354,7 +364,9 @@ fn parse_sse_body(body: &str, expected_id: Option<i64>) -> Option<Value> {
 ///
 /// 非 object 要素・name 空は落とす。description は文字列のときのみ採用（Node `t.description ? String(...) : undefined`）。
 fn parse_tools_result(rpc: Option<&Value>) -> Vec<McpTool> {
-    let Some(Value::Array(items)) = rpc.and_then(|v| v.get("result")).and_then(|r| r.get("tools"))
+    let Some(Value::Array(items)) = rpc
+        .and_then(|v| v.get("result"))
+        .and_then(|r| r.get("tools"))
     else {
         return Vec::new();
     };
@@ -372,10 +384,7 @@ fn parse_tools_result(rpc: Option<&Value>) -> Vec<McpTool> {
                 .filter(|s| !s.is_empty())
                 .map(str::to_owned);
             // inputSchema は object のときのみ採用（Node `t.inputSchema && typeof === "object"`）。
-            let input_schema = obj
-                .get("inputSchema")
-                .filter(|s| s.is_object())
-                .cloned();
+            let input_schema = obj.get("inputSchema").filter(|s| s.is_object()).cloned();
             Some(McpTool {
                 name: name.to_owned(),
                 description,
@@ -401,8 +410,7 @@ fn parse_tool_call_result(rpc: Option<&Value>) -> Result<String, ToolCallError> 
             arr.iter()
                 .filter(|c| {
                     // type === "text" もしくは text フィールドを持つ（Node のフィルタ）。
-                    c.get("type").and_then(Value::as_str) == Some("text")
-                        || c.get("text").is_some()
+                    c.get("type").and_then(Value::as_str) == Some("text") || c.get("text").is_some()
                 })
                 .filter_map(|c| c.get("text").and_then(Value::as_str))
                 .filter(|t| !t.is_empty())
@@ -483,7 +491,10 @@ impl McpClient for HttpMcpClient {
         }
     }
 
-    async fn fetch_dashboard_html(&self, server: &McpServerRecord) -> Result<(u16, String), String> {
+    async fn fetch_dashboard_html(
+        &self,
+        server: &McpServerRecord,
+    ) -> Result<(u16, String), String> {
         let origin = mcp_origin(&server.endpoint_url)?;
         let url = format!("{origin}{DASHBOARD_PATH}");
         let res = self.authed_get(server, &url).await?;
@@ -552,11 +563,7 @@ impl McpClient for HttpMcpClient {
             req = req.header("Mcp-Session-Id", sid);
         }
 
-        let resp = req
-            .body(body)
-            .send()
-            .await
-            .map_err(|e| format!("{e}"))?;
+        let resp = req.body(body).send().await.map_err(|e| format!("{e}"))?;
 
         let status = resp.status().as_u16();
         let content_type = resp
@@ -787,7 +794,10 @@ mod tests {
         let tools = parse_tools_result(Some(&rpc));
         assert_eq!(tools.len(), 3);
         assert_eq!(tools.first().unwrap().name, "echo");
-        assert_eq!(tools.first().unwrap().description.as_deref(), Some("repeat"));
+        assert_eq!(
+            tools.first().unwrap().description.as_deref(),
+            Some("repeat")
+        );
         assert_eq!(tools.get(1).unwrap().name, "noop");
         assert_eq!(tools.get(1).unwrap().description, None);
         assert_eq!(tools.get(2).unwrap().name, "empty-desc");
@@ -938,20 +948,44 @@ mod tests {
     #[test]
     fn ssrf_ipv4_ranges() {
         for ip in [
-            "0.0.0.1", "10.0.0.1", "127.0.0.1", "169.254.169.254", "172.16.0.1",
-            "192.168.1.1", "100.64.0.1", "224.0.0.1", "255.255.255.255",
+            "0.0.0.1",
+            "10.0.0.1",
+            "127.0.0.1",
+            "169.254.169.254",
+            "172.16.0.1",
+            "192.168.1.1",
+            "100.64.0.1",
+            "224.0.0.1",
+            "255.255.255.255",
         ] {
-            assert!(is_blocked_ipv4(ip.parse().unwrap()), "expected blocked: {ip}");
+            assert!(
+                is_blocked_ipv4(ip.parse().unwrap()),
+                "expected blocked: {ip}"
+            );
         }
         for ip in ["8.8.8.8", "1.1.1.1", "172.15.0.1", "100.63.0.1"] {
-            assert!(!is_blocked_ipv4(ip.parse().unwrap()), "expected allowed: {ip}");
+            assert!(
+                !is_blocked_ipv4(ip.parse().unwrap()),
+                "expected allowed: {ip}"
+            );
         }
     }
 
     #[test]
     fn ssrf_ipv6_ranges_and_dispatch() {
-        for ip in ["::1", "::", "fe80::1", "fc00::1", "fec0::1", "ff02::1", "2001:db8::1"] {
-            assert!(is_blocked_ipv6(ip.parse().unwrap()), "expected blocked: {ip}");
+        for ip in [
+            "::1",
+            "::",
+            "fe80::1",
+            "fc00::1",
+            "fec0::1",
+            "ff02::1",
+            "2001:db8::1",
+        ] {
+            assert!(
+                is_blocked_ipv6(ip.parse().unwrap()),
+                "expected blocked: {ip}"
+            );
         }
         assert!(!is_blocked_ipv6("2606:4700:4700::1111".parse().unwrap()));
         // is_blocked_ip のディスパッチ。

@@ -469,12 +469,17 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(ok.status(), StatusCode::OK);
-        let bytes = axum::body::to_bytes(ok.into_body(), usize::MAX).await.unwrap();
+        let bytes = axum::body::to_bytes(ok.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let j: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(j["success"], serde_json::json!(true));
         assert_eq!(j["persona"]["name"], serde_json::json!("Shared"));
         assert_eq!(j["persona"]["is_public"], serde_json::json!(false));
-        assert!(j["message"].as_str().unwrap().contains("インポートしました"));
+        assert!(j["message"]
+            .as_str()
+            .unwrap()
+            .contains("インポートしました"));
         assert!(j["persona"]["owner_id"].is_null());
 
         // id 欠落 → 400「id は必須です。」。
@@ -492,7 +497,9 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(bad.status(), StatusCode::BAD_REQUEST);
-        let bytes = axum::body::to_bytes(bad.into_body(), usize::MAX).await.unwrap();
+        let bytes = axum::body::to_bytes(bad.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let j: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(j["message"], serde_json::json!("id は必須です。"));
 
@@ -577,7 +584,10 @@ mod tests {
         assert_eq!(recommended(&path, "b1"), None, "非公開化で推奨解除");
 
         // 他人は変更できない・不在も false。
-        assert!(!repo.set_public(&scope("intruder"), pid, true).await.unwrap());
+        assert!(!repo
+            .set_public(&scope("intruder"), pid, true)
+            .await
+            .unwrap());
         assert!(!repo.set_public(&scope("owner"), 9999, true).await.unwrap());
     }
 
@@ -590,20 +600,38 @@ mod tests {
         let app = app_with(db);
 
         // 公開: 200 success:true・Node 文言。
-        let (st, j) = send_post(&app, "/api/personas/publish", &format!(r#"{{"id":{mine},"isPublic":true}}"#)).await;
+        let (st, j) = send_post(
+            &app,
+            "/api/personas/publish",
+            &format!(r#"{{"id":{mine},"isPublic":true}}"#),
+        )
+        .await;
         assert_eq!(st, StatusCode::OK);
         assert_eq!(j["success"], serde_json::json!(true));
         assert!(j["message"].as_str().unwrap().contains("公開しました"));
 
         // 非公開に戻す: success:true・非公開文言。
-        let (_, j) = send_post(&app, "/api/personas/publish", &format!(r#"{{"id":{mine},"isPublic":false}}"#)).await;
+        let (_, j) = send_post(
+            &app,
+            "/api/personas/publish",
+            &format!(r#"{{"id":{mine},"isPublic":false}}"#),
+        )
+        .await;
         assert!(j["message"].as_str().unwrap().contains("非公開にしました"));
 
         // 非 bool isPublic は非公開扱い（Node 厳密 ===true）。他人のペルソナ → success:false。
-        let (st, j) = send_post(&app, "/api/personas/publish", &format!(r#"{{"id":{others},"isPublic":true}}"#)).await;
+        let (st, j) = send_post(
+            &app,
+            "/api/personas/publish",
+            &format!(r#"{{"id":{others},"isPublic":true}}"#),
+        )
+        .await;
         assert_eq!(st, StatusCode::OK);
         assert_eq!(j["success"], serde_json::json!(false));
-        assert!(j["message"].as_str().unwrap().contains("所有者ではありません"));
+        assert!(j["message"]
+            .as_str()
+            .unwrap()
+            .contains("所有者ではありません"));
 
         // id 欠落 → 400。
         let (st, j) = send_post(&app, "/api/personas/publish", r#"{"isPublic":true}"#).await;
@@ -628,7 +656,10 @@ mod tests {
         }
         let repo = PersonaRepo::new(&db);
         repo.set_active(&scope("u"), Some(pid)).await.unwrap();
-        assert_eq!(repo.active_persona_id(&scope("u")).await.unwrap(), Some(pid));
+        assert_eq!(
+            repo.active_persona_id(&scope("u")).await.unwrap(),
+            Some(pid)
+        );
         assert_eq!(recommended(&path, "b1"), Some(pid));
 
         // 削除で: personas 行削除 + bot_active_personas（FK cascade）+ bots.recommended（明示解除）。
@@ -670,19 +701,35 @@ mod tests {
         let app = app_with(db.clone());
 
         // 適用: 200「…を適用しました。」・active が mine になる。
-        let (st, j) = send_post(&app, "/api/personas/activate", &format!(r#"{{"id":{mine}}}"#)).await;
+        let (st, j) = send_post(
+            &app,
+            "/api/personas/activate",
+            &format!(r#"{{"id":{mine}}}"#),
+        )
+        .await;
         assert_eq!(st, StatusCode::OK);
         assert_eq!(j["success"], serde_json::json!(true));
         assert!(j["message"].as_str().unwrap().contains("適用しました"));
         assert_eq!(
-            PersonaRepo::new(&db).active_persona_id(&scope("u")).await.unwrap(),
+            PersonaRepo::new(&db)
+                .active_persona_id(&scope("u"))
+                .await
+                .unwrap(),
             Some(mine)
         );
 
         // 他人のペルソナ → 403。
-        let (st, j) = send_post(&app, "/api/personas/activate", &format!(r#"{{"id":{others}}}"#)).await;
+        let (st, j) = send_post(
+            &app,
+            "/api/personas/activate",
+            &format!(r#"{{"id":{others}}}"#),
+        )
+        .await;
         assert_eq!(st, StatusCode::FORBIDDEN);
-        assert!(j["message"].as_str().unwrap().contains("自分のペルソナのみ"));
+        assert!(j["message"]
+            .as_str()
+            .unwrap()
+            .contains("自分のペルソナのみ"));
 
         // 解除（id null）→ 200「デフォルト…」・active None。
         let (st, j) = send_post(&app, "/api/personas/activate", r#"{"id":null}"#).await;

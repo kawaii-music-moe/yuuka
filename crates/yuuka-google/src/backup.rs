@@ -217,7 +217,11 @@ impl GoogleBackupClient {
 
     /// プレフィックスでバックアップファイル一覧を取得する（Node `listBackupFiles`・createdTime desc）。
     /// 失敗は空一覧へ縮退する（Node は catch → `[]`）。
-    async fn list_backup_files(&self, access_token: &str, folder_id: Option<&str>) -> Vec<DriveFile> {
+    async fn list_backup_files(
+        &self,
+        access_token: &str,
+        folder_id: Option<&str>,
+    ) -> Vec<DriveFile> {
         let mut query = format!("name contains '{BACKUP_PREFIX}' and trashed=false");
         if let Some(fid) = folder_id.filter(|f| !f.is_empty()) {
             query.push_str(&format!(" and '{fid}' in parents"));
@@ -342,7 +346,8 @@ impl GoogleBackupClient {
                     export_user_data(conn, &dest, &uid).map_err(map_sqlite)?;
                     // dest は close（drop）してからファイルを読む。
                 }
-                std::fs::read(&tmp_path).map_err(|e| DbError::Operation(format!("read temp db: {e}")))
+                std::fs::read(&tmp_path)
+                    .map_err(|e| DbError::Operation(format!("read temp db: {e}")))
             })
             .await
             .map_err(|e| GoogleError::Upstream(e.to_string()))?;
@@ -405,7 +410,11 @@ fn copy_rows(
     let Ok(mut stmt) = src.prepare(&select) else {
         return Ok(());
     };
-    let columns: Vec<String> = stmt.column_names().iter().map(|c| (*c).to_owned()).collect();
+    let columns: Vec<String> = stmt
+        .column_names()
+        .iter()
+        .map(|c| (*c).to_owned())
+        .collect();
     if columns.is_empty() {
         return Ok(());
     }
@@ -459,8 +468,8 @@ fn zip_single_file(name: &str, bytes: &[u8]) -> Result<Vec<u8>, zip::result::Zip
     let mut buf = std::io::Cursor::new(Vec::new());
     {
         let mut writer = zip::ZipWriter::new(&mut buf);
-        let options: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default()
-            .compression_method(zip::CompressionMethod::Deflated);
+        let options: zip::write::FileOptions<'_, ()> =
+            zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
         writer.start_file(name, options)?;
         writer.write_all(bytes)?;
         writer.finish()?;
@@ -498,7 +507,10 @@ fn build_multipart_body(
 /// Drive ファイルメタデータ JSON（`{name, mimeType, parents?}`・Node `fileMetadata`）。
 fn drive_metadata_json(file_name: &str, folder_id: Option<&str>) -> String {
     let mut meta = serde_json::Map::new();
-    meta.insert("name".to_owned(), serde_json::Value::String(file_name.to_owned()));
+    meta.insert(
+        "name".to_owned(),
+        serde_json::Value::String(file_name.to_owned()),
+    );
     meta.insert(
         "mimeType".to_owned(),
         serde_json::Value::String(BACKUP_MIME.to_owned()),
@@ -714,9 +726,7 @@ mod tests {
         let dest = Connection::open_in_memory().expect("dest");
         export_user_data(&src, &dest, "alice").expect("export");
         let titles: Vec<String> = {
-            let mut stmt = dest
-                .prepare("SELECT title FROM todos ORDER BY id")
-                .unwrap();
+            let mut stmt = dest.prepare("SELECT title FROM todos ORDER BY id").unwrap();
             let rows = stmt
                 .query_map([], |r| r.get::<_, String>(0))
                 .unwrap()
@@ -820,7 +830,8 @@ mod tests {
 
     #[test]
     fn multipart_body_has_two_parts_and_boundary() {
-        let (content_type, body) = build_multipart_body("yuuka_backup_x.zip", Some("F1"), b"ZIPDATA");
+        let (content_type, body) =
+            build_multipart_body("yuuka_backup_x.zip", Some("F1"), b"ZIPDATA");
         assert!(content_type.starts_with("multipart/related; boundary="));
         let text = String::from_utf8_lossy(&body);
         // metadata パート（JSON）と media パート（zip）の 2 パート + 終端。

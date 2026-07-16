@@ -201,7 +201,6 @@ impl DeviceAuthStore {
             device_name,
         }
     }
-
 }
 
 /// `approve` の結果（Node `ApproveResult`。`persist_failed` はインメモリでは発生しない）。
@@ -239,7 +238,10 @@ fn generate_user_code() -> Result<String, getrandom::Error> {
 }
 
 /// `users` から username / role を引く（承認済みユーザーの実在確認 + 応答用）。無ければ `None`。
-async fn lookup_user(db: &Db, discord_id: &str) -> Result<Option<(String, String)>, yuuka_core::DbError> {
+async fn lookup_user(
+    db: &Db,
+    discord_id: &str,
+) -> Result<Option<(String, String)>, yuuka_core::DbError> {
     let uid = discord_id.to_owned();
     db.read
         .read(move |conn| {
@@ -372,7 +374,11 @@ async fn token_handler(
 ) -> Response {
     let device_code = as_opt_string(body.device_code).unwrap_or_default();
     if device_code.is_empty() {
-        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "invalid_request" }))).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "invalid_request" })),
+        )
+            .into_response();
     }
     match store.poll(&device_code) {
         PollDecision::Expired => {
@@ -397,7 +403,8 @@ async fn token_handler(
                 Err(_) => return server_error(),
             };
             let Some((username, role)) = user else {
-                return (StatusCode::GONE, Json(json!({ "error": "expired_token" }))).into_response();
+                return (StatusCode::GONE, Json(json!({ "error": "expired_token" })))
+                    .into_response();
             };
             // 生トークンを 1 本発行して返す（hash のみ保存・平文はサーバに残さない）。
             let raw_token = match generate_token() {
@@ -425,7 +432,11 @@ async fn token_handler(
             )
             .await;
 
-            let role = if role.is_empty() { "user".to_owned() } else { role };
+            let role = if role.is_empty() {
+                "user".to_owned()
+            } else {
+                role
+            };
             (
                 StatusCode::OK,
                 Json(json!({
@@ -534,13 +545,22 @@ mod tests {
         let app = app(store);
 
         // 1) code 発行。
-        let (st, j) = send(&app, "/api/auth/device/code", "", r#"{"device_name":"My PC"}"#).await;
+        let (st, j) = send(
+            &app,
+            "/api/auth/device/code",
+            "",
+            r#"{"device_name":"My PC"}"#,
+        )
+        .await;
         assert_eq!(st, StatusCode::OK);
         let device_code = j["device_code"].as_str().unwrap().to_owned();
         let user_code = j["user_code"].as_str().unwrap().to_owned();
         assert_eq!(j["interval"], serde_json::json!(5));
         assert_eq!(j["expires_in"], serde_json::json!(600));
-        assert_eq!(j["verification_uri"], serde_json::json!("https://ex.test/device"));
+        assert_eq!(
+            j["verification_uri"],
+            serde_json::json!("https://ex.test/device")
+        );
         assert_eq!(
             j["verification_uri_complete"],
             serde_json::json!(format!("https://ex.test/device?code={user_code}"))
@@ -596,11 +616,23 @@ mod tests {
         let app = app(store);
 
         // approve は auth 必須（未ログイン → 401）。
-        let (st, _) = send(&app, "/api/auth/device/approve", "", r#"{"user_code":"AAAA-BBBB"}"#).await;
+        let (st, _) = send(
+            &app,
+            "/api/auth/device/approve",
+            "",
+            r#"{"user_code":"AAAA-BBBB"}"#,
+        )
+        .await;
         assert_eq!(st, StatusCode::UNAUTHORIZED);
 
         // user_code 空 → 400。
-        let (st, _) = send(&app, "/api/auth/device/approve", "owner", r#"{"user_code":""}"#).await;
+        let (st, _) = send(
+            &app,
+            "/api/auth/device/approve",
+            "owner",
+            r#"{"user_code":""}"#,
+        )
+        .await;
         assert_eq!(st, StatusCode::BAD_REQUEST);
 
         // 未知の user_code → 404。
@@ -644,9 +676,18 @@ mod tests {
         assert_eq!(st, StatusCode::BAD_REQUEST);
         assert_eq!(j["error"], serde_json::json!("invalid_request"));
         // 非文字列 user_code → 400「ユーザーコードが必要です。」（汎用 invalid request body でない）。
-        let (st, j) = send(&app, "/api/auth/device/approve", "owner", r#"{"user_code":123}"#).await;
+        let (st, j) = send(
+            &app,
+            "/api/auth/device/approve",
+            "owner",
+            r#"{"user_code":123}"#,
+        )
+        .await;
         assert_eq!(st, StatusCode::BAD_REQUEST);
-        assert_eq!(j["message"], serde_json::json!("ユーザーコードが必要です。"));
+        assert_eq!(
+            j["message"],
+            serde_json::json!("ユーザーコードが必要です。")
+        );
     }
 
     #[tokio::test]
