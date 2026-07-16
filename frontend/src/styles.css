@@ -2320,19 +2320,9 @@ input[type="checkbox"]:disabled,
 		gap: 8px;
 	}
 
-	/* スマホではユーザーバッジ非表示・Botバッジ/ログアウトはアイコンのみに縮退 */
-	.user-profile-badge {
-		display: none;
-	}
-
-	.bot-context-badge {
-		padding: 6px 8px;
-	}
-
-	.bot-context-badge .bot-badge-label,
-	.logout-label {
-		display: none;
-	}
+	/* バッジ類のスマホ縮退規則は基底定義より後方（.bot-context-badge 定義直後の
+	   media ブロック）に置く — ここに書くと後続の基底規則に同詳細度・後勝ちで
+	   打ち消されるため */
 
 	.profile-switch {
 		flex: 1 1 auto;
@@ -3173,6 +3163,25 @@ input[type="checkbox"]:disabled,
 .bot-context-badge:hover {
 	background-color: rgba(59, 130, 246, 0.25);
 	border-color: rgba(59, 130, 246, 0.7);
+}
+
+/* スマホの1行ヘッダー用バッジ縮退（基底定義の後方に置き後勝ちで確実に適用） */
+@media (max-width: 768px) {
+	/* ユーザーバッジは非表示（ユーザー名は画面外情報のため） */
+	.user-profile-badge {
+		display: none;
+	}
+
+	/* Botバッジ/ログアウトはアイコンのみに縮退 */
+	.bot-context-badge {
+		padding: 6px 8px;
+		flex-shrink: 0;
+	}
+
+	.bot-context-badge .bot-badge-label,
+	.logout-label {
+		display: none;
+	}
 }
 
 /* ==============================================================================
