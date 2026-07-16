@@ -92,6 +92,30 @@ Rust は**存在しない DB を作らない**（`open_conn` は `SQLITE_OPEN_CR
   `YUUKA_RUST_CRON=0` を明示（`instance.env` で上書き）し、cron 所有を Node 一択にする。
 - カットオーバー後は cron 所有 = Rust。ロールバック時（下記）は Rust を落としてから systemd を起動する。
 
+## dev を Rust へ隔離カットオーバー（`cutover-dev-rust.sh`）— prod タグ共有に注意
+
+> **⚠️ `deploy/instance.sh dev update` は dev では使わない。** `docker-compose.yml` は
+> 全インスタンス共有で `image: yuuka:latest` を使う（prod もこのタグ）。`dev update` は
+> `dc build` でこの **yuuka:latest を再ビルド**するため、prod の次回再作成時に dev/feature
+> ビルドへ差し替わる副作用がある。
+
+dev を Rust へ置き換える際は、prod と共有の `yuuka:latest` を一切触らない**隔離タグ方式**を使う:
+
+```bash
+# 1. dev 専用イメージをビルド（yuuka:latest は不変）
+docker build -t yuuka:dev-rust -f Dockerfile .
+# 2. 安全カットオーバー（dev DB バックアップ → Node dev-hot 停止 → Rust dev 起動 → ヘルス確認 → 失敗時 自動ロールバック）
+deploy/cutover-dev-rust.sh
+# ロールバック（Rust dev → Node dev-hot 復帰）
+deploy/cutover-dev-rust.sh rollback
+```
+
+- 隔離オーバーレイ `docker-compose.dev-rust.yml`（`image: yuuka:dev-rust`）を base に重ねて起動する。
+- Node dev-hot（`tsx watch`・:7855・同一 `deploy/dev/data/yuuka.db`）を停止してから起動する（SQLite 単一ライター・P0-2）。
+- 既定は **Discord OFF**（`YUUKA_RUST_DISCORD` 未設定＝web/API/cron のみ Rust 化）。dev の Discord bot を
+  Rust へ移す場合は `deploy/dev/instance.env` に `YUUKA_RUST_DISCORD=1` を置き、`docker-compose.dev-rust.yml`
+  の `environment:` pass-through を有効化して再 up（dev-hot 停止後＝dev 専用トークンの単一 owner）。
+
 ## 本番ロールバック（systemd へ戻す）
 コンテナと systemd は同じ `data/` を共有するため **同時起動は不可**（SQLite WAL 単一ライター・上記 cron 所有も参照）。
 ```bash
