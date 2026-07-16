@@ -34,6 +34,7 @@ use yuuka_web::Db;
 use crate::guild_prompt::{self, GuildScope};
 use crate::message_log::{self, ContextEntry};
 use crate::synapse_extract::{self, ExtractScope};
+use crate::context_note;
 use crate::synapse_recall;
 use crate::{bot_repo, persona, system_prompt, user};
 
@@ -272,6 +273,11 @@ impl ChatEngine {
             rich,
             &system_prompt::now_date_time_ja(),
         );
+
+        // 3.4. コンテキストノート（ユーザー登録の背景情報）を systemInstruction 末尾へ注入
+        //      （Node `gemini.ts:170-175`・§3.7.3・構成順=ペルソナ→ルール→コンテキストノート）。
+        //      秘書モードのみ（Node の guild/DM `buildGuildSystemInstruction` は非注入）。未登録/空/失敗は "" で不変。
+        sys.push_str(&context_note::build_context_note_section(&self.db, uid, bid).await);
 
         // 3.5. L2 連想想起（シナプス）を systemInstruction 末尾へ追記（Node `buildRecallSection`）。
         //      秘書モードのスコープは (userId, botId)・guild_id なし（DM/秘書利用）。返信チェーンは

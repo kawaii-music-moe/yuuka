@@ -15,6 +15,7 @@ pub mod discord_live;
 pub mod discord_ports;
 pub mod engine;
 pub mod guild_prompt;
+pub mod context_note;
 pub mod member_routes;
 pub mod message_log;
 pub mod module_catalog;
