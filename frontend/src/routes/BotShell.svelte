@@ -110,7 +110,11 @@
 		});
 	});
 
+	// スマホ用ドロワー開閉（≤768px。PC ではサイドバー常設のため未使用）。
+	let sidebarOpen = $state(false);
+
 	function go(t: BotTab): void {
+		sidebarOpen = false; // 遷移時はドロワーを閉じる
 		navigateTo(`/bot/${t}`);
 	}
 
@@ -166,8 +170,14 @@
 	);
 </script>
 
+<svelte:window
+	onkeydown={(e) => {
+		if (e.key === "Escape") sidebarOpen = false;
+	}}
+/>
+
 <div class="app-container" id="app-container">
-	<aside class="sidebar">
+	<aside class="sidebar" class:open={sidebarOpen}>
 		<button
 			type="button"
 			class="sidebar-back-button"
@@ -207,8 +217,26 @@
 		</nav>
 	</aside>
 
+	<!-- ドロワー背面オーバーレイ（スマホのみ。タップで閉じる） -->
+	{#if sidebarOpen}
+		<button
+			type="button"
+			class="sidebar-backdrop"
+			aria-label="メニューを閉じる"
+			onclick={() => (sidebarOpen = false)}
+		></button>
+	{/if}
+
 	<main class="main-content">
 		<header class="top-header">
+			<button
+				type="button"
+				class="menu-toggle"
+				aria-label="メニューを開く"
+				onclick={() => (sidebarOpen = true)}
+			>
+				<Icon name="menu" />
+			</button>
 			<div class="header-title">
 				<h2 id="current-tab-title">{title}</h2>
 			</div>
@@ -277,27 +305,21 @@
 		width: 100%;
 		text-align: left;
 	}
+	/* スマホもドロワー（縦型サイドバー）のため PC と同じ全幅・左寄せでよい */
 	.menu-item {
 		background: none;
 		border: none;
+		width: 100%;
 		cursor: pointer;
 		font: inherit;
+		text-align: left;
 	}
-	/* PC（縦サイドバー）のみ全幅・左寄せ。スマホは styles.css のボトムナビ規則
-	   （flex:0 0 auto・縦積み中央寄せ）に委ねる — scoped セレクタの方が詳細度が
-	   高く、無条件の width:100% はボトムナビで各ボタンが画面幅いっぱいになるため */
-	@media (min-width: 769px) {
-		.menu-item {
-			width: 100%;
-			text-align: left;
-		}
-		/* 設定ハブ項目は日常機能と視覚的に区切る（2階層化） */
-		.menu-item-settings {
-			margin-top: 10px;
-			border-top: 1px solid var(--border-divider);
-			border-radius: 0;
-			padding-top: 14px;
-		}
+	/* 設定ハブ項目は日常機能と視覚的に区切る（2階層化） */
+	.menu-item-settings {
+		margin-top: 10px;
+		border-top: 1px solid var(--border-divider);
+		border-radius: 0;
+		padding-top: 14px;
 	}
 	.bot-context-badge {
 		background: none;

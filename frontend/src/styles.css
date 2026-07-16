@@ -1080,6 +1080,11 @@ textarea:focus {
 	font-weight: 800;
 }
 
+/* スマホドロワー用ハンバーガー（PC はサイドバー常設のため非表示） */
+.menu-toggle {
+	display: none;
+}
+
 /* Integrated Header Controls */
 .header-controls {
 	display: flex;
@@ -2207,94 +2212,57 @@ input[type="checkbox"]:disabled,
 }
 
 @media (max-width: 768px) {
-	/* Sidebar transforms into Bottom Nav Bar */
+	/* Sidebar: 左から出るドロワー（ヘッダのハンバーガーで開閉）。
+	   中身（戻るボタン/Botブランディング/縦メニュー）は PC と同一構成のまま、
+	   位置だけ off-canvas 化する。開閉は BotShell が .open を付与。 */
 	.sidebar {
 		position: fixed;
-		top: auto;
+		top: 0;
 		bottom: 0;
 		left: 0;
-		width: 100vw;
-		height: 64px;
-		flex-direction: row;
-		background-color: var(--bg-primary);
-		border-top: 1px solid var(--border-matte);
-		border-right: none;
-		padding: 0 12px;
-		justify-content: space-around;
-		box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.6);
-		z-index: 1000;
-		overflow: hidden;
+		width: min(300px, 82vw);
+		height: 100dvh;
+		z-index: 1600;
+		transform: translateX(-100%);
+		transition: transform 0.25s ease;
 	}
 
-	/* ボトムナビでは戻るボタンとアプリ情報ヘッダーを非表示にする */
-	.sidebar-brand,
-	.sidebar-back-button,
-	.app-sidebar-header {
-		display: none;
+	.sidebar.open {
+		transform: translateX(0);
+		box-shadow: 8px 0 32px rgba(0, 0, 0, 0.55);
 	}
 
-	/* メニュー項目が多いため横スクロール式ナビにする
-     （収まる場合は疑似要素の auto マージンで中央寄せ） */
-	.sidebar-menu {
-		width: 100%;
-		height: 100%;
-		flex-direction: row;
-		justify-content: flex-start;
-		align-items: center;
-		gap: 0;
-		overflow-x: auto;
-		overflow-y: hidden;
-		scrollbar-width: none;
+	/* ドロワー背面オーバーレイ（BotShell が開時のみ描画。タップで閉じる） */
+	.sidebar-backdrop {
+		position: fixed;
+		inset: 0;
+		background: rgba(0, 0, 0, 0.5);
+		border: none;
+		padding: 0;
+		z-index: 1500;
 	}
-
-	.sidebar-menu::-webkit-scrollbar {
-		display: none;
-	}
-
-	.sidebar-menu::before,
-	.sidebar-menu::after {
-		content: "";
-		margin: auto;
-	}
-
-	.menu-item {
-		flex: 0 0 auto;
-		flex-direction: column;
-		align-items: center;
-		gap: 2px;
-		padding: 6px;
-		font-size: 0.65rem;
-		text-align: center;
-		border: none !important;
-		border-radius: var(--radius);
-		color: var(--color-zinc-muted);
-	}
-
-	.menu-text {
-		white-space: nowrap; /* ラベルの一文字ずつの縦折れを防ぐ */
-	}
-
-	.menu-item .menu-icon {
-		font-size: 1.15rem;
-		margin: 0;
-	}
-
-	.menu-item:hover {
-		background-color: transparent;
-		padding-left: 6px;
-	}
-
-	/* active 状態は各テーマ共通でベースのアクセント色スタイルを使う
-     （ここでハードコードするとテーマ間で挙動が揃わないため上書きしない） */
 
 	/* Main Workspace adjustments */
 	.main-content {
-		padding: 24px 16px 88px 16px; /* High bottom padding to prevent overlap with bottom nav bar! */
+		padding: 18px 14px 28px;
 		height: auto;
-		min-height: calc(100vh - 64px);
+		min-height: 100vh;
 	}
 
-	/* 1行ヘッダー: タイトル左・アイコン操作右（縦積みをやめ上部占有を最小化） */
+	/* ハンバーガー（ドロワー開閉）をタイトル左に表示 */
+	.menu-toggle {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		flex-shrink: 0;
+		background: none;
+		border: none;
+		cursor: pointer;
+		color: var(--text-primary);
+		padding: 2px;
+	}
+
+	/* 1行ヘッダー: ハンバーガー+タイトル左・アイコン操作右（縦積みをやめ上部占有を最小化） */
 	.top-header {
 		flex-wrap: nowrap;
 		gap: 8px;
@@ -2532,7 +2500,7 @@ input[type="checkbox"]:disabled,
 
 @media (max-width: 420px) {
 	.main-content {
-		padding: 18px 12px 88px 12px;
+		padding: 16px 12px 24px 12px;
 	}
 
 	.card {
@@ -2557,31 +2525,15 @@ input[type="checkbox"]:disabled,
 		padding: 14px 0;
 	}
 
-	.menu-item {
-		font-size: 0.6rem;
-	}
-
 	.column-header h3 {
 		font-size: 0.88rem;
 	}
 }
 
-/* 360px 以下: ボトムナビはアイコンのみ・ラベル非表示でナビ高さを抑える */
+/* 360px 以下: さらに詰める（サイドバーはドロワーのため縮小規則は不要） */
 @media (max-width: 360px) {
-	.menu-text {
-		display: none;
-	}
-
-	.menu-item {
-		padding: 8px 4px;
-	}
-
-	.sidebar {
-		height: 54px;
-	}
-
 	.main-content {
-		padding: 16px 10px 74px 10px;
+		padding: 14px 10px 20px 10px;
 	}
 
 	.login-card {
@@ -4081,14 +4033,13 @@ summary.column-header.badge-right > h3 {
 
 @media (max-width: 768px) {
 	[data-theme="blue-archive"] .top-header {
-		margin: -24px -16px 20px -16px;
-		padding: 14px 16px;
+		margin: -18px -14px 16px -14px;
+		padding: 12px 14px;
 	}
 
+	/* ドロワー式サイドバー（旧ボトムナビ用の border-top/上向き影は撤去） */
 	[data-theme="blue-archive"] .sidebar {
 		background-color: var(--bg-sidebar);
-		border-top-color: #dde6ed;
-		box-shadow: 0 -2px 12px rgba(2, 211, 251, 0.1);
 	}
 
 	[data-theme="blue-archive"] .menu-item.active {
@@ -4101,8 +4052,8 @@ summary.column-header.badge-right > h3 {
    （ずれると横スクロールが発生する） */
 @media (max-width: 420px) {
 	[data-theme="blue-archive"] .top-header {
-		margin: -18px -12px 20px -12px;
-		padding: 14px 12px;
+		margin: -16px -12px 16px -12px;
+		padding: 12px;
 	}
 }
 
