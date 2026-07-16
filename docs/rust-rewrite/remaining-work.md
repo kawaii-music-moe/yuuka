@@ -293,7 +293,7 @@
 - [~] P3-1 CI ゲート常時緑（workflow 整備済み・**ブランチ未 push のため直近コミット群では未実行**＝push 後に確認）
 - [x] ~~実 Redis 稼働下の Cookie 相互運用確認~~ → **経路 B では非該当**（Rust 単独＝Node との Cookie 相互運用が発生しない。dev カットオーバーで実証。経路 A を採る場合のみ必要）
 - [x] **dev カットオーバー完了**（`deploy/cutover-dev-rust.sh`・web/API/cron/Discord 全 Rust・DB 保全・自動ロールバック実証）
-- [ ] **prod カットオーバー**（push → CI 緑 → `yuuka:latest` を Rust でビルド → prod へ dev と同手順を写像）＝**ユーザー最終判断・唯一の残オペレーション**
+- [~] **prod カットオーバー** — **スクリプト整備済**（`deploy/cutover-prod-rust.sh`＝Node 稼働のまま Rust を staging タグでビルド → Rust バイナリ検証 → Node クリーン停止〔WAL checkpoint〕→ DB backup → `yuuka:latest` へタグ昇格 → Rust 起動〔`YUUKA_RUST_DISCORD=1`〕→ ヘルス → 失敗時 `yuuka:prev-prod`〔Node〕へ自動ロールバック。base compose に `YUUKA_RUST_DISCORD` pass-through 追加・`deploy/prod/instance.env` に `=1` 常設）。**残＝実行そのもの**（push → CI 緑 → `deploy/cutover-prod-rust.sh`）＝**ユーザー最終判断・唯一の残オペレーション**
 
 ---
 
