@@ -24,7 +24,7 @@
 	import { navigateTo, type BotTab } from "$lib/router";
 	import { Icon } from "$lib/components/ui";
 
-	// §P1b ルート遅延ロード: 15タブの静的 import を loader マップに変換する。
+	// §P1b ルート遅延ロード: 16タブの静的 import を loader マップに変換する。
 	// Vite は各 import() を個別チャンク（BotDashboard-*.js 等）に分割するため、
 	// 初期 entry（index-*.js）からタブ実体が外れ初期JSが軽くなる。
 	// 各タブは props 形状が異なり得るため Component<Record<string, never>> で受ける。
@@ -47,12 +47,15 @@
 		discord: () => import("./BotDiscord.svelte"),
 		config: () => import("./BotConfig.svelte"),
 		devices: () => import("./BotDevices.svelte"),
+		settings: () => import("./BotSettingsHub.svelte"),
 	};
 
 	// 現在表示中のタブ（App/router から渡される。未指定は既定 config）。
 	let { tab = "config" as BotTab }: { tab?: BotTab } = $props();
 
 	// §8 プリセット別タブフィルタ（旧 app.js:157-170）。
+	// 2階層化: 設定系（personas/delivery/webhooks/mcp/playbooks/discord/config/
+	// devices）はサイドバーから外し /bot/settings ハブへ集約（BotSettingsHub）。
 	const SECRETARY_ONLY_TABS: BotTab[] = [
 		"tasks",
 		"timeline",
@@ -60,29 +63,32 @@
 		"expenses",
 		"reminders",
 		"personal",
+	];
+
+	// 設定ハブ配下のタブ。サイドバーでは「Bot設定」をアクティブ表示し、
+	// ヘッダタイトルは「Bot設定 › <ページ名>」のパンくずにする。
+	const SETTINGS_TABS: BotTab[] = [
+		"settings",
+		"config",
+		"personas",
+		"playbooks",
+		"mcp",
 		"delivery",
 		"webhooks",
-		"playbooks",
+		"discord",
+		"devices",
 	];
-	const ASSISTANT_ONLY_TABS: BotTab[] = ["discord"];
 
-	// 全メニュー項目（旧 index.html sidebar-menu の順・ラベル・アイコン）。
+	// サイドバー項目（日常機能のみ + 設定ハブ）。
 	const ALL_MENU: { tab: BotTab; label: string; icon: string }[] = [
 		{ tab: "dashboard", label: "一般情報", icon: "info" },
 		{ tab: "tasks", label: "タスク管理", icon: "checklist" },
-		{ tab: "timeline", label: "タイムライン", icon: "timeline" },
 		{ tab: "schedules", label: "予定スケジュール", icon: "calendar_today" },
-		{ tab: "expenses", label: "経費・収支管理", icon: "payments" },
 		{ tab: "reminders", label: "リマインダー", icon: "alarm" },
+		{ tab: "timeline", label: "タイムライン", icon: "timeline" },
+		{ tab: "expenses", label: "経費・収支管理", icon: "payments" },
 		{ tab: "personal", label: "メモ・連絡先", icon: "contacts" },
-		{ tab: "personas", label: "ペルソナ", icon: "theater_comedy" },
-		{ tab: "delivery", label: "配信設定", icon: "campaign" },
-		{ tab: "webhooks", label: "Webhook", icon: "webhook" },
-		{ tab: "mcp", label: "MCPサーバー", icon: "extension" },
-		{ tab: "playbooks", label: "Playbook 管理", icon: "description" },
-		{ tab: "discord", label: "Discord連携", icon: "forum" },
-		{ tab: "config", label: "Bot 設定", icon: "smart_toy" },
-		{ tab: "devices", label: "接続端末", icon: "devices" },
+		{ tab: "settings", label: "Bot設定", icon: "settings" },
 	];
 
 	// §8 ヘッダタイトルマップ（旧 app.js:338-354 switchTab）。
@@ -102,14 +108,15 @@
 		discord: "Discord 連携設定",
 		config: "システム設定情報",
 		devices: "接続端末",
+		settings: "Bot設定",
 	};
 
 	// プリセット別に絞り込んだメニュー配列（derived(activeBot)）。
+	// 設定系タブの表示条件は BotSettingsHub 側で同じ規約により絞り込む。
 	const menuItems = derived(activeBot, ($bot) => {
 		const isAssistant = ($bot?.preset ?? "secretary") === "mcp_assistant";
 		return ALL_MENU.filter((m) => {
 			if (SECRETARY_ONLY_TABS.includes(m.tab)) return !isAssistant;
-			if (ASSISTANT_ONLY_TABS.includes(m.tab)) return isAssistant;
 			return true;
 		});
 	});
@@ -140,7 +147,12 @@
 	// import() が再評価される。同一タブ内の他の再レンダリングでは同じ Promise 参照の
 	// ままなので無駄なフェッチが起きない（Vite の module cache で実 fetch も1回）。
 	const modulePromise = $derived((TAB_LOADERS[tab] ?? TAB_LOADERS.config)());
-	const title = $derived(TAB_TITLES[tab] ?? "ダッシュボード");
+	// 設定ハブ配下ページはパンくず表記（現在地が「Bot設定」内であることを示す）。
+	const title = $derived(
+		tab !== "settings" && SETTINGS_TABS.includes(tab)
+			? `Bot設定 › ${TAB_TITLES[tab]}`
+			: (TAB_TITLES[tab] ?? "ダッシュボード"),
+	);
 
 	// Bot ブランディング（旧 updateSidebarBotBranding）。
 	const botName = $derived($activeBot?.name ?? "システムデフォルト");
@@ -190,7 +202,9 @@
 				<button
 					type="button"
 					class="menu-item"
-					class:active={item.tab === tab}
+					class:active={item.tab === tab ||
+						(item.tab === "settings" && SETTINGS_TABS.includes(tab))}
+					class:menu-item-settings={item.tab === "settings"}
 					data-tab={item.tab}
 					onclick={() => go(item.tab)}
 				>
@@ -278,6 +292,13 @@
 		cursor: pointer;
 		font: inherit;
 		text-align: left;
+	}
+	/* 設定ハブ項目は日常機能と視覚的に区切る（2階層化） */
+	.menu-item-settings {
+		margin-top: 10px;
+		border-top: 1px solid var(--border-divider);
+		border-radius: 0;
+		padding-top: 14px;
 	}
 	.bot-context-badge {
 		background: none;

@@ -31,7 +31,7 @@ export type RouteView =
 	| "tasks-guide" // /tasks/guide
 	| "notfound"; // 未知パス
 
-/** /bot/<tab> の 15 タブ識別子（§8）。 */
+/** /bot/<tab> の 16 タブ識別子（§8 + 設定ハブ "settings"）。 */
 export type BotTab =
 	| "dashboard"
 	| "tasks"
@@ -47,7 +47,8 @@ export type BotTab =
 	| "playbooks"
 	| "discord"
 	| "config"
-	| "devices";
+	| "devices"
+	| "settings";
 
 export interface ResolvedRoute {
 	view: RouteView;
@@ -57,7 +58,7 @@ export interface ResolvedRoute {
 	params?: Record<string, string>;
 }
 
-/** §8 の 15 Bot タブ。未知タブ → "config" フォールバック。 */
+/** §8 の 16 Bot タブ（+ 設定ハブ）。未知タブ → "config" フォールバック。 */
 export const BOT_TABS: BotTab[] = [
 	"dashboard",
 	"tasks",
@@ -74,6 +75,7 @@ export const BOT_TABS: BotTab[] = [
 	"discord",
 	"config",
 	"devices",
+	"settings",
 ];
 
 /** §8 PUBLIC_PATHS: 認証を待たず描画できる公開ルート。 */

@@ -104,7 +104,8 @@
 			avatar: bot.discord_avatar_url || "",
 			preset: bot.preset || "secretary",
 		});
-		navigateTo("/bot/config");
+		// 2階層化後の入口は一般情報（設定系はサイドバー「Bot設定」ハブ配下へ移動）。
+		navigateTo("/bot/dashboard");
 	}
 
 	// ── Discord 同期（旧 syncBtn） ──
