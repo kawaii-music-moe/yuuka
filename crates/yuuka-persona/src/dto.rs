@@ -40,11 +40,13 @@ pub struct SavePersona {
 
 /// `GET /api/personas` のペイロード（`Envelope<PersonaListData>`）。
 ///
-/// 適用中ペルソナ ID（`bot_active_personas`）はコア CRUD 外のため deferred。
+/// `active_persona_id` は当該スコープ `(user, bot)` の適用中ペルソナ ID（`bot_active_personas`・
+/// Node `getActivePersonaIdForBot`）。未適用は `None`（M-11・「適用中」表示の復元）。
 #[derive(Debug, Clone, Serialize, TS)]
 #[ts(export_to = "generated/")]
 pub struct PersonaListData {
     pub personas: Vec<Persona>,
+    pub active_persona_id: Option<i64>,
     pub max_length: i64,
 }
 

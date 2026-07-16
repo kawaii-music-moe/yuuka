@@ -51,6 +51,7 @@ tracing-subscriber.workspace = true
 backon.workspace = true
 thiserror.workspace = true
 async-trait.workspace = true
+reqwest.workspace = true               # Google/MCP 実 HTTP クライアント（A3/A4 配線）の共有インスタンス
 serde.workspace = true                 # /ws/chat フレームの Deserialize/Serialize
 serde_json.workspace = true            # フレーム JSON 直列化
 chrono.workspace = true                # デスクトップ配布バイナリの built_at（mtime → ISO8601）

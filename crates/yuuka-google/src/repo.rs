@@ -94,6 +94,69 @@ pub async fn get_primary_account(
         .await
 }
 
+/// owner の primary アカウントの暗号化リフレッシュトークン 3 列を引く（`GoogleHttpClient` の
+/// キャッシュ済み一覧解決用）。`(account_id, encrypted, iv, tag)` を返す。Node の
+/// `getPrimaryGoogleAccount` + repo 内復号に相当（本移植は復号をクライアント層へ集約する）。
+///
+/// # Errors
+/// 読み取り失敗時 [`DbError`]。
+pub async fn get_primary_account_tokens(
+    db: &Db,
+    user_id: &str,
+) -> Result<Option<(i64, String, String, String)>, DbError> {
+    let user_id = user_id.to_owned();
+    db.read
+        .read(move |conn| {
+            conn.query_row(
+                "SELECT id, refresh_token_encrypted, refresh_token_iv, refresh_token_tag \
+                 FROM user_google_accounts WHERE user_id = ?1 \
+                 ORDER BY is_primary DESC, id ASC LIMIT 1",
+                params![user_id],
+                |r| {
+                    Ok((
+                        r.get::<_, i64>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, String>(2)?,
+                        r.get::<_, String>(3)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(map_sqlite)
+        })
+        .await
+}
+
+/// 特定アカウントの暗号化リフレッシュトークン 3 列 + 所有者を引く（`GoogleHttpClient` の
+/// アカウント別一覧解決用）。`(user_id, encrypted, iv, tag)` を返す。越権チェックのため owner を含む。
+///
+/// # Errors
+/// 読み取り失敗時 [`DbError`]。
+pub async fn get_account_tokens(
+    db: &Db,
+    account_id: i64,
+) -> Result<Option<(String, String, String, String)>, DbError> {
+    db.read
+        .read(move |conn| {
+            conn.query_row(
+                "SELECT user_id, refresh_token_encrypted, refresh_token_iv, refresh_token_tag \
+                 FROM user_google_accounts WHERE id = ?1",
+                params![account_id],
+                |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, String>(2)?,
+                        r.get::<_, String>(3)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(map_sqlite)
+        })
+        .await
+}
+
 /// owner の連携アカウント数（`/api/status` の `googleAccountCount`）。
 ///
 /// # Errors

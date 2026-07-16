@@ -55,9 +55,13 @@ async fn list(
     Query(q): Query<BotQuery>,
 ) -> Result<Json<Envelope<PersonaListData>>, ApiError> {
     let scope = resolve_scope(&user.0, &db, q.bot_id.as_deref()).await?;
-    let personas = PersonaRepo::new(&db).list(&scope).await?;
+    let repo = PersonaRepo::new(&db);
+    let personas = repo.list(&scope).await?;
+    // M-11: 当該スコープの適用中ペルソナ ID（Node `getActivePersonaIdForBot`）。
+    let active_persona_id = repo.active_persona_id(&scope).await?;
     Ok(Json(Envelope::ok(PersonaListData {
         personas,
+        active_persona_id,
         // i64 へ落として wire に載せる（DTO 由来の定数上限）。
         max_length: i64::try_from(PERSONA_MAX_LENGTH).unwrap_or(i64::MAX),
     })))

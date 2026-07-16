@@ -131,6 +131,11 @@ async fn run() -> Result<(), String> {
     // 即時反映）、デフォルト Bot トークン暗号化は同じ crypto を使う。runtime 効果（Bot 再起動/停止/
     // 稼働状態）は Discord gateway 未配線のため NullBotRuntime へ縮退する（DB 効果は常に完全に働く）。
     let bot_runtime: Arc<dyn yuuka_admin::BotRuntime> = Arc::new(yuuka_admin::NullBotRuntime);
+    // Google/MCP の実 HTTP に使う共有 reqwest クライアント（接続プール共有・30s タイムアウト）。
+    let http_client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .unwrap_or_default();
     let admin_runtime = Arc::new(yuuka_admin::AdminRuntime::new(
         sessions.clone(),
         crypto.clone(),
@@ -145,8 +150,28 @@ async fn run() -> Result<(), String> {
     // 共有する。Google OAuth/Calendar/Drive バックアップは HTTP サブシステム未配線のため Null シームへ
     // 縮退する（DB 効果＝アカウント行・カレンダー列・トークン列は常に完全に働く）。OAuth state ストアは
     // web 再起動を跨ぐよう main で 1 度だけ生成する。
-    let google_oauth: Arc<dyn yuuka_google::GoogleOAuthPort> = Arc::new(yuuka_google::NullGoogleOAuth);
-    let google_calendar: Arc<dyn yuuka_google::CalendarPort> = Arc::new(yuuka_google::NullCalendar);
+    // Google OAuth/Calendar は実 HTTP クライアント（A3・reqwest）。暗号鍵があれば GoogleHttpClient
+    // （リフレッシュトークン復号 + Google API）、無ければ Null へ縮退する。`is_configured()` が
+    // GOOGLE_CLIENT_ID/SECRET 未設定を自己判定するため、client の有無に依らず oauth ルートは安全に振る舞う。
+    // Drive バックアップ（BackupPort）は別途のため NullBackup 据え置き（backup/trigger は 500）。
+    let (google_oauth, google_calendar): (
+        Arc<dyn yuuka_google::GoogleOAuthPort>,
+        Arc<dyn yuuka_google::CalendarPort>,
+    ) = if let Some(crypto) = crypto.clone() {
+        let client = Arc::new(yuuka_google::GoogleHttpClient::new(
+            cfg.google_client_id.clone().unwrap_or_default(),
+            cfg.google_client_secret.clone().unwrap_or_default(),
+            crypto,
+            db.clone(),
+            http_client.clone(),
+        ));
+        (client.clone(), client)
+    } else {
+        (
+            Arc::new(yuuka_google::NullGoogleOAuth),
+            Arc::new(yuuka_google::NullCalendar),
+        )
+    };
     let google_backup: Arc<dyn yuuka_google::BackupPort> = Arc::new(yuuka_google::NullBackup);
     let oauth_state = Arc::new(yuuka_google::OAuthStateStore::new());
     let settings_runtime = Arc::new(yuuka_settings::SettingsRuntime::new(
@@ -163,10 +188,13 @@ async fn run() -> Result<(), String> {
 
     // MCP ルータ（サーバー管理 + ダッシュボードプロキシ）。auth_credential 暗号化に crypto を注入し、
     // proxy token は in-memory（web 再起動を跨ぐよう main で 1 度生成）。MCP サーバーへの実 HTTP
-    // （tools/list・dashboard・proxy）は未配線のため NullMcpClient へ縮退する（DB 効果は常に働く）。
+    // （tools/list・dashboard・proxy）は HttpMcpClient（A4・SSRF ガード + JSON-RPC/SSE）で処理する。
     let mcp_routes = yuuka_mcp::routes(Arc::new(yuuka_mcp::McpRuntime::new(
         crypto.clone(),
-        Arc::new(yuuka_mcp::NullMcpClient),
+        Arc::new(yuuka_mcp::HttpMcpClient::new(
+            crypto.clone(),
+            http_client.clone(),
+        )),
         Arc::new(yuuka_mcp::ProxyTokenManager::new()),
     )));
 

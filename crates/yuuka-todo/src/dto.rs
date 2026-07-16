@@ -79,10 +79,25 @@ where
 {
     let value = serde_json::Value::deserialize(deserializer)?;
     Ok(match value {
-        serde_json::Value::Number(n) => n.as_i64().and_then(normalize_priority_num),
+        serde_json::Value::Number(n) => priority_num_to_i64(&n).and_then(normalize_priority_num),
         serde_json::Value::String(s) => normalize_priority_str(&s),
         _ => None,
     })
+}
+
+/// JSON 数値を JS `Number(x)` 相当で整数へ寄せる（`2` も `2.0` も `2`・JS は int/float を区別しない）。
+/// 小数部を持つ値・i64 範囲外は `None`（M-7・旧 UI 互換の数値 priority 受理幅）。
+fn priority_num_to_i64(n: &serde_json::Number) -> Option<i64> {
+    if let Some(i) = n.as_i64() {
+        return Some(i);
+    }
+    let f = n.as_f64()?;
+    #[allow(clippy::cast_possible_truncation)]
+    if f.fract() == 0.0 && (i64::MIN as f64..=i64::MAX as f64).contains(&f) {
+        Some(f as i64)
+    } else {
+        None
+    }
 }
 
 /// update 用の優先度 3 値（Node `normalizePriority` + `updateTodo` の `!== undefined` 分岐）。
@@ -117,8 +132,7 @@ impl<'de> Deserialize<'de> for PriorityUpdate {
             // null/空文字は明示クリア（Node normalizePriority が null を返す経路）。
             serde_json::Value::Null => Self::Clear,
             serde_json::Value::String(s) if s.is_empty() => Self::Clear,
-            serde_json::Value::Number(n) => n
-                .as_i64()
+            serde_json::Value::Number(n) => priority_num_to_i64(&n)
                 .and_then(normalize_priority_num)
                 .map_or(Self::Unchanged, Self::Set),
             serde_json::Value::String(s) => {
@@ -137,7 +151,7 @@ impl<'de> Deserialize<'de> for PriorityUpdate {
 #[must_use]
 pub fn normalize_priority(value: &serde_json::Value) -> Option<String> {
     match value {
-        serde_json::Value::Number(n) => n.as_i64().and_then(normalize_priority_num),
+        serde_json::Value::Number(n) => priority_num_to_i64(n).and_then(normalize_priority_num),
         serde_json::Value::String(s) => normalize_priority_str(s),
         _ => None,
     }
@@ -300,4 +314,32 @@ pub struct TodoProgress {
     pub progress: i64,
     #[serde(default)]
     pub note: Option<String>,
+}
+
+#[cfg(test)]
+mod priority_tests {
+    use super::{normalize_priority, PriorityUpdate};
+    use serde_json::json;
+
+    #[test]
+    fn accepts_whole_number_floats_like_js() {
+        // 整数（旧 UI 互換）。
+        assert_eq!(normalize_priority(&json!(2)).as_deref(), Some("high"));
+        // whole-number float（JS `Number(2.0)===2`）も受理する（M-7）。
+        assert_eq!(normalize_priority(&json!(2.0)).as_deref(), Some("high"));
+        assert_eq!(normalize_priority(&json!(0.0)).as_deref(), Some("low"));
+        // 文字列。
+        assert_eq!(normalize_priority(&json!("medium")).as_deref(), Some("medium"));
+        // 小数部あり・範囲外・未知は None。
+        assert_eq!(normalize_priority(&json!(1.5)), None);
+        assert_eq!(normalize_priority(&json!(9)), None);
+        assert_eq!(normalize_priority(&json!("urgent")), None);
+    }
+
+    #[test]
+    fn priority_update_float_is_set() {
+        // update 経路でも whole-number float は Set 扱い。
+        let pu: PriorityUpdate = serde_json::from_value(json!(1.0)).unwrap();
+        assert_eq!(pu, PriorityUpdate::Set("medium".to_owned()));
+    }
 }

@@ -20,6 +20,11 @@ serde_json.workspace = true
 async-trait.workspace = true
 getrandom.workspace = true
 hex.workspace = true
+# 実 MCP HTTP クライアント（HttpMcpClient）: tools/list JSON-RPC + SSE + ダッシュボード取得 + プロキシ中継。
+reqwest.workspace = true            # 外部 MCP サーバーへの HTTP（json/stream/rustls・workspace 固定）
+url = "2"                           # endpoint_url の origin 抽出・SSRF ガードの scheme/host/userinfo パース
+tokio.workspace = true              # SSRF ガードの DNS 解決（lookup_host・workspace は features=full）
+tracing.workspace = true            # 復号失敗等の縮退ログ（Node console.error パリティ）
 
 [dev-dependencies]
 tokio.workspace = true

@@ -21,10 +21,12 @@ use axum::{Extension, Router};
 use yuuka_crypto::SystemCrypto;
 use yuuka_web::AppState;
 
+mod http_client;
 mod repo;
 mod routes;
 mod tokens;
 
+pub use http_client::HttpMcpClient;
 pub use tokens::ProxyTokenManager;
 
 // ─── 外部 MCP サーバー HTTP シーム ───────────────────────────────────────────

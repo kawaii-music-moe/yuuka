@@ -405,6 +405,9 @@ mod tests {
         assert_eq!(j["personas"][0]["prompt"], serde_json::json!("be nice"));
         assert_eq!(j["personas"][0]["is_public"], serde_json::json!(false));
         assert_eq!(j["max_length"], serde_json::json!(20000));
+        // M-11: 未適用時は active_persona_id が null で存在する（キー欠落でない）。
+        assert!(j.get("active_persona_id").is_some());
+        assert!(j["active_persona_id"].is_null());
         // 内部列 owner_id は露出しない（構造的フェイルクローズ）。
         assert!(j["personas"][0]["owner_id"].is_null());
     }
