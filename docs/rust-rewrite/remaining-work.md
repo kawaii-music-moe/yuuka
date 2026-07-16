@@ -62,7 +62,7 @@
 
 ## 0. 現状サマリ（判定）
 
-**機能パリティ完遂。dev 環境は Rust 版で本稼働中（2026-07-16）。** 基盤設計は堅牢でユニットは全緑（**test 717**）、ユーザーが実際に触れる全経路（ログイン・会話・Discord・通知・秘密情報復号）+ P1-1〜P1-7 + Web ルート **152/152** + LLM ツール **85/85 + MCP 動的** + **P2-C 常駐サービス全実装**（briefing/report/backup 常駐 cron + playbook + **synapse 吸収**・予約シーム 0）が**すべて実装済み**。**dev（:7855・`yuuka:dev-rust` 隔離タグ）は web/API/cron/Discord すべて Rust で稼働**（bot 鬼方カヨコ#2543 ログイン確認・prod `yuuka:latest` 無影響・DB 保全）。**残るのは (1) prod カットオーバー（ユーザー最終判断）、(2) Gemini `generateAuxText` 上位層〔report/briefing の LLM 要約・意図的 defer〕、(3) live HTTP 実クレデンシャル疎通の実運用検証、(4) systemInstruction 注入シーム 残 2 件〔P2-E・カレンダー一覧/検索スキル＝**コンテキストノート E-1 は 2026-07-16d 完了**〕**。**判定=経路A GO は達成済み・経路B（Node 撤去）は dev で実証済み**（prod への適用がユーザー判断）。**実測（2026-07-16 コンテナ確認）: prod（:7701・`yuuka-prod-app-1`）は依然 Node（`node dist/index.js`・`yuuka:latest` 2026-07-10 ビルド）で稼働中**。ブランチは未 push（5 コミット先行）＝ CI は直近コミット群で未実行。
+**機能パリティ完遂。dev 環境は Rust 版で本稼働中（2026-07-16）。** 基盤設計は堅牢でユニットは全緑（**test 717**）、ユーザーが実際に触れる全経路（ログイン・会話・Discord・通知・秘密情報復号）+ P1-1〜P1-7 + Web ルート **152/152** + LLM ツール **85/85 + MCP 動的** + **P2-C 常駐サービス全実装**（briefing/report/backup 常駐 cron + playbook + **synapse 吸収**・予約シーム 0）が**すべて実装済み**。**dev（:7855・`yuuka:dev-rust` 隔離タグ）は web/API/cron/Discord すべて Rust で稼働**（bot 鬼方カヨコ#2543 ログイン確認・prod `yuuka:latest` 無影響・DB 保全）。**残るのは (1) prod カットオーバー（ユーザー最終判断）、(2) Gemini `generateAuxText` 上位層〔report/briefing の LLM 要約・意図的 defer〕、(3) live HTTP 実クレデンシャル疎通の実運用検証、(4) systemInstruction 注入シーム 残 1 件〔P2-E・検索スキル＝**コンテキストノート E-1 + カレンダー一覧 E-2 は 2026-07-16d 完了**〕**。**判定=経路A GO は達成済み・経路B（Node 撤去）は dev で実証済み**（prod への適用がユーザー判断）。**実測（2026-07-16 コンテナ確認）: prod（:7701・`yuuka-prod-app-1`）は依然 Node（`node dist/index.js`・`yuuka:latest` 2026-07-10 ビルド）で稼働中**。ブランチは未 push（5 コミット先行）＝ CI は直近コミット群で未実行。
 
 | 面 | 実測 |
 |---|---|
@@ -233,12 +233,12 @@
 - [x] `ADMIN_DISCORD_IDS`（初期 admin bootstrap）— `config.rs` 取込済（`parse_string_list`）
 - [x] `REMINDER_CRON`（reminder ポーリング cron）— `config.rs` 取込済（既定 `* * * * *`・`/api/status` で露出）。~~残: report/briefing 等 他 cron 上書きキー~~ → **非該当と確定（2026-07-16c）**: Node に report/briefing のグローバル cron 上書きキーは存在しない（両サービスとも毎分 tick + per-config `cron_matches_now` 方式＝Rust も同構造で移植済み）
 
-### P2-E systemInstruction 注入シーム（**E-1 完了・残 2 件**・2026-07-16c 実査で指摘）
+### P2-E systemInstruction 注入シーム（**E-1/E-2 完了・残 1 件〔検索スキル〕**・2026-07-16c 実査で指摘）
 
 > Node `gemini.ts buildSystemInstruction` は「ペルソナ + 固定ルール」に加えて動的セクション 4 種を注入する。Rust（`yuuka-orchestrator/src/system_prompt.rs` + `engine.rs`）は **synapse 想起のみ配線済み**（2026-07-16・engine 層で末尾追記）。残り 3 件は空シーム＝「未設定ユーザーには挙動一致」だが、**設定済みユーザーには機能低下**。いずれも prod カットオーバーのブロッカーではないが、体感差の大きい順に:
 
 - [x] **コンテキストノート注入**（P2-E-1・**完了 2026-07-16d**）— Node `gemini.ts:170-175`・§3.7.3 逐語。新 `yuuka-orchestrator/src/context_note.rs`＝`context_notes`（user_id/bot_id）を直接読み（orchestrator の DB 直読み慣習・yuuka-personal 非依存）「# コンテキストノート」セクションを Node バイト一致で整形、`engine.rs secretary_turn` で persona/固定ルールの後・synapse 想起の前へ `push_str`。**秘書モードのみ**（Node の guild `buildGuildSystemInstruction` も非注入）。未登録/空(trim後)/DB エラーは `""`（Node try/catch パリティ）。テスト 4（整形バイト一致・空/空白→""・スコープ分離）。**保存系（tool 3 本 + Web 2 本）に対し読み戻しが無かった silent 後退を解消**
-- [ ] **Google カレンダー一覧注入**（Node `gemini.ts:149-160`）— 連携中カレンダーの name/ID 一覧 + デフォルト ID 案内。無いと addSchedule の `calendar_id` 選択ができずデフォルトカレンダー実質固定。`GoogleCalendar` ポート（A3 live・5min キャッシュ）は既存＝engine へ注入して追記・小〜中
+- [x] **Google カレンダー一覧注入**（P2-E-2・**完了 2026-07-16d**）— Node `gemini.ts:149-166` 逐語。新 `calendar_prompt.rs`＝`CalendarPort::cached_calendars`（A3・5min キャッシュ）で連携カレンダー name/ID 一覧、デフォルト ID は primary アカウントの `calendar_id`（`get_primary_account`＝Node `getResolvedCalendarId`）から。`engine.rs secretary_turn` で persona/ルールの後・コンテキストノートの前（Node 構成順）へ注入。`ChatEngine` に `Option<Arc<dyn CalendarPort>>` + `with_calendar` セッター追加、main.rs で A3 の `google_calendar` を注入（settings/integrated と同一 Arc 共有）。キャッシュ空は非注入（Node `isCalendarEnabled` を包含）。**秘書モードのみ**。テスト 3（整形バイト一致・空→非注入・primary calendar_id 解決）。orchestrator→yuuka-google dep 追加（非循環）
 - [ ] **検索スキル注入**（Node `gemini.ts:80-84`・`docs/skills/search_skills.md` インライン）— searchWeb/fetchDynamicPage の巡回ガイド（天気=気象庁・運行=Yahoo・ニュース=一次ソース優先）。無いと検索品質が低下。**注意: Rust の Docker イメージは docs/ 非同梱**（P3-7 スリム化）のため Node 方式の実行時ファイル読込は不成立＝**`include_str!` でコンパイル時埋込**が妥当（`search_skills.md` 改名時は再コンパイルで追随・実行時パス解決の後方互換が不要になる）
 
 ---
