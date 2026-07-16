@@ -28,6 +28,7 @@ use crate::ports::{
 };
 use crate::reply::{send_channel_reply, to_twilight_components};
 use crate::tenant::{run_tenant, TenantConfig, TenantStatus};
+use crate::turn_gate::TurnGate;
 
 /// 注入ポート束（呼び出し側が実装を渡す）。
 #[derive(Clone)]
@@ -43,6 +44,7 @@ pub struct DiscordManager {
     ports: ManagerPorts,
     dedup: Arc<MessageDedup>,
     guidance_throttle: Arc<MessageDedup>,
+    turn_gate: Arc<TurnGate>,
 }
 
 /// [`prepare`](DiscordManager::prepare) の結果: 監督対象テナント群と共有 Messenger。
@@ -60,6 +62,7 @@ impl DiscordManager {
             ports,
             dedup: Arc::new(MessageDedup::new()),
             guidance_throttle: Arc::new(MessageDedup::with_ttl(GUIDANCE_TTL)),
+            turn_gate: Arc::new(TurnGate::new()),
         }
     }
 
@@ -145,6 +148,7 @@ impl DiscordManager {
             notifier: messenger.clone(),
             dedup: self.dedup.clone(),
             guidance_throttle: self.guidance_throttle.clone(),
+            turn_gate: self.turn_gate.clone(),
         };
         let interaction_deps = InteractionDeps {
             http,

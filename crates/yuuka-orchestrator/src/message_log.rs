@@ -254,6 +254,7 @@ pub async fn add_guild_message_log(
     content: &str,
     discord_msg_id: Option<&str>,
     reply_to_msg_id: Option<&str>,
+    channel_id: Option<&str>,
 ) -> Result<(), DbError> {
     let (bot_id, guild_id, user_id, role, content) = (
         bot_id.to_owned(),
@@ -264,12 +265,13 @@ pub async fn add_guild_message_log(
     );
     let discord_msg_id = discord_msg_id.map(str::to_owned);
     let reply_to_msg_id = reply_to_msg_id.map(str::to_owned);
+    let channel_id = channel_id.map(str::to_owned);
     db.writer
         .transaction(move |tx| {
             tx.execute(
-                "INSERT INTO message_logs (user_id, bot_id, discord_msg_id, role, content, reply_to_msg_id, guild_id) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-                params![user_id, bot_id, discord_msg_id, role, content, reply_to_msg_id, guild_id],
+                "INSERT INTO message_logs (user_id, bot_id, discord_msg_id, role, content, reply_to_msg_id, guild_id, channel_id) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![user_id, bot_id, discord_msg_id, role, content, reply_to_msg_id, guild_id, channel_id],
             )
             .map_err(map_sqlite)?;
             Ok(())
@@ -278,7 +280,11 @@ pub async fn add_guild_message_log(
 }
 
 /// 汎用モードのギルドコンテキスト（直近 `limit` 件・古い順）を取得する（Node `getGuildContext` の
-/// SQLite 再構築部）。`bot_id × guild_id` スコープで floor は使わない（Node パリティ）。
+/// SQLite 再構築部）。floor は使わない（Node パリティ）。
+///
+/// `channel_id` があれば `bot_id × guild_id × channel_id` の厳密一致で引き、チャンネル間で会話が
+/// 混ざらないようにする（V19）。チャンネル不明の経路（Web 等）は従来どおりギルド全体で引く。
+/// V19 以前の行（channel_id = NULL）は厳密一致に含まれない＝チャンネル別履歴は移行後に育つ。
 ///
 /// # Errors
 /// 読み取り失敗時 [`DbError`]。
@@ -286,9 +292,11 @@ pub async fn recent_guild_context(
     db: &Db,
     bot_id: &str,
     guild_id: &str,
+    channel_id: Option<&str>,
     limit: i64,
 ) -> Result<Vec<ContextEntry>, DbError> {
     let (bot_id, guild_id) = (bot_id.to_owned(), guild_id.to_owned());
+    let channel_id = channel_id.map(str::to_owned);
     db.read
         .read(move |conn| {
             let mut stmt = conn
@@ -296,12 +304,13 @@ pub async fn recent_guild_context(
                     "SELECT role, content FROM ( \
                        SELECT id, role, content FROM message_logs \
                        WHERE bot_id = ?1 AND guild_id = ?2 \
+                         AND (?4 IS NULL OR channel_id = ?4) \
                        ORDER BY id DESC LIMIT ?3 \
                      ) ORDER BY id ASC",
                 )
                 .map_err(map_sqlite)?;
             let rows = stmt
-                .query_map(params![bot_id, guild_id, limit], |r| {
+                .query_map(params![bot_id, guild_id, limit, channel_id], |r| {
                     Ok(ContextEntry {
                         role: r.get::<_, String>(0)?,
                         content: r.get::<_, String>(1)?,

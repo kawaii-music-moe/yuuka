@@ -111,10 +111,14 @@ mod tests {
 
     #[test]
     fn baseline_reruns_on_fully_populated_db_and_stamps_schema_version() {
-        // 移行期の現実シナリオ: 全スキーマオブジェクト（fts 仮想表・トリガ含む）が既に存在する
-        // DB へ refinery が V17 baseline を流す。refinery 履歴を消して baseline 全体を再走させ、
-        // #2（CREATE VIRTUAL TABLE / CREATE TRIGGER の IF NOT EXISTS 冪等性）を検証する。
-        // IF NOT EXISTS が欠けると「object already exists」で失敗し Rust writer が起動不能になる。
+        // 移行期の現実シナリオ: Node が作成した DB（= baseline 相当のオブジェクトのみ・refinery
+        // 履歴なし）へ refinery が全マイグレーションを流す。baseline の CREATE 群が IF NOT EXISTS で
+        // 冪等でないと「object already exists」で失敗し Rust writer が起動不能になる（#2 のガード）。
+        //
+        // 注: post-baseline のマイグレーション（V19 の ALTER TABLE ADD COLUMN 等）は SQLite に
+        // IF NOT EXISTS が無く再走冪等にできないため、「全オブジェクト既存 + 履歴なし」ではなく
+        // 「Node 実スキーマ（baseline のみ既存）+ 履歴なし」を正確に再現する: 履歴を消した上で
+        // post-baseline の産物（bot_channels / message_logs.channel_id）も除去してから再走する。
         let dir = tempdir().unwrap();
         let path = dir.path().join("populated.sqlite");
         seed_db(&path, "");
@@ -123,11 +127,16 @@ mod tests {
         // 1) 全オブジェクトを作成（+ refinery 履歴を刻む）。
         run_migrations(&mut conn).unwrap();
 
-        // 2) refinery 履歴を消し、「未適用だが全オブジェクトは既存」の状態を作る。
-        conn.execute_batch("DROP TABLE refinery_schema_history;")
-            .unwrap();
+        // 2) refinery 履歴を消し、post-baseline 産物を落として「Node 作成 DB」状態を作る。
+        conn.execute_batch(
+            "DROP TABLE refinery_schema_history; \
+             DROP TABLE bot_channels; \
+             DROP INDEX idx_message_logs_guild_channel; \
+             ALTER TABLE message_logs DROP COLUMN channel_id;",
+        )
+        .unwrap();
 
-        // 3) baseline 全体を再走 — 全 CREATE が IF NOT EXISTS で冪等なら成功する（#2 のガード）。
+        // 3) 全体を再走 — baseline は冪等 CREATE、post-baseline は対象不在なので成功する。
         run_migrations(&mut conn).unwrap();
 
         // #1: schema_version が '17' で刻まれている（Node がこの DB を開いても再 DROP しない）。
@@ -139,6 +148,24 @@ mod tests {
             )
             .unwrap();
         assert_eq!(v, "17", "baseline は schema_version='17' を刻印する");
+
+        // post-baseline の産物が再作成されている（V18 / V19）。
+        let bot_channels: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='bot_channels'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(bot_channels, 1, "V18: bot_channels 再作成");
+        let channel_col: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('message_logs') WHERE name='channel_id'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(channel_col, 1, "V19: message_logs.channel_id 再追加");
     }
 
     #[tokio::test]

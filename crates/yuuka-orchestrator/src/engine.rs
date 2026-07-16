@@ -507,6 +507,7 @@ impl ChatEngine {
                         &prefixed,
                         msg.discord_msg_id.as_deref(),
                         msg.reply_to_msg_id.as_deref(),
+                        msg.channel_id.as_deref(),
                     )
                     .await
                     .map_err(db_fail)?;
@@ -536,6 +537,7 @@ impl ChatEngine {
                     &self.db,
                     bid,
                     gid,
+                    msg.channel_id.as_deref(),
                     message_log::GUILD_CONTEXT_LIMIT,
                 )
                 .await
@@ -664,6 +666,7 @@ impl ChatEngine {
                     &reply_text,
                     None,
                     None,
+                    msg.channel_id.as_deref(),
                 )
                 .await
             }

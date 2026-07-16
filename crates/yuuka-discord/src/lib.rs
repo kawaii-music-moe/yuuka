@@ -27,8 +27,10 @@ mod presence;
 mod reply;
 mod tenant;
 mod text;
+mod turn_gate;
 
 pub use idempotent::MessageDedup;
+pub use turn_gate::TurnGate;
 pub use manager::{DiscordManager, DiscordMessenger, ManagerPorts, Prepared, TenantRunner};
 pub use presence::build_presence;
 pub use tenant::{default_intents, run_tenant, TenantConfig, TenantStatus};
