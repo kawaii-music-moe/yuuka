@@ -43,10 +43,14 @@ impl Content {
     }
 
     /// この content の全 text part を連結して返す（`response.text()` 相当）。
+    /// 思考要約 part（`thought: true`）はユーザー向けテキストに含めない。
     #[must_use]
     pub fn collect_text(&self) -> String {
         let mut out = String::new();
         for p in &self.parts {
+            if p.extra.get("thought").and_then(serde_json::Value::as_bool) == Some(true) {
+                continue;
+            }
             if let Some(t) = &p.text {
                 out.push_str(t);
             }
@@ -78,6 +82,12 @@ pub struct Part {
     pub function_response: Option<FunctionResponse>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub file_data: Option<FileData>,
+    /// 上記以外のフィールド（`thoughtSignature`/`thought` 等）を往復で温存する。
+    /// Gemini 3 系は functionCall part の `thoughtSignature` を次リクエストで
+    /// 返送しないと 400 を返すため、未知フィールドの脱落は許されない
+    /// （Node は `candidate.content` を生 JSON のまま返送しており、そのパリティ）。
+    #[serde(flatten, skip_serializing_if = "serde_json::Map::is_empty", default)]
+    pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
 impl Part {
@@ -434,5 +444,37 @@ mod tests {
         let raw = r#"{"error":{"code":500,"message":"boom","details":[]}}"#;
         let env: ErrorEnvelope = serde_json::from_str(raw).expect("de");
         assert_eq!(env.retry_delay_secs(), None);
+    }
+
+    #[test]
+    fn part_roundtrips_thought_signature_on_function_call() {
+        // Gemini 3 系: functionCall part の thoughtSignature を次リクエストで返送しないと 400。
+        let raw = r#"{"functionCall":{"name":"mcp4_list_debts","args":{"include_paid":false}},
+            "thoughtSignature":"sig-abc123"}"#;
+        let p: Part = serde_json::from_str(raw).expect("de");
+        assert_eq!(
+            p.extra.get("thoughtSignature"),
+            Some(&serde_json::Value::String("sig-abc123".into()))
+        );
+        let v = serde_json::to_value(&p).expect("ser");
+        assert_eq!(v["thoughtSignature"], "sig-abc123");
+        assert_eq!(v["functionCall"]["name"], "mcp4_list_debts");
+    }
+
+    #[test]
+    fn part_without_extra_serializes_without_extra_keys() {
+        let p = Part::text("hi");
+        let v = serde_json::to_value(&p).expect("ser");
+        assert_eq!(v, serde_json::json!({"text": "hi"}));
+    }
+
+    #[test]
+    fn collect_text_skips_thought_parts() {
+        let raw = r#"{"role":"model","parts":[
+            {"text":"(内部思考)","thought":true},
+            {"text":"こんにちは"}
+        ]}"#;
+        let c: Content = serde_json::from_str(raw).expect("de");
+        assert_eq!(c.collect_text(), "こんにちは");
     }
 }

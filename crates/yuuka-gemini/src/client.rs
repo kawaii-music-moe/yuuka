@@ -213,6 +213,13 @@ impl GeminiClient {
         // 非 2xx: RetryInfo を抽出してから分類する。
         let body = resp.text().await.unwrap_or_default();
         let env: ErrorEnvelope = serde_json::from_str(&body).unwrap_or_default();
+        // 原因究明にはエラー本文が不可欠（例: thoughtSignature 欠落の 400）。message を必ずログへ残す。
+        tracing::warn!(
+            status,
+            api_status = env.error.as_ref().and_then(|e| e.status.as_deref()),
+            message = env.error.as_ref().and_then(|e| e.message.as_deref()),
+            "Gemini generateContent が非 2xx を返却"
+        );
         match status {
             429 => Err(GeminiError::RateLimited {
                 retry_after: env.retry_delay_secs().map(Duration::from_secs),
