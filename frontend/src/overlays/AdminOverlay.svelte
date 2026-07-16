@@ -15,6 +15,7 @@
 	import { confirmDialog } from "$lib/components/ui";
 	import { Button, Icon } from "$lib/components/ui";
 	import { currentUser } from "$lib/stores/session";
+	import { navigateTo } from "$lib/router";
 	import type {
 		AdminStats,
 		AdminUserView,
@@ -332,6 +333,19 @@
 	}
 </script>
 
+<div class="overlay active" id="admin-overlay">
+	<div class="management-overlay-card">
+		<div class="management-overlay-header">
+			<h1>
+				<span class="material-symbols-outlined" style="vertical-align:middle;font-size:1.6rem;"
+					>admin_panel_settings</span
+				> 管理者設定
+			</h1>
+			<button type="button" class="btn btn-secondary" onclick={() => navigateTo("/")}>
+				<Icon name="arrow_back" class="icon-button-left" /> Bot選択に戻る
+			</button>
+		</div>
+		<div class="management-overlay-body">
 <section id="tab-admin" class="tab-view">
 	<!-- KPI Row -->
 	<div class="admin-kpi-row">
@@ -759,6 +773,9 @@
 		</div>
 	</details>
 </section>
+		</div>
+	</div>
+</div>
 
 <AuditModal bind:open={auditOpen} />
 
