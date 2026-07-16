@@ -308,6 +308,14 @@ pub trait BotDirectory: Send + Sync {
     /// 許可ギルドか（現行 `isGuildAllowed`。未許可は応答も記録もしない）。
     async fn is_guild_allowed(&self, bot_id: &BotId, guild_id: &GuildId) -> bool;
 
+    /// 有効化チャンネルか（メンション不要で応答する・Rust 新機能）。DM/未登録は false。
+    async fn is_channel_enabled(
+        &self,
+        bot_id: &BotId,
+        guild_id: &GuildId,
+        channel_id: &str,
+    ) -> bool;
+
     /// 保有ロールのいずれかが許可ロールか（現行 `isAnyRoleAllowed`）。
     async fn is_any_role_allowed(
         &self,

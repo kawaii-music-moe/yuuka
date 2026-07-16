@@ -139,13 +139,24 @@ async fn assistant_flow(deps: &FlowDeps, rt: &RuntimeBot, bot: &BotRecord, messa
         }
     }
 
-    // メンション / Bot への返信にのみ応答（DM は常に対象）。
+    // メンション / Bot への返信 / 有効化チャンネルに応答（DM は常に対象）。
+    // 有効化チャンネル（`bot_channels`）ではメンション/返信が無くても応答する（Rust 新機能）。
     let reference = resolve_reference(deps, &message).await;
     let is_reply_to_bot = reference
         .as_ref()
         .is_some_and(|r| r.author_id == rt.bot_user_id);
     let is_mentioned = is_user_mentioned(&message, rt.bot_user_id);
-    if !is_dm && !is_mentioned && !is_reply_to_bot {
+    let is_enabled_channel = if let Some(gid) = guild_id.as_ref() {
+        deps.directory
+            .is_channel_enabled(&rt.bot_id, gid, &message.channel_id.get().to_string())
+            .await
+    } else {
+        false
+    };
+    // 明示的に宛てられた（DM / メンション / Bot 返信）か。有効化チャンネルの「傍受」はここに含めない
+    // ＝本文なしメッセージ（スタンプ等）へ定型プロンプトを返さない判定に使う（下記の空本文分岐）。
+    let addressed = is_dm || is_mentioned || is_reply_to_bot;
+    if !addressed && !is_enabled_channel {
         return;
     }
 
@@ -257,7 +268,7 @@ async fn assistant_flow(deps: &FlowDeps, rt: &RuntimeBot, bot: &BotRecord, messa
             ..IncomingChat::default()
         };
         dispatch_assistant(deps, rt, is_dm, guild_id.as_ref(), speaker, chat, &handles).await
-    } else {
+    } else if addressed {
         // 本文なしメンション → 定型プロンプトを返して終了（タイマーは drop で停止）。
         drop(typing);
         status(BotStatus::Idle);
@@ -269,6 +280,12 @@ async fn assistant_flow(deps: &FlowDeps, rt: &RuntimeBot, bot: &BotRecord, messa
             &[],
         )
         .await;
+        return;
+    } else {
+        // 有効化チャンネルの本文なしメッセージ（スタンプ/添付のみ等）は黙殺する
+        // （メンションされていないため、案内文を返すとチャンネルがスパムになる）。
+        drop(typing);
+        status(BotStatus::Idle);
         return;
     };
 

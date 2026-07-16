@@ -16,17 +16,20 @@
 	import type {
 		AssistantConfigResp,
 		AssistantGuild,
+		AssistantChannel,
 		AssistantMember,
 		AssistantRole,
 	} from "./config/configTypes";
 
 	import GuildsSection from "./discord/GuildsSection.svelte";
+	import ChannelsSection from "./discord/ChannelsSection.svelte";
 	import MembersSection from "./discord/MembersSection.svelte";
 	import RolesSection from "./discord/RolesSection.svelte";
 	import RequestsSection from "./discord/RequestsSection.svelte";
 	import NoteSection from "./discord/NoteSection.svelte";
 
 	let guilds = $state<AssistantGuild[]>([]);
+	let channels = $state<AssistantChannel[]>([]);
 	let members = $state<AssistantMember[]>([]);
 	let roles = $state<AssistantRole[]>([]);
 	let isAssistantOwner = $state(false);
@@ -49,6 +52,7 @@
 		if (!id || isDefaultBot(id) || !isAssistant) {
 			isAssistantOwner = false;
 			guilds = [];
+			channels = [];
 			members = [];
 			roles = [];
 			return;
@@ -62,6 +66,7 @@
 			}
 			isAssistantOwner = true;
 			guilds = res.guilds ?? [];
+			channels = res.channels ?? [];
 			members = res.members ?? [];
 			roles = res.roles ?? [];
 		} catch {
@@ -82,10 +87,11 @@
 				<span class="badge badge-accent">OWNER専用</span>
 			</summary>
 			<p class="description-text">
-				サーバー常駐アシスタントの応答許可ギルド・利用メンバー・共有ノートを設定します。応答にはBot専用のGemini APIキー・独自Discordトークンも必要です（「Bot設定」ページ）。
+				サーバー常駐アシスタントの応答許可ギルド・有効化チャンネル（メンション不要）・利用メンバー・共有ノートを設定します。応答にはBot専用のGemini APIキー・独自Discordトークンも必要です（「Bot設定」ページ）。
 			</p>
 
 			<GuildsSection {botId} {guilds} onchanged={refresh} />
+			<ChannelsSection {botId} {guilds} {channels} onchanged={refresh} />
 			<MembersSection {botId} {guilds} {members} onchanged={refresh} />
 			<RolesSection {botId} {guilds} {roles} onchanged={refresh} />
 			<RequestsSection {botId} {reloadKey} onchanged={refresh} />
