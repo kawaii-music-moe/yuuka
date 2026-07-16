@@ -215,6 +215,34 @@
 				</button>
 			{/each}
 		</nav>
+
+		<!-- サイドバー最下部ユーザーパネル（テーマ切替/ログアウト集約。ヘッダーから移設） -->
+		<div class="sidebar-user-panel">
+			<div class="sidebar-user-info" title={userDisplay}>
+				<Icon name="person" class="icon-small" />
+				<span class="sidebar-user-name">{userDisplay}</span>
+			</div>
+			<div class="sidebar-user-actions">
+				<button
+					type="button"
+					class="btn-icon"
+					title={themeTitle}
+					aria-label={themeTitle}
+					onclick={toggleTheme}
+				>
+					<Icon name={themeIcon} />
+				</button>
+				<button
+					type="button"
+					class="btn-icon"
+					title="ログアウト"
+					aria-label="ログアウト"
+					onclick={logout}
+				>
+					<Icon name="logout" />
+				</button>
+			</div>
+		</div>
 	</aside>
 
 	<!-- ドロワー背面オーバーレイ（スマホのみ。タップで閉じる） -->
@@ -239,40 +267,6 @@
 			</button>
 			<div class="header-title">
 				<h2 id="current-tab-title">{title}</h2>
-			</div>
-
-			<div class="header-controls">
-				<button
-					type="button"
-					class="bot-context-badge"
-					title="Botを切り替える"
-					onclick={backToBots}
-				>
-					<Icon name="robot_2" class="icon-small" />
-					<span class="bot-badge-label">{botName}</span>
-				</button>
-				<div class="user-profile-badge">
-					<Icon name="person" class="icon-small" />
-					<span class="user-badge-label">{userDisplay}</span>
-				</div>
-				<button
-					type="button"
-					class="btn-icon"
-					title={themeTitle}
-					aria-label={themeTitle}
-					onclick={toggleTheme}
-				>
-					<Icon name={themeIcon} />
-				</button>
-				<button
-					type="button"
-					class="btn btn-secondary btn-sm"
-					title="ログアウト"
-					onclick={logout}
-				>
-					<Icon name="logout" class="icon-button-left" />
-					<span class="logout-label">ログアウト</span>
-				</button>
 			</div>
 		</header>
 
@@ -320,11 +314,6 @@
 		border-top: 1px solid var(--border-divider);
 		border-radius: 0;
 		padding-top: 14px;
-	}
-	.bot-context-badge {
-		background: none;
-		cursor: pointer;
-		font: inherit;
 	}
 	.content-view-container {
 		flex: 1;

@@ -178,16 +178,6 @@
 	background-color: rgba(98, 0, 238, 0.12);
 }
 
-[data-theme="light"] .bot-context-badge {
-	background-color: rgba(98, 0, 238, 0.08);
-	border-color: rgba(98, 0, 238, 0.3);
-	color: #6200ee;
-}
-[data-theme="light"] .bot-context-badge:hover {
-	background-color: rgba(98, 0, 238, 0.16);
-	border-color: rgba(98, 0, 238, 0.6);
-}
-
 [data-theme="light"] .stat-card-badge-trend.positive {
 	color: var(--color-primary);
 	border-color: rgba(98, 0, 238, 0.3);
@@ -1048,6 +1038,42 @@ textarea:focus {
 	font-weight: 600;
 }
 
+/* サイドバー最下部のユーザーパネル（Discord 風。テーマ切替/ログアウトを集約） */
+.sidebar-user-panel {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+	margin-top: 12px;
+	padding-top: 12px;
+	border-top: 1px solid var(--border-divider);
+	flex-shrink: 0;
+}
+
+.sidebar-user-info {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	min-width: 0;
+	color: var(--text-secondary);
+	font-size: 0.82rem;
+	font-weight: 600;
+}
+
+.sidebar-user-name {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.sidebar-user-actions {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	flex-shrink: 0;
+}
+
 /* Workspace Frame */
 .main-content {
 	flex-grow: 1;
@@ -1083,20 +1109,6 @@ textarea:focus {
 /* スマホドロワー用ハンバーガー（PC はサイドバー常設のため非表示） */
 .menu-toggle {
 	display: none;
-}
-
-/* Integrated Header Controls */
-.header-controls {
-	display: flex;
-	flex-wrap: wrap;
-	align-items: center;
-	gap: 16px;
-	min-width: 0;
-	max-width: 100%;
-}
-
-.header-controls .btn-icon {
-	flex-shrink: 0;
 }
 
 .profile-switch {
@@ -2282,16 +2294,6 @@ input[type="checkbox"]:disabled,
 		text-overflow: ellipsis;
 	}
 
-	.header-controls {
-		flex: 0 0 auto;
-		flex-wrap: nowrap;
-		gap: 8px;
-	}
-
-	/* バッジ類のスマホ縮退規則は基底定義より後方（.bot-context-badge 定義直後の
-	   media ブロック）に置く — ここに書くと後続の基底規則に同詳細度・後勝ちで
-	   打ち消されるため */
-
 	.profile-switch {
 		flex: 1 1 auto;
 		min-width: 0;
@@ -2646,31 +2648,6 @@ input[type="checkbox"]:disabled,
 	display: block;
 }
 
-.user-profile-badge {
-	display: flex;
-	align-items: center;
-	gap: 8px;
-	background-color: var(--card-matte);
-	border: 1px solid var(--border-matte);
-	padding: 8px 16px;
-	border-radius: 50px;
-	font-size: 0.85rem;
-	font-weight: 600;
-	color: var(--color-white);
-	white-space: nowrap;
-	/* 長い名前でもヘッダー1行を保つ上限（コンテナが狭ければそちらに従う） */
-	max-width: min(340px, 100%);
-	min-width: 0;
-}
-
-/* 長いユーザーID表示はバッジ内で省略してレイアウトを押し広げない
-   （旧 #current-user-display。Svelte 版は class 参照 + flex 子の縮小許可） */
-.user-profile-badge .user-badge-label {
-	min-width: 0;
-	overflow: hidden;
-	text-overflow: ellipsis;
-}
-
 .login-divider {
 	display: flex;
 	align-items: center;
@@ -2766,15 +2743,49 @@ input[type="checkbox"]:disabled,
 }
 
 .home-nav-actions {
+	position: relative; /* ⋮ ドロップダウンの基準 */
 	display: flex;
 	align-items: center;
 	gap: 8px;
-	flex-wrap: wrap;
-	justify-content: flex-end;
 }
 
-.home-nav-btn {
-	white-space: nowrap;
+/* ナビ右側の ⋮ ドロップダウン（統合管理/アカウント管理/管理者設定/ログアウト） */
+.home-nav-menu {
+	position: absolute;
+	right: 0;
+	top: calc(100% + 6px);
+	z-index: 100;
+	min-width: 210px;
+	background-color: var(--surface-2dp);
+	border: 1px solid var(--border-matte);
+	border-radius: 8px;
+	box-shadow: 0 8px 22px rgba(0, 0, 0, 0.45);
+	padding: 4px;
+}
+
+.home-nav-menu-item {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	width: 100%;
+	text-align: left;
+	padding: 10px 12px;
+	background: none;
+	border: 0;
+	border-radius: 6px;
+	color: var(--text-high);
+	cursor: pointer;
+	font-size: 0.85rem;
+}
+
+.home-nav-menu-item:hover {
+	background-color: var(--surface-1dp);
+}
+
+.home-nav-menu-divider {
+	border: 0;
+	border-top: 1px solid var(--border-divider);
+	margin: 4px 0;
 }
 
 /* ── グリーティング ── */
@@ -3083,57 +3094,6 @@ input[type="checkbox"]:disabled,
 .btn-sync-discord.syncing {
 	animation: spin 0.8s linear infinite;
 	pointer-events: none;
-}
-
-/* Switch Bot Header Control */
-.bot-context-badge {
-	background-color: rgba(88, 101, 242, 0.1);
-	border: 1px solid rgba(88, 101, 242, 0.3);
-	color: #949fef;
-	padding: 6px 14px;
-	border-radius: 16px;
-	font-size: 0.85rem;
-	font-weight: 600;
-	display: flex;
-	align-items: center;
-	gap: 6px;
-	cursor: pointer;
-	transition: all 0.15s ease;
-	white-space: nowrap;
-	/* 長い Bot 名でもヘッダー1行を保つ上限 */
-	max-width: min(260px, 100%);
-	min-width: 0;
-}
-
-/* 旧 #active-bot-display。Svelte 版は class 参照 + flex 子の縮小許可 */
-.bot-context-badge .bot-badge-label {
-	min-width: 0;
-	overflow: hidden;
-	text-overflow: ellipsis;
-}
-
-.bot-context-badge:hover {
-	background-color: rgba(59, 130, 246, 0.25);
-	border-color: rgba(59, 130, 246, 0.7);
-}
-
-/* スマホの1行ヘッダー用バッジ縮退（基底定義の後方に置き後勝ちで確実に適用） */
-@media (max-width: 768px) {
-	/* ユーザーバッジは非表示（ユーザー名は画面外情報のため） */
-	.user-profile-badge {
-		display: none;
-	}
-
-	/* Botバッジ/ログアウトはアイコンのみに縮退 */
-	.bot-context-badge {
-		padding: 6px 8px;
-		flex-shrink: 0;
-	}
-
-	.bot-context-badge .bot-badge-label,
-	.logout-label {
-		display: none;
-	}
 }
 
 /* ==============================================================================
@@ -3940,16 +3900,6 @@ summary.column-header.badge-right > h3 {
 	font-weight: 700;
 }
 
-[data-theme="blue-archive"] .bot-context-badge {
-	background-color: rgba(2, 211, 251, 0.08);
-	border-color: rgba(2, 211, 251, 0.3);
-	color: var(--ba-cyan-hover);
-}
-[data-theme="blue-archive"] .bot-context-badge:hover {
-	background-color: rgba(2, 211, 251, 0.16);
-	border-color: rgba(2, 211, 251, 0.6);
-}
-
 [data-theme="blue-archive"] .stat-card-badge-trend {
 	color: var(--ba-cyan);
 	border-color: #c8dcea;
@@ -4293,9 +4243,6 @@ summary.column-header.badge-right > h3 {
 	.home-stats {
 		grid-template-columns: repeat(2, 1fr);
 		gap: 8px;
-	}
-	.home-nav-actions .home-nav-btn span.icon-button-left {
-		display: none;
 	}
 	.bot-cards-grid {
 		grid-template-columns: 1fr;

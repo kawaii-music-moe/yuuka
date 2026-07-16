@@ -192,7 +192,12 @@
 		currentUser.set(null);
 		navigateTo("/login");
 	}
+
+	// ナビ右側の ⋮ メニュー開閉（window クリックで閉じる。IntegratedOverlay と同規約）。
+	let menuOpen = $state(false);
 </script>
+
+<svelte:window onclick={() => (menuOpen = false)} />
 
 <div class="overlay active" id="bot-selection-overlay">
 	<div class="home-dashboard">
@@ -204,36 +209,51 @@
 				<span class="home-nav-subtitle">Management Portal</span>
 			</div>
 			<div class="home-nav-actions">
+				<!-- 複数ボタンの並びを避け ⋮ メニューに集約 -->
 				<button
 					type="button"
-					class="btn btn-secondary btn-sm home-nav-btn"
-					onclick={() => navigateTo("/integrated")}
+					class="btn-icon"
+					title="メニュー"
+					aria-label="メニューを開く"
+					aria-expanded={menuOpen}
+					onclick={(e) => {
+						e.stopPropagation();
+						menuOpen = !menuOpen;
+					}}
 				>
-					<Icon name="hub" class="icon-button-left" />統合管理
+					<Icon name="more_vert" />
 				</button>
-				<button
-					type="button"
-					class="btn btn-secondary btn-sm home-nav-btn"
-					onclick={() => navigateTo("/account")}
-				>
-					<Icon name="manage_accounts" class="icon-button-left" />アカウント管理
-				</button>
-				{#if $isAdmin}
-					<button
-						type="button"
-						class="btn btn-secondary btn-sm home-nav-btn"
-						onclick={() => navigateTo("/admin")}
-					>
-						<Icon name="admin_panel_settings" class="icon-button-left" />管理者設定
-					</button>
+				{#if menuOpen}
+					<div class="home-nav-menu">
+						<button
+							type="button"
+							class="home-nav-menu-item"
+							onclick={() => navigateTo("/integrated")}
+						>
+							<Icon name="hub" /> 統合管理
+						</button>
+						<button
+							type="button"
+							class="home-nav-menu-item"
+							onclick={() => navigateTo("/account")}
+						>
+							<Icon name="manage_accounts" /> アカウント管理
+						</button>
+						{#if $isAdmin}
+							<button
+								type="button"
+								class="home-nav-menu-item"
+								onclick={() => navigateTo("/admin")}
+							>
+								<Icon name="admin_panel_settings" /> 管理者設定
+							</button>
+						{/if}
+						<hr class="home-nav-menu-divider" />
+						<button type="button" class="home-nav-menu-item" onclick={logout}>
+							<Icon name="logout" /> ログアウト
+						</button>
+					</div>
 				{/if}
-				<button
-					type="button"
-					class="btn btn-secondary btn-sm home-nav-btn"
-					onclick={logout}
-				>
-					<Icon name="logout" class="icon-button-left" />ログアウト
-				</button>
 			</div>
 		</nav>
 
