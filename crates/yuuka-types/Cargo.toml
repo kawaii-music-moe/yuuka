@@ -1,0 +1,17 @@
+[package]
+name = "yuuka-types"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "yuuka wire DTO + Envelope<T> + ts-rs export（フロント⇄Rust 型の単一真実源）"
+
+[dependencies]
+yuuka-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+ts-rs.workspace = true
+
+[lints]
+workspace = true

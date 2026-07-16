@@ -103,6 +103,18 @@ function loadSearchSkills(): string {
 
 // ─── システムプロンプト構築 ──────────────────────────────────────────────────
 
+/** システムプロンプト用の現在日時表記（例: 2026年7月8日 (水) 21時05分30秒） */
+function formatDateTimeJa(now: Date): string {
+	const year = now.getFullYear();
+	const month = now.getMonth() + 1;
+	const date = now.getDate();
+	const hours = String(now.getHours()).padStart(2, "0");
+	const minutes = String(now.getMinutes()).padStart(2, "0");
+	const seconds = String(now.getSeconds()).padStart(2, "0");
+	const dayOfWeek = ["日", "月", "火", "水", "木", "金", "土"][now.getDay()];
+	return `${year}年${month}月${date}日 (${dayOfWeek}) ${hours}時${minutes}分${seconds}秒`;
+}
+
 /** デフォルトペルソナ（§4.1.1: 最低限の設定＝丁寧なアシスタント） */
 const DEFAULT_PERSONA = `# あなたの役割
 あなたは、タスク管理・スケジュール管理・家計管理・ブラウザ自動操作を支援する汎用AIアシスタントです。ユーザーの日常的な生産性向上と生活管理を、的確かつ効率的にサポートしてください。
@@ -121,15 +133,7 @@ async function buildSystemInstruction(
 	botId: string,
 	richReplyEnabled: boolean,
 ): Promise<string> {
-	const now = new Date();
-	const year = now.getFullYear();
-	const month = now.getMonth() + 1;
-	const date = now.getDate();
-	const hours = String(now.getHours()).padStart(2, "0");
-	const minutes = String(now.getMinutes()).padStart(2, "0");
-	const seconds = String(now.getSeconds()).padStart(2, "0");
-	const dayOfWeek = ["日", "月", "火", "水", "木", "金", "土"][now.getDay()];
-	const dateTimeStr = `${year}年${month}月${date}日 (${dayOfWeek}) ${hours}時${minutes}分${seconds}秒`;
+	const dateTimeStr = formatDateTimeJa(new Date());
 
 	// ペルソナ（§4.1 / v8: (user_id, bot_id) 毎に独立。未設定時はデフォルト）
 	let personaPrompt: string | null = null;
@@ -167,7 +171,7 @@ async function buildSystemInstruction(
 	let contextNoteSection = "";
 	try {
 		const note = getContextNote(userId, botId);
-		if (note && note.trim()) {
+		if (note?.trim()) {
 			contextNoteSection = `\n# コンテキストノート（ユーザーが「覚えておいてほしい」と登録した背景情報）\n以下はユーザー固有の考慮事項・背景知識です。会話・判断の際に常に考慮してください。\n${note.trim()}`;
 		}
 	} catch (err) {
@@ -368,6 +372,52 @@ export interface ChatMessage {
 	replyToMsgId?: string;
 }
 
+/** 会話ログへ保存するテキスト表現（テキストが無い場合は添付種別のプレースホルダ） */
+function describeIncomingMessage(message: ChatMessage): string {
+	return (
+		message.text?.trim() ||
+		(message.audioData ? "[音声メッセージ]" : message.imageData ? "[画像]" : "")
+	);
+}
+
+/** 返信チェーンを「ユーザー/あなた」プレフィックス付きテキストへ整形する（秘書・owner DM 共通） */
+function formatReplyChainText(chain: MessageLogRecord[]): string {
+	return chain
+		.map((m) => `${m.role === "user" ? "ユーザー" : "あなた"}: ${m.content}`)
+		.join("\n");
+}
+
+/** ターンプランナーへ渡す入力（3経路共通） */
+function buildPlanInput(message: ChatMessage): {
+	text: string;
+	imageCount: number;
+	hasAudio: boolean;
+} {
+	return {
+		text: message.text ?? "",
+		imageCount: message.imageData ? 1 : 0,
+		hasAudio: !!message.audioData,
+	};
+}
+
+/**
+ * MCP動的ツールモジュールを解決する（capability 無し・取得失敗時は空モジュール）。
+ * スコープ規約は getMcpFunctionModuleForBot 側に集約されている（v5/v7）。
+ */
+async function resolveMcpModule(
+	caps: ReturnType<typeof resolveBotCapabilities>,
+	botId: string,
+	userId: string,
+): Promise<FunctionModule> {
+	if (!caps.has("mcp")) return { declarations: [], handlers: {} };
+	try {
+		return await getMcpFunctionModuleForBot(botId, userId);
+	} catch (err) {
+		console.error("MCP動的ツールの取得に失敗しました（スキップ）:", err);
+		return { declarations: [], handlers: {} };
+	}
+}
+
 /** レート制限エラーかどうか判定 */
 function isRateLimitError(error: unknown): boolean {
 	if (error && typeof error === "object" && "status" in error) {
@@ -442,7 +492,7 @@ async function generateWithRetry(
 					);
 					if (retryInfo?.retryDelay) {
 						const seconds = parseInt(retryInfo.retryDelay.replace("s", ""), 10);
-						if (!isNaN(seconds)) {
+						if (!Number.isNaN(seconds)) {
 							waitMs = (seconds + 1) * 1000;
 						}
 					}
@@ -485,6 +535,15 @@ function claimsActionCompleted(text: string): boolean {
 	// 「やっておきました」「しておきますね」等の汎用的な実行表明
 	const generic = /(やって|して)おき(ました|ます(ね)?)/;
 	return done.test(text) || generic.test(text);
+}
+
+/** ブラウザ操作系ツール（実行成否を LoopResult の browserTool* へ集約する対象）かどうか */
+function isBrowserTool(name: string): boolean {
+	return (
+		name.startsWith("browserInteractive") ||
+		name === "browserFillCredential" ||
+		["fetchDynamicPage", "takePageScreenshot", "searchWeb"].includes(name)
+	);
 }
 
 /** 未実行の完了報告を検知した際に注入する是正プロンプト */
@@ -540,7 +599,13 @@ async function runFunctionCallingLoop(
 		const candidate = response.candidates?.[0];
 		if (!candidate) break;
 
-		const functionCalls = candidate.content.parts.filter(
+		// Gemini 3.x では finishReason が SAFETY / RECITATION / MAX_TOKENS /
+		// MALFORMED_FUNCTION_CALL 等のとき、candidate.content に parts 配列が
+		// 無いことがある。無ガードで .filter すると TypeError となりターン全体が
+		// 例外終了し、Bot が一切応答しなくなる（本番障害 2026-07-07）。空配列へ
+		// フォールバックすれば functionCalls=[] として通常の「関数呼び出し無し」
+		// 経路に合流し、finalize の空応答フォールバック（定型文）で必ず返信できる。
+		const functionCalls = (candidate.content?.parts ?? []).filter(
 			(p): p is Part & { functionCall: FunctionCall } => "functionCall" in p,
 		);
 
@@ -601,9 +666,10 @@ async function runFunctionCallingLoop(
 
 		for (const fc of functionCalls) {
 			const { name, args } = fc.functionCall;
+			const fnArgs = (args ?? {}) as Record<string, unknown>;
 			console.log(
 				`🔧 Function Call: ${name}`,
-				sanitizeArgsForLog(name, (args ?? {}) as Record<string, unknown>),
+				sanitizeArgsForLog(name, fnArgs),
 			);
 
 			// 実行時エスカレーション（Goal 2）: 重いツールに着手する、あるいはループが規定時間を
@@ -624,27 +690,31 @@ async function runFunctionCallingLoop(
 			}
 
 			const dispatchStart = Date.now();
-			const functionResult = await registry.dispatch(
-				ctx,
-				name,
-				(args ?? {}) as Record<string, unknown>,
-			);
+			const functionResult = await registry.dispatch(ctx, name, fnArgs);
 			const dispatchLatencyMs = Date.now() - dispatchStart;
 			console.log(
 				`📤 Function Result (Sent to Gemini): ${functionResult.substring(0, 500)}${functionResult.length > 500 ? "... (truncated in console log)" : ""}`,
 			);
 
+			// ツール結果は原則JSON（{success: boolean, ...}）。ここで一度だけパースし、
+			// 実績記録・ブラウザ成否判定・Gemini への functionResponse で共用する。
+			// JSON でない結果（説明文等）はパース失敗として扱い、そのまま包んで返す。
+			let parsed: unknown;
+			let parseFailed = false;
+			try {
+				parsed = JSON.parse(functionResult);
+			} catch {
+				parseFailed = true;
+			}
+			const reportedFailure =
+				!parseFailed &&
+				!!parsed &&
+				(parsed as { success?: unknown }).success === false;
+
 			// R0/R2: ツール実行実績を SQLite へ永続化（経験統計＝topic_tool_stats の素地）。
 			// 引数ダイジェストは buildOutcomeArgsDigest で秘匿マスク済み（§6.3.2 / §9.3 の除外規約を継承）。
 			// topic_id は R1 では未付与（2nd Hop によるトピック紐付けは R2 課題）。
 			try {
-				let outcomeStatus: "success" | "error" = "success";
-				try {
-					const parsed = JSON.parse(functionResult);
-					if (parsed && parsed.success === false) outcomeStatus = "error";
-				} catch {
-					/* JSON でない結果（説明文等）は success 扱い */
-				}
 				incrMetric("tool_calls");
 				recordToolOutcome({
 					userId: ctx.userId,
@@ -652,11 +722,8 @@ async function runFunctionCallingLoop(
 					guildId: ctx.guildId ?? null,
 					topicId: null,
 					toolName: name,
-					argsDigest: buildOutcomeArgsDigest(
-						name,
-						(args ?? {}) as Record<string, unknown>,
-					),
-					status: outcomeStatus,
+					argsDigest: buildOutcomeArgsDigest(name, fnArgs),
+					status: reportedFailure ? "error" : "success",
 					latencyMs: dispatchLatencyMs,
 				});
 			} catch (err) {
@@ -665,41 +732,23 @@ async function runFunctionCallingLoop(
 
 			// マクロ登録用に操作履歴を記録（§3.6 実行ベース登録。秘匿系は記録側で除外される）
 			if (options.recordActions) {
-				recordFunctionCall(
-					ctx.userId,
-					name,
-					(args ?? {}) as Record<string, unknown>,
-				).catch(() => {});
+				recordFunctionCall(ctx.userId, name, fnArgs).catch(() => {});
 			}
 
-			// ブラウザツールの実行と成否判定
-			if (
-				name.startsWith("browserInteractive") ||
-				name === "browserFillCredential" ||
-				["fetchDynamicPage", "takePageScreenshot", "searchWeb"].includes(name)
-			) {
+			// ブラウザツールの実行と成否判定（非JSON応答は失敗として扱う）
+			if (isBrowserTool(name)) {
 				browserToolCalled = true;
-				try {
-					const parsed = JSON.parse(functionResult);
-					if (parsed && parsed.success === false) {
-						browserToolFailed = true;
-					}
-				} catch {
+				if (parseFailed || reportedFailure) {
 					browserToolFailed = true;
 				}
-			}
-
-			let parsedResult: object;
-			try {
-				parsedResult = JSON.parse(functionResult) as object;
-			} catch {
-				parsedResult = { result: functionResult };
 			}
 
 			functionResponseParts.push({
 				functionResponse: {
 					name,
-					response: parsedResult,
+					response: parseFailed
+						? { result: functionResult }
+						: (parsed as object),
 				},
 			});
 		}
@@ -876,10 +925,9 @@ async function runPlannedTurn(params: {
 		// 最終テキスト応答を決定し、実際に返す文面を必ず会話ログへ保存する（空応答時の定型文も保存）。
 		// これを怠ると当該ターンに assistant の記録が残らず、次ターンで要求が「未応答」扱いとなり
 		// 直前のブラウザ操作等が勝手に再実行される回帰が起きる。
-		const replyText =
-			text && text.trim()
-				? text
-				: params.fallbackText(browserToolCalled, browserToolFailed);
+		const replyText = text?.trim()
+			? text
+			: params.fallbackText(browserToolCalled, browserToolFailed);
 		await params.saveAssistant(replyText);
 		params.onFinal?.(replyText);
 		return { replyText, embeds: ctx.embeds, files: ctx.files };
@@ -954,13 +1002,7 @@ export async function processMessage(
 	};
 
 	// 1. ユーザーのメッセージを永続ログ + コンテキストキャッシュへ保存（§7.1）
-	const logText =
-		message.text?.trim() ||
-		(message.audioData
-			? "[音声メッセージ]"
-			: message.imageData
-				? "[画像]"
-				: "");
+	const logText = describeIncomingMessage(message);
 	if (logText) {
 		await addMessageLog(
 			userId,
@@ -977,105 +1019,37 @@ export async function processMessage(
 
 	// 3. 返信チェーンの解決（§3.1.4: 15件キャッシュとは別枠でコンテキストの先頭に追加）
 	// 解決結果は L2 想起の返信スレッド化クエリ（B）でも再利用するためブロック外へ保持する。
-	const contents: Content[] = [];
 	let replyChain: MessageLogRecord[] = [];
 	if (message.replyToMsgId) {
 		try {
-			const chain = resolveReplyChain(
+			replyChain = resolveReplyChain(
 				userId,
 				message.replyToMsgId,
 				config.replyChainMaxDepth,
 			);
-			replyChain = chain;
-			if (chain.length > 0) {
-				const chainText = chain
-					.map(
-						(m) => `${m.role === "user" ? "ユーザー" : "あなた"}: ${m.content}`,
-					)
-					.join("\n");
-				contents.push({
-					role: "user",
-					parts: [
-						{
-							text: `[返信チェーン（このメッセージは以下のやり取りへの返信です。古い順）]\n${chainText}\n[返信チェーンここまで]`,
-						},
-					],
-				});
-				contents.push({
-					role: "model",
-					parts: [{ text: "（返信チェーンの文脈を把握しました）" }],
-				});
-			}
 		} catch (err) {
 			console.error("返信チェーンの解決に失敗しました:", err);
 		}
 	}
 
-	// 4. 履歴をGeminiのContents形式へ変換（同ロール連続は結合して交互にする）
-	for (const entry of history) {
-		const role = entry.role === "assistant" ? "model" : "user";
-		const last = contents[contents.length - 1];
-		if (last && last.role === role) {
-			const lastPart = last.parts[0];
-			if ("text" in lastPart) {
-				lastPart.text += "\n" + entry.content;
-			}
-		} else {
-			contents.push({ role, parts: [{ text: entry.content }] });
-		}
-	}
+	// 4. 返信チェーン・履歴・添付（画像・音声）を Gemini の Contents 形式へ組み立てる
+	const contents = buildContentsFromHistory(
+		history,
+		message,
+		replyChain.length > 0 ? formatReplyChainText(replyChain) : undefined,
+	);
 
-	// 履歴が空の場合のフォールバック
-	if (contents.length === 0) {
-		contents.push({ role: "user", parts: [{ text: message.text || "" }] });
-	}
-
-	// 5. 最新メッセージに画像・音声がある場合、直近のユーザーコンテンツへパーツ追加
-	const inlineParts: Part[] = [];
-	if (message.imageData) {
-		inlineParts.push({
-			inlineData: {
-				data: message.imageData.data,
-				mimeType: message.imageData.mimeType,
-			},
-		});
-	}
-	if (message.audioData) {
-		inlineParts.push({
-			inlineData: {
-				data: message.audioData.data,
-				mimeType: message.audioData.mimeType,
-			},
-		});
-	}
-	if (inlineParts.length > 0) {
-		const lastContent = contents[contents.length - 1];
-		if (lastContent && lastContent.role === "user") {
-			lastContent.parts.push(...inlineParts);
-		} else {
-			contents.push({ role: "user", parts: [{ text: "" }, ...inlineParts] });
-		}
-	}
-
-	// 6. Function レジストリの構築（属性ゲート §4.2: 保持ケーパビリティのモジュールのみ + MCP動的 §4.4）
+	// 5. Function レジストリの構築（属性ゲート §4.2: 保持ケーパビリティのモジュールのみ + MCP動的 §4.4）
 	//    秘書プリセット（既存Bot・system_default 含む）では従来のフルセットと完全に一致する。
 	const caps = resolveBotCapabilities(botId);
 	// 機能モジュール化（function_modularization.md §3.1 / §4改訂）: capability で絞った後、
 	// 発話ユーザー視点の有効モジュール（override → Bot既定 → 全有効）へさらに絞る。
 	const enabledModules = resolveEnabledModulesForUser(botId, userId);
-	let mcpModule: FunctionModule = { declarations: [], handlers: {} };
-	if (caps.has("mcp")) {
-		try {
-			// v5: 当該Botに利用許可(bot_mcp_access)されたサーバー＋システムレベルから取得する。
-			// v7: 共有秘書(system_default)では発話者(userId)所有分のみへスコープする（クロステナント露出防止）。
-			mcpModule = await getMcpFunctionModuleForBot(botId, userId);
-		} catch (err) {
-			console.error("MCP動的ツールの取得に失敗しました（スキップ）:", err);
-		}
-	}
 	const registry = buildFunctionRegistry([
 		...getFunctionModulesForCapabilities(caps, enabledModules),
-		mcpModule,
+		// MCP動的 v5: 当該Botに利用許可(bot_mcp_access)されたサーバー＋システムレベルから取得。
+		// v7: 共有秘書(system_default)では発話者(userId)所有分のみへスコープ（クロステナント露出防止）。
+		await resolveMcpModule(caps, botId, userId),
 	]);
 
 	const systemInstruction = await buildSystemInstruction(
@@ -1109,11 +1083,7 @@ export async function processMessage(
 			ctx,
 			onStatusChange,
 			asyncDelivery,
-			planInput: {
-				text: message.text ?? "",
-				imageCount: message.imageData ? 1 : 0,
-				hasAudio: !!message.audioData,
-			},
+			planInput: buildPlanInput(message),
 			recordActions: true,
 			saveAssistant: (replyText) =>
 				addMessageLog(userId, botId, "assistant", replyText),
@@ -1196,7 +1166,7 @@ function buildContentsFromHistory(
 		if (last && last.role === role) {
 			const lastPart = last.parts[0];
 			if ("text" in lastPart) {
-				lastPart.text += "\n" + entry.content;
+				lastPart.text += `\n${entry.content}`;
 			}
 		} else {
 			contents.push({ role, parts: [{ text: entry.content }] });
@@ -1247,15 +1217,7 @@ function buildGuildSystemInstruction(
 	guildId: string | null,
 	speaker: GuildSpeaker,
 ): string {
-	const now = new Date();
-	const year = now.getFullYear();
-	const month = now.getMonth() + 1;
-	const date = now.getDate();
-	const hours = String(now.getHours()).padStart(2, "0");
-	const minutes = String(now.getMinutes()).padStart(2, "0");
-	const seconds = String(now.getSeconds()).padStart(2, "0");
-	const dayOfWeek = ["日", "月", "火", "水", "木", "金", "土"][now.getDay()];
-	const dateTimeStr = `${year}年${month}月${date}日 (${dayOfWeek}) ${hours}時${minutes}分${seconds}秒`;
+	const dateTimeStr = formatDateTimeJa(new Date());
 
 	// ペルソナ（要件 §4.4: Bot単位ペルソナ。未設定・削除済みは既存デフォルトへフォールバック）
 	let personaSection = DEFAULT_PERSONA;
@@ -1408,13 +1370,7 @@ export async function processGuildMessage(
 	};
 
 	// 1. 発話をギルドコンテキストへ記録（発話者を「[名前]: 」プレフィックスで区別 §4.6.1）
-	const logText =
-		message.text?.trim() ||
-		(message.audioData
-			? "[音声メッセージ]"
-			: message.imageData
-				? "[画像]"
-				: "");
+	const logText = describeIncomingMessage(message);
 	if (logText) {
 		await addGuildMessageLog(
 			botId,
@@ -1453,21 +1409,10 @@ export async function processGuildMessage(
 
 	// 3. Function レジストリ（汎用モード: core + memory の静的モジュール + Bot紐付けMCP §4.3.1）
 	const caps = resolveBotCapabilities(botId);
-	let mcpModule: FunctionModule = { declarations: [], handlers: {} };
-	if (caps.has("mcp")) {
-		try {
-			// ギルド経路: 当該Botに利用許可されたMCPサーバーのみ（単一owner Botのため owner設定分をそのまま使う）。
-			mcpModule = await getMcpFunctionModuleForBot(botId, speaker.userId);
-		} catch (err) {
-			console.error(
-				"Bot紐付けMCP動的ツールの取得に失敗しました（スキップ）:",
-				err,
-			);
-		}
-	}
 	const registry = buildFunctionRegistry([
 		...getGuildAssistantFunctionModules("guild", caps),
-		mcpModule,
+		// ギルド経路: 当該Botに利用許可されたMCPサーバーのみ（単一owner Botのため owner設定分をそのまま使う）。
+		await resolveMcpModule(caps, botId, speaker.userId),
 	]);
 
 	const systemInstruction = buildGuildSystemInstruction(
@@ -1495,11 +1440,7 @@ export async function processGuildMessage(
 			ctx,
 			onStatusChange,
 			asyncDelivery,
-			planInput: {
-				text: message.text ?? "",
-				imageCount: message.imageData ? 1 : 0,
-				hasAudio: !!message.audioData,
-			},
+			planInput: buildPlanInput(message),
 			recordActions: false,
 			saveAssistant: (replyText) =>
 				addGuildMessageLog(
@@ -1539,13 +1480,7 @@ export async function processBotDmMessage(
 		richReplyEnabled: true,
 	};
 
-	const logText =
-		message.text?.trim() ||
-		(message.audioData
-			? "[音声メッセージ]"
-			: message.imageData
-				? "[画像]"
-				: "");
+	const logText = describeIncomingMessage(message);
 	if (logText) {
 		await addBotDmMessageLog(
 			botId,
@@ -1568,11 +1503,7 @@ export async function processBotDmMessage(
 				config.replyChainMaxDepth,
 			);
 			if (chain.length > 0) {
-				replyChainText = chain
-					.map(
-						(m) => `${m.role === "user" ? "ユーザー" : "あなた"}: ${m.content}`,
-					)
-					.join("\n");
+				replyChainText = formatReplyChainText(chain);
 			}
 		} catch (err) {
 			console.error("owner DM 返信チェーンの解決に失敗しました:", err);
@@ -1582,21 +1513,10 @@ export async function processBotDmMessage(
 	const contents = buildContentsFromHistory(history, message, replyChainText);
 
 	const caps = resolveBotCapabilities(botId);
-	let mcpModule: FunctionModule = { declarations: [], handlers: {} };
-	if (caps.has("mcp")) {
-		try {
-			// owner DM: 当該Botに利用許可されたMCPサーバーのみ（単一owner Botのため owner設定分をそのまま使う）。
-			mcpModule = await getMcpFunctionModuleForBot(botId, owner.userId);
-		} catch (err) {
-			console.error(
-				"Bot紐付けMCP動的ツールの取得に失敗しました（スキップ）:",
-				err,
-			);
-		}
-	}
 	const registry = buildFunctionRegistry([
 		...getGuildAssistantFunctionModules("dm", caps),
-		mcpModule,
+		// owner DM: 当該Botに利用許可されたMCPサーバーのみ（単一owner Botのため owner設定分をそのまま使う）。
+		await resolveMcpModule(caps, botId, owner.userId),
 	]);
 
 	const systemInstruction = buildGuildSystemInstruction(bot, "dm", null, owner);
@@ -1620,11 +1540,7 @@ export async function processBotDmMessage(
 			ctx,
 			onStatusChange,
 			asyncDelivery,
-			planInput: {
-				text: message.text ?? "",
-				imageCount: message.imageData ? 1 : 0,
-				hasAudio: !!message.audioData,
-			},
+			planInput: buildPlanInput(message),
 			recordActions: false,
 			saveAssistant: (replyText) =>
 				addBotDmMessageLog(botId, owner.userId, "assistant", replyText),

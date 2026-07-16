@@ -1,0 +1,23 @@
+[package]
+name = "yuuka-botassistant"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "yuuka guild-assistant ツール（汎用モード＝個人/共有ノート）— Node botAssistantFunctions パリティ"
+
+[dependencies]
+yuuka-core.workspace = true
+yuuka-db.workspace = true
+yuuka-types.workspace = true
+yuuka-web.workspace = true
+rusqlite.workspace = true
+serde_json.workspace = true
+async-trait.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+
+[lints]
+workspace = true

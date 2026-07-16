@@ -1,0 +1,40 @@
+[package]
+name = "yuuka-orchestrator"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "yuuka 会話オーケストレーション（秘書ターン処理・現行 gemini.ts processMessage の上位層／P1-2）"
+
+[dependencies]
+yuuka-core.workspace = true
+yuuka-db.workspace = true
+yuuka-web.workspace = true          # Db（read pool + writer actor）
+yuuka-crypto.workspace = true       # 保存済み Gemini キーの復号（SystemCrypto）
+yuuka-gemini.workspace = true       # FC ループ・GeminiClient・Content/Part
+yuuka-tools.workspace = true        # ツールレジストリ snapshot
+yuuka-mcp.workspace = true          # MCP 動的ツール（McpProvider）+ McpClient ポート（tools/call）— 秘書ターンで探索
+yuuka-synapse.workspace = true      # シナプス認知エンジン（in-process・L2 想起 + 索引化）— P1-3/Phase H
+yuuka-discord.workspace = true      # provider 中立 DTO（TurnProcessor/TurnReply/IncomingChat 等）+ MemberDmSender
+yuuka-auth.workspace = true         # 監査ログ（add_audit_log）— 利用申請 Web-API
+axum.workspace = true               # 利用申請 Web-API（member_routes）
+rusqlite.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+secrecy.workspace = true
+getrandom.workspace = true          # Bot ID（bot_<uuidv4>）の CSPRNG 生成
+base64.workspace = true             # ツール生成メディア（rich_parts）の base64 デコード + Bot トークンの app-id 導出
+chrono.workspace = true             # システムプロンプトのローカル日時（Node formatDateTimeJa）
+async-trait.workspace = true
+tokio.workspace = true              # シナプス抽出の fire-and-forget（spawn）+ 索引の Arc<Mutex> 直列化
+tracing.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+tower.workspace = true
+yuuka-types.workspace = true
+tempfile = "3"
+
+[lints]
+workspace = true

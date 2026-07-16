@@ -1,0 +1,24 @@
+# ==============================================================================
+# Rust dev 隔離オーバーレイ
+# ------------------------------------------------------------------------------
+# base の docker-compose.yml は `image: yuuka:latest` を全インスタンス共有で使う
+# （prod もこのタグ）。dev を Rust へ置き換える際、標準の `deploy/instance.sh dev update`
+# はこの yuuka:latest を再ビルドしてしまい、prod の次回再作成時に dev/feature ビルドへ
+# 差し替わる副作用がある。それを避けるため、dev は **専用タグ yuuka:dev-rust** で起動する。
+#
+# 使い方（deploy/cutover-dev-rust.sh が内部で使用）:
+#   docker build -t yuuka:dev-rust -f Dockerfile .
+#   docker compose -p yuuka-dev --env-file deploy/dev/instance.env \
+#     -f docker-compose.yml -f docker-compose.dev-rust.yml up -d
+#
+# Discord を live 化する場合は instance.env に `YUUKA_RUST_DISCORD=1` を置き、
+# 下の environment pass-through のコメントアウトを外す（Node dev-hot 停止後・単一 owner）。
+# ==============================================================================
+
+services:
+  app:
+    image: yuuka:dev-rust
+    pull_policy: never
+    environment:
+      # dev Discord bot を Rust で live 化（instance.env の YUUKA_RUST_DISCORD から補間・既定 0=off）。
+      - YUUKA_RUST_DISCORD=${YUUKA_RUST_DISCORD:-0}

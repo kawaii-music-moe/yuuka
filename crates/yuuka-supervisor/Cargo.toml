@@ -1,0 +1,73 @@
+[package]
+name = "yuuka-supervisor"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "yuuka エントリポイント兼監督（JoinSet supervisor・bin: yuuka）— Phase 0 stub"
+
+[[bin]]
+name = "yuuka"
+path = "src/main.rs"
+
+[dependencies]
+yuuka-core.workspace = true
+yuuka-crypto.workspace = true
+yuuka-types.workspace = true           # /ws/chat フレームの SessionUser 直列化
+yuuka-db.workspace = true              # /ws/chat の bot 一覧クエリ（map_sqlite）
+yuuka-web.workspace = true
+yuuka-todo.workspace = true
+yuuka-finance.workspace = true
+yuuka-schedule.workspace = true
+yuuka-timeline.workspace = true
+yuuka-reminder.workspace = true
+yuuka-personal.workspace = true
+yuuka-credential.workspace = true
+yuuka-playbook.workspace = true
+yuuka-persona.workspace = true
+yuuka-botassistant.workspace = true
+yuuka-briefing.workspace = true
+yuuka-conversation.workspace = true
+yuuka-richcontent.workspace = true
+yuuka-browser.workspace = true
+yuuka-chart.workspace = true
+yuuka-webhook.workspace = true
+yuuka-admin.workspace = true
+yuuka-settings.workspace = true
+yuuka-google.workspace = true
+yuuka-integrated.workspace = true
+yuuka-mcp.workspace = true
+yuuka-auth.workspace = true
+yuuka-tools.workspace = true
+yuuka-gemini.workspace = true
+yuuka-orchestrator.workspace = true    # 会話エンジン（ChatEngine）— /ws/chat の駆動（P1-2）
+yuuka-synapse.workspace = true         # シナプス認知エンジン（in-process・起動時ロード + ChatEngine へ注入）
+yuuka-discord.workspace = true
+yuuka-services.workspace = true
+axum.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+backon.workspace = true
+thiserror.workspace = true
+async-trait.workspace = true
+reqwest.workspace = true               # Google/MCP 実 HTTP クライアント（A3/A4 配線）の共有インスタンス
+serde.workspace = true                 # /ws/chat フレームの Deserialize/Serialize
+serde_json.workspace = true            # フレーム JSON 直列化
+chrono.workspace = true                # デスクトップ配布バイナリの built_at（mtime → ISO8601）
+futures-util = "0.3"                    # WebSocket の split（Sink/Stream 分離）
+base64.workspace = true                 # 受信ファイル（rich reply）の base64 化
+getrandom.workspace = true              # messageId 生成
+
+[dev-dependencies]
+tokio.workspace = true
+tower = { workspace = true, features = ["util"] }
+tempfile = "3"
+rusqlite = { workspace = true }
+serde_json.workspace = true
+secrecy.workspace = true
+tokio-tungstenite = "0.29"              # /ws/chat の live 統合テスト用 WS クライアント
+
+[lints]
+workspace = true

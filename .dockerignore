@@ -1,5 +1,8 @@
 # ビルドコンテキストから除外（ビルド成果物・実行時データ・秘密情報）
 .git
+.claude
+# Rust ビルド成果物（数 GB）。イメージへは COPY せず、ビルド段のキャッシュマウントで扱う。
+target
 node_modules
 dist
 data

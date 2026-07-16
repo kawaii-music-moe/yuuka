@@ -1,0 +1,29 @@
+[package]
+name = "yuuka-admin"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "yuuka admin ドメイン（管理 API: users/bots/invite-codes/stats/audit-logs/system-settings）— Node adminRoutes.ts パリティ"
+
+[dependencies]
+yuuka-core.workspace = true
+yuuka-crypto.workspace = true
+yuuka-db.workspace = true
+yuuka-types.workspace = true
+yuuka-web.workspace = true
+yuuka-auth.workspace = true
+axum.workspace = true
+rusqlite.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+async-trait.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+tower = { workspace = true, features = ["util"] }
+tempfile = "3"
+
+[lints]
+workspace = true

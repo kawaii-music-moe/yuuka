@@ -1,0 +1,178 @@
+# workspace ルート Cargo.toml。Phase 0（契約凍結）で新設。
+# 絶対制約1（anyhow等の握り潰し禁止）の機械強制。検証: docs/rust-rewrite/verification/rpt-clippy-cargodeny.md
+#
+# 逸脱#1（本タスク指示）: yuuka-synapse は Phase H で daemon をライブラリ吸収し、workspace
+# member（crates/yuuka-synapse）へ取り込み済み（deps=tokio 不要の serde/serde_json/rusqlite/base64
+# のみでクリーン・deny 影響なし）。yuuka-crawler は依然 members に入れない（fxhash unmaintained /
+# MPL-2.0 の未整理が残るため）。また既存/独立の nested Cargo.toml（旧 src/rust_synapse[非採用]・
+# src/rust_crawler・clients/desktop・.claude/worktrees 配下のコピー）は本 workspace に取り込まない
+# よう exclude する。
+
+[workspace]
+resolver = "2"
+members = [
+    "crates/yuuka-core",
+    "crates/yuuka-crypto",
+    "crates/yuuka-db",
+    "crates/yuuka-types",
+    "crates/yuuka-web",
+    "crates/yuuka-auth",
+    "crates/yuuka-discord",
+    "crates/yuuka-gemini",
+    "crates/yuuka-tools",
+    "crates/yuuka-orchestrator",
+    "crates/yuuka-services",
+    "crates/yuuka-supervisor",
+    "crates/yuuka-todo",
+    "crates/yuuka-finance",
+    "crates/yuuka-schedule",
+    "crates/yuuka-timeline",
+    "crates/yuuka-reminder",
+    "crates/yuuka-personal",
+    "crates/yuuka-credential",
+    "crates/yuuka-playbook",
+    "crates/yuuka-persona",
+    "crates/yuuka-admin",
+    "crates/yuuka-settings",
+    "crates/yuuka-google",
+    "crates/yuuka-integrated",
+    "crates/yuuka-mcp",
+    "crates/yuuka-botassistant",
+    "crates/yuuka-briefing",
+    "crates/yuuka-webhook",
+    "crates/yuuka-conversation",
+    "crates/yuuka-richcontent",
+    "crates/yuuka-browser",
+    "crates/yuuka-chart",
+    "crates/yuuka-synapse",
+    "xtask",
+]
+exclude = [
+    ".claude",
+    "clients/desktop",
+    # crawler は依然 members に入れない（fxhash unmaintained RUSTSEC-2025-0057 / MPL-2.0 ×4 未許可 /
+    # license 欄欠落で unlicensed）。取り込みは license 欄追加 + deny.toml 調整とセットで行う。
+    "src/rust_crawler",
+    # 旧 synapse daemon（Phase H で crates/yuuka-synapse へライブラリ吸収済み）。旧ディレクトリは
+    # 独立 nested Cargo.toml を持つため、二重定義を避けるよう本 workspace からは exclude し続ける
+    # （新実装は crates/yuuka-synapse が正）。
+    "src/rust_synapse",
+]
+
+[workspace.package]
+edition = "2021"            # オープン決定事項#4（2021 か 2024 か）: 既定 2021 を採用
+rust-version = "1.96"
+license = "MIT"            # プロジェクト方針（package.json）に一致。全メンバーが継承。
+publish = false           # 第一者クレートは crates.io へ公開しない。
+
+# ── 自己復帰の前提: パニックは unwind（abort にしない） ──
+# tokio がタスク境界でパニックを隔離できるのは unwind のときだけ。
+# 検証: docs/rust-rewrite/verification/rpt-resilience-tokio-backon-recloser.md §1
+#
+# ── 本番バイナリのスリム化 ──
+# strip: デバッグ/シンボル情報を除去（サイズの大半＝本番配布物に不要）。バックトレースは
+#   tracing の error ログ + panic=unwind の隔離で運用するため line-table 無しでも支障なし。
+# lto="thin": クロスクレート最適化でサイズ削減 + 実行時性能向上（"fat" より高速ビルド）。
+# panic="unwind" は自己復帰の前提のため abort に変えない（サイズより堅牢性を優先）。
+[profile.release]
+panic = "unwind"
+strip = true
+lto = "thin"
+[profile.dev]
+panic = "unwind"
+
+# ── 絶対制約1: 握り潰し系 lint を workspace 全体で deny ──
+# restriction グループは一括有効化禁止（相互矛盾を含むため個別列挙が必須）。
+# 各メンバー crate は [lints] workspace = true を必ず書くこと。
+[workspace.lints.clippy]
+unwrap_used        = "deny"
+expect_used        = "deny"
+panic              = "deny"
+todo               = "deny"
+unimplemented      = "deny"
+unreachable        = "deny"
+indexing_slicing   = "deny"
+panic_in_result_fn = "deny"
+
+# ── 共有依存（バージョンは 2026-07-01 実測。docs/rust-rewrite/00-decisions.md に整合） ──
+[workspace.dependencies]
+# foundation で実際に使う依存のみ features 展開。feature crate は Phase 0 では yuuka-core のみに依存する。
+tokio                    = { version = "1.52", features = ["full"] }
+thiserror                = "2.0.18"
+axum                     = { version = "0.8.9", features = ["ws", "macros"] }
+tower                    = "0.5"
+tower-http               = { version = "0.6", features = ["fs", "compression-br", "compression-gzip", "set-header"] }  # 0.7 は axum 0.8.9 未対応の恐れ→0.6 固定
+hyper                    = "1"
+rusqlite                 = { version = "0.32", features = ["bundled"] }
+deadpool-sqlite          = "0.13"
+refinery                 = { version = "0.9", features = ["rusqlite"] }
+backon                   = "1.6"                                                # backoff は RUSTSEC-2025-0012 で禁止
+tokio-graceful-shutdown  = "0.19"
+recloser                 = "1.4"
+twilight-gateway         = "0.17"
+twilight-http            = "0.17"
+twilight-model           = "0.17"
+twilight-cache-inmemory  = "0.17"
+twilight-util            = "0.17"
+reqwest                  = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls", "http2", "charset"] }  # 0.13 は存在しない（最新 0.12.x）。native-tls を避け rustls 固定
+eventsource-stream       = "0.2"
+serde                    = { version = "1", features = ["derive"] }
+serde_json               = "1"
+secrecy                  = "0.10"
+ts-rs                    = "12"                                                 # オープン決定#1: utoipa 5.5 + openapi-typescript 代替
+rmcp                     = { version = "2.0", features = ["client"] }
+extism                   = "1.30"
+redis                    = { version = "0.27", features = ["tokio-comp", "connection-manager"] }  # or fred（tokio-comp + 自動再接続）
+sha2                     = "0.10"                                               # セッション/デスクトップトークンの sha256hex
+base64                   = "0.22"                                               # Discord 添付 → Gemini inlineData 用 base64
+# ── 保存時暗号化（yuuka-crypto・Node src/utils/crypto.ts パリティ・P1-5） ──
+aes-gcm                  = "0.10"                                               # AES-256-GCM（Node createCipheriv aes-256-gcm 相当・12B IV / 16B tag）
+scrypt                   = "0.11"                                               # システム鍵導出（Node crypto.scryptSync 既定 N=16384/r=8/p=1）
+argon2                   = "0.5"                                                # ユーザー鍵導出（Node @node-rs/argon2 hashRawSync・Argon2id m=19456/t=2/p=1）
+hex                      = "0.4"                                                # 暗号文/IV/authTag の hex 表現（Node の hex 文字列と相互運用）
+getrandom                = "0.2"                                                # IV（12B CSPRNG）生成
+bcrypt                   = "0.16"                                               # パスワードハッシュ（Node bcryptjs v3・$2b$ cost 12 と相互運用・P1-1）
+regex                    = "1"                                                  # Discord 非対応 Markdown 変換（toDiscordMarkdown 移植）
+async-trait              = "0.1"
+tracing                  = "0.1"
+tracing-subscriber       = { version = "0.3", features = ["env-filter", "fmt"] }
+serde_yaml               = "0.9"
+chrono                   = { version = "0.4", default-features = false, features = ["clock", "std"] }  # cron スケジューラのローカル壁時計（node-cron はローカル時刻）。SQLite datetime とは別用途
+croner                   = "2"                                                  # 5-field cron 式の次回発火計算（node-cron / cron-parser パリティ）
+zip                      = { version = "8", default-features = false, features = ["deflate-flate2"] }  # バックアップ ZIP（Node archiver 相当）。deflate のみ（bzip2/zstd/lzma/aes 非有効＝MIT/Apache/Zlib のみに限定）
+tempfile                 = "3"                                                  # バックアップの一時 SQLite/ZIP（scratch ディレクトリ相当）
+
+# yuuka クレート間の内部依存（パス依存）
+yuuka-core   = { path = "crates/yuuka-core" }
+yuuka-crypto = { path = "crates/yuuka-crypto" }
+yuuka-db    = { path = "crates/yuuka-db" }
+yuuka-types = { path = "crates/yuuka-types" }
+yuuka-web        = { path = "crates/yuuka-web" }
+yuuka-auth       = { path = "crates/yuuka-auth" }
+yuuka-tools      = { path = "crates/yuuka-tools" }
+yuuka-gemini     = { path = "crates/yuuka-gemini" }
+yuuka-orchestrator = { path = "crates/yuuka-orchestrator" }
+yuuka-discord    = { path = "crates/yuuka-discord" }
+yuuka-todo       = { path = "crates/yuuka-todo" }
+yuuka-finance    = { path = "crates/yuuka-finance" }
+yuuka-schedule   = { path = "crates/yuuka-schedule" }
+yuuka-timeline   = { path = "crates/yuuka-timeline" }
+yuuka-reminder   = { path = "crates/yuuka-reminder" }
+yuuka-personal   = { path = "crates/yuuka-personal" }
+yuuka-credential = { path = "crates/yuuka-credential" }
+yuuka-playbook   = { path = "crates/yuuka-playbook" }
+yuuka-persona    = { path = "crates/yuuka-persona" }
+yuuka-admin      = { path = "crates/yuuka-admin" }
+yuuka-settings   = { path = "crates/yuuka-settings" }
+yuuka-google     = { path = "crates/yuuka-google" }
+yuuka-integrated = { path = "crates/yuuka-integrated" }
+yuuka-mcp        = { path = "crates/yuuka-mcp" }
+yuuka-botassistant = { path = "crates/yuuka-botassistant" }
+yuuka-briefing   = { path = "crates/yuuka-briefing" }
+yuuka-webhook    = { path = "crates/yuuka-webhook" }
+yuuka-conversation = { path = "crates/yuuka-conversation" }
+yuuka-richcontent = { path = "crates/yuuka-richcontent" }
+yuuka-browser    = { path = "crates/yuuka-browser" }
+yuuka-chart      = { path = "crates/yuuka-chart" }
+yuuka-services   = { path = "crates/yuuka-services" }
+yuuka-synapse    = { path = "crates/yuuka-synapse" }
