@@ -42,6 +42,9 @@ export const botAttributeApi = {
 	/** POST /api/bots/assistant/guilds */
 	setGuilds: (body: { botId: string; [k: string]: unknown }) =>
 		api.post<ApiResponse>("/api/bots/assistant/guilds", body, USER),
+	/** POST /api/bots/assistant/channels — 有効化チャンネル（メンション不要で応答） */
+	setChannels: (body: { botId: string; [k: string]: unknown }) =>
+		api.post<ApiResponse>("/api/bots/assistant/channels", body, USER),
 	/** POST /api/bots/assistant/members */
 	setMembers: (body: { botId: string; [k: string]: unknown }) =>
 		api.post<ApiResponse>("/api/bots/assistant/members", body, USER),

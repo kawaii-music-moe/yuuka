@@ -152,10 +152,7 @@ mod tests {
         app_with_crypto(db, None)
     }
 
-    fn app_with_crypto(
-        db: Db,
-        crypto: Option<Arc<yuuka_crypto::SystemCrypto>>,
-    ) -> axum::Router {
+    fn app_with_crypto(db: Db, crypto: Option<Arc<yuuka_crypto::SystemCrypto>>) -> axum::Router {
         let auth = Arc::new(FakeAuth {
             user: SessionUser {
                 discord_id: "u".to_owned(),
@@ -388,8 +385,9 @@ mod tests {
                 .unwrap();
             }
         }
-        let crypto =
-            Arc::new(yuuka_crypto::SystemCrypto::new(secrecy::SecretString::from("master-secret")).unwrap());
+        let crypto = Arc::new(
+            yuuka_crypto::SystemCrypto::new(secrecy::SecretString::from("master-secret")).unwrap(),
+        );
         let app = app_with_crypto(db, Some(crypto));
 
         // 必須欠落 → 400 {success:false, message}。

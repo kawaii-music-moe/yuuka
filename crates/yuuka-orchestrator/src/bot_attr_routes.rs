@@ -61,6 +61,7 @@ pub fn routes_with(crypto: Option<Arc<SystemCrypto>>) -> Router<AppState> {
         )
         .route("/api/bots/assistant/persona", post(set_persona))
         .route("/api/bots/assistant/guilds", post(set_guild))
+        .route("/api/bots/assistant/channels", post(set_channel))
         .route("/api/bots/assistant/members", post(set_member))
         .route("/api/bots/assistant/roles", post(set_role))
         .route("/api/bots/assistant/gemini-key", post(set_gemini_key))
@@ -472,6 +473,67 @@ async fn set_guild(
         })),
     )
         .into_response()
+}
+
+// ─── POST /api/bots/assistant/channels（有効化チャンネル・owner/Admin） ───────
+// 有効化チャンネルではメンション不要で応答する（Rust 新機能）。body: botId, guildId, channelId, action。
+
+async fn set_channel(
+    user: AuthenticatedUser,
+    State(db): State<Db>,
+    Json(body): Json<Value>,
+) -> Response {
+    let uid = user.0.discord_id;
+    let bot = match owned_bot_from_body(&db, &uid, &body).await {
+        Ok(b) => b,
+        Err(resp) => return resp,
+    };
+    let guild_id = trimmed(&body, "guildId");
+    let channel_id = trimmed(&body, "channelId");
+    let remove = is_remove(&body);
+    if !is_snowflake(&guild_id) {
+        return bad_request("ギルドID（数字）を入力してください。");
+    }
+    if !is_snowflake(&channel_id) {
+        return bad_request("チャンネルID（数字）を入力してください。");
+    }
+    let ok = match if remove {
+        bot_repo::remove_enabled_channel(&db, &bot.id, &guild_id, &channel_id).await
+    } else {
+        bot_repo::add_enabled_channel(&db, &bot.id, &guild_id, &channel_id, &uid).await
+    } {
+        Ok(v) => v,
+        Err(_) => return server_error(),
+    };
+    audit_change(
+        &db,
+        &uid,
+        "bot.channel_enable_change",
+        &format!("{}/{}:{}", guild_id, channel_id, action_word(remove)),
+    )
+    .await;
+    let channels = match bot_repo::list_enabled_channels(&db, &bot.id).await {
+        Ok(c) => c,
+        Err(_) => return server_error(),
+    };
+    let list: Vec<Value> = channels.iter().map(channel_json).collect();
+    (
+        StatusCode::OK,
+        Json(json!({
+            "success": true,
+            "channels": list,
+            "message": change_message(ok, remove, "有効化チャンネルへ追加しました。", "有効化チャンネルから削除しました。"),
+        })),
+    )
+        .into_response()
+}
+
+/// `BotChannelRow` → JSON（assistant-config / set_channel 共通）。
+fn channel_json(c: &bot_repo::BotChannelRow) -> Value {
+    json!({
+        "bot_id": c.bot_id, "guild_id": c.guild_id, "channel_id": c.channel_id,
+        "added_by": c.added_by, "created_at": c.created_at,
+    })
 }
 
 // ─── POST /api/bots/assistant/members（利用メンバー・owner/Admin） ───────────
@@ -1027,6 +1089,11 @@ async fn assistant_config_get(
         .iter()
         .map(|g| json!({ "bot_id": g.bot_id, "guild_id": g.guild_id, "created_at": g.created_at }))
         .collect();
+    let channels = match bot_repo::list_enabled_channels(&db, &bot.id).await {
+        Ok(c) => c,
+        Err(_) => return server_error(),
+    };
+    let channels: Vec<Value> = channels.iter().map(channel_json).collect();
     let members = match bot_repo::list_bot_members(&db, &bot.id).await {
         Ok(m) => m,
         Err(_) => return server_error(),
@@ -1083,6 +1150,7 @@ async fn assistant_config_get(
         "personas": personas,
         "mcp_servers": mcp_servers,
         "guilds": guilds,
+        "channels": channels,
         "members": members,
         "roles": roles,
         "usage": usage,
@@ -1884,6 +1952,90 @@ mod tests {
         let role0 = &j["roles"].as_array().unwrap()[0];
         assert_eq!(role0["role_id"], r);
         assert_eq!(role0["role_name"], "VIP");
+    }
+
+    #[tokio::test]
+    async fn assistant_enabled_channels() {
+        let app = app();
+        let g = "111111111111111111";
+        let c = "444444444444444444";
+
+        // channelId 欠落 → 400。
+        let (st, _) = send(
+            &app,
+            "POST",
+            "/api/bots/assistant/channels",
+            "owner",
+            &format!(r#"{{"botId":"b1","guildId":"{g}"}}"#),
+        )
+        .await;
+        assert_eq!(st, StatusCode::BAD_REQUEST);
+        // guildId 不正 → 400。
+        let (st, _) = send(
+            &app,
+            "POST",
+            "/api/bots/assistant/channels",
+            "owner",
+            &format!(r#"{{"botId":"b1","guildId":"12","channelId":"{c}"}}"#),
+        )
+        .await;
+        assert_eq!(st, StatusCode::BAD_REQUEST);
+        // 追加 → 一覧に出る。
+        let (st, j) = send(
+            &app,
+            "POST",
+            "/api/bots/assistant/channels",
+            "owner",
+            &format!(r#"{{"botId":"b1","guildId":"{g}","channelId":"{c}"}}"#),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(j["message"], "有効化チャンネルへ追加しました。");
+        let ch0 = &j["channels"].as_array().unwrap()[0];
+        assert_eq!(ch0["guild_id"], g);
+        assert_eq!(ch0["channel_id"], c);
+        // 二重追加は「変更はありませんでした。」。
+        let (_st, j) = send(
+            &app,
+            "POST",
+            "/api/bots/assistant/channels",
+            "owner",
+            &format!(r#"{{"botId":"b1","guildId":"{g}","channelId":"{c}"}}"#),
+        )
+        .await;
+        assert_eq!(j["message"], "変更はありませんでした。");
+        // assistant-config の集約にも channels が載る。
+        let (st, j) = send(
+            &app,
+            "GET",
+            "/api/bots/assistant-config?botId=b1",
+            "owner",
+            "",
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(j["channels"].as_array().unwrap()[0]["channel_id"], c);
+        // 削除 → 空。
+        let (_st, j) = send(
+            &app,
+            "POST",
+            "/api/bots/assistant/channels",
+            "owner",
+            &format!(r#"{{"botId":"b1","guildId":"{g}","channelId":"{c}","action":"remove"}}"#),
+        )
+        .await;
+        assert_eq!(j["message"], "有効化チャンネルから削除しました。");
+        assert_eq!(j["channels"].as_array().unwrap().len(), 0);
+        // 非所有者 403。
+        let (st, _) = send(
+            &app,
+            "POST",
+            "/api/bots/assistant/channels",
+            "other",
+            &format!(r#"{{"botId":"b1","guildId":"{g}","channelId":"{c}"}}"#),
+        )
+        .await;
+        assert_eq!(st, StatusCode::FORBIDDEN);
     }
 
     #[tokio::test]

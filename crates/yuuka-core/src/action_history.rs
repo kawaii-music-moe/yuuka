@@ -200,7 +200,11 @@ mod tests {
     #[test]
     fn records_in_order_and_masks_secrets() {
         let rec = ActionRecorder::new();
-        rec.record("u", "addTodo", &json!({"title": "牛乳", "password": "hunter2"}));
+        rec.record(
+            "u",
+            "addTodo",
+            &json!({"title": "牛乳", "password": "hunter2"}),
+        );
         rec.record("u", "addExpense", &json!({"amount": 500}));
         let actions = rec.recent("u");
         assert_eq!(actions.len(), 2);
@@ -231,7 +235,9 @@ mod tests {
         assert_eq!(actions.len(), MAX_ACTIONS);
         // 先頭が落ちて最新が残る（最後は n=34）。
         assert!(actions[0].args_summary.contains("n=5"));
-        assert!(actions[MAX_ACTIONS - 1].args_summary.contains(&format!("n={}", MAX_ACTIONS + 4)));
+        assert!(actions[MAX_ACTIONS - 1]
+            .args_summary
+            .contains(&format!("n={}", MAX_ACTIONS + 4)));
     }
 
     #[test]

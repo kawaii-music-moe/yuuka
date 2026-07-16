@@ -116,6 +116,33 @@ deploy/cutover-dev-rust.sh rollback
   Rust へ移す場合は `deploy/dev/instance.env` に `YUUKA_RUST_DISCORD=1` を置き、`docker-compose.dev-rust.yml`
   の `environment:` pass-through を有効化して再 up（dev-hot 停止後＝dev 専用トークンの単一 owner）。
 
+## prod を Rust へカットオーバー（`cutover-prod-rust.sh`）— タグ付け替え + 自動ロールバック
+
+prod は base `docker-compose.yml` を `image: yuuka:latest` で使うため、dev のような隔離タグ問題は
+生じない（**タグの付け替え**で Node ↔ Rust を切替える）。専用スクリプトがダウンタイムを最小化しつつ、
+失敗時は現行 Node イメージへ自動で戻す:
+
+```bash
+# 一発カットオーバー（Node 稼働のまま Rust を staging ビルド → 検証 → Node 停止 → DB backup
+#  → latest へ昇格 → Rust 起動 → ヘルス → 失敗時 yuuka:prev-prod へ自動ロールバック）
+deploy/cutover-prod-rust.sh
+deploy/cutover-prod-rust.sh --no-cache   # Rust をフル再ビルドしてから切替
+# 手動ロールバック（yuuka:prev-prod = 切替前の Node イメージへ戻す）
+deploy/cutover-prod-rust.sh rollback
+```
+
+- **ダウンタイム最小化**: 重い Rust クロスコンパイルは `yuuka:rust-staging` タグへ行い、その間 prod の
+  Node は無停止。停止するのは「Node stop → DB backup → タグ昇格 → Rust up」の数十秒のみ。
+- **一貫した DB backup**: Node を**クリーン停止**（WAL チェックポイント）してから `yuuka.db`(+wal/shm) を
+  退避するため、稼働中コピーの不整合を避ける。
+- **単一ライター遵守（P0-2）**: 同一 app サービスの recreate なので Node 停止後に Rust が起動＝二重 writer なし。
+  cron 所有は Rust（Dockerfile `YUUKA_RUST_CRON=1`）、Discord は `YUUKA_RUST_DISCORD=1`（`deploy/prod/instance.env`
+  に常設・base compose が pass-through）で Rust に移る。Node イメージはこの env を無視するのでロールバックしても安全。
+- **自動ロールバック**: ヘルス（`/` 200 + `/api/setup/status` JSON）が 60s 以内に緑にならなければ、退避した
+  `yuuka:prev-prod`（Node）を latest へ戻して再起動する。DB を戻す必要があれば `cp data/yuuka.db.bak-<ts> data/yuuka.db`。
+- **`instance.sh prod update` との違い**: 標準 update は DB backup も staging 隔離も自動ロールバックも持たない。
+  Node→Rust の初回移行は本スクリプトを使う（移行完了後の通常更新は `instance.sh prod update` でよい）。
+
 ## 本番ロールバック（systemd へ戻す）
 コンテナと systemd は同じ `data/` を共有するため **同時起動は不可**（SQLite WAL 単一ライター・上記 cron 所有も参照）。
 ```bash

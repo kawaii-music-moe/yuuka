@@ -100,7 +100,9 @@ async fn process_due_backups(ctx: &ServiceContext, now: DateTime<Local>) -> Resu
         }
         tracing::info!(user = %state.user_id, "⏰ [Backup] 定期バックアップを開始します");
         match ctx.backup.run_backup(&state.user_id).await {
-            Ok(url) => tracing::info!(user = %state.user_id, %url, "✅ [Backup] 定期バックアップ完了"),
+            Ok(url) => {
+                tracing::info!(user = %state.user_id, %url, "✅ [Backup] 定期バックアップ完了")
+            }
             // 1 ユーザーの失敗で走査全体を止めない（Node の per-user try/catch）。last_run_at は
             // run_backup 成功時のみ更新されるため、失敗ユーザーは次 tick で再試行される。
             Err(e) => {
@@ -231,20 +233,14 @@ mod tests {
     fn due_when_interval_elapsed() {
         // 24h 間隔・前回 24h+ 前 → due。
         let now = at(2026, 7, 8, 12, 0);
-        assert!(is_due(
-            &state(true, 24, Some("2026-07-07 11:00:00")),
-            now
-        ));
+        assert!(is_due(&state(true, 24, Some("2026-07-07 11:00:00")), now));
     }
 
     #[test]
     fn not_due_within_interval() {
         // 24h 間隔・前回 1h 前 → まだ due でない。
         let now = at(2026, 7, 8, 12, 0);
-        assert!(!is_due(
-            &state(true, 24, Some("2026-07-08 11:00:00")),
-            now
-        ));
+        assert!(!is_due(&state(true, 24, Some("2026-07-08 11:00:00")), now));
     }
 
     #[test]
@@ -275,7 +271,10 @@ mod tests {
 
     #[test]
     fn garbage_last_run_is_treated_as_due() {
-        assert!(is_due(&state(true, 24, Some("not-a-date")), at(2026, 7, 8, 12, 0)));
+        assert!(is_due(
+            &state(true, 24, Some("not-a-date")),
+            at(2026, 7, 8, 12, 0)
+        ));
     }
 
     /// 実行された user_id を記録する [`BackupRunner`]。
@@ -365,7 +364,9 @@ mod tests {
         });
         let ctx = ctx_with_backup(db, runner.clone());
 
-        process_due_backups(&ctx, now).await.expect("scan ok despite failures");
+        process_due_backups(&ctx, now)
+            .await
+            .expect("scan ok despite failures");
         assert_eq!(runner.ran.lock().unwrap().len(), 2);
     }
 
@@ -376,6 +377,9 @@ mod tests {
 
     #[test]
     fn schedule_is_hourly_at_15() {
-        assert!(matches!(BackupService.schedule(), Schedule::Cron("15 * * * *")));
+        assert!(matches!(
+            BackupService.schedule(),
+            Schedule::Cron("15 * * * *")
+        ));
     }
 }

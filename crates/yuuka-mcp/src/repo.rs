@@ -226,7 +226,11 @@ pub async fn get_server_by_id(db: &Db, id: i64) -> Result<Option<McpServerRecord
 }
 
 /// 全カラムを取り出す共通クエリ（`from_row` と対で使う）。owner 一覧・system 一覧で SQL のみ差し替える。
-async fn query_servers(db: &Db, sql: &'static str, arg: Option<String>) -> Result<Vec<McpServerRecord>, DbError> {
+async fn query_servers(
+    db: &Db,
+    sql: &'static str,
+    arg: Option<String>,
+) -> Result<Vec<McpServerRecord>, DbError> {
     db.read
         .read(move |conn| {
             let mut stmt = conn.prepare(sql).map_err(map_sqlite)?;
@@ -249,7 +253,10 @@ async fn query_servers(db: &Db, sql: &'static str, arg: Option<String>) -> Resul
 ///
 /// # Errors
 /// 読み取り失敗時 [`DbError`]。
-pub async fn list_servers_for_owner(db: &Db, user_id: &str) -> Result<Vec<McpServerRecord>, DbError> {
+pub async fn list_servers_for_owner(
+    db: &Db,
+    user_id: &str,
+) -> Result<Vec<McpServerRecord>, DbError> {
     query_servers(
         db,
         "SELECT * FROM mcp_servers WHERE user_id = ?1 ORDER BY created_at ASC",
@@ -279,7 +286,10 @@ pub async fn list_system_servers(db: &Db) -> Result<Vec<McpServerRecord>, DbErro
 ///
 /// # Errors
 /// 読み取り失敗時 [`DbError`]。
-pub async fn list_servers_granted_to_bot(db: &Db, bot_id: &str) -> Result<Vec<McpServerRecord>, DbError> {
+pub async fn list_servers_granted_to_bot(
+    db: &Db,
+    bot_id: &str,
+) -> Result<Vec<McpServerRecord>, DbError> {
     let bot_id = bot_id.to_owned();
     db.read
         .read(move |conn| {
@@ -551,9 +561,16 @@ mod tests {
     async fn owner_and_system_listing() {
         let (db, path) = fresh_db();
         seed_user(&path, "alice", "user");
-        add_server(&db, Some("alice".to_owned()), "a", "https://x/mcp", None, true)
-            .await
-            .unwrap();
+        add_server(
+            &db,
+            Some("alice".to_owned()),
+            "a",
+            "https://x/mcp",
+            None,
+            true,
+        )
+        .await
+        .unwrap();
         add_server(&db, None, "sys", "https://y/mcp", None, false)
             .await
             .unwrap();
@@ -570,9 +587,16 @@ mod tests {
     async fn tools_cache_roundtrip_and_parse() {
         let (db, path) = fresh_db();
         seed_user(&path, "alice", "user");
-        let rec = add_server(&db, Some("alice".to_owned()), "a", "https://x/mcp", None, true)
-            .await
-            .unwrap();
+        let rec = add_server(
+            &db,
+            Some("alice".to_owned()),
+            "a",
+            "https://x/mcp",
+            None,
+            true,
+        )
+        .await
+        .unwrap();
         // 既定は空配列。
         assert!(parse_tools_cache(&rec).is_empty());
         update_tools_cache(
@@ -602,15 +626,25 @@ mod tests {
         let (db, path) = fresh_db();
         seed_user(&path, "alice", "user");
         seed_user(&path, "bob", "user");
-        let a = add_server(&db, Some("alice".to_owned()), "a", "https://x/mcp", None, true)
-            .await
-            .unwrap();
+        let a = add_server(
+            &db,
+            Some("alice".to_owned()),
+            "a",
+            "https://x/mcp",
+            None,
+            true,
+        )
+        .await
+        .unwrap();
         let sys = add_server(&db, None, "sys", "https://y/mcp", None, true)
             .await
             .unwrap();
 
         set_enabled(&db, a.id, false).await.unwrap();
-        assert_eq!(get_server_by_id(&db, a.id).await.unwrap().unwrap().enabled, 0);
+        assert_eq!(
+            get_server_by_id(&db, a.id).await.unwrap().unwrap().enabled,
+            0
+        );
 
         // 他人は本人所有を削除できない。
         assert!(!delete_server(&db, a.id, "bob", false).await.unwrap());
@@ -668,9 +702,16 @@ mod tests {
         let (db, path) = fresh_db();
         seed_user(&path, "alice", "user");
         seed_user(&path, "carol", "user");
-        let a = add_server(&db, Some("alice".to_owned()), "a", "https://x/mcp", None, true)
-            .await
-            .unwrap();
+        let a = add_server(
+            &db,
+            Some("alice".to_owned()),
+            "a",
+            "https://x/mcp",
+            None,
+            true,
+        )
+        .await
+        .unwrap();
         raw(&path)
             .execute(
                 "INSERT INTO bots (id, user_id, name) VALUES ('b1','alice','b1'),('b2','alice','b2')",

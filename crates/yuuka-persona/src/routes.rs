@@ -137,9 +137,11 @@ async fn marketplace_get(
         return not_found_public();
     };
     match PersonaRepo::new(&db).get_public(id).await {
-        Ok(Some(persona)) => {
-            (StatusCode::OK, Json(json!({ "success": true, "persona": persona }))).into_response()
-        }
+        Ok(Some(persona)) => (
+            StatusCode::OK,
+            Json(json!({ "success": true, "persona": persona })),
+        )
+            .into_response(),
         Ok(None) => not_found_public(),
         Err(_) => internal_error(),
     }
@@ -327,7 +329,10 @@ async fn publish_persona(
         Ok(s) => s,
         Err(_) => return internal_error(),
     };
-    match PersonaRepo::new(&db).set_public(&scope, id, is_public).await {
+    match PersonaRepo::new(&db)
+        .set_public(&scope, id, is_public)
+        .await
+    {
         Ok(ok) => {
             let message = if ok {
                 if is_public {

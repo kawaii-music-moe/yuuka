@@ -116,7 +116,9 @@ async fn register(
     // 以降は secretService.registerCredential 相当（正規化 → 検証 → salt → 暗号化 → 保存）。
     let clean_service = normalize_service_name(&service);
     if clean_service.is_empty() {
-        return Err(ApiError(WebError::Validation("サービス名が空です。".to_owned())));
+        return Err(ApiError(WebError::Validation(
+            "サービス名が空です。".to_owned(),
+        )));
     }
     let clean_username = username.trim().to_owned();
     if clean_username.is_empty() || password.is_empty() {

@@ -196,12 +196,17 @@ pub(crate) async fn calendars(
     Json(body): Json<CalendarsInput>,
 ) -> Result<Response, ApiError> {
     let Some(Value::Array(list)) = body.calendars else {
-        return Ok(bad_request("カレンダーリストは配列形式で指定してください。"));
+        return Ok(bad_request(
+            "カレンダーリストは配列形式で指定してください。",
+        ));
     };
     let calendars: Vec<String> = list.iter().map(js_string).collect();
     yuuka_google::repo::set_user_calendars(&state.db, &user.0.discord_id, &calendars).await?;
     rt.calendar.invalidate_user(&user.0.discord_id);
-    Ok(Json(json!({ "success": true, "message": "同期対象カレンダーを更新しました。" })).into_response())
+    Ok(
+        Json(json!({ "success": true, "message": "同期対象カレンダーを更新しました。" }))
+            .into_response(),
+    )
 }
 
 // ─── POST /api/settings/backup/trigger ───────────────────────────────────────

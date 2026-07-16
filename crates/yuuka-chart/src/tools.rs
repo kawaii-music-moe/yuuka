@@ -10,9 +10,7 @@ use async_trait::async_trait;
 use base64::Engine;
 use serde_json::{json, Value};
 use yuuka_core::tool::FunctionDeclaration;
-use yuuka_core::{
-    EmbedPart, ResponsePart, Tool, ToolContext, ToolError, ToolName, ToolOutcome,
-};
+use yuuka_core::{EmbedPart, ResponsePart, Tool, ToolContext, ToolError, ToolName, ToolOutcome};
 
 use crate::render::{self, ChartSpec, ChartType, Series};
 
@@ -37,11 +35,8 @@ fn fail(message: impl Into<String>) -> ToolOutcome {
 
 /// JSON 配列を f64 ベクタへ（非数値は NaN・Node `Number(v)` 相当）。
 fn as_f64_vec(v: Option<&Value>) -> Option<Vec<f64>> {
-    v.and_then(Value::as_array).map(|arr| {
-        arr.iter()
-            .map(|x| x.as_f64().unwrap_or(f64::NAN))
-            .collect()
-    })
+    v.and_then(Value::as_array)
+        .map(|arr| arr.iter().map(|x| x.as_f64().unwrap_or(f64::NAN)).collect())
 }
 
 /// JSON 配列を文字列ベクタへ（Node `String(l)`）。
@@ -101,7 +96,11 @@ impl Tool for SendChartTool {
             ));
         }
 
-        let Some(kind) = args.get("type").and_then(Value::as_str).and_then(ChartType::parse) else {
+        let Some(kind) = args
+            .get("type")
+            .and_then(Value::as_str)
+            .and_then(ChartType::parse)
+        else {
             return Ok(fail(
                 "グラフ種別が不正です。pie / doughnut / bar / horizontalBar / line のいずれかを指定してください。",
             ));
@@ -138,7 +137,9 @@ impl Tool for SendChartTool {
                     return Ok(fail("second_values に数値でない要素が含まれています。"));
                 }
                 Some(Series {
-                    label: Some(arg_string(&args, "second_label").unwrap_or_else(|| "系列2".to_owned())),
+                    label: Some(
+                        arg_string(&args, "second_label").unwrap_or_else(|| "系列2".to_owned()),
+                    ),
                     values: sv,
                 })
             }
@@ -204,7 +205,10 @@ mod tests {
     #[tokio::test]
     async fn rejects_when_rich_disabled() {
         let out = tool()
-            .call(&ctx(false), json!({"type": "bar", "title": "t", "labels": ["a"], "values": [1]}))
+            .call(
+                &ctx(false),
+                json!({"type": "bar", "title": "t", "labels": ["a"], "values": [1]}),
+            )
             .await
             .unwrap();
         assert_eq!(out.payload["success"], false);
@@ -215,18 +219,24 @@ mod tests {
         let t = tool();
         // 不正 type。
         assert_eq!(
-            t.call(&ctx(true), json!({"type": "x", "title": "t", "labels": ["a"], "values": [1]}))
-                .await
-                .unwrap()
-                .payload["success"],
+            t.call(
+                &ctx(true),
+                json!({"type": "x", "title": "t", "labels": ["a"], "values": [1]})
+            )
+            .await
+            .unwrap()
+            .payload["success"],
             false
         );
         // 件数不一致。
         assert_eq!(
-            t.call(&ctx(true), json!({"type": "bar", "title": "t", "labels": ["a", "b"], "values": [1]}))
-                .await
-                .unwrap()
-                .payload["success"],
+            t.call(
+                &ctx(true),
+                json!({"type": "bar", "title": "t", "labels": ["a", "b"], "values": [1]})
+            )
+            .await
+            .unwrap()
+            .payload["success"],
             false
         );
         // pie で第2系列 → 不可。

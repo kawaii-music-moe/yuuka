@@ -1677,10 +1677,18 @@ mod tests {
         assert_eq!(out.payload["todos"].as_array().unwrap().len(), 0);
 
         // 2 件追加（priority 未設定）。
-        let a = add.call(&ctx(), json!({"title": "A"})).await.unwrap().payload["todo"]["id"]
+        let a = add
+            .call(&ctx(), json!({"title": "A"}))
+            .await
+            .unwrap()
+            .payload["todo"]["id"]
             .as_i64()
             .unwrap();
-        let b = add.call(&ctx(), json!({"title": "B"})).await.unwrap().payload["todo"]["id"]
+        let b = add
+            .call(&ctx(), json!({"title": "B"}))
+            .await
+            .unwrap()
+            .payload["todo"]["id"]
             .as_i64()
             .unwrap();
 

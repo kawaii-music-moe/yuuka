@@ -179,10 +179,7 @@ pub async fn count_accounts(db: &Db, user_id: &str) -> Result<i64, DbError> {
 ///
 /// # Errors
 /// 読み取り失敗時 [`DbError`]。
-pub async fn list_accounts_safe(
-    db: &Db,
-    user_id: &str,
-) -> Result<Vec<GoogleAccountSafe>, DbError> {
+pub async fn list_accounts_safe(db: &Db, user_id: &str) -> Result<Vec<GoogleAccountSafe>, DbError> {
     let user_id = user_id.to_owned();
     db.read
         .read(move |conn| {

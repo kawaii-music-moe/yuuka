@@ -103,7 +103,9 @@ fn blend(img: &mut RgbaImage, x: i32, y: i32, color: [u8; 4], coverage: f32) {
     let a = coverage.clamp(0.0, 1.0) * (f32::from(color[3]) / 255.0);
     let existing = img.get_pixel(xu, yu).0;
     let mix = |fg: u8, bg: u8| -> u8 {
-        (f32::from(fg) * a + f32::from(bg) * (1.0 - a)).round().clamp(0.0, 255.0) as u8
+        (f32::from(fg) * a + f32::from(bg) * (1.0 - a))
+            .round()
+            .clamp(0.0, 255.0) as u8
     };
     img.put_pixel(
         xu,
@@ -190,7 +192,15 @@ fn fill_sector(
 }
 
 /// テキスト描画（ab_glyph）。フォント未検出（`None`）なら何もしない。
-fn draw_text(img: &mut RgbaImage, f: Option<&impl Font>, x: f32, y: f32, size: f32, text: &str, color: [u8; 4]) {
+fn draw_text(
+    img: &mut RgbaImage,
+    f: Option<&impl Font>,
+    x: f32,
+    y: f32,
+    size: f32,
+    text: &str,
+    color: [u8; 4],
+) {
     let Some(font) = f else { return };
     let scale = PxScale::from(size);
     let scaled = font.as_scaled(scale);
@@ -218,11 +228,21 @@ fn draw_text(img: &mut RgbaImage, f: Option<&impl Font>, x: f32, y: f32, size: f
 /// テキスト幅（px）。
 fn text_width(font: &impl Font, size: f32, text: &str) -> f32 {
     let scaled = font.as_scaled(PxScale::from(size));
-    text.chars().map(|c| scaled.h_advance(font.glyph_id(c))).sum()
+    text.chars()
+        .map(|c| scaled.h_advance(font.glyph_id(c)))
+        .sum()
 }
 
 /// 中央寄せテキスト（x 中心）。
-fn draw_text_centered(img: &mut RgbaImage, f: Option<&impl Font>, cx: f32, y: f32, size: f32, s: &str, color: [u8; 4]) {
+fn draw_text_centered(
+    img: &mut RgbaImage,
+    f: Option<&impl Font>,
+    cx: f32,
+    y: f32,
+    size: f32,
+    s: &str,
+    color: [u8; 4],
+) {
     let w = f.map_or(0.0, |font| text_width(font, size, s));
     draw_text(img, f, cx - w / 2.0, y, size, s, color);
 }
@@ -260,7 +280,15 @@ fn draw_bar(img: &mut RgbaImage, f: Option<&impl Font>, spec: &ChartSpec) {
     for k in 0..=4 {
         let y = bottom - (bottom - top) * (k as f32 / 4.0);
         draw_line(img, left as i32, y as i32, right as i32, y as i32, GRID);
-        draw_text_centered(img, f, left - 22.0, y - 8.0, 16.0, &fmt_value(max * f64::from(k) / 4.0), MUTED);
+        draw_text_centered(
+            img,
+            f,
+            left - 22.0,
+            y - 8.0,
+            16.0,
+            &fmt_value(max * f64::from(k) / 4.0),
+            MUTED,
+        );
     }
 
     let n = spec.labels.len().max(1);
@@ -273,10 +301,33 @@ fn draw_bar(img: &mut RgbaImage, f: Option<&impl Font>, spec: &ChartSpec) {
             let v = s.values.get(i).copied().unwrap_or(0.0);
             let h = ((v / max) as f32) * (bottom - top);
             let x0 = base_x + bw * si as f32;
-            fill_rect(img, x0 as i32, (bottom - h) as i32, (x0 + bw) as i32, bottom as i32, palette(si));
-            draw_text_centered(img, f, x0 + bw / 2.0, bottom - h - 18.0, 14.0, &fmt_value(v), FG);
+            fill_rect(
+                img,
+                x0 as i32,
+                (bottom - h) as i32,
+                (x0 + bw) as i32,
+                bottom as i32,
+                palette(si),
+            );
+            draw_text_centered(
+                img,
+                f,
+                x0 + bw / 2.0,
+                bottom - h - 18.0,
+                14.0,
+                &fmt_value(v),
+                FG,
+            );
         }
-        draw_text_centered(img, f, base_x + (slot * 0.7) / 2.0, bottom + 6.0, 15.0, label, MUTED);
+        draw_text_centered(
+            img,
+            f,
+            base_x + (slot * 0.7) / 2.0,
+            bottom + 6.0,
+            15.0,
+            label,
+            MUTED,
+        );
     }
     legend(img, f, &series, right);
 }
@@ -284,7 +335,12 @@ fn draw_bar(img: &mut RgbaImage, f: Option<&impl Font>, spec: &ChartSpec) {
 /// 横棒（horizontalBar・予算消化率などのプログレスバー風）。
 fn draw_hbar(img: &mut RgbaImage, f: Option<&impl Font>, spec: &ChartSpec) {
     let (left, right, top, bottom) = (140.0_f32, W as f32 - 90.0, 80.0_f32, H as f32 - 40.0);
-    let max = spec.primary.values.iter().fold(0.0_f64, |m, v| m.max(*v)).max(1.0);
+    let max = spec
+        .primary
+        .values
+        .iter()
+        .fold(0.0_f64, |m, v| m.max(*v))
+        .max(1.0);
     let n = spec.labels.len().max(1);
     let slot = (bottom - top) / n as f32;
     let bh = slot * 0.6;
@@ -293,10 +349,32 @@ fn draw_hbar(img: &mut RgbaImage, f: Option<&impl Font>, spec: &ChartSpec) {
         let v = spec.primary.values.get(i).copied().unwrap_or(0.0);
         let w = ((v / max) as f32) * (right - left);
         // トラック（背景）。
-        fill_rect(img, left as i32, y as i32, right as i32, (y + bh) as i32, GRID);
-        fill_rect(img, left as i32, y as i32, (left + w) as i32, (y + bh) as i32, palette(i));
+        fill_rect(
+            img,
+            left as i32,
+            y as i32,
+            right as i32,
+            (y + bh) as i32,
+            GRID,
+        );
+        fill_rect(
+            img,
+            left as i32,
+            y as i32,
+            (left + w) as i32,
+            (y + bh) as i32,
+            palette(i),
+        );
         draw_text(img, f, 10.0, y + bh / 2.0 - 8.0, 15.0, label, MUTED);
-        draw_text(img, f, right + 6.0, y + bh / 2.0 - 8.0, 15.0, &fmt_value(v), FG);
+        draw_text(
+            img,
+            f,
+            right + 6.0,
+            y + bh / 2.0 - 8.0,
+            15.0,
+            &fmt_value(v),
+            FG,
+        );
     }
 }
 
@@ -316,7 +394,15 @@ fn draw_line_chart(img: &mut RgbaImage, f: Option<&impl Font>, spec: &ChartSpec)
     for k in 0..=4 {
         let y = bottom - (bottom - top) * (k as f32 / 4.0);
         draw_line(img, left as i32, y as i32, right as i32, y as i32, GRID);
-        draw_text_centered(img, f, left - 22.0, y - 8.0, 16.0, &fmt_value(max * f64::from(k) / 4.0), MUTED);
+        draw_text_centered(
+            img,
+            f,
+            left - 22.0,
+            y - 8.0,
+            16.0,
+            &fmt_value(max * f64::from(k) / 4.0),
+            MUTED,
+        );
     }
 
     let n = spec.labels.len().max(2);
@@ -330,7 +416,14 @@ fn draw_line_chart(img: &mut RgbaImage, f: Option<&impl Font>, spec: &ChartSpec)
             if let Some((px, py)) = prev {
                 draw_line(img, px, py, x as i32, y as i32, color);
             }
-            fill_rect(img, x as i32 - 3, y as i32 - 3, x as i32 + 3, y as i32 + 3, color);
+            fill_rect(
+                img,
+                x as i32 - 3,
+                y as i32 - 3,
+                x as i32 + 3,
+                y as i32 + 3,
+                color,
+            );
             prev = Some((x as i32, y as i32));
         }
     }
@@ -346,7 +439,11 @@ fn draw_pie(img: &mut RgbaImage, f: Option<&impl Font>, spec: &ChartSpec) {
     let cx = 280.0_f32;
     let cy = (H as f32) / 2.0 + 20.0;
     let r = 170.0_f32;
-    let inner = if spec.kind == ChartType::Doughnut { r * 0.55 } else { 0.0 };
+    let inner = if spec.kind == ChartType::Doughnut {
+        r * 0.55
+    } else {
+        0.0
+    };
     let total: f64 = spec.primary.values.iter().filter(|v| **v > 0.0).sum();
     if total <= 0.0 {
         draw_text_centered(img, f, cx, cy - 10.0, 18.0, "データがありません", MUTED);
@@ -364,7 +461,15 @@ fn draw_pie(img: &mut RgbaImage, f: Option<&impl Font>, spec: &ChartSpec) {
         if a1 >= a0 {
             fill_sector(img, cx, cy, r, inner, (a0, a1), palette(i));
         } else {
-            fill_sector(img, cx, cy, r, inner, (a0, std::f32::consts::TAU), palette(i));
+            fill_sector(
+                img,
+                cx,
+                cy,
+                r,
+                inner,
+                (a0, std::f32::consts::TAU),
+                palette(i),
+            );
             fill_sector(img, cx, cy, r, inner, (0.0, a1), palette(i));
         }
         ang += sweep;
@@ -393,8 +498,22 @@ fn normalize_angle(a: f32) -> f32 {
 
 /// 軸（左・下）を描く。
 fn axis(img: &mut RgbaImage, left: f32, right: f32, top: f32, bottom: f32) {
-    draw_line(img, left as i32, top as i32, left as i32, bottom as i32, MUTED);
-    draw_line(img, left as i32, bottom as i32, right as i32, bottom as i32, MUTED);
+    draw_line(
+        img,
+        left as i32,
+        top as i32,
+        left as i32,
+        bottom as i32,
+        MUTED,
+    );
+    draw_line(
+        img,
+        left as i32,
+        bottom as i32,
+        right as i32,
+        bottom as i32,
+        MUTED,
+    );
 }
 
 /// 凡例（複数系列時のみ・右上）。
@@ -405,7 +524,14 @@ fn legend(img: &mut RgbaImage, f: Option<&impl Font>, series: &[&Series], right:
     for (i, s) in series.iter().enumerate() {
         let name = s.label.clone().unwrap_or_else(|| format!("系列{}", i + 1));
         let y = 74.0 + i as f32 * 26.0;
-        fill_rect(img, (right - 130.0) as i32, y as i32, (right - 108.0) as i32, y as i32 + 18, palette(i));
+        fill_rect(
+            img,
+            (right - 130.0) as i32,
+            y as i32,
+            (right - 108.0) as i32,
+            y as i32 + 18,
+            palette(i),
+        );
         draw_text(img, f, right - 100.0, y - 2.0, 16.0, &name, FG);
     }
 }

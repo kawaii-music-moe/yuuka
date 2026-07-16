@@ -346,9 +346,7 @@ pub(crate) async fn grants_google(
     };
     let owned = matches!(&acct, Some(a) if a.user_id == *user_id);
     let Some(account_id) = account_id.filter(|_| owned) else {
-        return Ok(forbidden(
-            "対象Googleアカウントの所有者ではありません。",
-        ));
+        return Ok(forbidden("対象Googleアカウントの所有者ではありません。"));
     };
     yuuka_google::repo::set_bot_google_account(db, &bot_id, Some(account_id)).await?;
     Ok(json_ok(json!({ "success": true })))

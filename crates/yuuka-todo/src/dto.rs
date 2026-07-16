@@ -329,7 +329,10 @@ mod priority_tests {
         assert_eq!(normalize_priority(&json!(2.0)).as_deref(), Some("high"));
         assert_eq!(normalize_priority(&json!(0.0)).as_deref(), Some("low"));
         // 文字列。
-        assert_eq!(normalize_priority(&json!("medium")).as_deref(), Some("medium"));
+        assert_eq!(
+            normalize_priority(&json!("medium")).as_deref(),
+            Some("medium")
+        );
         // 小数部あり・範囲外・未知は None。
         assert_eq!(normalize_priority(&json!(1.5)), None);
         assert_eq!(normalize_priority(&json!(9)), None);

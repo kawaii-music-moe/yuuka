@@ -10,9 +10,7 @@ pub mod http;
 pub mod ports;
 pub mod repo;
 
-pub use backup::{
-    read_backup_config, touch_backup_last_run, BackupConfig, GoogleBackupClient,
-};
+pub use backup::{read_backup_config, touch_backup_last_run, BackupConfig, GoogleBackupClient};
 pub use http::GoogleHttpClient;
 pub use ports::{
     BackupPort, CalendarPort, CalendarSummary, GoogleError, GoogleOAuthPort, GoogleTokens,

@@ -28,7 +28,8 @@
 	<View />
 {:catch}
 	<div class="lazy-error" role="alert">
-		画面の読み込みに失敗しました。再読込してください。
+		<p>画面の読み込みに失敗しました。</p>
+		<button type="button" class="lazy-reload" onclick={() => location.reload()}>再読込する</button>
 	</div>
 {/await}
 
@@ -39,5 +40,18 @@
 	.lazy-error {
 		padding: 2rem;
 		text-align: center;
+	}
+	.lazy-reload {
+		margin-top: 0.75rem;
+		padding: 0.5rem 1.25rem;
+		border: 1px solid var(--border-matte, #333);
+		border-radius: 8px;
+		background: var(--surface-1dp, rgba(255, 255, 255, 0.06));
+		color: var(--text-high, #fff);
+		cursor: pointer;
+		font-size: 0.9rem;
+	}
+	.lazy-reload:hover {
+		background: var(--surface-2dp, #27272a);
 	}
 </style>

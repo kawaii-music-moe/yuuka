@@ -190,9 +190,13 @@ impl BrowserManager {
                     }
                 }
                 // スマートフォールバック（テキストマッチ）。
-                self.smart_click_fallback(&sess.page, selector, &actual).await
+                self.smart_click_fallback(&sess.page, selector, &actual)
+                    .await
             }
-            Err(_) => self.smart_click_fallback(&sess.page, selector, &actual).await,
+            Err(_) => {
+                self.smart_click_fallback(&sess.page, selector, &actual)
+                    .await
+            }
         }
     }
 
@@ -210,7 +214,9 @@ impl BrowserManager {
                 "message": format!("テキスト \"{actual}\" に合致する要素を見つけ出し、クリックしました。"),
             }))
         } else {
-            Err(format!("要素またはテキスト \"{selector}\" のクリックに失敗しました。"))
+            Err(format!(
+                "要素またはテキスト \"{selector}\" のクリックに失敗しました。"
+            ))
         }
     }
 
@@ -224,7 +230,9 @@ impl BrowserManager {
         if wait_for_selector(&sess.page, &actual, 5000).await.is_ok() {
             if let Ok(el) = sess.page.find_element(&actual).await {
                 // 既存値をクリアしてから入力（Node: focus→Ctrl+A→Backspace→type delay 50）。
-                let _ = el.call_js_fn("function(){ this.focus(); this.value=''; }", false).await;
+                let _ = el
+                    .call_js_fn("function(){ this.focus(); this.value=''; }", false)
+                    .await;
                 if el.type_str(text).await.is_ok() {
                     return Ok(json!({
                         "success": true,
@@ -242,7 +250,9 @@ impl BrowserManager {
                 "message": format!("検索キー \"{selector}\" に合致する入力フィールドを見つけ出し、テキストを入力しました。"),
             }))
         } else {
-            Err(format!("要素 \"{selector}\" へのテキスト入力に失敗しました。"))
+            Err(format!(
+                "要素 \"{selector}\" へのテキスト入力に失敗しました。"
+            ))
         }
     }
 
@@ -359,7 +369,10 @@ fn parse_contains(selector: &str) -> Option<(Option<String>, String)> {
             }
             let tag_opt = if tag.is_empty() {
                 None
-            } else if tag.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_') {
+            } else if tag
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+            {
                 Some(tag.to_owned())
             } else {
                 None

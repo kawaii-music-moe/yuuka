@@ -623,6 +623,38 @@ pub async fn is_guild_allowed(db: &Db, bot_id: &str, guild_id: &str) -> Result<b
     .await
 }
 
+/// 有効化チャンネルか（メンション不要で応答するチャンネル・Rust 新機能）。
+///
+/// 登録された `(bot_id, guild_id, channel_id)` では、Bot はメンション/返信が無くても応答する。
+/// DM や未登録チャンネルでは false（＝従来どおりメンション必須）。
+///
+/// # Errors
+/// 読み取り失敗時 [`DbError`]。
+pub async fn is_channel_enabled(
+    db: &Db,
+    bot_id: &str,
+    guild_id: &str,
+    channel_id: &str,
+) -> Result<bool, DbError> {
+    let (bot_id, guild_id, channel_id) = (
+        bot_id.to_owned(),
+        guild_id.to_owned(),
+        channel_id.to_owned(),
+    );
+    db.read
+        .read(move |conn| {
+            conn.query_row(
+                "SELECT 1 FROM bot_channels WHERE bot_id = ?1 AND guild_id = ?2 AND channel_id = ?3",
+                params![bot_id, guild_id, channel_id],
+                |_| Ok(()),
+            )
+            .optional()
+            .map(|o| o.is_some())
+            .map_err(map_sqlite)
+        })
+        .await
+}
+
 /// 利用メンバーか（Node `isBotMember`。owner は呼び出し側で暗黙メンバー）。
 ///
 /// # Errors
@@ -774,6 +806,111 @@ pub async fn list_allowed_guilds(db: &Db, bot_id: &str) -> Result<Vec<BotGuildRo
                         bot_id: r.get(0)?,
                         guild_id: r.get(1)?,
                         created_at: r.get(2)?,
+                    })
+                })
+                .map_err(map_sqlite)?;
+            let mut out = Vec::new();
+            for row in rows {
+                out.push(row.map_err(map_sqlite)?);
+            }
+            Ok(out)
+        })
+        .await
+}
+
+// ─── 有効化チャンネル管理（メンション不要で応答・Rust 新機能） ────────────────────
+
+/// `bot_channels` 1 行（メンション不要で応答する有効化チャンネル）。
+#[derive(Debug, Clone)]
+pub struct BotChannelRow {
+    pub bot_id: String,
+    pub guild_id: String,
+    pub channel_id: String,
+    pub added_by: String,
+    pub created_at: String,
+}
+
+/// 有効化チャンネルを追加（INSERT OR IGNORE）。追加できたら `true`。
+///
+/// # Errors
+/// 書き込み失敗時 [`DbError`]。
+pub async fn add_enabled_channel(
+    db: &Db,
+    bot_id: &str,
+    guild_id: &str,
+    channel_id: &str,
+    added_by: &str,
+) -> Result<bool, DbError> {
+    let (b, g, c, by) = (
+        bot_id.to_owned(),
+        guild_id.to_owned(),
+        channel_id.to_owned(),
+        added_by.to_owned(),
+    );
+    db.writer
+        .transaction(move |tx| {
+            let n = tx
+                .execute(
+                    "INSERT OR IGNORE INTO bot_channels (bot_id, guild_id, channel_id, added_by) \
+                     VALUES (?1, ?2, ?3, ?4)",
+                    params![b, g, c, by],
+                )
+                .map_err(map_sqlite)?;
+            Ok(n > 0)
+        })
+        .await
+}
+
+/// 有効化チャンネルを削除。削除できたら `true`。
+///
+/// # Errors
+/// 書き込み失敗時 [`DbError`]。
+pub async fn remove_enabled_channel(
+    db: &Db,
+    bot_id: &str,
+    guild_id: &str,
+    channel_id: &str,
+) -> Result<bool, DbError> {
+    let (b, g, c) = (
+        bot_id.to_owned(),
+        guild_id.to_owned(),
+        channel_id.to_owned(),
+    );
+    db.writer
+        .transaction(move |tx| {
+            let n = tx
+                .execute(
+                    "DELETE FROM bot_channels WHERE bot_id = ?1 AND guild_id = ?2 AND channel_id = ?3",
+                    params![b, g, c],
+                )
+                .map_err(map_sqlite)?;
+            Ok(n > 0)
+        })
+        .await
+}
+
+/// 有効化チャンネル一覧（created_at ASC）。
+///
+/// # Errors
+/// 読み取り失敗時 [`DbError`]。
+pub async fn list_enabled_channels(db: &Db, bot_id: &str) -> Result<Vec<BotChannelRow>, DbError> {
+    let b = bot_id.to_owned();
+    db.read
+        .read(move |conn| {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT bot_id, guild_id, channel_id, added_by, created_at FROM bot_channels \
+                     WHERE bot_id = ?1 ORDER BY created_at ASC",
+                )
+                .map_err(map_sqlite)?;
+            let rows = stmt
+                .query_map(params![b], |r| {
+                    Ok(BotChannelRow {
+                        bot_id: r.get(0)?,
+                        guild_id: r.get(1)?,
+                        channel_id: r.get(2)?,
+                        added_by: r.get(3)?,
+                        created_at: r.get(4)?,
                     })
                 })
                 .map_err(map_sqlite)?;
@@ -1950,5 +2087,45 @@ mod crud_tests {
         let sharee_bots = list_bots_for_user(&db, "sharee").await.unwrap();
         assert!(sharee_bots.iter().any(|b| b.id == "b_other"));
         assert!(!sharee_bots.iter().any(|b| b.id == "b_owned"));
+    }
+
+    #[tokio::test]
+    async fn enabled_channel_add_query_remove() {
+        let db = seed_db();
+        create_bot(&db, "b1", "owner", "Bot").await.unwrap();
+        let (g, c1, c2) = ("g1", "c1", "c2");
+
+        // 未登録は false（＝メンション必須のまま）。
+        assert!(!is_channel_enabled(&db, "b1", g, c1).await.unwrap());
+
+        // 追加できたら true、二重追加は false（INSERT OR IGNORE）。
+        assert!(add_enabled_channel(&db, "b1", g, c1, "owner")
+            .await
+            .unwrap());
+        assert!(!add_enabled_channel(&db, "b1", g, c1, "owner")
+            .await
+            .unwrap());
+        add_enabled_channel(&db, "b1", g, c2, "owner")
+            .await
+            .unwrap();
+
+        // 登録済みチャンネルは true、別チャンネル・別ギルドは false。
+        assert!(is_channel_enabled(&db, "b1", g, c1).await.unwrap());
+        assert!(is_channel_enabled(&db, "b1", g, c2).await.unwrap());
+        assert!(!is_channel_enabled(&db, "b1", "other", c1).await.unwrap());
+        assert!(!is_channel_enabled(&db, "b1", g, "c3").await.unwrap());
+
+        // 一覧は created_at ASC（挿入順）。
+        let list = list_enabled_channels(&db, "b1").await.unwrap();
+        assert_eq!(list.len(), 2);
+        assert_eq!(list[0].channel_id, c1);
+        assert_eq!(list[1].channel_id, c2);
+        assert_eq!(list[0].added_by, "owner");
+
+        // 削除できたら true、未登録の削除は false。以後 gate は false。
+        assert!(remove_enabled_channel(&db, "b1", g, c1).await.unwrap());
+        assert!(!remove_enabled_channel(&db, "b1", g, c1).await.unwrap());
+        assert!(!is_channel_enabled(&db, "b1", g, c1).await.unwrap());
+        assert_eq!(list_enabled_channels(&db, "b1").await.unwrap().len(), 1);
     }
 }

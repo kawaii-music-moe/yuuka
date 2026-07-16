@@ -111,7 +111,11 @@ pub(crate) async fn list(
         }
         servers.push(view);
     }
-    Ok((StatusCode::OK, Json(json!({ "success": true, "servers": servers }))).into_response())
+    Ok((
+        StatusCode::OK,
+        Json(json!({ "success": true, "servers": servers })),
+    )
+        .into_response())
 }
 
 // ─── POST /api/mcp-servers/add（追加・scope:"system" は Admin のみ） ────────────
@@ -247,19 +251,27 @@ pub(crate) async fn refresh(
     Json(body): Json<Value>,
 ) -> Result<Response, ApiError> {
     let Some(id) = parse_body_id(body.get("id")) else {
-        return Ok(err_json(StatusCode::NOT_FOUND, "MCPサーバーが見つかりません。"));
+        return Ok(err_json(
+            StatusCode::NOT_FOUND,
+            "MCPサーバーが見つかりません。",
+        ));
     };
     let admin = repo::is_admin(&state.db, &user.0.discord_id).await?;
     let server = repo::get_server_by_id(&state.db, id).await?;
     let Some(server) = server.filter(|s| repo::can_manage(s, &user.0.discord_id, admin)) else {
-        return Ok(err_json(StatusCode::NOT_FOUND, "MCPサーバーが見つかりません。"));
+        return Ok(err_json(
+            StatusCode::NOT_FOUND,
+            "MCPサーバーが見つかりません。",
+        ));
     };
 
     match rt.client.refresh_tools(&server).await {
         Ok(tools) => {
             let json_str = tools_to_cache_json(&tools);
             repo::update_tools_cache(&state.db, id, &json_str).await?;
-            let fresh = repo::get_server_by_id(&state.db, id).await?.unwrap_or(server);
+            let fresh = repo::get_server_by_id(&state.db, id)
+                .await?
+                .unwrap_or(server);
             Ok((
                 StatusCode::OK,
                 Json(json!({
@@ -286,14 +298,20 @@ pub(crate) async fn toggle(
     Json(body): Json<Value>,
 ) -> Result<Response, ApiError> {
     let Some(id) = parse_body_id(body.get("id")) else {
-        return Ok(err_json(StatusCode::NOT_FOUND, "MCPサーバーが見つかりません。"));
+        return Ok(err_json(
+            StatusCode::NOT_FOUND,
+            "MCPサーバーが見つかりません。",
+        ));
     };
     // Node `ctx.body.enabled === true`（真偽値 true のみ enabled）。
     let enabled = body.get("enabled") == Some(&Value::Bool(true));
     let admin = repo::is_admin(&state.db, &user.0.discord_id).await?;
     let server = repo::get_server_by_id(&state.db, id).await?;
     let Some(_server) = server.filter(|s| repo::can_manage(s, &user.0.discord_id, admin)) else {
-        return Ok(err_json(StatusCode::NOT_FOUND, "MCPサーバーが見つかりません。"));
+        return Ok(err_json(
+            StatusCode::NOT_FOUND,
+            "MCPサーバーが見つかりません。",
+        ));
     };
     repo::set_enabled(&state.db, id, enabled).await?;
     // 無効化したら発行済みプロキシトークンを即時失効させる。
@@ -305,7 +323,11 @@ pub(crate) async fn toggle(
     } else {
         "MCPサーバーを無効化しました。"
     };
-    Ok((StatusCode::OK, Json(json!({ "success": true, "message": message }))).into_response())
+    Ok((
+        StatusCode::OK,
+        Json(json!({ "success": true, "message": message })),
+    )
+        .into_response())
 }
 
 // ─── POST /api/mcp-servers/delete（削除） ──────────────────────────────────────
@@ -343,7 +365,11 @@ pub(crate) async fn delete(
     } else {
         "MCPサーバーが見つからないか、削除権限がありません。"
     };
-    Ok((StatusCode::OK, Json(json!({ "success": ok, "message": message }))).into_response())
+    Ok((
+        StatusCode::OK,
+        Json(json!({ "success": ok, "message": message })),
+    )
+        .into_response())
 }
 
 // ─── GET /api/mcp-servers/:id/dashboard/status（管理ページ提供の有無） ──────────
@@ -355,7 +381,10 @@ pub(crate) async fn dashboard_status(
     Path(id): Path<String>,
 ) -> Result<Response, ApiError> {
     let Some(server) = resolve_manageable(&state, &user, &id).await? else {
-        return Ok(err_json(StatusCode::NOT_FOUND, "MCPサーバーが見つかりません。"));
+        return Ok(err_json(
+            StatusCode::NOT_FOUND,
+            "MCPサーバーが見つかりません。",
+        ));
     };
     let available = rt.client.probe_dashboard(&server).await;
     Ok((
@@ -390,7 +419,10 @@ pub(crate) async fn dashboard(
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     let Some(server) = resolve_manageable(&state, &user, &id_str).await? else {
-        return Ok(frame_error(StatusCode::NOT_FOUND, "MCPサーバーが見つかりません。"));
+        return Ok(frame_error(
+            StatusCode::NOT_FOUND,
+            "MCPサーバーが見つかりません。",
+        ));
     };
     if !rt.client.probe_dashboard(&server).await {
         return Ok(frame_error(
@@ -419,7 +451,13 @@ pub(crate) async fn dashboard(
     let proxy_token = rt.tokens.issue(server.id, &user.0.discord_id);
     let akizakura = rt.client.fetch_akizakura_css().await;
 
-    match rewrite_dashboard(&html, server.id, &self_origin, &proxy_token, akizakura.as_deref()) {
+    match rewrite_dashboard(
+        &html,
+        server.id,
+        &self_origin,
+        &proxy_token,
+        akizakura.as_deref(),
+    ) {
         Ok(final_html) => {
             let frame_csp = frame_csp(&self_origin);
             let mut resp = (StatusCode::OK, final_html).into_response();
@@ -521,7 +559,8 @@ fn rewrite_dashboard(
     };
 
     // 5) `<head ...>` 直後にトークン注入スクリプトを差し込む（無ければ先頭へ prepend）。
-    let auto_token_script = format!("<script>window.__mcpProxyToken__ = \"{proxy_token}\";</script>");
+    let auto_token_script =
+        format!("<script>window.__mcpProxyToken__ = \"{proxy_token}\";</script>");
     let final_html = inject_after_head(&rewritten, &auto_token_script);
     Ok(final_html)
 }
@@ -747,10 +786,7 @@ pub(crate) async fn proxy_preflight(headers: HeaderMap) -> Response {
         HeaderValue::from_static("POST, OPTIONS"),
     );
     if let Ok(v) = HeaderValue::from_str(&req_headers) {
-        h.insert(
-            HeaderName::from_static("access-control-allow-headers"),
-            v,
-        );
+        h.insert(HeaderName::from_static("access-control-allow-headers"), v);
     }
     h.insert(
         HeaderName::from_static("access-control-max-age"),
@@ -1052,14 +1088,23 @@ mod tests {
             if !token.is_empty() {
                 b = b.header("cookie", format!("__Host-yuuka-session={token}"));
             }
-            let resp = app.clone().oneshot(b.body(Body::empty()).unwrap()).await.unwrap();
+            let resp = app
+                .clone()
+                .oneshot(b.body(Body::empty()).unwrap())
+                .await
+                .unwrap();
             let status = resp.status();
             let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
             let json = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
             (status, json)
         }
 
-        async fn post(app: &axum::Router, uri: &str, token: &str, body: &str) -> (StatusCode, Value) {
+        async fn post(
+            app: &axum::Router,
+            uri: &str,
+            token: &str,
+            body: &str,
+        ) -> (StatusCode, Value) {
             let mut b = Request::builder()
                 .method("POST")
                 .uri(uri)
@@ -1264,8 +1309,14 @@ mod tests {
             assert_eq!(resp.status(), StatusCode::NO_CONTENT);
             let h = resp.headers();
             assert_eq!(h.get("access-control-allow-origin").unwrap(), "null");
-            assert_eq!(h.get("access-control-allow-methods").unwrap(), "POST, OPTIONS");
-            assert_eq!(h.get("access-control-allow-headers").unwrap(), "authorization, x-custom");
+            assert_eq!(
+                h.get("access-control-allow-methods").unwrap(),
+                "POST, OPTIONS"
+            );
+            assert_eq!(
+                h.get("access-control-allow-headers").unwrap(),
+                "authorization, x-custom"
+            );
             assert_eq!(h.get("access-control-max-age").unwrap(), "600");
             assert!(h.get("access-control-allow-credentials").is_none());
         }
@@ -1287,7 +1338,10 @@ mod tests {
             assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
             let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
             let j: Value = serde_json::from_slice(&bytes).unwrap();
-            assert_eq!(j["message"], Value::String("不正なサーバーIDです。".to_owned()));
+            assert_eq!(
+                j["message"],
+                Value::String("不正なサーバーIDです。".to_owned())
+            );
         }
 
         #[tokio::test]

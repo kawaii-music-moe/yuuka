@@ -119,7 +119,9 @@ mod tests {
 
     #[tokio::test]
     async fn rejects_non_http_scheme() {
-        let e = assert_safe_outbound_url("ftp://example.com").await.unwrap_err();
+        let e = assert_safe_outbound_url("ftp://example.com")
+            .await
+            .unwrap_err();
         assert!(e.contains("許可されていないスキーム"));
     }
 
@@ -141,10 +143,12 @@ mod tests {
             .await
             .unwrap_err()
             .contains("内部/予約済み"));
-        assert!(assert_safe_outbound_url("http://169.254.169.254/latest/meta-data")
-            .await
-            .unwrap_err()
-            .contains("内部/予約済み"));
+        assert!(
+            assert_safe_outbound_url("http://169.254.169.254/latest/meta-data")
+                .await
+                .unwrap_err()
+                .contains("内部/予約済み")
+        );
         assert!(assert_safe_outbound_url("http://[::1]/")
             .await
             .unwrap_err()
@@ -154,21 +158,58 @@ mod tests {
     #[test]
     fn ipv4_ranges_match_node() {
         for ip in [
-            "0.0.0.1", "10.0.0.1", "127.0.0.1", "169.254.1.1", "172.16.0.1", "172.31.255.255",
-            "192.168.1.1", "192.0.0.1", "192.0.2.5", "198.18.0.1", "198.51.100.9", "203.0.113.9",
-            "100.64.0.1", "224.0.0.1", "255.255.255.255",
+            "0.0.0.1",
+            "10.0.0.1",
+            "127.0.0.1",
+            "169.254.1.1",
+            "172.16.0.1",
+            "172.31.255.255",
+            "192.168.1.1",
+            "192.0.0.1",
+            "192.0.2.5",
+            "198.18.0.1",
+            "198.51.100.9",
+            "203.0.113.9",
+            "100.64.0.1",
+            "224.0.0.1",
+            "255.255.255.255",
         ] {
-            assert!(is_blocked_ipv4(ip.parse().unwrap()), "expected blocked: {ip}");
+            assert!(
+                is_blocked_ipv4(ip.parse().unwrap()),
+                "expected blocked: {ip}"
+            );
         }
-        for ip in ["8.8.8.8", "1.1.1.1", "172.15.0.1", "172.32.0.1", "100.63.0.1", "223.255.255.255"] {
-            assert!(!is_blocked_ipv4(ip.parse().unwrap()), "expected allowed: {ip}");
+        for ip in [
+            "8.8.8.8",
+            "1.1.1.1",
+            "172.15.0.1",
+            "172.32.0.1",
+            "100.63.0.1",
+            "223.255.255.255",
+        ] {
+            assert!(
+                !is_blocked_ipv4(ip.parse().unwrap()),
+                "expected allowed: {ip}"
+            );
         }
     }
 
     #[test]
     fn ipv6_ranges_match_node() {
-        for ip in ["::1", "::", "fe80::1", "fc00::1", "fd00::1", "fec0::1", "ff02::1", "2001:db8::1"] {
-            assert!(is_blocked_ipv6(ip.parse().unwrap()), "expected blocked: {ip}");
+        for ip in [
+            "::1",
+            "::",
+            "fe80::1",
+            "fc00::1",
+            "fd00::1",
+            "fec0::1",
+            "ff02::1",
+            "2001:db8::1",
+        ] {
+            assert!(
+                is_blocked_ipv6(ip.parse().unwrap()),
+                "expected blocked: {ip}"
+            );
         }
         assert!(!is_blocked_ipv6("2606:4700:4700::1111".parse().unwrap()));
     }

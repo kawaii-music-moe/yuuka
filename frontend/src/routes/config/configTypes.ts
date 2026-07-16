@@ -115,6 +115,10 @@ export interface AssistantMcpServer {
 export interface AssistantGuild {
 	guild_id: string;
 }
+export interface AssistantChannel {
+	guild_id: string;
+	channel_id: string;
+}
 export interface AssistantMember {
 	guild_id: string;
 	user_id: string;
@@ -142,6 +146,7 @@ export interface AssistantConfigResp {
 	personas?: AssistantPersona[];
 	mcp_servers?: AssistantMcpServer[];
 	guilds?: AssistantGuild[];
+	channels?: AssistantChannel[];
 	members?: AssistantMember[];
 	roles?: AssistantRole[];
 	usage?: AssistantUsage[];

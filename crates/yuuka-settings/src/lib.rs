@@ -93,18 +93,12 @@ pub fn routes(runtime: Arc<SettingsRuntime>) -> Router<AppState> {
             "/api/settings/discord",
             get(discord::get_discord).post(discord::post_discord),
         )
-        .route(
-            "/api/settings/google/oauth/url",
-            get(google::oauth_url),
-        )
+        .route("/api/settings/google/oauth/url", get(google::oauth_url))
         .route(
             "/api/settings/google/oauth/callback",
             get(google::oauth_callback),
         )
         .route("/api/settings/calendars", post(google::calendars))
-        .route(
-            "/api/settings/backup/trigger",
-            post(google::backup_trigger),
-        )
+        .route("/api/settings/backup/trigger", post(google::backup_trigger))
         .layer(Extension(runtime))
 }

@@ -110,7 +110,11 @@ struct UploadReceiptInput {
 }
 
 fn receipt_error(status: StatusCode, message: &str) -> Response {
-    (status, Json(json!({ "success": false, "message": message }))).into_response()
+    (
+        status,
+        Json(json!({ "success": false, "message": message })),
+    )
+        .into_response()
 }
 
 async fn upload_receipt(
@@ -148,10 +152,7 @@ async fn upload_receipt(
             Ok(true) => b.to_owned(),
             Ok(false) => "system_default".to_owned(),
             Err(_) => {
-                return receipt_error(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "処理に失敗しました。",
-                )
+                return receipt_error(StatusCode::INTERNAL_SERVER_ERROR, "処理に失敗しました。")
             }
         },
         _ => "system_default".to_owned(),
@@ -163,13 +164,13 @@ async fn upload_receipt(
         .parse_receipt(&bot_id, &user.0.discord_id, &image, &mime, additional)
         .await
     {
-        Ok(response) => {
-            (StatusCode::OK, Json(json!({ "success": true, "response": response }))).into_response()
-        }
+        Ok(response) => (
+            StatusCode::OK,
+            Json(json!({ "success": true, "response": response })),
+        )
+            .into_response(),
         // レート超過はコスト増幅 DoS 対策の 429（Node `rateLimitMessage`）。
-        Err(ReceiptError::RateLimited(msg)) => {
-            receipt_error(StatusCode::TOO_MANY_REQUESTS, &msg)
-        }
+        Err(ReceiptError::RateLimited(msg)) => receipt_error(StatusCode::TOO_MANY_REQUESTS, &msg),
         // Gemini vision 未配線（縮退）。Node は上流エラーで 500 に落ちるが、明示 503 で伝える。
         Err(ReceiptError::Unavailable) => receipt_error(
             StatusCode::SERVICE_UNAVAILABLE,

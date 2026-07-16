@@ -87,7 +87,8 @@ pub async fn screenshot(url: &str, out_path: &Path) -> Result<(), String> {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis())
         .unwrap_or(0);
-    let temp_dir = std::env::temp_dir().join(format!("yuuka-screenshot-{}-{stamp}", std::process::id()));
+    let temp_dir =
+        std::env::temp_dir().join(format!("yuuka-screenshot-{}-{stamp}", std::process::id()));
     std::fs::create_dir_all(&temp_dir).map_err(|e| e.to_string())?;
 
     let output = tokio::process::Command::new(&chrome)

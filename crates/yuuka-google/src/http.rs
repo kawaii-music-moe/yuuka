@@ -40,8 +40,7 @@ const TOKEN_ENDPOINT: &str = "https://oauth2.googleapis.com/token";
 /// userinfo エンドポイント（email 取得）。
 const USERINFO_ENDPOINT: &str = "https://www.googleapis.com/oauth2/v2/userinfo";
 /// calendarList エンドポイント（利用可能カレンダー一覧）。
-const CALENDAR_LIST_ENDPOINT: &str =
-    "https://www.googleapis.com/calendar/v3/users/me/calendarList";
+const CALENDAR_LIST_ENDPOINT: &str = "https://www.googleapis.com/calendar/v3/users/me/calendarList";
 
 /// 同意画面で要求する OAuth スコープ（Node `GOOGLE_OAUTH_SCOPES`・並び順も一致）。
 const OAUTH_SCOPES: &[&str] = &[
@@ -516,10 +515,16 @@ mod tests {
         // 非空 + TTL 内 → 採用。
         assert!(cache_entry_is_fresh(&one, Duration::from_secs(10)));
         // 非空 + TTL 直前 → 採用。
-        assert!(cache_entry_is_fresh(&one, CACHE_TTL - Duration::from_secs(1)));
+        assert!(cache_entry_is_fresh(
+            &one,
+            CACHE_TTL - Duration::from_secs(1)
+        ));
         // 非空 + TTL 経過 → 破棄（再取得）。
         assert!(!cache_entry_is_fresh(&one, CACHE_TTL));
-        assert!(!cache_entry_is_fresh(&one, CACHE_TTL + Duration::from_secs(1)));
+        assert!(!cache_entry_is_fresh(
+            &one,
+            CACHE_TTL + Duration::from_secs(1)
+        ));
         // 空一覧は TTL 内でも採用しない（Node と一致・空をキャッシュ固着させない）。
         assert!(!cache_entry_is_fresh(&[], Duration::from_secs(0)));
     }

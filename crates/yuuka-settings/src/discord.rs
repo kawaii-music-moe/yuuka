@@ -61,11 +61,7 @@ pub(crate) async fn get_discord(
     } else {
         match &row {
             Some(r) if &r.user_id == user_id => {}
-            _ => {
-                return Ok(forbidden(
-                    "Botのトークン設定はオーナーのみが閲覧できます。",
-                ))
-            }
+            _ => return Ok(forbidden("Botのトークン設定はオーナーのみが閲覧できます。")),
         }
     }
 
@@ -160,8 +156,14 @@ pub(crate) async fn post_discord(
         token_changed = true;
     }
 
-    repo::update_bot_discord_token(&state.db, &bot_id, encrypted.clone(), iv.clone(), tag.clone())
-        .await?;
+    repo::update_bot_discord_token(
+        &state.db,
+        &bot_id,
+        encrypted.clone(),
+        iv.clone(),
+        tag.clone(),
+    )
+    .await?;
     let detail = if token_cleared {
         "cleared"
     } else if token_changed {
@@ -169,8 +171,14 @@ pub(crate) async fn post_discord(
     } else {
         "unchanged"
     };
-    yuuka_auth::audit::add_audit_log(&state.db, user_id, "bot.token_change", Some(&bot_id), Some(detail))
-        .await;
+    yuuka_auth::audit::add_audit_log(
+        &state.db,
+        user_id,
+        "bot.token_change",
+        Some(&bot_id),
+        Some(detail),
+    )
+    .await;
 
     // クリア時は稼働中 Bot を停止する。
     if token_cleared {
