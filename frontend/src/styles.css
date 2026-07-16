@@ -2716,12 +2716,15 @@ input[type="checkbox"]:disabled,
 	font-weight: 600;
 	color: var(--color-white);
 	white-space: nowrap;
-	max-width: 100%;
+	/* 長い名前でもヘッダー1行を保つ上限（コンテナが狭ければそちらに従う） */
+	max-width: min(340px, 100%);
 	min-width: 0;
 }
 
-/* 長いユーザーID表示はバッジ内で省略してレイアウトを押し広げない */
-.user-profile-badge #current-user-display {
+/* 長いユーザーID表示はバッジ内で省略してレイアウトを押し広げない
+   （旧 #current-user-display。Svelte 版は class 参照 + flex 子の縮小許可） */
+.user-profile-badge .user-badge-label {
+	min-width: 0;
 	overflow: hidden;
 	text-overflow: ellipsis;
 }
@@ -3155,11 +3158,14 @@ input[type="checkbox"]:disabled,
 	cursor: pointer;
 	transition: all 0.15s ease;
 	white-space: nowrap;
-	max-width: 100%;
+	/* 長い Bot 名でもヘッダー1行を保つ上限 */
+	max-width: min(260px, 100%);
 	min-width: 0;
 }
 
-.bot-context-badge #active-bot-display {
+/* 旧 #active-bot-display。Svelte 版は class 参照 + flex 子の縮小許可 */
+.bot-context-badge .bot-badge-label {
+	min-width: 0;
 	overflow: hidden;
 	text-overflow: ellipsis;
 }

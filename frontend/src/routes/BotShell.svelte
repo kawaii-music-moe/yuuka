@@ -225,7 +225,7 @@
 				</button>
 				<div class="user-profile-badge">
 					<Icon name="person" class="icon-small" />
-					<span>{userDisplay}</span>
+					<span class="user-badge-label">{userDisplay}</span>
 				</div>
 				<button
 					type="button"
