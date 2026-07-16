@@ -86,11 +86,7 @@ pub async fn touch_synapses(db: &Db, ids: Vec<i64>) -> Result<(), DbError> {
     db.writer
         .transaction(move |tx| {
             // プレースホルダを id 数だけ生成（IN 句・Node と同形）。
-            let placeholders = ids
-                .iter()
-                .map(|_| "?")
-                .collect::<Vec<_>>()
-                .join(", ");
+            let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
             let sql = format!(
                 "UPDATE synapses SET \
                    use_count = use_count + 1, \

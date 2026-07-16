@@ -11,6 +11,8 @@ pub mod assistant_config;
 pub mod bot_attr_routes;
 pub mod bot_repo;
 pub mod bot_routes;
+pub mod calendar_prompt;
+pub mod context_note;
 pub mod discord_live;
 pub mod discord_ports;
 pub mod engine;

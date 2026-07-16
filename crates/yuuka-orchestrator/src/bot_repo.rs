@@ -1714,10 +1714,7 @@ pub async fn set_bot_persona(
 ///
 /// # Errors
 /// 読み取り失敗時 [`DbError`]。
-pub async fn get_public_persona_name(
-    db: &Db,
-    persona_id: i64,
-) -> Result<Option<String>, DbError> {
+pub async fn get_public_persona_name(db: &Db, persona_id: i64) -> Result<Option<String>, DbError> {
     db.read
         .read(move |conn| {
             conn.query_row(

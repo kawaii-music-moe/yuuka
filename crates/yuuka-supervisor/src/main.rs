@@ -127,14 +127,38 @@ async fn run() -> Result<(), String> {
         }
         Arc::new(tokio::sync::Mutex::new(engine))
     };
-    let chat_engine = Arc::new(ChatEngine::with_real_gemini(
-        db.clone(),
-        crypto.clone(),
-        tool_registry,
-        Some(action_recorder),
-        mcp_client.clone(),
-        Some(synapse_engine),
-    ));
+    // Google OAuth/Calendar クライアント（A3・reqwest）。暗号鍵 + GOOGLE_CLIENT_ID/SECRET があれば
+    // GoogleHttpClient、無ければ Null へ縮退する。ChatEngine の systemInstruction（連携カレンダー一覧・
+    // P2-E-2）と settings/integrated ルートで同一 Arc を共有するため、ChatEngine 構築前にここで 1 度だけ生成する。
+    let (google_oauth, google_calendar): (
+        Arc<dyn yuuka_google::GoogleOAuthPort>,
+        Arc<dyn yuuka_google::CalendarPort>,
+    ) = if let Some(crypto) = crypto.clone() {
+        let client = Arc::new(yuuka_google::GoogleHttpClient::new(
+            cfg.google_client_id.clone().unwrap_or_default(),
+            cfg.google_client_secret.clone().unwrap_or_default(),
+            crypto,
+            db.clone(),
+            http_client.clone(),
+        ));
+        (client.clone(), client)
+    } else {
+        (
+            Arc::new(yuuka_google::NullGoogleOAuth),
+            Arc::new(yuuka_google::NullCalendar),
+        )
+    };
+    let chat_engine = Arc::new(
+        ChatEngine::with_real_gemini(
+            db.clone(),
+            crypto.clone(),
+            tool_registry,
+            Some(action_recorder),
+            mcp_client.clone(),
+            Some(synapse_engine),
+        )
+        .with_calendar(google_calendar.clone()),
+    );
     let chat_ws_routes = ws_routes(chat_engine.clone(), cfg.desktop_max_upload_mb);
 
     // 4.7) Discord マルチテナント（P1-3）。実ポート（BotDirectory/RateLimiter/MembershipService）＋
@@ -177,36 +201,14 @@ async fn run() -> Result<(), String> {
     // 共有する。Google OAuth/Calendar/Drive バックアップは HTTP サブシステム未配線のため Null シームへ
     // 縮退する（DB 効果＝アカウント行・カレンダー列・トークン列は常に完全に働く）。OAuth state ストアは
     // web 再起動を跨ぐよう main で 1 度だけ生成する。
-    // Google OAuth/Calendar は実 HTTP クライアント（A3・reqwest）。暗号鍵があれば GoogleHttpClient
-    // （リフレッシュトークン復号 + Google API）、無ければ Null へ縮退する。`is_configured()` が
-    // GOOGLE_CLIENT_ID/SECRET 未設定を自己判定するため、client の有無に依らず oauth ルートは安全に振る舞う。
+    // Google OAuth/Calendar（google_oauth/google_calendar）は ChatEngine 構築前（上）で 1 度だけ生成済み。
     // Drive バックアップ（BackupPort）は下でゲート付きに配線する（crypto + ID/SECRET 揃えば live）。
-    let (google_oauth, google_calendar): (
-        Arc<dyn yuuka_google::GoogleOAuthPort>,
-        Arc<dyn yuuka_google::CalendarPort>,
-    ) = if let Some(crypto) = crypto.clone() {
-        let client = Arc::new(yuuka_google::GoogleHttpClient::new(
-            cfg.google_client_id.clone().unwrap_or_default(),
-            cfg.google_client_secret.clone().unwrap_or_default(),
-            crypto,
-            db.clone(),
-            http_client.clone(),
-        ));
-        (client.clone(), client)
-    } else {
-        (
-            Arc::new(yuuka_google::NullGoogleOAuth),
-            Arc::new(yuuka_google::NullCalendar),
-        )
-    };
     // Drive バックアップ（BackupPort）: 暗号鍵 + GOOGLE_CLIENT_ID/SECRET が揃えば実 Drive アップロード
     // （GoogleBackupClient・OAuth と同一のトークン経路）、揃わなければ NullBackup（backup/trigger は 500）。
     // A3 の GoogleHttpClient と同じゲート（crypto 有無 + is_configured 相当の ID/SECRET 存在）で判定する。
     // 同一 Arc を settings ルート（手動 trigger）と cron 常駐サービス（定期実行）へ共有する。
     let google_backup_client: Option<Arc<yuuka_google::GoogleBackupClient>> = match crypto.clone() {
-        Some(crypto)
-            if cfg.google_client_id.is_some() && cfg.google_client_secret.is_some() =>
-        {
+        Some(crypto) if cfg.google_client_id.is_some() && cfg.google_client_secret.is_some() => {
             Some(Arc::new(yuuka_google::GoogleBackupClient::new(
                 cfg.google_client_id.clone().unwrap_or_default(),
                 cfg.google_client_secret.clone().unwrap_or_default(),
@@ -247,12 +249,11 @@ async fn run() -> Result<(), String> {
 
     // 統合設定ルータ（overview / bot lifecycle / grants / google accounts）。Bot 起動停止は Discord
     // gateway 未配線のため NullBotLifecycle、カレンダー取得は settings と同一の Null シームを共有する。
-    let integrated_routes = yuuka_integrated::routes(Arc::new(
-        yuuka_integrated::IntegratedRuntime::new(
+    let integrated_routes =
+        yuuka_integrated::routes(Arc::new(yuuka_integrated::IntegratedRuntime::new(
             Arc::new(yuuka_integrated::NullBotLifecycle),
             google_calendar.clone(),
-        ),
-    ));
+        )));
 
     // finance ルータ（A1 配線）: upload-receipt を実 ChatEngine の秘書ターン（画像 OCR）へ橋渡す。
     // レート制限は web 受付専用の in-memory カウンタ（guildId スロット="web"）。
@@ -368,8 +369,7 @@ async fn run() -> Result<(), String> {
         // 定期バックアップの実行ポートを注入（実 Drive クライアントがあれば live・無ければ NullBackupRunner
         // 据え置き＝走査はするが実行は失敗）。手動 trigger（settings）と同一の GoogleBackupClient を共有する。
         if let Some(client) = google_backup_client.clone() {
-            service_ctx =
-                service_ctx.with_backup(Arc::new(BackupRunnerAdapter { client }));
+            service_ctx = service_ctx.with_backup(Arc::new(BackupRunnerAdapter { client }));
         }
         let cron = build_supervised_services(&service_ctx);
         tracing::warn!(
@@ -473,9 +473,9 @@ impl yuuka_finance::ReceiptParser for ReceiptParserAdapter {
             .consume(&bid, &yuuka_core::GuildId::new("web"), &uid)
             .await;
         if let Some(exceeded) = decision.exceeded {
-            return Err(yuuka_finance::ReceiptError::RateLimited(rate_limit_message(
-                exceeded,
-            )));
+            return Err(yuuka_finance::ReceiptError::RateLimited(
+                rate_limit_message(exceeded),
+            ));
         }
         // InlineMedia は `;` 以降を除去した MIME を要求する（Gemini inlineData 用）。
         let clean_mime = mime_type

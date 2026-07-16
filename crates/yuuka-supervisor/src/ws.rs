@@ -364,17 +364,12 @@ fn rich_embed_to_json(e: &RichEmbed) -> serde_json::Value {
         let fields: Vec<serde_json::Value> = e
             .fields
             .iter()
-            .map(|f| {
-                serde_json::json!({ "name": f.name, "value": f.value, "inline": f.inline })
-            })
+            .map(|f| serde_json::json!({ "name": f.name, "value": f.value, "inline": f.inline }))
             .collect();
         obj.insert("fields".to_owned(), serde_json::Value::Array(fields));
     }
     if let Some(footer) = &e.footer {
-        obj.insert(
-            "footer".to_owned(),
-            serde_json::json!({ "text": footer }),
-        );
+        obj.insert("footer".to_owned(), serde_json::json!({ "text": footer }));
     }
     serde_json::Value::Object(obj)
 }

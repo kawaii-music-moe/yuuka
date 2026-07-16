@@ -26,11 +26,14 @@ use yuuka_gemini::{
     run_function_calling_loop, Content, GeminiClient, GenerateBackend, LoopOptions, Part, Role,
     Status, StatusCb,
 };
+use yuuka_google::CalendarPort;
 use yuuka_mcp::{McpClient, McpProvider};
 use yuuka_synapse::{Scope as SynapseScope, SynapseEngine};
 use yuuka_tools::ToolRegistry;
 use yuuka_web::Db;
 
+use crate::calendar_prompt;
+use crate::context_note;
 use crate::guild_prompt::{self, GuildScope};
 use crate::message_log::{self, ContextEntry};
 use crate::synapse_extract::{self, ExtractScope};
@@ -136,6 +139,9 @@ pub struct ChatEngine {
     /// `None` なら現行挙動（直近履歴のみ）へデグレード（想起は `""`・抽出は no-op）。main.rs で
     /// [`SynapseEngine::boot`] して 1 つだけ注入する。`Mutex` は唯一の可変索引を直列化する。
     synapse: Option<Arc<tokio::sync::Mutex<SynapseEngine>>>,
+    /// 連携中 Google カレンダー一覧を systemInstruction へ注入するための CalendarPort（A3・5min キャッシュ）。
+    /// `None` なら非注入（Node `isCalendarEnabled` 相当のデグレード）。main.rs で [`ChatEngine::with_calendar`] 注入。
+    calendar: Option<Arc<dyn CalendarPort>>,
 }
 
 impl ChatEngine {
@@ -159,7 +165,16 @@ impl ChatEngine {
             recorder,
             mcp_client,
             synapse,
+            calendar: None,
         }
+    }
+
+    /// 連携カレンダー一覧の注入に使う `CalendarPort` を後付けする（main.rs で A3 の `google_calendar` を注入・
+    /// P2-E-2）。未注入なら systemInstruction にカレンダー一覧を組み込まない。
+    #[must_use]
+    pub fn with_calendar(mut self, calendar: Arc<dyn CalendarPort>) -> Self {
+        self.calendar = Some(calendar);
+        self
     }
 
     /// 本番 `GeminiClient` ファクトリで構築する糖衣。
@@ -273,6 +288,18 @@ impl ChatEngine {
             &system_prompt::now_date_time_ja(),
         );
 
+        // 3.35. 連携中 Google カレンダー一覧を systemInstruction へ注入（Node `gemini.ts:149-166`・P2-E-2・
+        //       秘書モードのみ）。Node 構成順＝ペルソナ→カレンダー→コンテキストノートに合わせ、コンテキスト
+        //       ノートより前へ。未注入/キャッシュ空は "" で不変。
+        if let Some(cal) = &self.calendar {
+            sys.push_str(&calendar_prompt::build_calendar_section(&self.db, cal, uid).await);
+        }
+
+        // 3.4. コンテキストノート（ユーザー登録の背景情報）を systemInstruction 末尾へ注入
+        //      （Node `gemini.ts:170-175`・§3.7.3・構成順=ペルソナ→ルール→コンテキストノート）。
+        //      秘書モードのみ（Node の guild/DM `buildGuildSystemInstruction` は非注入）。未登録/空/失敗は "" で不変。
+        sys.push_str(&context_note::build_context_note_section(&self.db, uid, bid).await);
+
         // 3.5. L2 連想想起（シナプス）を systemInstruction 末尾へ追記（Node `buildRecallSection`）。
         //      秘書モードのスコープは (userId, botId)・guild_id なし（DM/秘書利用）。返信チェーンは
         //      Rust では縮退シーム（空）＝クエリは現発話。エンジン未配線/想起 0 件なら "" で不変。
@@ -283,7 +310,8 @@ impl ChatEngine {
                 guild_id: None,
             };
             let query = synapse_recall::build_recall_query(&msg.text, &[]);
-            let section = synapse_recall::build_recall_section(&self.db, engine, &scope, &query).await;
+            let section =
+                synapse_recall::build_recall_section(&self.db, engine, &scope, &query).await;
             sys.push_str(&section);
         }
 
@@ -318,15 +346,11 @@ impl ChatEngine {
         // MCP 動的ツール: `mcp` 能力があるときだけ発話者スコープで探索し、そのターン限りの provider として
         // snapshot へ層状に足す（Node `resolveMcpModule`: `caps.has("mcp")` ガード → getMcpFunctionModuleForBot）。
         // 探索は DB + tools/list（ネットワーク）を伴うため FC ループ直前に一度だけ行う。取得失敗でも空 provider。
-        let mcp_provider: Option<Arc<dyn yuuka_core::ToolProvider>> = if ctx.capabilities.has("mcp") {
+        let mcp_provider: Option<Arc<dyn yuuka_core::ToolProvider>> = if ctx.capabilities.has("mcp")
+        {
             Some(Arc::new(
-                McpProvider::discover(
-                    self.db.clone(),
-                    Arc::clone(&self.mcp_client),
-                    bid,
-                    uid,
-                )
-                .await,
+                McpProvider::discover(self.db.clone(), Arc::clone(&self.mcp_client), bid, uid)
+                    .await,
             ))
         } else {
             None

@@ -446,14 +446,20 @@ mod tests {
         assert_eq!(s.total_responses, 1);
 
         // ログ無し Bot は全 0・長さは days。
-        let z = get_bot_usage_series(&db, "system_default", 5).await.unwrap();
+        let z = get_bot_usage_series(&db, "system_default", 5)
+            .await
+            .unwrap();
         assert_eq!(z.series.len(), 5);
         assert_eq!(z.total_requests, 0);
         assert_eq!(z.total_responses, 0);
 
         // days クランプ: 0→1、200→90。
         assert_eq!(
-            get_bot_usage_series(&db, "b1", 0).await.unwrap().series.len(),
+            get_bot_usage_series(&db, "b1", 0)
+                .await
+                .unwrap()
+                .series
+                .len(),
             1
         );
         assert_eq!(

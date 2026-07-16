@@ -4015,6 +4015,7 @@ dependencies = [
  "yuuka-db",
  "yuuka-discord",
  "yuuka-gemini",
+ "yuuka-google",
  "yuuka-mcp",
  "yuuka-synapse",
  "yuuka-tools",
