@@ -1066,9 +1066,9 @@ textarea:focus {
 	justify-content: space-between;
 	align-items: center;
 	gap: 12px 16px;
-	margin-bottom: 30px;
+	margin-bottom: 18px;
 	border-bottom: 1px solid var(--border-matte);
-	padding-bottom: 20px;
+	padding-bottom: 14px;
 }
 
 .header-title {
@@ -1078,12 +1078,6 @@ textarea:focus {
 .header-title h2 {
 	font-size: 1.6rem;
 	font-weight: 800;
-	margin-bottom: 6px;
-}
-
-.header-title p {
-	font-size: 0.8rem;
-	color: var(--text-secondary);
 }
 
 /* Integrated Header Controls */
@@ -2300,26 +2294,44 @@ input[type="checkbox"]:disabled,
 		min-height: calc(100vh - 64px);
 	}
 
-	/* Stacking Top Header */
+	/* 1行ヘッダー: タイトル左・アイコン操作右（縦積みをやめ上部占有を最小化） */
 	.top-header {
-		flex-direction: column;
-		align-items: stretch;
-		gap: 12px;
+		flex-wrap: nowrap;
+		gap: 8px;
+		margin-bottom: 14px;
 		border-bottom: 1px solid var(--border-matte);
-		padding-bottom: 16px;
+		padding-bottom: 10px;
 	}
 
 	.header-title {
 		min-width: 0;
+		flex: 1 1 auto;
+	}
+
+	.header-title h2 {
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
 	}
 
 	.header-controls {
-		flex-direction: row;
-		flex-wrap: wrap;
-		align-items: stretch;
-		justify-content: flex-start;
+		flex: 0 0 auto;
+		flex-wrap: nowrap;
 		gap: 8px;
-		width: 100%;
+	}
+
+	/* スマホではユーザーバッジ非表示・Botバッジ/ログアウトはアイコンのみに縮退 */
+	.user-profile-badge {
+		display: none;
+	}
+
+	.bot-context-badge {
+		padding: 6px 8px;
+	}
+
+	.bot-context-badge .bot-badge-label,
+	.logout-label {
+		display: none;
 	}
 
 	.profile-switch {
@@ -2334,19 +2346,6 @@ input[type="checkbox"]:disabled,
 		min-width: 0;
 		max-width: 100%;
 		flex: 1 1 0;
-	}
-
-	#btn-logout {
-		padding: 8px 12px;
-		font-size: 0.8rem;
-		flex: 0 0 auto;
-		width: auto;
-		white-space: nowrap;
-	}
-
-	/* モバイルではログアウトボタンのアイコンを非表示にしてテキストのみ */
-	#btn-logout .icon-button-left {
-		display: none;
 	}
 
 	/* Layout Grids Stacking to 1 Column */
@@ -2445,10 +2444,6 @@ input[type="checkbox"]:disabled,
 	/* Header title scaling */
 	.header-title h2 {
 		font-size: 1.3rem;
-	}
-
-	.header-title p {
-		font-size: 0.72rem;
 	}
 
 	.column-header h3 {
@@ -2605,10 +2600,6 @@ input[type="checkbox"]:disabled,
 
 	.header-title h2 {
 		font-size: 1.1rem;
-	}
-
-	.header-title p {
-		font-size: 0.7rem;
 	}
 }
 

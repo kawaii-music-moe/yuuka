@@ -211,7 +211,6 @@
 		<header class="top-header">
 			<div class="header-title">
 				<h2 id="current-tab-title">{title}</h2>
-				<p id="header-subtitle">タスク・スケジュール・家計をスマートに管理します。</p>
 			</div>
 
 			<div class="header-controls">
@@ -222,7 +221,7 @@
 					onclick={backToBots}
 				>
 					<Icon name="robot_2" class="icon-small" />
-					<span>{botName}</span>
+					<span class="bot-badge-label">{botName}</span>
 				</button>
 				<div class="user-profile-badge">
 					<Icon name="person" class="icon-small" />
@@ -243,7 +242,8 @@
 					title="ログアウト"
 					onclick={logout}
 				>
-					<Icon name="logout" class="icon-button-left" /> ログアウト
+					<Icon name="logout" class="icon-button-left" />
+					<span class="logout-label">ログアウト</span>
 				</button>
 			</div>
 		</header>
