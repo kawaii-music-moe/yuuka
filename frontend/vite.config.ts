@@ -54,9 +54,19 @@ export default defineConfig({
 	},
 	plugins: [
 		svelte(),
-		// P1a: Service Worker（Workbox generateSW / self-host / CSP準拠）
-		// 旧 src/public/sw.js（yuuka-v10, 固定 /app.js precache）を置換。
+		// Service Worker は **無効化**（selfDestroying）。
+		// 経緯: autoUpdate + precache + StaleWhileRevalidate の構成では、アプリを開いたまま
+		//   新ビルドがデプロイされるとブラウザ内の旧 SW が旧ハッシュ資産を掴んだまま
+		//   cleanupOutdatedCaches で旧キャッシュを消し、新旧 CSS/JS が skew して画面が総崩れになる
+		//   （遅延ビュー〔統合管理/管理者〕が先に、続いて他ページも表示不能＝進行性の白画面）。
+		//   Svelte + Vite 移行後は資産ハッシュが頻繁に変わるため再デプロイ毎に再発していた。
+		// 対処: selfDestroying:true で「自己解除 + 全キャッシュ削除」する sw.js を配信する。
+		//   既存の壊れた SW を持つ全クライアントが次回ロードで自動回復し、以後は SW なしの
+		//   プレーン SPA として動く（社内管理ポータルのためオフライン/インストール性の喪失は許容）。
+		// 再有効化する場合は selfDestroying を外し、下記 workbox 設定へ戻す（ただし更新 skew の
+		//   恒久対策〔資産の StaleWhileRevalidate 撤去・更新フロー是正〕を併せて行うこと）。
 		VitePWA({
+			selfDestroying: true,
 			// 更新フローの単一責任者。skipWaiting/clientsClaim は明示しない
 			//（autoUpdate + skipWaiting + clientsClaim の三点セットは新旧チャンク混在→白画面を再誘発するため禁止）。
 			registerType: "autoUpdate",
