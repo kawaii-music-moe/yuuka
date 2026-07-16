@@ -78,9 +78,7 @@ pub fn routes_with(
         .layer(Extension(runtime))
         .layer(Extension(ViewCrypto(crypto)))
         // sync-discord の Discord ライブ照会シーム（gateway 未配線時は Null＝Bot ユーザー無し）。
-        .layer(Extension(
-            Arc::new(NullDiscordLive) as Arc<dyn DiscordLive>,
-        ))
+        .layer(Extension(Arc::new(NullDiscordLive) as Arc<dyn DiscordLive>))
 }
 
 // ─── GET /api/bots ───────────────────────────────────────────────────────────

@@ -54,10 +54,7 @@ pub fn routes_with(crypto: Option<Arc<SystemCrypto>>) -> Router<AppState> {
         .route("/api/bots/presets", get(list_presets))
         .route("/api/bots/attributes", post(change_attributes))
         .route("/api/bots/assistant-config", get(assistant_config_get))
-        .route(
-            "/api/bots/assistant/guild-options",
-            get(guild_options_get),
-        )
+        .route("/api/bots/assistant/guild-options", get(guild_options_get))
         .route(
             "/api/bots/assistant/guild-note",
             get(guild_note_get).post(guild_note_set),
@@ -69,7 +66,10 @@ pub fn routes_with(crypto: Option<Arc<SystemCrypto>>) -> Router<AppState> {
         .route("/api/bots/assistant/gemini-key", post(set_gemini_key))
         .route("/api/bots/modules", get(get_modules).post(set_modules))
         .route("/api/bots/usage", get(get_usage))
-        .route("/api/bots/recommended-persona", post(set_recommended_persona))
+        .route(
+            "/api/bots/recommended-persona",
+            post(set_recommended_persona),
+        )
         .route(
             "/api/admin/personas/unpublish",
             post(admin_unpublish_persona),
@@ -81,9 +81,7 @@ pub fn routes_with(crypto: Option<Arc<SystemCrypto>>) -> Router<AppState> {
         )
         .layer(Extension(AttrCrypto(crypto)))
         // guild-options の Discord ライブ照会シーム（gateway 未配線時は Null＝利用不可・空一覧）。
-        .layer(Extension(
-            Arc::new(NullDiscordLive) as Arc<dyn DiscordLive>,
-        ))
+        .layer(Extension(Arc::new(NullDiscordLive) as Arc<dyn DiscordLive>))
 }
 
 // ─── GET /api/bots/usage（API 利用量サマリ・アクセス権のある全ユーザー・読み取り専用） ──
@@ -145,9 +143,7 @@ async fn get_usage(
     let series: Vec<Value> = usage
         .series
         .iter()
-        .map(|p| {
-            json!({ "date": p.date, "requests": p.requests, "responses": p.responses })
-        })
+        .map(|p| json!({ "date": p.date, "requests": p.requests, "responses": p.responses }))
         .collect();
     Json(json!({
         "success": true,
@@ -977,8 +973,12 @@ async fn assistant_config_get(
     State(db): State<Db>,
     Query(q): Query<BotIdQuery>,
 ) -> Response {
-    let bot = match require_owned_bot(&db, &user.0.discord_id, q.bot_id.as_deref().unwrap_or_default())
-        .await
+    let bot = match require_owned_bot(
+        &db,
+        &user.0.discord_id,
+        q.bot_id.as_deref().unwrap_or_default(),
+    )
+    .await
     {
         Ok(b) => b,
         Err(resp) => return resp,
@@ -1109,8 +1109,12 @@ async fn guild_options_get(
     Extension(live): Extension<Arc<dyn DiscordLive>>,
     Query(q): Query<GuildOptionsQuery>,
 ) -> Response {
-    let bot = match require_owned_bot(&db, &user.0.discord_id, q.bot_id.as_deref().unwrap_or_default())
-        .await
+    let bot = match require_owned_bot(
+        &db,
+        &user.0.discord_id,
+        q.bot_id.as_deref().unwrap_or_default(),
+    )
+    .await
     {
         Ok(b) => b,
         Err(resp) => return resp,
@@ -2077,8 +2081,8 @@ mod tests {
                 .expect("seed log");
             }
         }
-        let app = super::routes()
-            .with_state(AppState::new(Arc::new(FakeAuth), WebConfig::default(), db));
+        let app =
+            super::routes().with_state(AppState::new(Arc::new(FakeAuth), WebConfig::default(), db));
 
         let (st, j) = send(&app, "GET", "/api/bots/usage?days=1", "owner", "").await;
         assert_eq!(st, StatusCode::OK);

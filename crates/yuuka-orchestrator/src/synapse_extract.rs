@@ -29,15 +29,49 @@ const MEMORABLE_MIN_LEN: usize = 80;
 
 /// 「記憶に値する」意味マーカー（Node `MEMORABLE_RE`・逐語）。嗜好・習慣・事実・制約・記憶依頼。
 const MEMORABLE_MARKERS: &[&str] = &[
-    "好き", "嫌い", "苦手", "お気に入り", "推し", "いつも", "毎日", "毎週", "毎朝", "毎晩",
-    "習慣", "誕生日", "記念日", "アレルギー", "出身", "在住", "住ん", "勤め", "所属", "締め切り",
-    "期限", "目標", "設定", "覚え", "記憶", "忘れない",
+    "好き",
+    "嫌い",
+    "苦手",
+    "お気に入り",
+    "推し",
+    "いつも",
+    "毎日",
+    "毎週",
+    "毎朝",
+    "毎晩",
+    "習慣",
+    "誕生日",
+    "記念日",
+    "アレルギー",
+    "出身",
+    "在住",
+    "住ん",
+    "勤め",
+    "所属",
+    "締め切り",
+    "期限",
+    "目標",
+    "設定",
+    "覚え",
+    "記憶",
+    "忘れない",
 ];
 
 /// 秘匿ガードのキーワード（Node `SECRET_GUARD_RE`・逐語・大文字小文字無視）。
 const SECRET_GUARD_KEYWORDS: &[&str] = &[
-    "password", "passwd", "パスワード", "secret", "シークレット", "token", "api_key", "api-key",
-    "apikey", "credential", "暗証", "ワンタイム", "otp",
+    "password",
+    "passwd",
+    "パスワード",
+    "secret",
+    "シークレット",
+    "token",
+    "api_key",
+    "api-key",
+    "apikey",
+    "credential",
+    "暗証",
+    "ワンタイム",
+    "otp",
 ];
 
 /// Node `SECRET_GUARD_RE.test()` パリティ: キーワードのいずれかを（大文字小文字無視で）含むか。
@@ -93,9 +127,26 @@ fn derive_topic_id(text: &str) -> Option<String> {
         c.is_whitespace()
             || matches!(
                 c,
-                '、' | '。' | '．' | ',' | '.' | '!' | '?' | '！' | '？'
-                    | '「' | '」' | '『' | '』' | '(' | ')' | '（' | '）'
-                    | '[' | ']' | '【' | '】'
+                '、' | '。'
+                    | '．'
+                    | ','
+                    | '.'
+                    | '!'
+                    | '?'
+                    | '！'
+                    | '？'
+                    | '「'
+                    | '」'
+                    | '『'
+                    | '』'
+                    | '('
+                    | ')'
+                    | '（'
+                    | '）'
+                    | '['
+                    | ']'
+                    | '【'
+                    | '】'
             )
     };
     let mut longest: Option<&str> = None;
@@ -126,8 +177,25 @@ fn derive_topic_id(text: &str) -> Option<String> {
 
 /// 既知の秘匿トークン接頭辞（部分一致・Node `SECRET_PREFIXES`）。
 const SECRET_PREFIXES: &[&str] = &[
-    "sk-", "rk_", "ghp_", "gho_", "ghu_", "ghs_", "ghr_", "github_pat_", "xoxb-", "xoxp-",
-    "xoxa-", "xoxr-", "xoxs-", "AKIA", "ASIA", "AIza", "ya29.", "-----BEGIN", "AccountKey=",
+    "sk-",
+    "rk_",
+    "ghp_",
+    "gho_",
+    "ghu_",
+    "ghs_",
+    "ghr_",
+    "github_pat_",
+    "xoxb-",
+    "xoxp-",
+    "xoxa-",
+    "xoxr-",
+    "xoxs-",
+    "AKIA",
+    "ASIA",
+    "AIza",
+    "ya29.",
+    "-----BEGIN",
+    "AccountKey=",
 ];
 
 /// 文字あたりのシャノンエントロピー（bit・Node `shannonEntropyBits`）。
@@ -292,8 +360,7 @@ async fn extract_inner(
     }
 
     // memorable 判定: 意味マーカーを含むか、十分に長い実質発話のみ。
-    let is_memorable =
-        is_memorable_marker(trimmed) || trimmed.chars().count() >= MEMORABLE_MIN_LEN;
+    let is_memorable = is_memorable_marker(trimmed) || trimmed.chars().count() >= MEMORABLE_MIN_LEN;
     if !is_memorable {
         return Ok(());
     }
@@ -346,7 +413,8 @@ async fn extract_inner(
             },
         )
     };
-    synapse_repo::update_synapse_embedding(db, id, indexed.embedding, indexed.model_version).await?;
+    synapse_repo::update_synapse_embedding(db, id, indexed.embedding, indexed.model_version)
+        .await?;
     Ok(())
 }
 

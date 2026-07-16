@@ -153,10 +153,7 @@ mod tests {
             "直近2".to_owned(),
         ];
         // 直近 2 件（直近1・直近2）+ 現発話が改行結合される。
-        assert_eq!(
-            build_recall_query("現発話", &chain),
-            "直近1\n直近2\n現発話"
-        );
+        assert_eq!(build_recall_query("現発話", &chain), "直近1\n直近2\n現発話");
     }
 
     #[test]
@@ -236,14 +233,19 @@ mod tests {
             section.contains("# 関連する過去の記憶（連想想起／参考情報）"),
             "見出しを含む"
         );
-        assert!(section.contains("- 好きな食べ物はカレーです"), "content を箇条書きに含む");
+        assert!(
+            section.contains("- 好きな食べ物はカレーです"),
+            "content を箇条書きに含む"
+        );
 
         // 鮮度更新（use_count）が反映されている。
         let use_count: i64 = db
             .read
             .read(|conn| {
-                conn.query_row("SELECT use_count FROM synapses WHERE id = 1", [], |r| r.get(0))
-                    .map_err(yuuka_db::map_sqlite)
+                conn.query_row("SELECT use_count FROM synapses WHERE id = 1", [], |r| {
+                    r.get(0)
+                })
+                .map_err(yuuka_db::map_sqlite)
             })
             .await
             .expect("read");

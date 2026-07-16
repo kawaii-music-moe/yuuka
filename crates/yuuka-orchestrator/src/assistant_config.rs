@@ -17,7 +17,9 @@ pub async fn list_own_personas(db: &Db, owner_id: &str) -> Result<Vec<(i64, Stri
     db.read
         .read(move |conn| {
             let mut stmt = conn
-                .prepare("SELECT id, name FROM personas WHERE owner_id = ?1 ORDER BY updated_at DESC")
+                .prepare(
+                    "SELECT id, name FROM personas WHERE owner_id = ?1 ORDER BY updated_at DESC",
+                )
                 .map_err(map_sqlite)?;
             let rows = stmt
                 .query_map(params![owner_id], |r| {
