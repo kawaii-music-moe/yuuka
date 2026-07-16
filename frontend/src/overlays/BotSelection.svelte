@@ -17,6 +17,7 @@
 	import { confirmDialog, Modal, Icon } from "$lib/components/ui";
 	import { selectBot } from "$lib/stores/activeBot";
 	import { currentUser, isAdmin } from "$lib/stores/session";
+	import { theme, toggleTheme } from "$lib/stores/theme";
 	import { authApi } from "$lib/api/services";
 	import { navigateTo } from "$lib/router";
 	import type { BotView, PresetOption } from "$lib/api/types";
@@ -104,7 +105,8 @@
 			avatar: bot.discord_avatar_url || "",
 			preset: bot.preset || "secretary",
 		});
-		navigateTo("/bot/config");
+		// 2階層化後の入口は一般情報（設定系はサイドバー「Bot設定」ハブ配下へ移動）。
+		navigateTo("/bot/dashboard");
 	}
 
 	// ── Discord 同期（旧 syncBtn） ──
@@ -191,50 +193,125 @@
 		currentUser.set(null);
 		navigateTo("/login");
 	}
+
+	// スマホ用ドロワー開閉（BotShell と同規約。PC はサイドバー常設）。
+	let sidebarOpen = $state(false);
+
+	// サイドバー下部ユーザーパネル表示（BotShell と同一フォーマット）。
+	const userDisplay = $derived(
+		$currentUser ? `${$currentUser.username} (${$currentUser.discordId})` : "ロード中...",
+	);
+	const themeIcon = $derived($theme === "dark" ? "light_mode" : "dark_mode");
+	const themeTitle = $derived(
+		$theme === "dark" ? "ライトテーマに切り替え" : "ダークテーマに切り替え",
+	);
 </script>
 
-<div class="overlay active" id="bot-selection-overlay">
-	<div class="home-dashboard">
-		<!-- ナビゲーションバー -->
-		<nav class="home-nav">
-			<div class="home-nav-brand">
-				<span class="material-symbols-outlined home-nav-logo">calculate</span>
-				<span class="home-nav-title">Yuuka</span>
-				<span class="home-nav-subtitle">Management Portal</span>
+<svelte:window
+	onkeydown={(e) => {
+		if (e.key === "Escape") sidebarOpen = false;
+	}}
+/>
+
+<div class="app-container">
+	<!-- サイドバー（PC 常設 / スマホはドロワー。BotShell と同じ構造・クラスを流用） -->
+	<aside class="sidebar" class:open={sidebarOpen}>
+		<div class="home-nav-brand home-sidebar-brand">
+			<span class="material-symbols-outlined home-nav-logo">calculate</span>
+			<span class="home-nav-title">Yuuka</span>
+		</div>
+
+		<nav class="sidebar-menu">
+			<button
+				type="button"
+				class="menu-item active"
+				onclick={() => (sidebarOpen = false)}
+			>
+				<Icon name="home" class="menu-icon-symbol" />
+				<span class="menu-text">ホーム（Bot一覧）</span>
+			</button>
+			<button
+				type="button"
+				class="menu-item"
+				onclick={() => navigateTo("/integrated")}
+			>
+				<Icon name="hub" class="menu-icon-symbol" />
+				<span class="menu-text">統合管理</span>
+			</button>
+			<button
+				type="button"
+				class="menu-item"
+				onclick={() => navigateTo("/account")}
+			>
+				<Icon name="manage_accounts" class="menu-icon-symbol" />
+				<span class="menu-text">アカウント管理</span>
+			</button>
+			{#if $isAdmin}
+				<button
+					type="button"
+					class="menu-item"
+					onclick={() => navigateTo("/admin")}
+				>
+					<Icon name="admin_panel_settings" class="menu-icon-symbol" />
+					<span class="menu-text">管理者設定</span>
+				</button>
+			{/if}
+		</nav>
+
+		<!-- サイドバー最下部ユーザーパネル（BotShell と共通クラス） -->
+		<div class="sidebar-user-panel">
+			<div class="sidebar-user-info" title={userDisplay}>
+				<Icon name="person" class="icon-small" />
+				<span class="sidebar-user-name">{userDisplay}</span>
 			</div>
-			<div class="home-nav-actions">
+			<div class="sidebar-user-actions">
 				<button
 					type="button"
-					class="btn btn-secondary btn-sm home-nav-btn"
-					onclick={() => navigateTo("/integrated")}
+					class="btn-icon"
+					title={themeTitle}
+					aria-label={themeTitle}
+					onclick={toggleTheme}
 				>
-					<Icon name="hub" class="icon-button-left" />統合管理
+					<Icon name={themeIcon} />
 				</button>
 				<button
 					type="button"
-					class="btn btn-secondary btn-sm home-nav-btn"
-					onclick={() => navigateTo("/account")}
-				>
-					<Icon name="manage_accounts" class="icon-button-left" />アカウント管理
-				</button>
-				{#if $isAdmin}
-					<button
-						type="button"
-						class="btn btn-secondary btn-sm home-nav-btn"
-						onclick={() => navigateTo("/admin")}
-					>
-						<Icon name="admin_panel_settings" class="icon-button-left" />管理者設定
-					</button>
-				{/if}
-				<button
-					type="button"
-					class="btn btn-secondary btn-sm home-nav-btn"
+					class="btn-icon"
+					title="ログアウト"
+					aria-label="ログアウト"
 					onclick={logout}
 				>
-					<Icon name="logout" class="icon-button-left" />ログアウト
+					<Icon name="logout" />
 				</button>
 			</div>
-		</nav>
+		</div>
+	</aside>
+
+	<!-- ドロワー背面オーバーレイ（スマホのみ） -->
+	{#if sidebarOpen}
+		<button
+			type="button"
+			class="sidebar-backdrop"
+			aria-label="メニューを閉じる"
+			onclick={() => (sidebarOpen = false)}
+		></button>
+	{/if}
+
+	<main class="main-content">
+		<!-- スマホ専用バー（☰ + ブランド） -->
+		<header class="home-mobile-bar">
+			<button
+				type="button"
+				class="menu-toggle"
+				aria-label="メニューを開く"
+				onclick={() => (sidebarOpen = true)}
+			>
+				<Icon name="menu" />
+			</button>
+			<span class="home-nav-title">Yuuka</span>
+		</header>
+
+		<div class="home-dashboard">
 
 		<!-- グリーティング + サマリー -->
 		<div class="home-hero">
@@ -358,8 +435,41 @@
 				{/each}
 			</div>
 		</div>
-	</div>
+		</div>
+	</main>
 </div>
+
+<style>
+	/* BotShell と同じ骨格（scoped のため各ページで宣言が必要） */
+	.app-container {
+		display: flex;
+		min-height: 100vh;
+	}
+	.menu-item {
+		background: none;
+		border: none;
+		width: 100%;
+		cursor: pointer;
+		font: inherit;
+		text-align: left;
+	}
+	/* サイドバー内ブランド行 */
+	.home-sidebar-brand {
+		margin: 4px 4px 20px;
+	}
+	/* スマホ専用バー（PC ではサイドバー常設のため非表示） */
+	.home-mobile-bar {
+		display: none;
+	}
+	@media (max-width: 768px) {
+		.home-mobile-bar {
+			display: flex;
+			align-items: center;
+			gap: 10px;
+			margin-bottom: 14px;
+		}
+	}
+</style>
 
 <!-- Bot 作成モーダル -->
 <Modal bind:open={createOpen} title="新規Botの作成">

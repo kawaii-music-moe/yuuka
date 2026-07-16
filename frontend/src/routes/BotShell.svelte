@@ -12,7 +12,8 @@
 	//   - サイドバー（Bot一覧へ戻る / Bot ブランディング / プリセット別メニュー・active）
 	//   - ヘッダ（現タブタイトル・Bot切替バッジ・ユーザーバッジ・テーマトグル・ログアウト）
 	//   - タブ切替は navigateTo('/bot/<tab>')。表示中タブは props.tab を受ける。
-	//   - 秘書/汎用プリセット別タブフィルタ（SECRETARY_ONLY / ASSISTANT_ONLY）。
+	//   - 秘書/汎用プリセット別タブフィルタ（SECRETARY_ONLY_TABS）+ 設定ハブ
+	//     2階層化（設定系タブは $lib/botTabs を単一情報源に /bot/settings 配下）。
 	// ─────────────────────────────────────────────────────────────────────────
 	import type { Component } from "svelte";
 	import { derived } from "svelte/store";
@@ -21,10 +22,11 @@
 	import { theme, toggleTheme } from "$lib/stores/theme";
 	import { authApi } from "$lib/api/services";
 	import { pushToast } from "$lib/stores/toast";
-	import { navigateTo, type BotTab } from "$lib/router";
+	import { navigateTo, DEFAULT_BOT_TAB, type BotTab } from "$lib/router";
+	import { SETTINGS_CHILD_TABS, botPreset } from "$lib/botTabs";
 	import { Icon } from "$lib/components/ui";
 
-	// §P1b ルート遅延ロード: 15タブの静的 import を loader マップに変換する。
+	// §P1b ルート遅延ロード: 16タブの静的 import を loader マップに変換する。
 	// Vite は各 import() を個別チャンク（BotDashboard-*.js 等）に分割するため、
 	// 初期 entry（index-*.js）からタブ実体が外れ初期JSが軽くなる。
 	// 各タブは props 形状が異なり得るため Component<Record<string, never>> で受ける。
@@ -47,12 +49,15 @@
 		discord: () => import("./BotDiscord.svelte"),
 		config: () => import("./BotConfig.svelte"),
 		devices: () => import("./BotDevices.svelte"),
+		settings: () => import("./BotSettingsHub.svelte"),
 	};
 
-	// 現在表示中のタブ（App/router から渡される。未指定は既定 config）。
-	let { tab = "config" as BotTab }: { tab?: BotTab } = $props();
+	// 現在表示中のタブ（App/router から渡される。未指定は既定 DEFAULT_BOT_TAB）。
+	let { tab = DEFAULT_BOT_TAB }: { tab?: BotTab } = $props();
 
 	// §8 プリセット別タブフィルタ（旧 app.js:157-170）。
+	// 2階層化: 設定系（personas/delivery/webhooks/mcp/playbooks/discord/config/
+	// devices）はサイドバーから外し /bot/settings ハブへ集約（BotSettingsHub）。
 	const SECRETARY_ONLY_TABS: BotTab[] = [
 		"tasks",
 		"timeline",
@@ -60,29 +65,19 @@
 		"expenses",
 		"reminders",
 		"personal",
-		"delivery",
-		"webhooks",
-		"playbooks",
 	];
-	const ASSISTANT_ONLY_TABS: BotTab[] = ["discord"];
 
-	// 全メニュー項目（旧 index.html sidebar-menu の順・ラベル・アイコン）。
+	// サイドバー項目（日常機能のみ + 設定ハブ）。
+	// 設定ハブ配下のタブ集合は $lib/botTabs の SETTINGS_CHILD_TABS（単一情報源）。
 	const ALL_MENU: { tab: BotTab; label: string; icon: string }[] = [
 		{ tab: "dashboard", label: "一般情報", icon: "info" },
 		{ tab: "tasks", label: "タスク管理", icon: "checklist" },
-		{ tab: "timeline", label: "タイムライン", icon: "timeline" },
 		{ tab: "schedules", label: "予定スケジュール", icon: "calendar_today" },
-		{ tab: "expenses", label: "経費・収支管理", icon: "payments" },
 		{ tab: "reminders", label: "リマインダー", icon: "alarm" },
+		{ tab: "timeline", label: "タイムライン", icon: "timeline" },
+		{ tab: "expenses", label: "経費・収支管理", icon: "payments" },
 		{ tab: "personal", label: "メモ・連絡先", icon: "contacts" },
-		{ tab: "personas", label: "ペルソナ", icon: "theater_comedy" },
-		{ tab: "delivery", label: "配信設定", icon: "campaign" },
-		{ tab: "webhooks", label: "Webhook", icon: "webhook" },
-		{ tab: "mcp", label: "MCPサーバー", icon: "extension" },
-		{ tab: "playbooks", label: "Playbook 管理", icon: "description" },
-		{ tab: "discord", label: "Discord連携", icon: "forum" },
-		{ tab: "config", label: "Bot 設定", icon: "smart_toy" },
-		{ tab: "devices", label: "接続端末", icon: "devices" },
+		{ tab: "settings", label: "Bot設定", icon: "settings" },
 	];
 
 	// §8 ヘッダタイトルマップ（旧 app.js:338-354 switchTab）。
@@ -102,19 +97,24 @@
 		discord: "Discord 連携設定",
 		config: "システム設定情報",
 		devices: "接続端末",
+		settings: "Bot設定",
 	};
 
 	// プリセット別に絞り込んだメニュー配列（derived(activeBot)）。
+	// 設定系タブの表示条件は BotSettingsHub が $lib/botTabs の同じ規約で絞り込む。
 	const menuItems = derived(activeBot, ($bot) => {
-		const isAssistant = ($bot?.preset ?? "secretary") === "mcp_assistant";
+		const isAssistant = botPreset($bot) === "mcp_assistant";
 		return ALL_MENU.filter((m) => {
 			if (SECRETARY_ONLY_TABS.includes(m.tab)) return !isAssistant;
-			if (ASSISTANT_ONLY_TABS.includes(m.tab)) return isAssistant;
 			return true;
 		});
 	});
 
+	// スマホ用ドロワー開閉（≤768px。PC ではサイドバー常設のため未使用）。
+	let sidebarOpen = $state(false);
+
 	function go(t: BotTab): void {
+		sidebarOpen = false; // 遷移時はドロワーを閉じる
 		navigateTo(`/bot/${t}`);
 	}
 
@@ -139,8 +139,16 @@
 	// tab をキーに $derived で一度だけ Promise を生成することで、tab 変更時のみ
 	// import() が再評価される。同一タブ内の他の再レンダリングでは同じ Promise 参照の
 	// ままなので無駄なフェッチが起きない（Vite の module cache で実 fetch も1回）。
-	const modulePromise = $derived((TAB_LOADERS[tab] ?? TAB_LOADERS.config)());
-	const title = $derived(TAB_TITLES[tab] ?? "ダッシュボード");
+	const modulePromise = $derived(
+		(TAB_LOADERS[tab] ?? TAB_LOADERS[DEFAULT_BOT_TAB])(),
+	);
+	// 設定ハブ配下ページか（パンくず表記とサイドバー「Bot設定」アクティブ判定に使用）。
+	const inSettingsChild = $derived(SETTINGS_CHILD_TABS.includes(tab));
+	const title = $derived(
+		inSettingsChild
+			? `Bot設定 › ${TAB_TITLES[tab]}`
+			: (TAB_TITLES[tab] ?? "ダッシュボード"),
+	);
 
 	// Bot ブランディング（旧 updateSidebarBotBranding）。
 	const botName = $derived($activeBot?.name ?? "システムデフォルト");
@@ -162,8 +170,14 @@
 	);
 </script>
 
+<svelte:window
+	onkeydown={(e) => {
+		if (e.key === "Escape") sidebarOpen = false;
+	}}
+/>
+
 <div class="app-container" id="app-container">
-	<aside class="sidebar">
+	<aside class="sidebar" class:open={sidebarOpen}>
 		<button
 			type="button"
 			class="sidebar-back-button"
@@ -190,7 +204,9 @@
 				<button
 					type="button"
 					class="menu-item"
-					class:active={item.tab === tab}
+					class:active={item.tab === tab ||
+						(item.tab === "settings" && inSettingsChild)}
+					class:menu-item-settings={item.tab === "settings"}
 					data-tab={item.tab}
 					onclick={() => go(item.tab)}
 				>
@@ -199,29 +215,14 @@
 				</button>
 			{/each}
 		</nav>
-	</aside>
 
-	<main class="main-content">
-		<header class="top-header">
-			<div class="header-title">
-				<h2 id="current-tab-title">{title}</h2>
-				<p id="header-subtitle">タスク・スケジュール・家計をスマートに管理します。</p>
+		<!-- サイドバー最下部ユーザーパネル（テーマ切替/ログアウト集約。ヘッダーから移設） -->
+		<div class="sidebar-user-panel">
+			<div class="sidebar-user-info" title={userDisplay}>
+				<Icon name="person" class="icon-small" />
+				<span class="sidebar-user-name">{userDisplay}</span>
 			</div>
-
-			<div class="header-controls">
-				<button
-					type="button"
-					class="bot-context-badge"
-					title="Botを切り替える"
-					onclick={backToBots}
-				>
-					<Icon name="robot_2" class="icon-small" />
-					<span>{botName}</span>
-				</button>
-				<div class="user-profile-badge">
-					<Icon name="person" class="icon-small" />
-					<span>{userDisplay}</span>
-				</div>
+			<div class="sidebar-user-actions">
 				<button
 					type="button"
 					class="btn-icon"
@@ -233,12 +234,39 @@
 				</button>
 				<button
 					type="button"
-					class="btn btn-secondary btn-sm"
+					class="btn-icon"
 					title="ログアウト"
+					aria-label="ログアウト"
 					onclick={logout}
 				>
-					<Icon name="logout" class="icon-button-left" /> ログアウト
+					<Icon name="logout" />
 				</button>
+			</div>
+		</div>
+	</aside>
+
+	<!-- ドロワー背面オーバーレイ（スマホのみ。タップで閉じる） -->
+	{#if sidebarOpen}
+		<button
+			type="button"
+			class="sidebar-backdrop"
+			aria-label="メニューを閉じる"
+			onclick={() => (sidebarOpen = false)}
+		></button>
+	{/if}
+
+	<main class="main-content">
+		<header class="top-header">
+			<button
+				type="button"
+				class="menu-toggle"
+				aria-label="メニューを開く"
+				onclick={() => (sidebarOpen = true)}
+			>
+				<Icon name="menu" />
+			</button>
+			<div class="header-title">
+				<h2 id="current-tab-title">{title}</h2>
 			</div>
 		</header>
 
@@ -271,6 +299,7 @@
 		width: 100%;
 		text-align: left;
 	}
+	/* スマホもドロワー（縦型サイドバー）のため PC と同じ全幅・左寄せでよい */
 	.menu-item {
 		background: none;
 		border: none;
@@ -279,10 +308,12 @@
 		font: inherit;
 		text-align: left;
 	}
-	.bot-context-badge {
-		background: none;
-		cursor: pointer;
-		font: inherit;
+	/* 設定ハブ項目は日常機能と視覚的に区切る（2階層化） */
+	.menu-item-settings {
+		margin-top: 10px;
+		border-top: 1px solid var(--border-divider);
+		border-radius: 0;
+		padding-top: 14px;
 	}
 	.content-view-container {
 		flex: 1;

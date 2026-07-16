@@ -31,7 +31,7 @@ export type RouteView =
 	| "tasks-guide" // /tasks/guide
 	| "notfound"; // 未知パス
 
-/** /bot/<tab> の 15 タブ識別子（§8）。 */
+/** /bot/<tab> の 16 タブ識別子（§8 + 設定ハブ "settings"）。 */
 export type BotTab =
 	| "dashboard"
 	| "tasks"
@@ -47,7 +47,8 @@ export type BotTab =
 	| "playbooks"
 	| "discord"
 	| "config"
-	| "devices";
+	| "devices"
+	| "settings";
 
 export interface ResolvedRoute {
 	view: RouteView;
@@ -57,7 +58,7 @@ export interface ResolvedRoute {
 	params?: Record<string, string>;
 }
 
-/** §8 の 15 Bot タブ。未知タブ → "config" フォールバック。 */
+/** §8 の 16 Bot タブ（+ 設定ハブ）。未知タブ → "config" フォールバック。 */
 export const BOT_TABS: BotTab[] = [
 	"dashboard",
 	"tasks",
@@ -74,7 +75,11 @@ export const BOT_TABS: BotTab[] = [
 	"discord",
 	"config",
 	"devices",
+	"settings",
 ];
+
+/** §8: /bot 直下・未知タブ時の既定タブ（BotShell の loader フォールバックも共用）。 */
+export const DEFAULT_BOT_TAB: BotTab = "config";
 
 /** §8 PUBLIC_PATHS: 認証を待たず描画できる公開ルート。 */
 export const PUBLIC_PATHS = ["/usage", "/terms", "/privacy", "/tasks/guide"] as const;
@@ -139,9 +144,9 @@ export function resolveRoute(input: URL | string): ResolvedRoute {
 
 	// Bot 個別画面 /bot, /bot/<tab>
 	if (cp === "/bot" || cp.startsWith("/bot/")) {
-		// "/bot/".length === 5（app.js:561）。既定 config、未知タブ → config。
-		let tabId = cp === "/bot" ? "config" : cp.slice(5);
-		if (!BOT_TABS.includes(tabId as BotTab)) tabId = "config";
+		// "/bot/".length === 5（app.js:561）。既定・未知タブ → DEFAULT_BOT_TAB。
+		let tabId = cp === "/bot" ? DEFAULT_BOT_TAB : cp.slice(5);
+		if (!BOT_TABS.includes(tabId as BotTab)) tabId = DEFAULT_BOT_TAB;
 		return { view: "bot", tab: tabId as BotTab };
 	}
 

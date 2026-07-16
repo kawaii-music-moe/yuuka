@@ -31,12 +31,15 @@
 						期限（締め切り）と開始日を設定できます。両方を持つタスクはガントチャートにバーで表示されます。
 					</li>
 					<li>
-						<strong>優先度：</strong> 🔴高 / 🟡中 / 🔵低
+						<strong>優先度：</strong>
+						<Icon name="circle" size="0.95rem" fill class="prio-dot-high" />高
+						/ <Icon name="circle" size="0.95rem" fill class="prio-dot-mid" />中
+						/ <Icon name="circle" size="0.95rem" fill class="prio-dot-low" />低
 						で重要度を表します。「タスクを整理して」と頼むと、AIが期限や内容から優先度を提案します（確定は承認後）。
 					</li>
 					<li>
 						<strong>いつかやる：</strong>
-						期限も開始日も決めていないタスクは「🕗 いつかやる」にまとまります。
+						期限も開始日も決めていないタスクは「<Icon name="schedule" size={16} /> いつかやる」にまとまります。
 					</li>
 				</ul>
 			</div>
@@ -124,6 +127,16 @@
 </div>
 
 <style>
+	/* 優先度ドット（Icon の class 経由。Icon 内部要素のため :global が必要） */
+	.usage-section :global(.prio-dot-high) {
+		color: #e5484d;
+	}
+	.usage-section :global(.prio-dot-mid) {
+		color: #f5a623;
+	}
+	.usage-section :global(.prio-dot-low) {
+		color: #3b82f6;
+	}
 	.usage-title-row {
 		display: flex;
 		align-items: center;

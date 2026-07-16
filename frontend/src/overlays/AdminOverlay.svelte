@@ -15,6 +15,7 @@
 	import { confirmDialog } from "$lib/components/ui";
 	import { Button, Icon } from "$lib/components/ui";
 	import { currentUser } from "$lib/stores/session";
+	import ManagementOverlayShell from "./ManagementOverlayShell.svelte";
 	import type {
 		AdminStats,
 		AdminUserView,
@@ -332,6 +333,7 @@
 	}
 </script>
 
+<ManagementOverlayShell id="admin-overlay" icon="admin_panel_settings" title="管理者設定">
 <section id="tab-admin" class="tab-view">
 	<!-- KPI Row -->
 	<div class="admin-kpi-row">
@@ -759,6 +761,7 @@
 		</div>
 	</details>
 </section>
+</ManagementOverlayShell>
 
 <AuditModal bind:open={auditOpen} />
 

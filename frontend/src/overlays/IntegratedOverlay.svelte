@@ -17,6 +17,7 @@
 	import { confirmDialog } from "$lib/components/ui";
 	import { Button, Icon, StatusChip } from "$lib/components/ui";
 	import { isAdmin } from "$lib/stores/session";
+	import ManagementOverlayShell from "./ManagementOverlayShell.svelte";
 	import type {
 		IntegratedBotView,
 		IntegratedMcpServerView,
@@ -349,6 +350,7 @@
 
 <svelte:window onclick={() => (openMenuId = null)} />
 
+<ManagementOverlayShell id="integrated-overlay" icon="dashboard_customize" title="Bot統合管理">
 <section id="tab-integrated" class="tab-view">
 	<p class="description-text int-intro">
 		あなたのBotのヘルス確認・起動停止と、認証情報・MCP・Googleアカウントの<strong>登録</strong
@@ -689,6 +691,7 @@
 		</div>
 	</details>
 </section>
+</ManagementOverlayShell>
 
 <IntCalendarsModal bind:open={calOpen} account={calAccount} onsave={saveCalendars} />
 <McpDashboardModal bind:open={dashOpen} server={dashServer} />

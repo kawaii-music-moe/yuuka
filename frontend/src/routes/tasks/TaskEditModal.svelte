@@ -90,9 +90,9 @@
 			<label for="task-priority">優先度</label>
 			<select id="task-priority" bind:value={priority}>
 				<option value="">指定なし</option>
-				<option value="low">🔵 低</option>
-				<option value="medium">🟡 中</option>
-				<option value="high">🔴 高</option>
+				<option value="low">低</option>
+				<option value="medium">中</option>
+				<option value="high">高</option>
 			</select>
 		</div>
 		<Button type="submit" variant="primary" block>
