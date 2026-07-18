@@ -43,13 +43,16 @@ struct BotIdQuery {
     bot_id: Option<String>,
 }
 
-/// Bot 属性ルータ（既定 crypto なし・`AppState` 上でマージされる）。
+/// Bot 属性ルータ（既定 crypto なし・Discord ライブ照会は Null 縮退・`AppState` 上でマージされる）。
 pub fn routes() -> Router<AppState> {
-    routes_with(None)
+    routes_with(None, Arc::new(NullDiscordLive))
 }
 
-/// crypto を注入して Bot 属性ルータを組む（Gemini キー暗号化・main で SystemCrypto を渡す）。
-pub fn routes_with(crypto: Option<Arc<SystemCrypto>>) -> Router<AppState> {
+/// crypto/Discord ライブ照会を注入して Bot 属性ルータを組む（main で SystemCrypto/TenantRegistry を渡す）。
+pub fn routes_with(
+    crypto: Option<Arc<SystemCrypto>>,
+    live: Arc<dyn DiscordLive>,
+) -> Router<AppState> {
     Router::new()
         .route("/api/bots/presets", get(list_presets))
         .route("/api/bots/attributes", post(change_attributes))
@@ -82,7 +85,7 @@ pub fn routes_with(crypto: Option<Arc<SystemCrypto>>) -> Router<AppState> {
         )
         .layer(Extension(AttrCrypto(crypto)))
         // guild-options の Discord ライブ照会シーム（gateway 未配線時は Null＝利用不可・空一覧）。
-        .layer(Extension(Arc::new(NullDiscordLive) as Arc<dyn DiscordLive>))
+        .layer(Extension(live))
 }
 
 // ─── GET /api/bots/usage（API 利用量サマリ・アクセス権のある全ユーザー・読み取り専用） ──
@@ -2044,7 +2047,8 @@ mod tests {
         use yuuka_crypto::SystemCrypto;
         let crypto = Arc::new(SystemCrypto::new(SecretString::from("test-secret-xyz")).unwrap());
         let state = AppState::new(Arc::new(FakeAuth), WebConfig::default(), seed_db());
-        let app = super::routes_with(Some(crypto)).with_state(state);
+        let app =
+            super::routes_with(Some(crypto), Arc::new(NullDiscordLive)).with_state(state);
 
         // 形式不正 → 400。
         let (st, _) = send(

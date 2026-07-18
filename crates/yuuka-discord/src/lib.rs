@@ -20,6 +20,7 @@ pub mod ports;
 
 mod idempotent;
 mod interaction;
+mod live;
 mod manager;
 mod message_flow;
 mod notify_bridge;
@@ -29,9 +30,12 @@ mod tenant;
 mod text;
 
 pub use idempotent::MessageDedup;
+pub use live::{fetch_guild_options, GuildLiveEntry, GuildLiveOptions};
 pub use manager::{DiscordManager, DiscordMessenger, ManagerPorts, Prepared, TenantRunner};
 pub use presence::build_presence;
-pub use tenant::{default_intents, run_tenant, TenantConfig, TenantStatus};
+pub use tenant::{default_intents, run_tenant, GatewayBotUser, TenantConfig, TenantStatus};
+// supervisor（twilight 非依存）が REST クライアントを型名で扱えるよう再エクスポート。
+pub use twilight_http::Client as HttpClient;
 pub use text::{split_message, to_discord_markdown};
 
 // よく使う契約を crate ルートへ再エクスポート（実装側の import を短くする）。

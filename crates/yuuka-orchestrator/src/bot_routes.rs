@@ -58,15 +58,20 @@ impl BotViewRuntime for NullBotViewRuntime {
 #[derive(Clone)]
 struct ViewCrypto(Option<Arc<SystemCrypto>>);
 
-/// Bot 管理ルータ（既定 [`NullBotViewRuntime`]・crypto なし）。
+/// Bot 管理ルータ（既定 [`NullBotViewRuntime`]・crypto なし・Discord ライブ照会は Null 縮退）。
 pub fn routes() -> Router<AppState> {
-    routes_with(Arc::new(NullBotViewRuntime), None)
+    routes_with(
+        Arc::new(NullBotViewRuntime),
+        None,
+        Arc::new(NullDiscordLive),
+    )
 }
 
-/// ランタイム/crypto を注入して Bot 管理ルータを組む（Discord/crypto 配線時に使う）。
+/// ランタイム/crypto/Discord ライブ照会を注入して Bot 管理ルータを組む（Discord/crypto 配線時に使う）。
 pub fn routes_with(
     runtime: Arc<dyn BotViewRuntime>,
     crypto: Option<Arc<SystemCrypto>>,
+    live: Arc<dyn DiscordLive>,
 ) -> Router<AppState> {
     Router::new()
         .route(
@@ -78,7 +83,7 @@ pub fn routes_with(
         .layer(Extension(runtime))
         .layer(Extension(ViewCrypto(crypto)))
         // sync-discord の Discord ライブ照会シーム（gateway 未配線時は Null＝Bot ユーザー無し）。
-        .layer(Extension(Arc::new(NullDiscordLive) as Arc<dyn DiscordLive>))
+        .layer(Extension(live))
 }
 
 // ─── GET /api/bots ───────────────────────────────────────────────────────────

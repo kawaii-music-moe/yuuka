@@ -22,7 +22,10 @@ pub mod ws;
 pub use discord::{DiscordTenantService, MessengerRegistrationDm};
 pub use services::{build_supervised_services, CronSupervised};
 pub use supervisor::{RestartPolicy, ServiceError, ShutdownToken, SupervisedService, Supervisor};
-pub use tenants::{RegistryBotRuntime, RegistryBotViewRuntime, RegistryLifecycle, TenantRegistry};
+pub use tenants::{
+    RegistryBotRuntime, RegistryBotViewRuntime, RegistryDiscordLive, RegistryLifecycle,
+    TenantRegistry,
+};
 pub use tool_registry::{build_native_provider, build_tool_registry};
 pub use ws::ws_routes;
 

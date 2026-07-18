@@ -182,6 +182,12 @@ impl TenantRunner {
         self.status.clone()
     }
 
+    /// テナント別 REST クライアント（web 層の guild-options 照会が使う）。
+    #[must_use]
+    pub fn http(&self) -> Arc<Client> {
+        self.interaction_deps.http.clone()
+    }
+
     /// Shard poll ループを走らせる（`cancel` まで）。supervisor アダプタから呼ぶ。
     ///
     /// `&self` で再実行可能（依存は clone・token は borrow）。supervisor が panic/一過性障害後に

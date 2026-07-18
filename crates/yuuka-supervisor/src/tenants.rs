@@ -24,7 +24,9 @@ use std::time::Duration;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use yuuka_core::BotId;
-use yuuka_discord::{DiscordManager, DiscordMessenger, TenantRunner, TenantStatus};
+use yuuka_discord::{
+    DiscordManager, DiscordMessenger, GatewayBotUser, HttpClient, TenantRunner, TenantStatus,
+};
 
 /// 起動完了（READY）待ちの上限。Node の login 成功待ち相当。無効トークンは通常数秒で
 /// 恒久クローズになるため、この窓内に「失敗確定」も「接続成功」も大半が収まる。
@@ -43,6 +45,8 @@ struct Slot {
     join: JoinHandle<()>,
     /// gateway 接続状態（READY で true）。runner と共有。
     status: Arc<TenantStatus>,
+    /// テナント別 REST クライアント（guild-options 照会用・runner と同じトークン）。
+    http: Arc<HttpClient>,
 }
 
 /// Discord テナントの動的ライフサイクル管理（web 層への live 配線点）。
@@ -86,6 +90,26 @@ impl TenantRegistry {
         match slots.get(bot_id) {
             Some(s) if !s.join.is_finished() => (true, s.status.connected()),
             _ => (false, false),
+        }
+    }
+
+    /// 稼働中テナントの Bot ユーザー（READY 前・非稼働は `None`。Node `client.user` 相当）。
+    #[must_use]
+    pub fn bot_user(&self, bot_id: &str) -> Option<GatewayBotUser> {
+        let slots = self.slots();
+        match slots.get(bot_id) {
+            Some(s) if !s.join.is_finished() => s.status.bot_user(),
+            _ => None,
+        }
+    }
+
+    /// 稼働中テナントの REST クライアント（非稼働は `None`。guild-options 照会用）。
+    #[must_use]
+    pub fn http_client(&self, bot_id: &str) -> Option<Arc<HttpClient>> {
+        let slots = self.slots();
+        match slots.get(bot_id) {
+            Some(s) if !s.join.is_finished() => Some(s.http.clone()),
+            _ => None,
         }
     }
 
@@ -170,6 +194,7 @@ impl TenantRegistry {
     fn spawn_slot(&self, runner: TenantRunner) {
         let bot_id = runner.bot_id().to_string();
         let status = runner.status();
+        let http = runner.http();
         let (cancel_tx, cancel_rx) = watch::channel(false);
         let join = tokio::spawn(tenant_loop(Arc::new(runner), cancel_rx));
         let mut slots = self.slots();
@@ -179,6 +204,7 @@ impl TenantRegistry {
                 cancel: cancel_tx,
                 join,
                 status,
+                http,
             },
         ) {
             // start は stop_locked 済みなので通常到達しない（防御: 旧タスクを孤児にしない）。
@@ -276,6 +302,59 @@ impl yuuka_orchestrator::BotViewRuntime for RegistryBotViewRuntime {
         let reg = self.0.clone();
         let bot_id = bot_id.to_owned();
         tokio::spawn(async move { reg.stop(&bot_id).await });
+    }
+}
+
+/// [`yuuka_orchestrator::DiscordLive`] の live 実装（sync-discord の Bot ユーザー参照・
+/// guild-options のロール/メンバー候補）。
+pub struct RegistryDiscordLive(pub Arc<TenantRegistry>);
+
+impl RegistryDiscordLive {
+    fn to_bot_user(u: GatewayBotUser) -> yuuka_orchestrator::DiscordBotUser {
+        yuuka_orchestrator::DiscordBotUser {
+            id: u.id,
+            username: u.username,
+            avatar_url: u.avatar_url,
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl yuuka_orchestrator::DiscordLive for RegistryDiscordLive {
+    async fn custom_bot_user(&self, bot_id: &str) -> Option<yuuka_orchestrator::DiscordBotUser> {
+        self.0.bot_user(bot_id).map(Self::to_bot_user)
+    }
+
+    async fn default_bot_user(&self) -> Option<yuuka_orchestrator::DiscordBotUser> {
+        self.0
+            .bot_user(yuuka_core::BotId::SYSTEM_DEFAULT)
+            .map(Self::to_bot_user)
+    }
+
+    async fn guild_options(
+        &self,
+        bot_id: &str,
+        guild_id: &str,
+    ) -> yuuka_orchestrator::GuildOptions {
+        // Node `getBotClientForUser`: 独自クライアントがあればそれ、無ければデフォルトへフォールバック。
+        let client = self
+            .0
+            .http_client(bot_id)
+            .or_else(|| self.0.http_client(yuuka_core::BotId::SYSTEM_DEFAULT));
+        let Some(client) = client else {
+            return yuuka_orchestrator::GuildOptions::default();
+        };
+        let opts = yuuka_discord::fetch_guild_options(&client, guild_id).await;
+        let entry = |e: yuuka_discord::GuildLiveEntry| yuuka_orchestrator::GuildEntry {
+            id: e.id,
+            name: e.name,
+        };
+        yuuka_orchestrator::GuildOptions {
+            roles: opts.roles.into_iter().map(entry).collect(),
+            members: opts.members.into_iter().map(entry).collect(),
+            members_complete: opts.members_complete,
+            available: opts.available,
+        }
     }
 }
 

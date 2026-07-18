@@ -24,9 +24,8 @@ use yuuka_orchestrator::{ChatEngine, DbBotDirectory, DbMembership, InMemoryRateL
 use yuuka_services::{MetricsRegistry, ServiceContext};
 use yuuka_supervisor::{
     build_app, build_supervised_services, build_tool_registry, ws_routes, MessengerRegistrationDm,
-    RegistryBotRuntime, RegistryBotViewRuntime, RegistryLifecycle, ServiceError, ShutdownToken,
-    SupervisedService,
-    Supervisor, TenantRegistry,
+    RegistryBotRuntime, RegistryBotViewRuntime, RegistryDiscordLive, RegistryLifecycle,
+    ServiceError, ShutdownToken, SupervisedService, Supervisor, TenantRegistry,
 };
 use yuuka_web::{AppState, Db, WebConfig};
 
@@ -287,8 +286,16 @@ async fn run() -> Result<(), String> {
         Arc::new(yuuka_webhook::NullWebhookProcessor),
     );
 
+    // Discord ライブ照会（sync-discord の Bot ユーザー参照・guild-options のロール/メンバー候補）。
+    // Rust が gateway を所有する時のみ live（TenantRegistry）、Node 所有時は NullDiscordLive へ縮退する。
+    let discord_live: Arc<dyn yuuka_orchestrator::DiscordLive> = match &tenant_registry {
+        Some(reg) => Arc::new(RegistryDiscordLive(reg.clone())),
+        None => Arc::new(yuuka_orchestrator::NullDiscordLive),
+    };
+
     // Bot 属性ルータ（Gemini キー暗号化に crypto を注入）。
-    let bot_attribute_routes = yuuka_orchestrator::bot_attribute_routes_with(crypto.clone());
+    let bot_attribute_routes =
+        yuuka_orchestrator::bot_attribute_routes_with(crypto.clone(), discord_live.clone());
 
     // credential ルータ（register の保存時ユーザー鍵暗号化に crypto を注入・crypto 未設定なら register は
     // 400 に縮退・list/delete は暗号非依存で動作）。
@@ -301,8 +308,11 @@ async fn run() -> Result<(), String> {
         Some(reg) => Arc::new(RegistryBotViewRuntime(reg.clone())),
         None => Arc::new(yuuka_orchestrator::NullBotViewRuntime),
     };
-    let bot_management_routes =
-        yuuka_orchestrator::bot_management_routes_with(bot_view_runtime, crypto.clone());
+    let bot_management_routes = yuuka_orchestrator::bot_management_routes_with(
+        bot_view_runtime,
+        crypto.clone(),
+        discord_live,
+    );
 
     // デバイスフロー（RFC 8628）ルータ。device_code の一時状態はインメモリ store（web 再起動を跨ぐよう
     // main で 1 度だけ生成し注入）。承認 URL ベースは base_url（末尾スラッシュ除去）or http://host:port。

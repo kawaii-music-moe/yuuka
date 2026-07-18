@@ -9,6 +9,7 @@
 
 use std::future::Future;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 
 use secrecy::{ExposeSecret, SecretString};
 use twilight_gateway::{
@@ -42,6 +43,19 @@ pub struct TenantConfig {
 #[derive(Default)]
 pub struct TenantStatus {
     connected: AtomicBool,
+    /// READY で確定する Discord Bot ユーザー（web 層の sync-discord が参照。切断後も最終値を保持）。
+    user: Mutex<Option<GatewayBotUser>>,
+}
+
+/// READY で得た Bot 自身のユーザー情報（Node `client.user` 相当・web 層のプロフィール同期に使う）。
+#[derive(Debug, Clone)]
+pub struct GatewayBotUser {
+    /// Discord ユーザー ID（= application id 相当）。
+    pub id: String,
+    /// 表示ユーザー名。
+    pub username: String,
+    /// アバター URL（`displayAvatarURL()`）。
+    pub avatar_url: String,
 }
 
 impl TenantStatus {
@@ -53,6 +67,22 @@ impl TenantStatus {
 
     pub(crate) fn set_connected(&self, value: bool) {
         self.connected.store(value, Ordering::Relaxed);
+    }
+
+    /// READY 済みなら Bot ユーザー（未 READY は `None`）。
+    #[must_use]
+    pub fn bot_user(&self) -> Option<GatewayBotUser> {
+        self.user
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    pub(crate) fn set_bot_user(&self, user: GatewayBotUser) {
+        *self
+            .user
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(user);
     }
 }
 
@@ -110,6 +140,11 @@ pub async fn run_tenant(
                         // 非 Sync なので、保持すると future が !Send になり supervisor に載らない）。
                         let sender = shard.sender();
                         runtime = Some(on_ready(cfg, &flow, sender, &ready.user).await);
+                        status.set_bot_user(GatewayBotUser {
+                            id: ready.user.id.get().to_string(),
+                            username: ready.user.name.clone(),
+                            avatar_url: current_user_avatar_url(&ready.user),
+                        });
                         status.set_connected(true);
                     }
                     Event::MessageCreate(msg) => {
