@@ -132,6 +132,23 @@ pub async fn get_bot(db: &Db, bot_id: &str) -> Result<Option<BotRow>, DbError> {
         .await
 }
 
+/// `bots` テーブルに `system_default` 行が存在しない場合の合成エントリ（UI 表示専用）。
+/// 実際の権限付与操作の前に [`ensure_system_default_bot`] でシードする。
+#[must_use]
+pub fn synthetic_system_default(user_id: &str) -> BotRow {
+    BotRow {
+        id: "system_default".to_owned(),
+        user_id: user_id.to_owned(),
+        name: "早瀬ユウカ".to_owned(),
+        suspended: false,
+        stopped: false,
+        has_token: false,
+        discord_username: None,
+        discord_avatar_url: None,
+        capabilities: Some(r#"["persona","memory","mcp","secretary"]"#.to_owned()),
+    }
+}
+
 /// オーナー所有 Bot 一覧（Node `listBotsOwnedBy`・`created_at ASC`）。共有・system_default 由来は含めない。
 ///
 /// # Errors
@@ -324,6 +341,28 @@ pub async fn get_server_owner(db: &Db, server_id: i64) -> Result<Option<Option<S
             )
             .optional()
             .map_err(map_sqlite)
+        })
+        .await
+}
+
+/// `system_default` が `bots` に存在しない場合にシードする（FK 満足のためのランタイム補完）。
+/// `bot_mcp_access.bot_id` / `bot_credential_access.bot_id` の FK は `bots(id)` を参照するため、
+/// 付与操作の前に `system_default` を存在保証する。既に存在する場合は OR IGNORE で no-op。
+/// `owner_id` = 付与操作者（最初の一人が実質オーナーになる）。
+///
+/// # Errors
+/// 書き込み失敗時 [`DbError`]。
+pub async fn ensure_system_default_bot(db: &Db, owner_id: &str) -> Result<(), DbError> {
+    let owner_id = owner_id.to_owned();
+    db.writer
+        .transaction(move |tx| {
+            tx.execute(
+                "INSERT OR IGNORE INTO bots (id, user_id, name, capabilities) \
+                 VALUES ('system_default', ?1, '早瀬ユウカ', '[\"persona\",\"memory\",\"mcp\",\"secretary\"]')",
+                params![owner_id],
+            )
+            .map_err(map_sqlite)?;
+            Ok(())
         })
         .await
 }

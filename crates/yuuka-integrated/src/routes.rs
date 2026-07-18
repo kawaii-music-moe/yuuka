@@ -34,7 +34,10 @@ pub(crate) async fn overview(
     let db = &state.db;
 
     // 対象 Bot = 共有秘書(system_default) + 所有 Bot。system_default はヘルス表示のみ。
-    let system_default = repo::get_bot(db, "system_default").await?;
+    // DB 未登録時はフォールバックの合成エントリを使う（MCP 付与 UI を常に表示するため）。
+    let system_default = repo::get_bot(db, "system_default")
+        .await?
+        .unwrap_or_else(|| repo::synthetic_system_default(user_id));
     let owned: Vec<repo::BotRow> = repo::list_bots_owned_by(db, user_id)
         .await?
         .into_iter()
@@ -42,9 +45,7 @@ pub(crate) async fn overview(
         .collect();
 
     let mut records: Vec<(repo::BotRow, bool)> = Vec::new();
-    if let Some(sd) = system_default {
-        records.push((sd, true));
-    }
+    records.push((system_default, true));
     for b in owned {
         records.push((b, false));
     }
@@ -270,6 +271,10 @@ pub(crate) async fn grants_mcp(
         return Ok(forbidden("対象MCPサーバーの所有者ではありません。"));
     };
     if granted {
+        // system_default は bots テーブルに未登録の場合があるため FK 満足のため先にシードする。
+        if bot_id == "system_default" {
+            repo::ensure_system_default_bot(db, user_id).await?;
+        }
         repo::grant_mcp_to_bot(db, &bot_id, user_id, server_id).await?;
     } else {
         repo::revoke_mcp_from_bot(db, &bot_id, user_id, server_id).await?;
@@ -301,6 +306,9 @@ pub(crate) async fn grants_credential(
         return Ok(not_found("対象の認証情報が見つかりません。"));
     }
     if granted {
+        if bot_id == "system_default" {
+            repo::ensure_system_default_bot(db, user_id).await?;
+        }
         repo::grant_credential_to_bot(db, &bot_id, user_id, &raw_service).await?;
     } else {
         repo::revoke_credential_from_bot(db, &bot_id, user_id, &raw_service).await?;
@@ -501,17 +509,19 @@ async fn suspended_and_token_guards(
     Ok(None)
 }
 
-/// リソース許可の対象 Bot として有効か（Node `isGrantTargetBot`）。system_default は存在すれば可・
+/// リソース許可の対象 Bot として有効か（Node `isGrantTargetBot`）。system_default は常に可
+/// （DB 未登録でも付与前に [`repo::ensure_system_default_bot`] が自動シードする）・
 /// それ以外は owner 本人所有のみ可。
 async fn is_grant_target_bot(
     db: &yuuka_web::Db,
     user_id: &str,
     bot_id: &str,
 ) -> Result<bool, ApiError> {
-    let bot = repo::get_bot(db, bot_id).await?;
+    // system_default は DB 未登録でも常に許可（後続で ensure_system_default_bot が自動シードする）。
     if bot_id == "system_default" {
-        return Ok(bot.is_some());
+        return Ok(true);
     }
+    let bot = repo::get_bot(db, bot_id).await?;
     Ok(bot.is_some_and(|b| b.user_id == user_id))
 }
 
