@@ -114,14 +114,20 @@ export interface AssistantMcpServer {
 }
 export interface AssistantGuild {
 	guild_id: string;
+	/** Discord ライブから解決したギルド名（Bot 未稼働/未参加は null → ID 表示にフォールバック） */
+	guild_name?: string | null;
 }
 export interface AssistantChannel {
 	guild_id: string;
 	channel_id: string;
+	/** Discord ライブから解決したチャンネル名（解決不能は null） */
+	channel_name?: string | null;
 }
 export interface AssistantMember {
 	guild_id: string;
 	user_id: string;
+	/** Discord ライブから解決した表示名（nick → global_name → username・解決不能は null） */
+	member_name?: string | null;
 }
 export interface AssistantRole {
 	guild_id: string;
@@ -213,6 +219,15 @@ export interface CredentialsResp {
 	success: boolean;
 	message?: string;
 	credentials?: CredentialRow[];
+}
+
+/** ギルドの表示ラベル（名前が解決できていれば名前・できなければ「ギルド <ID>」）。 */
+export function guildLabel(
+	guilds: AssistantGuild[],
+	guildId: string,
+): string {
+	const g = guilds.find((x) => x.guild_id === guildId);
+	return g?.guild_name ? g.guild_name : `ギルド ${guildId}`;
 }
 
 /** owner/Admin 判定用のヘルパ。activeBot には user_id が無いため /api/bots の結果と突き合わせる。 */

@@ -6,6 +6,7 @@
 	import { ApiError } from "$lib/api/client";
 	import { pushToast } from "$lib/stores/toast";
 	import { confirmDialog, Button } from "$lib/components/ui";
+	import { guildLabel } from "../config/configTypes";
 	import type { AssistantGuild, AssistantChannel } from "../config/configTypes";
 
 	interface Props {
@@ -58,8 +59,9 @@
 
 	async function remove(ch: AssistantChannel, shift: boolean) {
 		if (!shift) {
+			const label = ch.channel_name ? `#${ch.channel_name}` : `チャンネル ${ch.channel_id}`;
 			const ok = await confirmDialog({
-				message: `チャンネル ${ch.channel_id} を有効化リストから削除しますか？`,
+				message: `${label} を有効化リストから削除しますか？`,
 				danger: true,
 				confirmLabel: "削除",
 			});
@@ -88,7 +90,7 @@
 	<div class="add-row">
 		<select bind:value={selectedGuild} class="min180">
 			{#each guilds as g (g.guild_id)}
-				<option value={g.guild_id}>ギルド {g.guild_id}</option>
+				<option value={g.guild_id}>{g.guild_name ?? `ギルド ${g.guild_id}`}</option>
 			{/each}
 		</select>
 		<input type="text" placeholder="チャンネルID（数字）" class="mono grow" bind:value={channelInput} />
@@ -101,7 +103,9 @@
 			{#each channels as ch (ch.guild_id + ":" + ch.channel_id)}
 				<div class="list-row">
 					<span class="field-sub">
-						<span class="mono">#{ch.channel_id}</span> @ ギルド {ch.guild_id}
+						{#if ch.channel_name}#{ch.channel_name}（<span class="mono">{ch.channel_id}</span
+							>）{:else}<span class="mono">#{ch.channel_id}</span>{/if}
+						@ {guildLabel(guilds, ch.guild_id)}
 					</span>
 					<button
 						type="button"

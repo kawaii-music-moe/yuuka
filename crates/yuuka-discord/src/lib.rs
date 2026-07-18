@@ -30,7 +30,10 @@ mod tenant;
 mod text;
 
 pub use idempotent::MessageDedup;
-pub use live::{fetch_guild_options, GuildLiveEntry, GuildLiveOptions};
+pub use live::{
+    fetch_channel_name, fetch_guild_name, fetch_guild_options, fetch_member_display,
+    GuildLiveEntry, GuildLiveOptions,
+};
 pub use manager::{DiscordManager, DiscordMessenger, ManagerPorts, Prepared, TenantRunner};
 pub use presence::build_presence;
 pub use tenant::{default_intents, run_tenant, GatewayBotUser, TenantConfig, TenantStatus};

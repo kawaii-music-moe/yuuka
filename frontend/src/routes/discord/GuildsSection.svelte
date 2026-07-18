@@ -36,15 +36,16 @@
 		}
 	}
 
-	async function remove(guildId: string) {
+	async function remove(g: AssistantGuild) {
+		const label = g.guild_name ? `${g.guild_name}（${g.guild_id}）` : `ギルド ${g.guild_id}`;
 		const ok = await confirmDialog({
-			message: `ギルド ${guildId} を応答許可リストから削除しますか？`,
+			message: `${label} を応答許可リストから削除しますか？`,
 			danger: true,
 			confirmLabel: "削除",
 		});
 		if (!ok) return;
 		try {
-			const res = await botAttributeApi.setGuilds({ botId, guildId, action: "remove" });
+			const res = await botAttributeApi.setGuilds({ botId, guildId: g.guild_id, action: "remove" });
 			if (res.success) onchanged();
 			else pushToast(res.message ?? "操作に失敗しました。", "error");
 		} catch (err) {
@@ -68,8 +69,12 @@
 		{:else}
 			{#each guilds as g (g.guild_id)}
 				<div class="list-row">
-					<span class="mono">{g.guild_id}</span>
-					<Button variant="secondary" small onclick={() => remove(g.guild_id)}>削除</Button>
+					<span class="field-sub">
+						{#if g.guild_name}{g.guild_name}（<span class="mono">{g.guild_id}</span>）{:else}<span
+								class="mono">{g.guild_id}</span
+							>{/if}
+					</span>
+					<Button variant="secondary" small onclick={() => remove(g)}>削除</Button>
 				</div>
 			{/each}
 		{/if}

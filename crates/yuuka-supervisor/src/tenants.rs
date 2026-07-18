@@ -305,11 +305,29 @@ impl yuuka_orchestrator::BotViewRuntime for RegistryBotViewRuntime {
     }
 }
 
+/// 表示名キャッシュの TTL（ギルド/チャンネル/メンバー名は変化が稀・REST 連打を避ける）。
+const NAME_CACHE_TTL: Duration = Duration::from_secs(300);
+
 /// [`yuuka_orchestrator::DiscordLive`] の live 実装（sync-discord の Bot ユーザー参照・
-/// guild-options のロール/メンバー候補）。
-pub struct RegistryDiscordLive(pub Arc<TenantRegistry>);
+/// guild-options のロール/メンバー候補・UI 表示名の解決）。
+///
+/// 表示名は REST で引き、TTL 付き in-memory キャッシュに載せる（設定画面を開く度の REST 連打
+/// 防止。`None`＝解決不能もキャッシュして未参加ギルドへの連打も避ける）。
+pub struct RegistryDiscordLive {
+    registry: Arc<TenantRegistry>,
+    /// `"g:<id>"` / `"c:<id>"` / `"m:<gid>:<uid>"` → (取得時刻, 解決結果)。
+    names: Mutex<HashMap<String, (std::time::Instant, Option<String>)>>,
+}
 
 impl RegistryDiscordLive {
+    #[must_use]
+    pub fn new(registry: Arc<TenantRegistry>) -> Self {
+        Self {
+            registry,
+            names: Mutex::new(HashMap::new()),
+        }
+    }
+
     fn to_bot_user(u: GatewayBotUser) -> yuuka_orchestrator::DiscordBotUser {
         yuuka_orchestrator::DiscordBotUser {
             id: u.id,
@@ -317,16 +335,45 @@ impl RegistryDiscordLive {
             avatar_url: u.avatar_url,
         }
     }
+
+    /// 名前解決に使う REST クライアント（当該 Bot → デフォルトへフォールバック）。
+    fn client_for(&self, bot_id: &str) -> Option<Arc<HttpClient>> {
+        self.registry
+            .http_client(bot_id)
+            .or_else(|| self.registry.http_client(yuuka_core::BotId::SYSTEM_DEFAULT))
+    }
+
+    /// キャッシュ参照（TTL 内のみ）。poison は into_inner で回復（単純 map・中間状態なし）。
+    fn cache_get(&self, key: &str) -> Option<Option<String>> {
+        let names = self
+            .names
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        names
+            .get(key)
+            .filter(|(at, _)| at.elapsed() < NAME_CACHE_TTL)
+            .map(|(_, v)| v.clone())
+    }
+
+    fn cache_put(&self, key: String, value: Option<String>) {
+        let mut names = self
+            .names
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // 定期再訪で無限に肥大しないよう、期限切れを都度掃除する（設定画面規模なら十分軽い）。
+        names.retain(|_, (at, _)| at.elapsed() < NAME_CACHE_TTL);
+        names.insert(key, (std::time::Instant::now(), value));
+    }
 }
 
 #[async_trait::async_trait]
 impl yuuka_orchestrator::DiscordLive for RegistryDiscordLive {
     async fn custom_bot_user(&self, bot_id: &str) -> Option<yuuka_orchestrator::DiscordBotUser> {
-        self.0.bot_user(bot_id).map(Self::to_bot_user)
+        self.registry.bot_user(bot_id).map(Self::to_bot_user)
     }
 
     async fn default_bot_user(&self) -> Option<yuuka_orchestrator::DiscordBotUser> {
-        self.0
+        self.registry
             .bot_user(yuuka_core::BotId::SYSTEM_DEFAULT)
             .map(Self::to_bot_user)
     }
@@ -337,11 +384,7 @@ impl yuuka_orchestrator::DiscordLive for RegistryDiscordLive {
         guild_id: &str,
     ) -> yuuka_orchestrator::GuildOptions {
         // Node `getBotClientForUser`: 独自クライアントがあればそれ、無ければデフォルトへフォールバック。
-        let client = self
-            .0
-            .http_client(bot_id)
-            .or_else(|| self.0.http_client(yuuka_core::BotId::SYSTEM_DEFAULT));
-        let Some(client) = client else {
+        let Some(client) = self.client_for(bot_id) else {
             return yuuka_orchestrator::GuildOptions::default();
         };
         let opts = yuuka_discord::fetch_guild_options(&client, guild_id).await;
@@ -355,6 +398,44 @@ impl yuuka_orchestrator::DiscordLive for RegistryDiscordLive {
             members_complete: opts.members_complete,
             available: opts.available,
         }
+    }
+
+    async fn guild_name(&self, bot_id: &str, guild_id: &str) -> Option<String> {
+        let key = format!("g:{guild_id}");
+        if let Some(cached) = self.cache_get(&key) {
+            return cached;
+        }
+        let client = self.client_for(bot_id)?;
+        let name = yuuka_discord::fetch_guild_name(&client, guild_id).await;
+        self.cache_put(key, name.clone());
+        name
+    }
+
+    async fn channel_name(&self, bot_id: &str, channel_id: &str) -> Option<String> {
+        let key = format!("c:{channel_id}");
+        if let Some(cached) = self.cache_get(&key) {
+            return cached;
+        }
+        let client = self.client_for(bot_id)?;
+        let name = yuuka_discord::fetch_channel_name(&client, channel_id).await;
+        self.cache_put(key, name.clone());
+        name
+    }
+
+    async fn member_display(
+        &self,
+        bot_id: &str,
+        guild_id: &str,
+        user_id: &str,
+    ) -> Option<String> {
+        let key = format!("m:{guild_id}:{user_id}");
+        if let Some(cached) = self.cache_get(&key) {
+            return cached;
+        }
+        let client = self.client_for(bot_id)?;
+        let name = yuuka_discord::fetch_member_display(&client, guild_id, user_id).await;
+        self.cache_put(key, name.clone());
+        name
     }
 }
 

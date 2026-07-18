@@ -289,7 +289,7 @@ async fn run() -> Result<(), String> {
     // Discord ライブ照会（sync-discord の Bot ユーザー参照・guild-options のロール/メンバー候補）。
     // Rust が gateway を所有する時のみ live（TenantRegistry）、Node 所有時は NullDiscordLive へ縮退する。
     let discord_live: Arc<dyn yuuka_orchestrator::DiscordLive> = match &tenant_registry {
-        Some(reg) => Arc::new(RegistryDiscordLive(reg.clone())),
+        Some(reg) => Arc::new(RegistryDiscordLive::new(reg.clone())),
         None => Arc::new(yuuka_orchestrator::NullDiscordLive),
     };
 

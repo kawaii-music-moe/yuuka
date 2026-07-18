@@ -1032,10 +1032,12 @@ async fn guild_note_set(
 // ─── GET /api/bots/assistant-config（汎用モード設定タブの一括取得・owner/Admin） ──
 
 /// `GET /api/bots/assistant-config`（Node）。プリセット/能力/キー有無/ペルソナ/MCP/ギルド設定/利用量/
-/// レート制限を 1 応答に集約する（読み取り専用）。
+/// レート制限を 1 応答に集約する（読み取り専用）。ギルド/チャンネル/メンバーの表示名は
+/// Discord ライブから best-effort で付与する（未稼働は null → UI が ID 表示にフォールバック）。
 async fn assistant_config_get(
     user: AuthenticatedUser,
     State(db): State<Db>,
+    Extension(live): Extension<Arc<dyn DiscordLive>>,
     Query(q): Query<BotIdQuery>,
 ) -> Response {
     let bot = match require_owned_bot(
@@ -1088,28 +1090,41 @@ async fn assistant_config_get(
         Ok(g) => g,
         Err(_) => return server_error(),
     };
-    let guilds: Vec<Value> = guilds
-        .iter()
-        .map(|g| json!({ "bot_id": g.bot_id, "guild_id": g.guild_id, "created_at": g.created_at }))
-        .collect();
+    let mut guild_values: Vec<Value> = Vec::with_capacity(guilds.len());
+    for g in &guilds {
+        let name = live.guild_name(&bot.id, &g.guild_id).await;
+        guild_values.push(json!({
+            "bot_id": g.bot_id, "guild_id": g.guild_id, "guild_name": name,
+            "created_at": g.created_at,
+        }));
+    }
+    let guilds = guild_values;
     let channels = match bot_repo::list_enabled_channels(&db, &bot.id).await {
         Ok(c) => c,
         Err(_) => return server_error(),
     };
-    let channels: Vec<Value> = channels.iter().map(channel_json).collect();
+    let mut channel_values: Vec<Value> = Vec::with_capacity(channels.len());
+    for c in &channels {
+        let name = live.channel_name(&bot.id, &c.channel_id).await;
+        channel_values.push(json!({
+            "bot_id": c.bot_id, "guild_id": c.guild_id, "channel_id": c.channel_id,
+            "channel_name": name, "added_by": c.added_by, "created_at": c.created_at,
+        }));
+    }
+    let channels = channel_values;
     let members = match bot_repo::list_bot_members(&db, &bot.id).await {
         Ok(m) => m,
         Err(_) => return server_error(),
     };
-    let members: Vec<Value> = members
-        .iter()
-        .map(|m| {
-            json!({
-                "bot_id": m.bot_id, "guild_id": m.guild_id, "user_id": m.user_id,
-                "added_by": m.added_by, "created_at": m.created_at,
-            })
-        })
-        .collect();
+    let mut member_values: Vec<Value> = Vec::with_capacity(members.len());
+    for m in &members {
+        let name = live.member_display(&bot.id, &m.guild_id, &m.user_id).await;
+        member_values.push(json!({
+            "bot_id": m.bot_id, "guild_id": m.guild_id, "user_id": m.user_id,
+            "member_name": name, "added_by": m.added_by, "created_at": m.created_at,
+        }));
+    }
+    let members = member_values;
     let roles = match bot_repo::list_allowed_roles(&db, &bot.id).await {
         Ok(r) => r,
         Err(_) => return server_error(),

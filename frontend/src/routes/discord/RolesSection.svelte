@@ -4,6 +4,7 @@
 	import { ApiError } from "$lib/api/client";
 	import { pushToast } from "$lib/stores/toast";
 	import { confirmDialog, Button } from "$lib/components/ui";
+	import { guildLabel } from "../config/configTypes";
 	import type {
 		AssistantGuild,
 		AssistantRole,
@@ -126,7 +127,7 @@
 	<div class="add-row">
 		<select bind:value={selectedGuild} class="min180">
 			{#each guilds as g (g.guild_id)}
-				<option value={g.guild_id}>ギルド {g.guild_id}</option>
+				<option value={g.guild_id}>{g.guild_name ?? `ギルド ${g.guild_id}`}</option>
 			{/each}
 		</select>
 		<select bind:value={selectedRole} class="min180 grow">
@@ -149,7 +150,7 @@
 				<div class="list-row">
 					<span class="field-sub">
 						{#if r.role_name}@{r.role_name}{:else}<span class="mono">{r.role_id}</span>{/if}
-						@ ギルド {r.guild_id}
+						@ {guildLabel(guilds, r.guild_id)}
 					</span>
 					<button
 						type="button"

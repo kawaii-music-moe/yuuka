@@ -6,7 +6,7 @@
 //! ため best-effort（失敗は空一覧・Node もキャッシュ分のみで `members_complete:false` だった）。
 
 use twilight_http::Client;
-use twilight_model::id::marker::GuildMarker;
+use twilight_model::id::marker::{ChannelMarker, GuildMarker, UserMarker};
 use twilight_model::id::Id;
 
 /// ロール/メンバーの `{id, name}` 候補（provider 中立・web 層の `GuildEntry` へ写像される）。
@@ -25,6 +25,39 @@ pub struct GuildLiveOptions {
     pub members_complete: bool,
     /// Bot が当該ギルドに参加しているか（guild fetch 成功＝在籍）。
     pub available: bool,
+}
+
+/// ギルド名を REST で引く（未参加・不正 ID・失敗は `None`＝呼び出し側が ID 表示へフォールバック）。
+pub async fn fetch_guild_name(client: &Client, guild_id: &str) -> Option<String> {
+    let gid = guild_id.parse::<Id<GuildMarker>>().ok()?;
+    let resp = client.guild(gid).await.ok()?;
+    resp.model().await.ok().map(|g| g.name)
+}
+
+/// チャンネル名を REST で引く（不可視・不正 ID・失敗は `None`）。DM 等の無名チャンネルも `None`。
+pub async fn fetch_channel_name(client: &Client, channel_id: &str) -> Option<String> {
+    let cid = channel_id.parse::<Id<ChannelMarker>>().ok()?;
+    let resp = client.channel(cid).await.ok()?;
+    resp.model().await.ok()?.name
+}
+
+/// ギルドメンバーの表示名を REST で引く（nick → global_name → username・Node `displayName` 相当）。
+/// 未在籍・失敗は `None`。
+pub async fn fetch_member_display(
+    client: &Client,
+    guild_id: &str,
+    user_id: &str,
+) -> Option<String> {
+    let gid = guild_id.parse::<Id<GuildMarker>>().ok()?;
+    let uid = user_id.parse::<Id<UserMarker>>().ok()?;
+    let resp = client.guild_member(gid, uid).await.ok()?;
+    let m = resp.model().await.ok()?;
+    Some(
+        m.nick
+            .clone()
+            .or_else(|| m.user.global_name.clone())
+            .unwrap_or_else(|| m.user.name.clone()),
+    )
 }
 
 /// 指定ギルドのロール/メンバー候補を REST で引く（Node `getGuildOptionsForBot`）。

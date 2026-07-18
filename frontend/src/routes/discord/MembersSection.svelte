@@ -4,6 +4,7 @@
 	import { ApiError } from "$lib/api/client";
 	import { pushToast } from "$lib/stores/toast";
 	import { confirmDialog, Button } from "$lib/components/ui";
+	import { guildLabel } from "../config/configTypes";
 	import type {
 		AssistantGuild,
 		AssistantMember,
@@ -95,8 +96,9 @@
 
 	async function remove(m: AssistantMember, shift: boolean) {
 		if (!shift) {
+			const label = m.member_name ? `${m.member_name}（${m.user_id}）` : `ユーザー ${m.user_id}`;
 			const ok = await confirmDialog({
-				message: `ユーザー ${m.user_id} を利用メンバーから削除しますか？`,
+				message: `${label} を利用メンバーから削除しますか？`,
 				danger: true,
 				confirmLabel: "削除",
 			});
@@ -125,7 +127,7 @@
 	<div class="add-row">
 		<select bind:value={selectedGuild} class="min180">
 			{#each guilds as g (g.guild_id)}
-				<option value={g.guild_id}>ギルド {g.guild_id}</option>
+				<option value={g.guild_id}>{g.guild_name ?? `ギルド ${g.guild_id}`}</option>
 			{/each}
 		</select>
 		<select bind:value={selectedMember} class="min180">
@@ -148,7 +150,9 @@
 			{#each members as m (m.guild_id + ":" + m.user_id)}
 				<div class="list-row">
 					<span class="field-sub">
-						<span class="mono">{m.user_id}</span> @ ギルド {m.guild_id}
+						{#if m.member_name}{m.member_name}（<span class="mono">{m.user_id}</span
+							>）{:else}<span class="mono">{m.user_id}</span>{/if}
+						@ {guildLabel(guilds, m.guild_id)}
 					</span>
 					<button
 						type="button"
