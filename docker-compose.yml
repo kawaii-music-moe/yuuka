@@ -30,6 +30,8 @@ services:
       # ホスト環境変数（instance.env の YUUKA_RUST_DISCORD）から pass-through。未設定なら渡さない
       # ＝Rust ゲート既定 off（Node が gateway 所有）。prod カットオーバーで 1 にする。
       - YUUKA_RUST_DISCORD
+      # ログレベル（tracing EnvFilter）。未設定なら既定 info。障害調査時に一時的に上げる。
+      - RUST_LOG
     volumes:
       - "${DATA_DIR:?set DATA_DIR in instance.env}:/app/data"
       - "${CONFIG_FILE:?set CONFIG_FILE in instance.env}:/app/config.yaml:ro"

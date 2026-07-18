@@ -118,7 +118,20 @@ pub async fn run_tenant(
                             tokio::spawn(async move {
                                 handle_message(&flow, &rt, message).await;
                             });
+                        } else {
+                            tracing::warn!(
+                                bot_id = %cfg.bot_id,
+                                "MESSAGE_CREATE を受信したが READY 前のため破棄"
+                            );
                         }
+                    }
+                    Event::GuildCreate(guild) => {
+                        // 参加ギルドの可視化（READY 直後に参加分が流れる・以降は新規参加時のみ）。
+                        // 「許可ギルド設定と実参加ギルドの不一致」調査に使う。
+                        tracing::info!(bot_id = %cfg.bot_id, guild_id = %guild.id(), "ギルド参加を確認");
+                    }
+                    Event::GuildDelete(guild) => {
+                        tracing::info!(bot_id = %cfg.bot_id, guild_id = %guild.id, "ギルドから離脱");
                     }
                     Event::InteractionCreate(interaction) => {
                         let ideps = interaction_deps.clone();

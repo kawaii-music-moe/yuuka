@@ -81,10 +81,20 @@ pub async fn handle_message(deps: &FlowDeps, rt: &RuntimeBot, message: Message) 
     if message.author.bot {
         return;
     }
+    // 受信の可視化（正常経路はログを出さない設計のため、黙殺調査はこの debug を起点にする。
+    // 有効化: RUST_LOG=info,yuuka_discord=debug）。
+    tracing::debug!(
+        bot_id = %rt.bot_id,
+        guild_id = ?message.guild_id.map(twilight_model::id::Id::get),
+        channel_id = %message.channel_id,
+        author = %message.author.id,
+        "MESSAGE_CREATE 受信"
+    );
     // 二重応答冪等ガード（両経路の分岐より前・現行 [`src/bot.ts:969`]）。
     let bot_uid = rt.bot_user_id.get().to_string();
     let msg_id = message.id.get().to_string();
     if !deps.dedup.claim(&bot_uid, &msg_id) {
+        tracing::debug!(bot_id = %rt.bot_id, msg_id, "黙殺: 二重応答ガード（処理済みメッセージ）");
         return;
     }
     // Bot 種別でルーティング（現行 `isGuildAssistantBot(botId)`）。
@@ -93,7 +103,10 @@ pub async fn handle_message(deps: &FlowDeps, rt: &RuntimeBot, message: Message) 
         // system_default はレコードが無くても常に秘書として応答する（現行はデフォルト Bot の
         // レコードを引かず secretary 経路にハードコード）。custom はレコード必須（無ければ黙殺）。
         None if rt.bot_id.as_str() == BotId::SYSTEM_DEFAULT => default_secretary_record(),
-        None => return,
+        None => {
+            tracing::debug!(bot_id = %rt.bot_id, "黙殺: Bot レコード無し");
+            return;
+        }
     };
     if bot.is_guild_assistant {
         assistant_flow(deps, rt, &bot, message).await;
@@ -125,6 +138,7 @@ async fn assistant_flow(deps: &FlowDeps, rt: &RuntimeBot, bot: &BotRecord, messa
 
     // DM は owner のみ応答（owner 以外は黙殺・§4.3.2）。
     if is_dm && author != bot.owner_id {
+        tracing::debug!(bot_id = %rt.bot_id, author = %author, "黙殺: owner 以外からの DM");
         return;
     }
 
@@ -135,6 +149,7 @@ async fn assistant_flow(deps: &FlowDeps, rt: &RuntimeBot, bot: &BotRecord, messa
         };
         // 許可ギルド（未許可は応答も記録もしない・§6）。
         if !deps.directory.is_guild_allowed(&rt.bot_id, gid).await {
+            tracing::debug!(bot_id = %rt.bot_id, guild_id = %gid, "黙殺: 未許可ギルド");
             return;
         }
     }
@@ -157,6 +172,11 @@ async fn assistant_flow(deps: &FlowDeps, rt: &RuntimeBot, bot: &BotRecord, messa
     // ＝本文なしメッセージ（スタンプ等）へ定型プロンプトを返さない判定に使う（下記の空本文分岐）。
     let addressed = is_dm || is_mentioned || is_reply_to_bot;
     if !addressed && !is_enabled_channel {
+        tracing::debug!(
+            bot_id = %rt.bot_id,
+            channel_id = %message.channel_id,
+            "黙殺: 宛先外（メンション/返信なし・有効化チャンネル外）"
+        );
         return;
     }
 
