@@ -35,8 +35,9 @@ pub struct TenantConfig {
 
 /// テナントの gateway 接続状態（web 層の稼働表示・起動完了待ちに使う）。
 ///
-/// READY 受信で `connected=true`、poll ループ終了（graceful 停止・恒久クローズ・一過性断の
-/// 再接続待ち）で `false`。twilight の自動再接続で再 READY すれば再び `true` に戻る。
+/// READY / RESUMED 受信で `connected=true`、poll ループ終了（graceful 停止・恒久クローズ・一過性断の
+/// 再接続待ち）で `false`。twilight の自動再接続後は、新規セッションなら READY・セッション継続なら
+/// RESUMED が届き、どちらでも `true` に戻る。
 #[derive(Default)]
 pub struct TenantStatus {
     connected: AtomicBool,
@@ -125,6 +126,11 @@ pub async fn run_tenant(
                         tokio::spawn(async move {
                             handle_interaction_event(&ideps, interaction).await;
                         });
+                    }
+                    Event::Resumed => {
+                        // 一過性断からのセッション resume（Ready は来ない）。稼働表示を復帰させる。
+                        status.set_connected(true);
+                        tracing::info!(bot_id = %cfg.bot_id, "gateway resume（接続復帰）");
                     }
                     Event::GatewayClose(frame) => {
                         if is_fatal_close(frame.as_ref()) {
