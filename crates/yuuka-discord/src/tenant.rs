@@ -14,6 +14,7 @@ use secrecy::{ExposeSecret, SecretString};
 use twilight_gateway::{
     CloseFrame, Event, EventTypeFlags, Intents, MessageSender, Shard, ShardId, StreamExt as _,
 };
+use twilight_model::gateway::payload::incoming::GuildCreate;
 use twilight_model::gateway::CloseCode;
 use twilight_model::guild::PartialMember;
 use twilight_model::user::{CurrentUser, User};
@@ -129,6 +130,19 @@ pub async fn run_tenant(
                         // 参加ギルドの可視化（READY 直後に参加分が流れる・以降は新規参加時のみ）。
                         // 「許可ギルド設定と実参加ギルドの不一致」調査に使う。
                         tracing::info!(bot_id = %cfg.bot_id, guild_id = %guild.id(), "ギルド参加を確認");
+                        // Bot 統合ロール（`@Bot名` 補完のロールメンション判定用）を控える。
+                        if let (Some(rt), GuildCreate::Available(g)) =
+                            (runtime.as_ref(), guild.as_ref())
+                        {
+                            let own_role = g.roles.iter().find(|r| {
+                                r.tags
+                                    .as_ref()
+                                    .is_some_and(|t| t.bot_id == Some(rt.bot_user_id))
+                            });
+                            if let Some(role) = own_role {
+                                rt.note_integration_role(g.id.get(), role.id.get());
+                            }
+                        }
                     }
                     Event::GuildDelete(guild) => {
                         tracing::info!(bot_id = %cfg.bot_id, guild_id = %guild.id, "ギルドから離脱");
@@ -214,6 +228,7 @@ async fn on_ready(
         bot_id: cfg.bot_id.clone(),
         bot_user_id,
         sender,
+        integration_roles: std::sync::Arc::default(),
     }
 }
 

@@ -67,6 +67,28 @@ pub struct RuntimeBot {
     pub bot_user_id: Id<UserMarker>,
     /// プレゼンス（`setBotStatus`）を spawn 先タスクから送るための cloneable sender。
     pub sender: MessageSender,
+    /// ギルド別の Bot 統合ロール ID（`@Bot名` 補完がロールメンションになるケースの判定用。
+    /// GUILD_CREATE の `role.tags.bot_id == 自 Bot` で控える）。
+    pub integration_roles: Arc<std::sync::Mutex<std::collections::HashMap<u64, u64>>>,
+}
+
+impl RuntimeBot {
+    /// GUILD_CREATE で確認した Bot 統合ロールを控える。
+    pub fn note_integration_role(&self, guild_id: u64, role_id: u64) {
+        self.integration_roles
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(guild_id, role_id);
+    }
+
+    /// ギルドの Bot 統合ロール ID（未知なら `None`）。
+    fn integration_role(&self, guild_id: u64) -> Option<u64> {
+        self.integration_roles
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(&guild_id)
+            .copied()
+    }
 }
 
 /// ターン処理へ渡すハンドル束（プレゼンス通知＋非同期配信）。
@@ -160,7 +182,8 @@ async fn assistant_flow(deps: &FlowDeps, rt: &RuntimeBot, bot: &BotRecord, messa
     let is_reply_to_bot = reference
         .as_ref()
         .is_some_and(|r| r.author_id == rt.bot_user_id);
-    let is_mentioned = is_user_mentioned(&message, rt.bot_user_id);
+    let is_mentioned =
+        is_user_mentioned(&message, rt.bot_user_id) || is_bot_role_mentioned(rt, &message);
     let is_enabled_channel = if let Some(gid) = guild_id.as_ref() {
         deps.directory
             .is_channel_enabled(&rt.bot_id, gid, &message.channel_id.get().to_string())
@@ -225,8 +248,13 @@ async fn assistant_flow(deps: &FlowDeps, rt: &RuntimeBot, bot: &BotRecord, messa
     let typing = TypingGuard::start(deps.http.clone(), message.channel_id);
     let status = make_status_sink(rt.sender.clone());
 
-    // 自 Bot 宛メンションのみ除去（他ユーザーメンションは対象解決に残す）。
+    // 自 Bot 宛メンションのみ除去（他ユーザーメンションは対象解決に残す）。統合ロール経由の
+    // メンション（`<@&role>`）も自 Bot 宛として除去する。
     let text = strip_self_mention(&message.content, &bot_uid_str(rt));
+    let text = match message.guild_id.and_then(|g| rt.integration_role(g.get())) {
+        Some(role_id) => text.replace(&format!("<@&{role_id}>"), ""),
+        None => text,
+    };
     let text = text.trim().to_owned();
     let context_prefix = build_context_prefix(rt, reference.as_ref(), true);
     let full_text = format!("{context_prefix}{text}");
@@ -375,7 +403,8 @@ async fn secretary_flow(deps: &FlowDeps, rt: &RuntimeBot, bot: &BotRecord, messa
     let is_reply_to_bot = reference
         .as_ref()
         .is_some_and(|r| r.author_id == rt.bot_user_id);
-    let is_mentioned = is_user_mentioned(&message, rt.bot_user_id);
+    let is_mentioned =
+        is_user_mentioned(&message, rt.bot_user_id) || is_bot_role_mentioned(rt, &message);
     let is_dm = message.guild_id.is_none();
     if !is_mentioned && !is_dm && !is_reply_to_bot {
         return;
@@ -706,10 +735,24 @@ fn bot_uid_str(rt: &RuntimeBot) -> String {
 /// 与えられたユーザーがメンションされているか（現行 `message.mentions.has(botClient.user)`）。
 ///
 /// discord.js の `has()` は直接メンションに加え **@everyone/@here**（`mention_everyone`）と
-/// **Bot 自身が保持するロールへのロールメンション**も真とする。前者は移植する。後者は Bot 自身の
-/// ギルドロール一覧が受信メッセージ（発話者の member）からは分からないため未対応（既知の狭め）。
+/// **Bot 自身が保持するロールへのロールメンション**も真とする。前者は本関数、後者は
+/// [`is_bot_role_mentioned`]（統合ロール＝`@Bot名` 補完で付くロール）で移植する。統合ロール以外の
+/// 保持ロール（例: 手動付与の共用ロール）へのメンションは未対応（既知の狭め・member fetch が必要）。
 fn is_user_mentioned(message: &Message, user_id: Id<UserMarker>) -> bool {
     message.mention_everyone || message.mentions.iter().any(|m| m.id == user_id)
+}
+
+/// Bot の統合ロールへのロールメンションか。Discord の `@Bot名` 補完はユーザーメンションではなく
+/// **統合ロールのロールメンション**になることがあり（`message.mentions` は空・`mention_roles` に
+/// ロール ID）、discord.js の `mentions.has()` はこれを真とするため移植する。
+fn is_bot_role_mentioned(rt: &RuntimeBot, message: &Message) -> bool {
+    let Some(gid) = message.guild_id else {
+        return false;
+    };
+    let Some(role_id) = rt.integration_role(gid.get()) else {
+        return false;
+    };
+    message.mention_roles.iter().any(|r| r.get() == role_id)
 }
 
 /// ギルド表示名を解決する（nick → global_name → username・現行 `resolveDisplayName`）。
