@@ -255,6 +255,30 @@ impl yuuka_integrated::BotLifecycle for RegistryLifecycle {
     }
 }
 
+/// [`yuuka_orchestrator::BotViewRuntime`] の live 実装（Bot 一覧の稼働表示・削除時停止）。
+pub struct RegistryBotViewRuntime(pub Arc<TenantRegistry>);
+
+impl yuuka_orchestrator::BotViewRuntime for RegistryBotViewRuntime {
+    fn default_ready(&self) -> bool {
+        self.0.run_status(yuuka_core::BotId::SYSTEM_DEFAULT).1
+    }
+
+    fn custom_running(&self, bot_id: &str) -> bool {
+        self.0.run_status(bot_id).0
+    }
+
+    fn custom_ready(&self, bot_id: &str) -> bool {
+        self.0.run_status(bot_id).1
+    }
+
+    fn stop_custom(&self, bot_id: &str) {
+        // トレイトは同期（Node の fire-and-forget `stopCustomBot` 相当）。停止はタスクへ切り出す。
+        let reg = self.0.clone();
+        let bot_id = bot_id.to_owned();
+        tokio::spawn(async move { reg.stop(&bot_id).await });
+    }
+}
+
 /// [`yuuka_admin::BotRuntime`] の live 実装（admin デフォルト Bot 再起動・settings 所有 Bot 操作）。
 ///
 /// `restart_default` の `token` 引数は使わない: 全呼び出し元が DB 保存後に呼ぶ契約のため、

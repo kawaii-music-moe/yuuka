@@ -22,7 +22,7 @@ pub mod ws;
 pub use discord::{DiscordTenantService, MessengerRegistrationDm};
 pub use services::{build_supervised_services, CronSupervised};
 pub use supervisor::{RestartPolicy, ServiceError, ShutdownToken, SupervisedService, Supervisor};
-pub use tenants::{RegistryBotRuntime, RegistryLifecycle, TenantRegistry};
+pub use tenants::{RegistryBotRuntime, RegistryBotViewRuntime, RegistryLifecycle, TenantRegistry};
 pub use tool_registry::{build_native_provider, build_tool_registry};
 pub use ws::ws_routes;
 
@@ -51,6 +51,7 @@ pub fn build_app(
     mcp_routes: Router<AppState>,
     integrated_routes: Router<AppState>,
     finance_routes: Router<AppState>,
+    bot_management_routes: Router<AppState>,
     dist_dir: Option<&Path>,
 ) -> Router {
     let routes = framework_routes()
@@ -76,7 +77,7 @@ pub fn build_app(
         .merge(yuuka_auth::device_routes())
         .merge(yuuka_orchestrator::member_request_routes())
         .merge(yuuka_orchestrator::bot_share_routes())
-        .merge(yuuka_orchestrator::bot_management_routes())
+        .merge(bot_management_routes)
         .merge(desktop_dist::routes());
     let routes = match dist_dir {
         Some(dir) => mount_static(routes, dir),
@@ -211,6 +212,8 @@ mod tests {
             )),
             // finance ルータ（既定 NullReceiptParser）を merge して検証する。
             yuuka_finance::routes(),
+            // Bot 管理ルータ（既定 NullBotViewRuntime・crypto なし）を merge して検証する。
+            yuuka_orchestrator::bot_management_routes(),
             None,
         )
     }

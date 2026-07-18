@@ -24,7 +24,8 @@ use yuuka_orchestrator::{ChatEngine, DbBotDirectory, DbMembership, InMemoryRateL
 use yuuka_services::{MetricsRegistry, ServiceContext};
 use yuuka_supervisor::{
     build_app, build_supervised_services, build_tool_registry, ws_routes, MessengerRegistrationDm,
-    RegistryBotRuntime, RegistryLifecycle, ServiceError, ShutdownToken, SupervisedService,
+    RegistryBotRuntime, RegistryBotViewRuntime, RegistryLifecycle, ServiceError, ShutdownToken,
+    SupervisedService,
     Supervisor, TenantRegistry,
 };
 use yuuka_web::{AppState, Db, WebConfig};
@@ -293,6 +294,16 @@ async fn run() -> Result<(), String> {
     // 400 に縮退・list/delete は暗号非依存で動作）。
     let credential_routes = yuuka_credential::routes_with(crypto.clone());
 
+    // Bot 管理ルータ（一覧の稼働表示・削除時停止）。Rust が gateway を所有する時のみ live
+    // （TenantRegistry）、Node 所有時は NullBotViewRuntime へ縮退する（integrated/admin と同じゲート）。
+    // crypto は discord_application_id 導出（保存トークン復号）に使う。
+    let bot_view_runtime: Arc<dyn yuuka_orchestrator::BotViewRuntime> = match &tenant_registry {
+        Some(reg) => Arc::new(RegistryBotViewRuntime(reg.clone())),
+        None => Arc::new(yuuka_orchestrator::NullBotViewRuntime),
+    };
+    let bot_management_routes =
+        yuuka_orchestrator::bot_management_routes_with(bot_view_runtime, crypto.clone());
+
     // デバイスフロー（RFC 8628）ルータ。device_code の一時状態はインメモリ store（web 再起動を跨ぐよう
     // main で 1 度だけ生成し注入）。承認 URL ベースは base_url（末尾スラッシュ除去）or http://host:port。
     let verification_base = cfg
@@ -338,6 +349,7 @@ async fn run() -> Result<(), String> {
         mcp_routes,
         integrated_routes,
         finance_routes,
+        bot_management_routes,
         addr,
         dist_dir,
     });
@@ -662,6 +674,8 @@ struct WebService {
     integrated_routes: Router<AppState>,
     /// finance ルータ（`ReceiptParser` を `Extension` で内包済み・`/api/expenses/*`・upload-receipt live）。
     finance_routes: Router<AppState>,
+    /// Bot 管理ルータ（`BotViewRuntime`/crypto を `Extension` で内包済み・`/api/bots*`）。
+    bot_management_routes: Router<AppState>,
     addr: SocketAddr,
     dist_dir: Option<PathBuf>,
 }
@@ -686,6 +700,7 @@ impl SupervisedService for WebService {
             self.mcp_routes.clone(),
             self.integrated_routes.clone(),
             self.finance_routes.clone(),
+            self.bot_management_routes.clone(),
             self.dist_dir.as_deref(),
         );
         let listener = tokio::net::TcpListener::bind(self.addr)
