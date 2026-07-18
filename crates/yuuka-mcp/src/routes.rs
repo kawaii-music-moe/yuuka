@@ -872,7 +872,13 @@ pub(crate) async fn proxy_post(
                     h.insert(HeaderName::from_static("mcp-session-id"), v);
                 }
             }
-            // 同一オリジン中継のため CORS ヘッダーは付けない（Node と同じ）。
+            // sandbox="allow-scripts allow-forms"（allow-same-origin 無し）の iframe は
+            // オリジンが null になるため、成功応答にも ACAO:null が必要。
+            h.insert(
+                HeaderName::from_static("access-control-allow-origin"),
+                HeaderValue::from_static("null"),
+            );
+            h.insert(VARY, HeaderValue::from_static("Origin"));
             Ok(resp)
         }
         Err(e) => Ok(proxy_cors(err_json(
