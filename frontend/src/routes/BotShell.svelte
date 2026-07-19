@@ -143,12 +143,9 @@
 		(TAB_LOADERS[tab] ?? TAB_LOADERS[DEFAULT_BOT_TAB])(),
 	);
 	// 設定ハブ配下ページか（パンくず表記とサイドバー「Bot設定」アクティブ判定に使用）。
+	// パンくず時の「Bot設定 ›」プレフィックスはテンプレート側でリンク付き分割描画する。
 	const inSettingsChild = $derived(SETTINGS_CHILD_TABS.includes(tab));
-	const title = $derived(
-		inSettingsChild
-			? `Bot設定 › ${TAB_TITLES[tab]}`
-			: (TAB_TITLES[tab] ?? "ダッシュボード"),
-	);
+	const title = $derived(TAB_TITLES[tab] ?? "ダッシュボード");
 
 	// Bot ブランディング（旧 updateSidebarBotBranding）。
 	const botName = $derived($activeBot?.name ?? "システムデフォルト");
@@ -266,7 +263,20 @@
 				<Icon name="menu" />
 			</button>
 			<div class="header-title">
-				<h2 id="current-tab-title">{title}</h2>
+				<h2 id="current-tab-title">
+					{#if inSettingsChild}
+						<button
+							type="button"
+							class="breadcrumb-link"
+							title="Bot設定に戻る"
+							onclick={() => go("settings")}>Bot設定</button
+						>
+						<span class="breadcrumb-sep">›</span>
+						{title}
+					{:else}
+						{title}
+					{/if}
+				</h2>
 			</div>
 		</header>
 
@@ -326,5 +336,24 @@
 		flex: 1;
 		padding: 2rem;
 		text-align: center;
+	}
+	/* パンくずの「Bot設定」リンク。見た目は見出しのまま、hover でリンクだと分かる程度に */
+	.breadcrumb-link {
+		background: none;
+		border: none;
+		padding: 0;
+		font: inherit;
+		color: var(--text-secondary);
+		cursor: pointer;
+		transition: color 0.15s ease;
+	}
+	.breadcrumb-link:hover {
+		color: var(--text-primary);
+		text-decoration: underline;
+		text-underline-offset: 4px;
+	}
+	.breadcrumb-sep {
+		color: var(--text-secondary);
+		margin: 0 2px;
 	}
 </style>
