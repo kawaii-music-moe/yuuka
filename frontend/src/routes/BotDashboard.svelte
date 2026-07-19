@@ -52,6 +52,10 @@
 	const isAssistant = $derived($activeBot?.preset === "mcp_assistant");
 	const baTheme = $derived($theme === "blue-archive");
 
+	// ウェルカムカードのアイコンは選択中Botのアバター（未設定Botは従来の固定画像へフォールバック）。
+	const botAvatar = $derived($activeBot?.avatar || "/materials/yuka.webp");
+	const botName = $derived($activeBot?.name || "アシスタント");
+
 	function reportError(e: unknown) {
 		const msg = e instanceof ApiError ? e.message : "エラーが発生しました";
 		pushToast(msg, "error");
@@ -127,11 +131,11 @@
 	<!-- ウェルカム: アシスタント吹き出し -->
 	<div class="welcome-card card">
 		<div class="assistant-avatar-container">
-			<img src="/materials/yuka.webp" alt="早瀬ユウカ" class="avatar-img" />
+			<img src={botAvatar} alt={botName} class="avatar-img" />
 			<div class="avatar-badge">AI</div>
 		</div>
 		<div class="speech-bubble-container">
-			<div class="character-name">アシスタント</div>
+			<div class="character-name">{botName}</div>
 			<div class="speech-bubble">
 				<p>{bubble}</p>
 			</div>
