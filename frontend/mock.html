@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="ja">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Yuuka UIモック - Discord連携タブ</title>
+  <meta name="theme-color" content="#121212">
+  <!-- Google Fonts（本体 index.html と同一） -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap"
+    rel="stylesheet">
+  <link rel="stylesheet"
+    href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" />
+  <script src="/theme-init.js"></script>
+  <style>
+    /* モック専用の簡易レイアウト（本体シェルの代わり） */
+    #app {
+      max-width: 860px;
+      margin: 0 auto;
+      padding: 24px 16px 64px;
+    }
+    .mock-banner {
+      padding: 8px 12px;
+      margin-bottom: 16px;
+      border: 1px dashed rgba(255, 255, 255, 0.3);
+      border-radius: 6px;
+      font-size: 0.8rem;
+      opacity: 0.7;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="mock-banner">UIモック: データは全てインメモリのダミーです（追加/削除/承認も画面内で動作します）。</div>
+  <div id="app"></div>
+  <script type="module" src="/src/mock/main.ts"></script>
+</body>
+
+</html>
