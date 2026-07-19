@@ -625,16 +625,18 @@
 								<td class="admin-table-td">{p.owner_username}</td>
 								<td class="admin-table-td admin-mono">{(p.prompt_length || 0).toLocaleString()}</td>
 								<td class="admin-table-td admin-td-actions">
-									<button
-										type="button"
-										class="admin-btn-action"
-										onclick={() => unpublishPersona(p)}>非公開化</button
-									>
-									<button
-										type="button"
-										class="admin-btn-action btn-danger admin-ml"
-										onclick={() => deletePersona(p)}>削除</button
-									>
+									<div class="admin-action-group">
+										<button
+											type="button"
+											class="admin-btn-action"
+											onclick={() => unpublishPersona(p)}>非公開化</button
+										>
+										<button
+											type="button"
+											class="admin-btn-action btn-danger"
+											onclick={() => deletePersona(p)}>削除</button
+										>
+									</div>
 								</td>
 							</tr>
 						{/each}
@@ -737,18 +739,20 @@
 								<td class="admin-table-td admin-td-date">{code.created_at}</td>
 								<td class="admin-table-td">
 									{#if !code.used_by}
-										{#if !code.revoked_at}
+										<div class="admin-action-group">
+											{#if !code.revoked_at}
+												<button
+													type="button"
+													class="admin-btn-action"
+													onclick={() => revokeInvite(code)}>無効化</button
+												>
+											{/if}
 											<button
 												type="button"
-												class="admin-btn-action"
-												onclick={() => revokeInvite(code)}>無効化</button
+												class="admin-btn-action btn-danger"
+												onclick={() => deleteInvite(code)}>削除</button
 											>
-										{/if}
-										<button
-											type="button"
-											class="admin-btn-action btn-danger admin-ml"
-											onclick={() => deleteInvite(code)}>削除</button
-										>
+										</div>
 									{:else}
 										<span class="admin-td-muted">—</span>
 									{/if}
@@ -804,9 +808,6 @@
 	}
 	.admin-code {
 		font-weight: 600;
-	}
-	.admin-ml {
-		margin-left: 6px;
 	}
 	.admin-mt {
 		margin-top: 16px;
