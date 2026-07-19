@@ -63,7 +63,7 @@
 		{:else}
 			{#each requests as r (r.id)}
 				<div class="request-row">
-					<span class="field-sub">
+					<span class="row-label">
 						<span class="mono">{r.user_id}</span> @ ギルド {r.guild_id}
 						{#if r.note}<br /><span class="note">📝 {r.note}</span>{/if}
 					</span>
@@ -96,6 +96,11 @@
 	}
 	.mono {
 		font-family: var(--font-family-mono);
+	}
+	/* 申請行は表示名が無くIDが主役のため、.discord-tab .row-label .mono の縮小・減色を打ち消す */
+	.row-label .mono {
+		font-size: inherit;
+		color: inherit;
 	}
 	.note {
 		opacity: 0.8;

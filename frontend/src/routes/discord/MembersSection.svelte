@@ -149,7 +149,7 @@
 		{:else}
 			{#each members as m (m.guild_id + ":" + m.user_id)}
 				<div class="list-row">
-					<span class="field-sub">
+					<span class="row-label">
 						{#if m.member_name}{m.member_name}（<span class="mono">{m.user_id}</span
 							>）{:else}<span class="mono">{m.user_id}</span>{/if}
 						@ {guildLabel(guilds, m.guild_id)}

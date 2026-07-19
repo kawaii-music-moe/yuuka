@@ -79,7 +79,7 @@
 	}
 </script>
 
-<section class="tab-view">
+<section class="tab-view discord-tab">
 	{#if isAssistantOwner && botId}
 		<details class="config-card card" open>
 			<summary class="column-header badge-right">

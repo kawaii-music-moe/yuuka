@@ -69,7 +69,7 @@
 		{:else}
 			{#each guilds as g (g.guild_id)}
 				<div class="list-row">
-					<span class="field-sub">
+					<span class="row-label">
 						{#if g.guild_name}{g.guild_name}（<span class="mono">{g.guild_id}</span>）{:else}<span
 								class="mono">{g.guild_id}</span
 							>{/if}

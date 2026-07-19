@@ -102,7 +102,7 @@
 		{:else}
 			{#each channels as ch (ch.guild_id + ":" + ch.channel_id)}
 				<div class="list-row">
-					<span class="field-sub">
+					<span class="row-label">
 						{#if ch.channel_name}#{ch.channel_name}（<span class="mono">{ch.channel_id}</span
 							>）{:else}<span class="mono">#{ch.channel_id}</span>{/if}
 						@ {guildLabel(guilds, ch.guild_id)}

@@ -115,8 +115,15 @@
 	.grow {
 		flex-grow: 1;
 	}
+	/* Modal は body へポータルされ .discord-tab スコープ外のため、ここで直接底上げする */
 	.note-modal-guild {
 		margin-bottom: 8px;
+		font-size: 0.9rem;
+		color: var(--text-primary);
+	}
+	.note-modal-guild .mono {
+		font-size: 0.8rem;
+		color: var(--color-zinc-muted);
 	}
 	.mono {
 		font-family: var(--font-family-mono);

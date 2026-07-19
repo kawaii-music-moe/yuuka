@@ -148,7 +148,7 @@
 		{:else}
 			{#each roles as r (r.guild_id + ":" + r.role_id)}
 				<div class="list-row">
-					<span class="field-sub">
+					<span class="row-label">
 						{#if r.role_name}@{r.role_name}{:else}<span class="mono">{r.role_id}</span>{/if}
 						@ {guildLabel(guilds, r.guild_id)}
 					</span>

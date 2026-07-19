@@ -749,6 +749,26 @@ textarea {
 	color: var(--text-primary);
 }
 
+/* Discord連携タブ（.discord-tab）配下のみ、注釈サイズ（0.72〜0.75rem）で描かれていた
+   見出し・説明・登録行の「名前」を本文サイズへ底上げする（IDは注釈サイズのmonoのまま）。
+   他タブと共有のクラス自体は変えず、スコープ付き上書きに留める。 */
+.discord-tab .collapsible-group > summary {
+	font-size: 0.9rem;
+	letter-spacing: 0.02em;
+}
+.discord-tab .description-text {
+	font-size: 0.8rem;
+	line-height: 1.6;
+}
+.discord-tab .row-label {
+	font-size: 0.9rem;
+	color: var(--text-primary);
+}
+.discord-tab .row-label .mono {
+	font-size: 0.8rem;
+	color: var(--color-zinc-muted);
+}
+
 /* Base input, select, textarea styling */
 input[type="text"],
 input[type="password"],
