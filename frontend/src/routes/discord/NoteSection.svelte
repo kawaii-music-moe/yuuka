@@ -5,6 +5,7 @@
 	import { ApiError } from "$lib/api/client";
 	import { pushToast } from "$lib/stores/toast";
 	import { Modal, Button } from "$lib/components/ui";
+	import { guildLabel } from "../config/configTypes";
 	import type { AssistantGuild, GuildNoteResp } from "../config/configTypes";
 
 	interface Props {
@@ -82,18 +83,20 @@
 	<div class="note-row">
 		<select bind:value={selectedGuild} class="grow">
 			{#each guilds as g (g.guild_id)}
-				<option value={g.guild_id}>ギルド {g.guild_id}</option>
+				<option value={g.guild_id}>{g.guild_name ?? `ギルド ${g.guild_id}`}</option>
 			{/each}
 		</select>
 		<Button variant="primary" onclick={openEditor}>編集</Button>
 	</div>
 </details>
 
-<Modal bind:open title="共有ノートの編集">
-	<p class="field-sub note-modal-guild">ギルド {selectedGuild}</p>
+<Modal bind:open wide title="共有ノートの編集">
+	<p class="field-sub note-modal-guild">
+		{guildLabel(guilds, selectedGuild)}（<span class="mono">{selectedGuild}</span>）
+	</p>
 	<div class="form-group">
 		<textarea
-			rows="14"
+			rows="16"
 			placeholder="共有ノートの内容（10,000文字まで）"
 			bind:value={noteContent}
 		></textarea>
@@ -114,6 +117,9 @@
 	}
 	.note-modal-guild {
 		margin-bottom: 8px;
+	}
+	.mono {
+		font-family: var(--font-family-mono);
 	}
 	textarea {
 		width: 100%;

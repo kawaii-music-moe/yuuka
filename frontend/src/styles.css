@@ -406,7 +406,10 @@ textarea {
      どこも .active を付けないため、旧規則が残ると全タブが常時非表示になる
      （BotConfig だけ scoped .config-tab{display:flex} が偶然上書きして見えていた）。 */
 .tab-view {
-	animation: tab-fade-in 0.3s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+	/* fill-mode forwards は使わない: 最終フレームの transform が恒久残留すると
+	   position:fixed 子孫（モーダル等）の包含ブロックがこの要素になってしまう。
+	   終了状態は自然状態（opacity:1 / transform:none）と同一なので見た目は変わらない。 */
+	animation: tab-fade-in 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 /* ==============================================================================
