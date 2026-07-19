@@ -238,6 +238,124 @@ async fn process_bot_dm_uses_separate_context() {
     assert_eq!(count_guild_logs(&path, "botG", "g1", "user"), 0);
 }
 
+/// Gemini へ渡った `contents` を記録する fake（チャンネル分離の検証用）。
+struct CapturingBackend {
+    text: String,
+    seen: Arc<Mutex<Vec<Vec<Content>>>>,
+}
+
+#[async_trait]
+impl GenerateBackend for CapturingBackend {
+    async fn generate(
+        &self,
+        _system_instruction: Option<&str>,
+        _declarations: &[FunctionDeclaration],
+        contents: &[Content],
+        _tool_config: Option<ToolConfig>,
+    ) -> Result<GenerateContentResponse, GeminiError> {
+        self.seen.lock().unwrap().push(contents.to_vec());
+        Ok(serde_json::from_value(json!({
+            "candidates": [ { "content": { "role": "model", "parts": [ { "text": self.text } ] } } ]
+        }))
+        .expect("valid response"))
+    }
+}
+
+struct CapturingFactory {
+    text: String,
+    seen: Arc<Mutex<Vec<Vec<Content>>>>,
+}
+
+impl GeminiFactory for CapturingFactory {
+    fn build(
+        &self,
+        _model: &str,
+        _api_key: SecretString,
+    ) -> Result<Arc<dyn GenerateBackend>, GeminiError> {
+        Ok(Arc::new(CapturingBackend {
+            text: self.text.clone(),
+            seen: self.seen.clone(),
+        }))
+    }
+}
+
+/// contents 全 part のテキストを連結する（履歴に何が乗ったかの検証用）。
+fn flatten_contents(contents: &[Content]) -> String {
+    contents
+        .iter()
+        .map(Content::collect_text)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[tokio::test]
+async fn guild_context_is_scoped_per_channel() {
+    let (db, path) = fresh_db();
+    let crypto = Arc::new(SystemCrypto::new(SecretString::from("gen-secret".to_owned())).unwrap());
+    seed_guild_bot(&path, &crypto, "botG", "owner1", true);
+    let seen: Arc<Mutex<Vec<Vec<Content>>>> = Arc::new(Mutex::new(Vec::new()));
+    let engine = ChatEngine::new(
+        db,
+        Some(crypto),
+        ToolRegistry::new(),
+        Arc::new(CapturingFactory {
+            text: "了解です！".to_owned(),
+            seen: seen.clone(),
+        }),
+        None,
+        Arc::new(yuuka_mcp::NullMcpClient),
+        None,
+    );
+
+    let turn = |text: &str, channel: &str| IncomingChat {
+        text: text.to_owned(),
+        channel_id: Some(channel.to_owned()),
+        ..IncomingChat::default()
+    };
+
+    // ch1 で犬の話 → ch2 で猫の話 → ch1 へ戻る。
+    for (text, ch) in [
+        ("犬の散歩どうしよう", "ch1"),
+        ("猫の餌なんだけど", "ch2"),
+        ("続きだけど", "ch1"),
+    ] {
+        engine
+            .process_guild(
+                &BotId::new("botG"),
+                &GuildId::new("g1"),
+                speaker("mem1", "たろう"),
+                turn(text, ch),
+                null_sink(),
+                Arc::new(NoopDelivery),
+            )
+            .await
+            .expect("guild turn");
+    }
+
+    let seen = seen.lock().unwrap();
+    assert_eq!(seen.len(), 3);
+    // ch2 のターンは ch1 の話題を見ない（チャンネル分離）。
+    let ch2 = flatten_contents(&seen[1]);
+    assert!(ch2.contains("猫の餌"), "ch2={ch2}");
+    assert!(!ch2.contains("犬の散歩"), "ch1 の話題が混入: {ch2}");
+    // ch1 の 2 ターン目は ch1 の履歴（発言＋応答）を見るが、ch2 の話題は見ない。
+    let ch1 = flatten_contents(&seen[2]);
+    assert!(ch1.contains("犬の散歩"), "ch1={ch1}");
+    assert!(ch1.contains("了解です！"), "ch1={ch1}");
+    assert!(!ch1.contains("猫の餌"), "ch2 の話題が混入: {ch1}");
+
+    // channel_id が user/assistant 両方の行に永続化される。
+    let with_channel: i64 = conn(&path)
+        .query_row(
+            "SELECT COUNT(*) FROM message_logs WHERE bot_id = 'botG' AND guild_id = 'g1' \
+             AND channel_id IN ('ch1', 'ch2')",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(with_channel, 6, "user 3 + assistant 3 全行に channel_id");
+}
+
 #[tokio::test]
 async fn missing_bot_key_degrades_by_scope() {
     let (db, path) = fresh_db();

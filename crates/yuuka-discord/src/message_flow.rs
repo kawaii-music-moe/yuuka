@@ -22,6 +22,7 @@ use twilight_model::id::Id;
 use yuuka_core::{BotId, DiscordError, GuildId, UserId};
 
 use crate::idempotent::MessageDedup;
+use crate::turn_gate::TurnGate;
 use crate::ports::{
     rate_limit_message, BotDirectory, BotRecord, BotStatus, DeliverTarget, IncomingChat,
     InlineMedia, Notifier, RateLimiter, Speaker, StatusSink, TurnDelivery, TurnError,
@@ -58,6 +59,8 @@ pub struct FlowDeps {
     pub dedup: Arc<MessageDedup>,
     /// メンバー外への利用案内スロットル（`(bot_id, user_id)`・TTL 5min・現行 `guidanceThrottle`）。
     pub guidance_throttle: Arc<MessageDedup>,
+    /// 会話単位（`bot × channel`）のターン直列化ゲート（返信の交錯防止）。
+    pub turn_gate: Arc<TurnGate>,
 }
 
 /// Ready で確定するテナントのランタイム情報。
@@ -119,6 +122,11 @@ pub async fn handle_message(deps: &FlowDeps, rt: &RuntimeBot, message: Message) 
         tracing::debug!(bot_id = %rt.bot_id, msg_id, "黙殺: 二重応答ガード（処理済みメッセージ）");
         return;
     }
+    // 同一会話（bot × channel）のターンを到着順に直列化する。persist-before-load のため、
+    // 並行ターンが互いの未応答発言を履歴に拾うと返信が交錯する（複数会話の混線防止）。
+    // 別チャンネル・別 Bot は並行のまま。ガードは本ターンの返信送信完了まで保持する。
+    let gate_key = format!("{}:{}", rt.bot_id.as_str(), message.channel_id.get());
+    let _turn = deps.turn_gate.acquire(&gate_key).await;
     // Bot 種別でルーティング（現行 `isGuildAssistantBot(botId)`）。
     let bot = match deps.directory.get_bot(&rt.bot_id).await {
         Some(b) => b,
@@ -272,6 +280,7 @@ async fn assistant_flow(deps: &FlowDeps, rt: &RuntimeBot, bot: &BotRecord, messa
     };
     let discord_msg_id = Some(message.id.get().to_string());
     let reply_to_msg_id = reference_message_id(&message);
+    let channel_id = Some(message.channel_id.get().to_string());
 
     let result: Result<TurnReply, TurnError> = if let Some(att) = audio {
         match fetch_inline_media(&att, "audio/ogg").await {
@@ -286,6 +295,7 @@ async fn assistant_flow(deps: &FlowDeps, rt: &RuntimeBot, bot: &BotRecord, messa
                     audio: Some(media),
                     discord_msg_id,
                     reply_to_msg_id,
+                    channel_id,
                     ..IncomingChat::default()
                 };
                 dispatch_assistant(deps, rt, is_dm, guild_id.as_ref(), speaker, chat, &handles)
@@ -301,6 +311,7 @@ async fn assistant_flow(deps: &FlowDeps, rt: &RuntimeBot, bot: &BotRecord, messa
                     image: Some(media),
                     discord_msg_id,
                     reply_to_msg_id,
+                    channel_id,
                     ..IncomingChat::default()
                 };
                 dispatch_assistant(deps, rt, is_dm, guild_id.as_ref(), speaker, chat, &handles)
@@ -313,6 +324,7 @@ async fn assistant_flow(deps: &FlowDeps, rt: &RuntimeBot, bot: &BotRecord, messa
             text: full_text.clone(),
             discord_msg_id,
             reply_to_msg_id,
+            channel_id,
             ..IncomingChat::default()
         };
         dispatch_assistant(deps, rt, is_dm, guild_id.as_ref(), speaker, chat, &handles).await
@@ -429,6 +441,7 @@ async fn secretary_flow(deps: &FlowDeps, rt: &RuntimeBot, bot: &BotRecord, messa
     let delivery = make_delivery(deps, rt, &message, is_dm, author.clone(), typing.handle());
     let discord_msg_id = Some(message.id.get().to_string());
     let reply_to_msg_id = reference_message_id(&message);
+    let channel_id = Some(message.channel_id.get().to_string());
 
     let result: Result<TurnReply, TurnError> = if let Some(att) = audio {
         match fetch_inline_media(&att, "audio/ogg").await {
@@ -444,6 +457,7 @@ async fn secretary_flow(deps: &FlowDeps, rt: &RuntimeBot, bot: &BotRecord, messa
                     audio: Some(media),
                     discord_msg_id,
                     reply_to_msg_id,
+                    channel_id,
                     ..IncomingChat::default()
                 };
                 deps.processor
@@ -479,6 +493,7 @@ async fn secretary_flow(deps: &FlowDeps, rt: &RuntimeBot, bot: &BotRecord, messa
             text: full_text.clone(),
             discord_msg_id,
             reply_to_msg_id,
+            channel_id,
             ..IncomingChat::default()
         };
         deps.processor

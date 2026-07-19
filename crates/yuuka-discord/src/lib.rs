@@ -28,12 +28,14 @@ mod presence;
 mod reply;
 mod tenant;
 mod text;
+mod turn_gate;
 
 pub use idempotent::MessageDedup;
 pub use live::{
     fetch_channel_name, fetch_guild_name, fetch_guild_options, fetch_member_display,
     GuildLiveEntry, GuildLiveOptions,
 };
+pub use turn_gate::TurnGate;
 pub use manager::{DiscordManager, DiscordMessenger, ManagerPorts, Prepared, TenantRunner};
 pub use presence::build_presence;
 pub use tenant::{default_intents, run_tenant, GatewayBotUser, TenantConfig, TenantStatus};

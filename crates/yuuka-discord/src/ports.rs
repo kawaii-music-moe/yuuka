@@ -45,6 +45,8 @@ pub struct IncomingChat {
     pub discord_msg_id: Option<String>,
     /// 返信元 Discord メッセージ ID（返信チェーン解決用）。
     pub reply_to_msg_id: Option<String>,
+    /// 受信チャンネル ID（ギルドコンテキストのチャンネル分離用・V19）。
+    pub channel_id: Option<String>,
 }
 
 /// 発話者（現行 `speaker { userId, displayName }`）。
