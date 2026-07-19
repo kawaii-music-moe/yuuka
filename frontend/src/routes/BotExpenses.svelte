@@ -141,9 +141,9 @@
 	// ── 支払い予定 キャンセル（旧 delBtn） ──
 	async function onCancelPlan(plan: PlannedPayment) {
 		const ok = await confirmDialog({
-			message: `「${plan.title}」をキャンセルしますか？`,
+			message: `「${plan.title}」の支払い予定を取り消しますか？`,
 			danger: true,
-			confirmLabel: "キャンセル",
+			confirmLabel: "予定を取り消す",
 		});
 		if (!ok) return;
 		try {
