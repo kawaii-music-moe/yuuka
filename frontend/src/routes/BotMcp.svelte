@@ -12,19 +12,29 @@
 	//
 	// ※ P4 で iframe 単独検証要（dev の Vite 前段でダッシュボード iframe が期待どおり動くかは未確定）。
 	// ─────────────────────────────────────────────────────────────────────────
-	import { mcpApi } from "$lib/api/services";
+	import { mcpApi, integratedApi } from "$lib/api/services";
 	import { ApiError } from "$lib/api/client";
 	import { pushToast } from "$lib/stores/toast";
 	import { confirmDialog } from "$lib/components/ui";
 	import { Button, Icon, TagChip, EmptyState } from "$lib/components/ui";
 	import { activeBot } from "$lib/stores/activeBot";
 	import type { McpServerView } from "$lib/api/types";
+	import type {
+		BotMcpGrantServer,
+		BotMcpOwnServer,
+	} from "$lib/api/services/integratedApi";
 
 	import McpDashboardModal from "./mcp/McpDashboardModal.svelte";
 
 	let servers = $state<McpServerView[]>([]);
 	let dashAvailable = $state<Record<number, boolean>>({});
 	let loading = $state(false);
+
+	// 共有Bot（system_default 以外の実Bot）が利用する MCP（bot-canonical・共同編集）。
+	let botServers = $state<BotMcpGrantServer[]>([]);
+	let ownGrantable = $state<BotMcpOwnServer[]>([]);
+	let grantsLoading = $state(false);
+	const isRealBot = $derived(!!$activeBot && $activeBot.id !== "system_default");
 
 	let dashOpen = $state(false);
 	let dashServer = $state<{ id: number; name: string } | null>(null);
@@ -69,10 +79,46 @@
 		dashAvailable = next;
 	}
 
+	// 共有Bot が利用する MCP（bot-canonical）と、付与できる自分の未付与サーバーを取得する。
+	async function loadBotGrants() {
+		if (!isRealBot) {
+			botServers = [];
+			ownGrantable = [];
+			return;
+		}
+		grantsLoading = true;
+		try {
+			const res = await integratedApi.botMcpGrants();
+			// Bot 切替の競合防止: 応答が現在選択中の Bot のものでなければ破棄（stale 応答で上書きしない）。
+			if (res.bot_id !== $activeBot?.id) return;
+			botServers = res.servers ?? [];
+			ownGrantable = res.own_servers ?? [];
+		} catch (e) {
+			reportError(e);
+			botServers = [];
+			ownGrantable = [];
+		} finally {
+			grantsLoading = false;
+		}
+	}
+
+	// このBotへ MCP サーバーを付与/解除する（共有相手も可・付与は自分のサーバーのみ）。
+	async function setGrant(serverId: number, granted: boolean) {
+		const botId = $activeBot?.id;
+		if (!botId) return;
+		try {
+			await integratedApi.grantMcp({ botId, serverId, granted });
+			await loadBotGrants();
+		} catch (e) {
+			reportError(e);
+		}
+	}
+
 	// MCP サーバはユーザースコープだが、UI は Bot 画面内なので activeBot 切替でも再取得しておく。
 	$effect(() => {
 		void $activeBot?.id;
 		void load();
+		void loadBotGrants();
 	});
 
 	async function refresh(s: McpServerView) {
@@ -117,10 +163,83 @@
 
 	<div class="card mcp-note-card">
 		<span class="field-sub"
-			>MCPサーバーの登録・削除・Bot別の利用許可は「Bot統合管理」ページに集約しました（ここは状況確認のみ）。</span
+			>MCPサーバーの登録・削除は「Bot統合管理」ページ、Bot別の利用許可は下の「このBotが利用するMCPサーバー」で管理できます。</span
 		>
 		<a href="/integrated" class="btn btn-secondary btn-sm">Bot統合管理へ</a>
 	</div>
+
+	{#if isRealBot}
+		<div class="action-column card mcp-bot-grants-card">
+			<div class="column-header">
+				<h3>
+					<Icon name="hub" class="header-icon-symbol" />このBotが利用するMCPサーバー
+				</h3>
+			</div>
+			<p class="description-text">
+				このBotが会話で利用するMCPサーバーです。<strong
+					>Botを共有しているユーザー間で同期</strong
+				>され、オーナー・共有相手のどちらからでも追加・解除できます（追加できるのは自分が登録したサーバーのみ）。
+			</p>
+			<div class="mcp-servers-list">
+				{#if botServers.length > 0}
+					{#each botServers as s (s.id)}
+						<div class="card-item glass mcp-card">
+							<div class="mcp-card-head">
+								<span class="card-title mcp-card-title">{s.name}</span>
+								<span class="badge badge-accent mcp-scope-badge">
+									{s.system ? "システム" : s.mine ? "自分が追加" : "共有相手が追加"}
+								</span>
+								<span
+									class="status-badge {s.enabled ? 'status-sent' : 'status-cancelled'}"
+									>{s.enabled ? "有効" : "無効"}</span
+								>
+							</div>
+							<div class="mcp-actions">
+								{#if s.system}
+									<span class="mcp-tools-empty"
+										>システム登録（全Bot常時利用・解除不可）</span
+									>
+								{:else}
+									<Button variant="secondary" small onclick={() => setGrant(s.id, false)}
+										>このBotから解除</Button
+									>
+								{/if}
+							</div>
+						</div>
+					{/each}
+				{:else if !grantsLoading}
+					<EmptyState
+						icon="hub"
+						message="このBotに許可されたMCPサーバーはまだありません。"
+					/>
+				{/if}
+			</div>
+
+			{#if ownGrantable.length > 0}
+				<div class="grant-add-block">
+					<span class="field-sub">自分のMCPサーバーをこのBotに追加:</span>
+					<div class="mcp-servers-list grant-add-list">
+						{#each ownGrantable as s (s.id)}
+							<div class="card-item glass mcp-card">
+								<div class="mcp-card-head">
+									<span class="card-title mcp-card-title">{s.name}</span>
+									{#if s.has_auth}
+										<span class="badge badge-accent mcp-scope-badge">🔑</span>
+									{/if}
+								</div>
+								<div class="mcp-endpoint" title={s.endpoint_url}>{s.endpoint_url}</div>
+								<div class="mcp-actions">
+									<Button variant="primary" small onclick={() => setGrant(s.id, true)}
+										>このBotに追加</Button
+									>
+								</div>
+							</div>
+						{/each}
+					</div>
+				</div>
+			{/if}
+		</div>
+	{/if}
 
 	<div class="action-column card">
 		<div class="column-header">
@@ -241,5 +360,17 @@
 		gap: 6px;
 		flex-wrap: wrap;
 		margin-top: 4px;
+	}
+	.mcp-bot-grants-card {
+		margin-bottom: 16px;
+	}
+	.grant-add-block {
+		margin-top: 16px;
+		padding-top: 12px;
+		border-top: 1px solid var(--color-border, rgba(255, 255, 255, 0.08));
+	}
+	.grant-add-list {
+		margin-top: 8px;
+		max-height: 320px;
 	}
 </style>

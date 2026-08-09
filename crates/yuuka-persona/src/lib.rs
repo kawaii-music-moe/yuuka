@@ -85,6 +85,161 @@ mod tests {
         }
     }
 
+    // ─── 共有 bot の owner-canonical 同期（A が B と bot を共有した場合） ───────────────
+
+    /// 共有 bot スコープ（発話ユーザー `user`・bot `bot`・オーナー `owner`）＝`resolve_scope` が
+    /// 実 bot を解決したときの `UserScope`。`config_owner_id` はオーナー。
+    fn scope_shared(user: &str, bot: &str, owner: &str) -> UserScope {
+        UserScope::with_owner(UserId::new(user), BotId::new(bot), UserId::new(owner))
+    }
+
+    const ACTIVE_DDL: &str = "CREATE TABLE bot_active_personas (
+        user_id TEXT NOT NULL,
+        bot_id TEXT NOT NULL DEFAULT 'system_default',
+        persona_id INTEGER NOT NULL,
+        updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+        PRIMARY KEY (user_id, bot_id)
+    );";
+
+    fn seed_db_full() -> Db {
+        let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "yuuka_persona_sync_test_{}_{seq}.sqlite",
+            std::process::id()
+        ));
+        {
+            let conn = rusqlite::Connection::open(&path).expect("seed db");
+            conn.execute_batch(PERSONAS_DDL).expect("create personas");
+            conn.execute_batch(ACTIVE_DDL).expect("create bot_active_personas");
+        }
+        Db::open(&path).expect("open db")
+    }
+
+    async fn count_active_rows(db: &Db, bot: &str) -> i64 {
+        let bot = bot.to_owned();
+        db.read
+            .read(move |conn| {
+                conn.query_row(
+                    "SELECT COUNT(*) FROM bot_active_personas WHERE bot_id = ?1",
+                    rusqlite::params![bot],
+                    |r| r.get::<_, i64>(0),
+                )
+                .map_err(yuuka_db::map_sqlite)
+            })
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn shared_bot_personas_are_owner_canonical_and_collaborative() {
+        let db = seed_db_full();
+        let repo = PersonaRepo::new(&db);
+        // オーナー A が自分の bot(botX) にペルソナ作成（owner-canonical キー = A）。
+        let owner_scope = scope_shared("A", "botX", "A");
+        let p = repo
+            .add(&owner_scope, new_persona("shared-p", "body"))
+            .await
+            .unwrap();
+
+        // 共有相手 B（同じ botX・オーナー A）は A のペルソナを閲覧できる（＝同期）。
+        let b_scope = scope_shared("B", "botX", "A");
+        let listed = repo.list(&b_scope).await.unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, p.id);
+        assert!(repo.get(&b_scope, p.id).await.unwrap().is_some());
+
+        // B は共同編集できる（オーナー名前空間へ書き込み）→ A から見ても反映される。
+        let updated = repo
+            .update(&b_scope, p.id, new_persona("edited-by-B", "b2"))
+            .await
+            .unwrap();
+        assert_eq!(updated.expect("updated").name, "edited-by-B");
+        assert_eq!(
+            repo.get(&owner_scope, p.id).await.unwrap().unwrap().name,
+            "edited-by-B"
+        );
+
+        // B が新規作成 → オーナー A の名前空間に入る（A から見える）。
+        let q = repo.add(&b_scope, new_persona("by-B", "q")).await.unwrap();
+        assert!(repo.get(&owner_scope, q.id).await.unwrap().is_some());
+
+        // 無関係ユーザー C（system_default）は A の共有ペルソナを見えない（テナント分離維持）。
+        assert!(repo.list(&scope("C")).await.unwrap().is_empty());
+
+        // B は削除も可能（共同編集）。
+        assert!(repo.delete(&b_scope, p.id).await.unwrap());
+        assert!(repo.get(&owner_scope, p.id).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn shared_bot_active_persona_is_single_synced_row() {
+        let db = seed_db_full();
+        let repo = PersonaRepo::new(&db);
+        let owner_scope = scope_shared("A", "botX", "A");
+        let b_scope = scope_shared("B", "botX", "A");
+        let p = repo.add(&owner_scope, new_persona("P", "p")).await.unwrap();
+        let q = repo.add(&owner_scope, new_persona("Q", "q")).await.unwrap();
+
+        // A が P を適用 → B も同じ適用中ペルソナを読む（同期）。
+        repo.set_active(&owner_scope, Some(p.id)).await.unwrap();
+        assert_eq!(repo.active_persona_id(&b_scope).await.unwrap(), Some(p.id));
+
+        // B が Q に切替 → A から見ても Q（共同編集・単一の共有行）。
+        repo.set_active(&b_scope, Some(q.id)).await.unwrap();
+        assert_eq!(
+            repo.active_persona_id(&owner_scope).await.unwrap(),
+            Some(q.id)
+        );
+
+        // bot_active_personas は botX につき 1 行のみ（オーナー A キー）。
+        assert_eq!(count_active_rows(&db, "botX").await, 1);
+    }
+
+    #[tokio::test]
+    async fn system_default_active_persona_stays_per_user() {
+        let db = seed_db_full();
+        let repo = PersonaRepo::new(&db);
+        // system_default はオーナー無し＝発話ユーザー単位（共有秘書は各自独立）。
+        let a = scope("A");
+        let b = scope("B");
+        let pa = repo.add(&a, new_persona("A-p", "a")).await.unwrap();
+        let pb = repo.add(&b, new_persona("B-p", "b")).await.unwrap();
+        repo.set_active(&a, Some(pa.id)).await.unwrap();
+        repo.set_active(&b, Some(pb.id)).await.unwrap();
+        // 各自の適用中は独立。
+        assert_eq!(repo.active_persona_id(&a).await.unwrap(), Some(pa.id));
+        assert_eq!(repo.active_persona_id(&b).await.unwrap(), Some(pb.id));
+        // 相互に相手のペルソナは見えない。
+        assert!(repo.get(&a, pb.id).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn shared_bot_import_lands_in_owner_namespace() {
+        let db = seed_db_full();
+        let repo = PersonaRepo::new(&db);
+        // 第三者 C が公開ペルソナを持つ。
+        let c = scope("C");
+        let src = repo
+            .add(&c, new_persona("public-src", "shared-body"))
+            .await
+            .unwrap();
+        repo.set_public(&c, src.id, true).await.unwrap();
+
+        // 共有相手 B が botX（オーナー A）上でインポート → オーナー A の名前空間へ独立コピーされる。
+        let b_scope = scope_shared("B", "botX", "A");
+        let imported = repo
+            .import_public(&b_scope, src.id)
+            .await
+            .unwrap()
+            .expect("imported");
+
+        // オーナー A から見える（＝共有集合に追加され、A/B 双方で同期）。
+        let owner_scope = scope_shared("A", "botX", "A");
+        assert!(repo.get(&owner_scope, imported.id).await.unwrap().is_some());
+        // 発話者 B 自身の user 単位（system_default）名前空間には入らない。
+        assert!(repo.get(&scope("B"), imported.id).await.unwrap().is_none());
+    }
+
     #[tokio::test]
     async fn add_list_and_scope_isolation() {
         let db = seed_db();

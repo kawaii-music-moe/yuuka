@@ -184,6 +184,23 @@ async fn assistant_flow(deps: &FlowDeps, rt: &RuntimeBot, bot: &BotRecord, messa
         }
     }
 
+    // 発言禁止チャンネル（`bot_muted_channels`）ではメンション/返信があっても一切応答しない（記録もしない）。
+    // 有効化チャンネルの逆ゲート＝「黙殺」。利用資格・レート制限などより手前で判定する（Rust 新機能）。
+    if let Some(gid) = guild_id.as_ref() {
+        if deps
+            .directory
+            .is_channel_muted(&rt.bot_id, gid, &message.channel_id.get().to_string())
+            .await
+        {
+            tracing::debug!(
+                bot_id = %rt.bot_id,
+                channel_id = %message.channel_id,
+                "黙殺: 発言禁止チャンネル"
+            );
+            return;
+        }
+    }
+
     // メンション / Bot への返信 / 有効化チャンネルに応答（DM は常に対象）。
     // 有効化チャンネル（`bot_channels`）ではメンション/返信が無くても応答する（Rust 新機能）。
     let reference = resolve_reference(deps, &message).await;

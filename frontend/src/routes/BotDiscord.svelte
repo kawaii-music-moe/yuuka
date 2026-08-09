@@ -23,6 +23,7 @@
 
 	import GuildsSection from "./discord/GuildsSection.svelte";
 	import ChannelsSection from "./discord/ChannelsSection.svelte";
+	import MutedChannelsSection from "./discord/MutedChannelsSection.svelte";
 	import MembersSection from "./discord/MembersSection.svelte";
 	import RolesSection from "./discord/RolesSection.svelte";
 	import RequestsSection from "./discord/RequestsSection.svelte";
@@ -30,6 +31,7 @@
 
 	let guilds = $state<AssistantGuild[]>([]);
 	let channels = $state<AssistantChannel[]>([]);
+	let mutedChannels = $state<AssistantChannel[]>([]);
 	let members = $state<AssistantMember[]>([]);
 	let roles = $state<AssistantRole[]>([]);
 	let isAssistantOwner = $state(false);
@@ -53,6 +55,7 @@
 			isAssistantOwner = false;
 			guilds = [];
 			channels = [];
+			mutedChannels = [];
 			members = [];
 			roles = [];
 			return;
@@ -67,6 +70,7 @@
 			isAssistantOwner = true;
 			guilds = res.guilds ?? [];
 			channels = res.channels ?? [];
+			mutedChannels = res.muted_channels ?? [];
 			members = res.members ?? [];
 			roles = res.roles ?? [];
 		} catch {
@@ -92,6 +96,7 @@
 
 			<GuildsSection {botId} {guilds} onchanged={refresh} />
 			<ChannelsSection {botId} {guilds} {channels} onchanged={refresh} />
+			<MutedChannelsSection {botId} {guilds} {mutedChannels} onchanged={refresh} />
 			<MembersSection {botId} {guilds} {members} onchanged={refresh} />
 			<RolesSection {botId} {guilds} {roles} onchanged={refresh} />
 			<RequestsSection {botId} {reloadKey} onchanged={refresh} />

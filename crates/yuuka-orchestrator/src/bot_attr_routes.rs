@@ -65,6 +65,10 @@ pub fn routes_with(
         .route("/api/bots/assistant/persona", post(set_persona))
         .route("/api/bots/assistant/guilds", post(set_guild))
         .route("/api/bots/assistant/channels", post(set_channel))
+        .route(
+            "/api/bots/assistant/muted-channels",
+            post(set_muted_channel),
+        )
         .route("/api/bots/assistant/members", post(set_member))
         .route("/api/bots/assistant/roles", post(set_role))
         .route("/api/bots/assistant/gemini-key", post(set_gemini_key))
@@ -533,6 +537,67 @@ async fn set_channel(
 
 /// `BotChannelRow` → JSON（assistant-config / set_channel 共通）。
 fn channel_json(c: &bot_repo::BotChannelRow) -> Value {
+    json!({
+        "bot_id": c.bot_id, "guild_id": c.guild_id, "channel_id": c.channel_id,
+        "added_by": c.added_by, "created_at": c.created_at,
+    })
+}
+
+// ─── POST /api/bots/assistant/muted-channels（発言禁止チャンネル・owner/Admin） ──
+// 発言禁止チャンネルではメンション/返信があっても応答しない（Rust 新機能）。body: botId, guildId, channelId, action。
+
+async fn set_muted_channel(
+    user: AuthenticatedUser,
+    State(db): State<Db>,
+    Json(body): Json<Value>,
+) -> Response {
+    let uid = user.0.discord_id;
+    let bot = match owned_bot_from_body(&db, &uid, &body).await {
+        Ok(b) => b,
+        Err(resp) => return resp,
+    };
+    let guild_id = trimmed(&body, "guildId");
+    let channel_id = trimmed(&body, "channelId");
+    let remove = is_remove(&body);
+    if !is_snowflake(&guild_id) {
+        return bad_request("ギルドID（数字）を入力してください。");
+    }
+    if !is_snowflake(&channel_id) {
+        return bad_request("チャンネルID（数字）を入力してください。");
+    }
+    let ok = match if remove {
+        bot_repo::remove_muted_channel(&db, &bot.id, &guild_id, &channel_id).await
+    } else {
+        bot_repo::add_muted_channel(&db, &bot.id, &guild_id, &channel_id, &uid).await
+    } {
+        Ok(v) => v,
+        Err(_) => return server_error(),
+    };
+    audit_change(
+        &db,
+        &uid,
+        "bot.channel_mute_change",
+        &format!("{}/{}:{}", guild_id, channel_id, action_word(remove)),
+    )
+    .await;
+    let channels = match bot_repo::list_muted_channels(&db, &bot.id).await {
+        Ok(c) => c,
+        Err(_) => return server_error(),
+    };
+    let list: Vec<Value> = channels.iter().map(muted_channel_json).collect();
+    (
+        StatusCode::OK,
+        Json(json!({
+            "success": true,
+            "muted_channels": list,
+            "message": change_message(ok, remove, "発言禁止チャンネルへ追加しました。", "発言禁止チャンネルから削除しました。"),
+        })),
+    )
+        .into_response()
+}
+
+/// `BotMutedChannelRow` → JSON（assistant-config / set_muted_channel 共通）。
+fn muted_channel_json(c: &bot_repo::BotMutedChannelRow) -> Value {
     json!({
         "bot_id": c.bot_id, "guild_id": c.guild_id, "channel_id": c.channel_id,
         "added_by": c.added_by, "created_at": c.created_at,
@@ -1112,6 +1177,19 @@ async fn assistant_config_get(
         }));
     }
     let channels = channel_values;
+    let muted_channels = match bot_repo::list_muted_channels(&db, &bot.id).await {
+        Ok(c) => c,
+        Err(_) => return server_error(),
+    };
+    let mut muted_channel_values: Vec<Value> = Vec::with_capacity(muted_channels.len());
+    for c in &muted_channels {
+        let name = live.channel_name(&bot.id, &c.channel_id).await;
+        muted_channel_values.push(json!({
+            "bot_id": c.bot_id, "guild_id": c.guild_id, "channel_id": c.channel_id,
+            "channel_name": name, "added_by": c.added_by, "created_at": c.created_at,
+        }));
+    }
+    let muted_channels = muted_channel_values;
     let members = match bot_repo::list_bot_members(&db, &bot.id).await {
         Ok(m) => m,
         Err(_) => return server_error(),
@@ -1169,6 +1247,7 @@ async fn assistant_config_get(
         "mcp_servers": mcp_servers,
         "guilds": guilds,
         "channels": channels,
+        "muted_channels": muted_channels,
         "members": members,
         "roles": roles,
         "usage": usage,

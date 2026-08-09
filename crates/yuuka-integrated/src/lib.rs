@@ -99,6 +99,7 @@ pub fn routes(runtime: Arc<IntegratedRuntime>) -> Router<AppState> {
             post(routes::bots_clear_history),
         )
         .route("/api/integrated/grants/mcp", post(routes::grants_mcp))
+        .route("/api/integrated/bots/mcp", get(routes::mcp_grants))
         .route(
             "/api/integrated/grants/credential",
             post(routes::grants_credential),

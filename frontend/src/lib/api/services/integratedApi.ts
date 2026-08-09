@@ -14,9 +14,47 @@ import type {
 
 const USER = { scope: "user" } as const;
 
+/** 共有Botが利用するMCPサーバー 1 件（bot-canonical・付与者を問わず全許可分 + システム）。 */
+export type BotMcpGrantServer = {
+	id: number;
+	name: string;
+	/** サーバー有効フラグ。無効なら実行時に使われない。 */
+	enabled: boolean;
+	/** システムレベル登録（全Bot常時利用・解除不可）か。 */
+	system: boolean;
+	/** 自分が付与したものか（共有相手が付与したものは false）。 */
+	mine: boolean;
+};
+
+/** 呼び出し元が当該Botへ付与できる「自分の」未付与サーバー 1 件。 */
+export type BotMcpOwnServer = {
+	id: number;
+	name: string;
+	endpoint_url: string;
+	enabled: boolean;
+	has_auth: boolean;
+};
+
+/** GET /api/integrated/bots/mcp のレスポンス。 */
+export type BotMcpGrantsResponse = {
+	success: boolean;
+	bot_id: string;
+	/** 呼び出し元がBotオーナー本人か（共有相手は false）。 */
+	is_owner: boolean;
+	servers: BotMcpGrantServer[];
+	own_servers: BotMcpOwnServer[];
+};
+
 export const integratedApi = {
 	/** GET /api/integrated/overview — 全 Bot 横断の統合ビュー */
 	overview: () => api.get<IntegratedOverviewResponse>("/api/integrated/overview", USER),
+
+	/**
+	 * GET /api/integrated/bots/mcp?botId= — 共有Botが使うMCP（bot-canonical）と
+	 * 付与できる自分の未付与サーバー。scope:'bot' で現在の activeBot を注入する。
+	 */
+	botMcpGrants: () =>
+		api.get<BotMcpGrantsResponse>("/api/integrated/bots/mcp", { scope: "bot" }),
 
 	// ── Bot ライフサイクル操作（対象 botId を明示） ──
 	/** POST /api/integrated/bots/start */

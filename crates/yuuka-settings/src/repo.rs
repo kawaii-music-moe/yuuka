@@ -143,13 +143,19 @@ pub struct StatusSnapshot {
 ///
 /// # Errors
 /// 読み取り失敗時 [`DbError`]。
+/// `persona_owner_id` は**適用中ペルソナの owner-canonical キー**（共有 bot はオーナー、
+/// `system_default`／所有 bot は発話ユーザー自身＝`user_id` と同じ）。ペルソナ以外の秘書業務
+/// データ（todos/schedules/expenses・users 設定）は従来どおり発話ユーザー `user_id` で集計する
+/// （共有 bot でも会話データは各自のもの）。適用中ペルソナだけ runtime と同じくオーナー基準にする。
 #[allow(clippy::too_many_lines)]
 pub async fn status_snapshot(
     db: &Db,
     user_id: &str,
+    persona_owner_id: &str,
     bot_id: &str,
 ) -> Result<StatusSnapshot, DbError> {
     let user_id = user_id.to_owned();
+    let persona_owner_id = persona_owner_id.to_owned();
     let bot_id = bot_id.to_owned();
     db.read
         .read(move |conn| {
@@ -265,10 +271,11 @@ pub async fn status_snapshot(
                 .optional()
                 .map_err(map_sqlite)?;
 
+            // 適用中ペルソナは owner-canonical（共有 bot はオーナーの行）＝runtime・persona ドメインと一致。
             let active_persona_id: Option<i64> = conn
                 .query_row(
                     "SELECT persona_id FROM bot_active_personas WHERE user_id = ?1 AND bot_id = ?2",
-                    params![user_id, bot_id],
+                    params![persona_owner_id, bot_id],
                     |r| r.get::<_, i64>(0),
                 )
                 .optional()
@@ -685,6 +692,40 @@ mod tests {
         assert!(delete_user(&db, "b").await.unwrap());
         assert!(!delete_user(&db, "b").await.unwrap());
         assert_eq!(count_admins(&db).await.unwrap(), 2);
+    }
+
+    #[tokio::test]
+    async fn status_snapshot_active_persona_is_owner_canonical() {
+        // A が所有する botX に適用中ペルソナ pA を設定。B は共有相手。
+        let (db, path) = fresh_db();
+        seed_user(&path, "A", "user");
+        seed_user(&path, "B", "user");
+        let conn = raw(&path);
+        conn.execute(
+            "INSERT INTO bots (id, user_id, name) VALUES ('botX', 'A', 'botX')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO personas (id, owner_id, name, prompt) VALUES (1, 'A', 'pA', 'x')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO bot_active_personas (user_id, bot_id, persona_id) VALUES ('A', 'botX', 1)",
+            [],
+        )
+        .unwrap();
+
+        // 発話者 B・ペルソナオーナー A（共有 bot の owner-canonical）→ ダッシュボードでも
+        // A の適用中ペルソナが見える（＝共有相手間で同期・runtime と一致）。
+        let shared = status_snapshot(&db, "B", "A", "botX").await.unwrap();
+        assert_eq!(shared.active_persona_id, Some(1));
+
+        // ペルソナオーナー = 発話者自身（非共有・system_default 相当）なら B の適用中は無い。
+        // ＝ persona_owner_id パラメータがペルソナ読みを支配していることの回帰ガード。
+        let own = status_snapshot(&db, "B", "B", "botX").await.unwrap();
+        assert_eq!(own.active_persona_id, None);
     }
 
     #[tokio::test]

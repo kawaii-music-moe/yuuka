@@ -17,10 +17,17 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::{Extension, Json};
 use serde_json::{json, Value};
-use yuuka_web::{ApiError, AppState, AuthenticatedUser};
+use yuuka_web::{resolve_scope, ApiError, AppState, AuthenticatedUser};
 
 use crate::repo::{self, js_int};
 use crate::IntegratedRuntime;
+
+/// `?botId=` クエリ（共有 bot の MCP grants 読み取り用）。
+#[derive(serde::Deserialize)]
+pub(crate) struct BotIdQuery {
+    #[serde(default, rename = "botId")]
+    bot_id: Option<String>,
+}
 
 // ─── 統合オーバービュー（1 コールでページ全体を構成） ──────────────────────────
 
@@ -256,30 +263,95 @@ pub(crate) async fn grants_mcp(
     let db = &state.db;
     let bot_id = body_bot_id(&body);
     let granted = body.get("granted") == Some(&Value::Bool(true));
-    if !is_grant_target_bot(db, user_id, &bot_id).await? {
+    // 共有 bot の MCP は共同編集：オーナー本人 or active 共有相手が管理できる（system_default は常に可）。
+    if !can_manage_bot_mcp(db, user_id, &bot_id).await? {
         return Ok(forbidden("対象Botへの権限がありません。"));
     }
-    // serverId = Number(x)・Number.isInteger でなければ getServerById を呼ばず None。
-    let server_id = body.get("serverId").and_then(js_int);
-    let owner = match server_id {
-        Some(id) => repo::get_server_owner(db, id).await?,
-        None => None,
-    };
-    // server が無い or owner が本人でない（システムレベル `Some(None)` も含む）→ 403。
-    let owned = matches!(&owner, Some(Some(o)) if o == user_id);
-    let Some(server_id) = server_id.filter(|_| owned) else {
-        return Ok(forbidden("対象MCPサーバーの所有者ではありません。"));
+    // serverId = Number(x)・Number.isInteger でなければ None。
+    let Some(server_id) = body.get("serverId").and_then(js_int) else {
+        return Ok(forbidden("対象MCPサーバーが不正です。"));
     };
     if granted {
+        // **付与は自分が登録したサーバーのみ**（他人の資格情報を勝手に貸与させない・共同編集でも不変）。
+        // システムレベル（`Some(None)`）・他人所有・不在（`None`）はいずれも 403。
+        let owner = repo::get_server_owner(db, server_id).await?;
+        if !matches!(&owner, Some(Some(o)) if o == user_id) {
+            return Ok(forbidden("自分が登録したMCPサーバーのみ許可できます。"));
+        }
         // system_default は bots テーブルに未登録の場合があるため FK 満足のため先にシードする。
         if bot_id == "system_default" {
             repo::ensure_system_default_bot(db, user_id).await?;
         }
         repo::grant_mcp_to_bot(db, &bot_id, user_id, server_id).await?;
-    } else {
+    } else if bot_id == "system_default" {
+        // 共有秘書は発話者スコープ厳守＝**自分の付与分のみ**解除（クロステナント防御）。
         repo::revoke_mcp_from_bot(db, &bot_id, user_id, server_id).await?;
+    } else {
+        // 共有 bot は bot-canonical 解除＝付与者を問わず外せる（共同編集・bot アクセス権は上で検証済み）。
+        repo::revoke_mcp_from_bot_any(db, &bot_id, server_id).await?;
     }
     Ok(json_ok(json!({ "success": true })))
+}
+
+/// 共有 bot の MCP サーバー（bot-canonical）と、呼び出し元が付与できる自分の未付与サーバーを返す。
+///
+/// 共有相手（オーナー or active 共有）が「この Bot が使う MCP」を閲覧・共同編集するための読み取り
+/// 経路。`system_default`（共有秘書）は発話者スコープ厳守のため**自分の付与分（＋システム）のみ**返す。
+pub(crate) async fn mcp_grants(
+    user: AuthenticatedUser,
+    State(state): State<AppState>,
+    axum::extract::Query(q): axum::extract::Query<BotIdQuery>,
+) -> Result<Response, ApiError> {
+    let user_id = &user.0.discord_id;
+    let db = &state.db;
+    // 共通の resolve_scope で bot アクセス検証 + オーナー解決を単一クエリで行う（空/未指定/未アクセスは
+    // system_default へ畳む＝全ルート共通のフォールバック契約）。has_bot_access + get_bot の二重問い合わせを避ける。
+    let scope = resolve_scope(&user.0, db, q.bot_id.as_deref()).await?;
+    let bot_id = scope.bot_id().as_str();
+    let is_system_default = bot_id == "system_default";
+    // オーナー本人か（所有 bot は bot_owner_id==自分・共有 bot は !=自分・system_default は None）。
+    let is_owner = scope.bot_owner_id().map(|o| o.as_str()) == Some(user_id.as_str());
+
+    let mut grants = repo::list_bot_grant_views(db, bot_id).await?;
+    // 共有秘書は自分の付与分（＋システム）のみに絞り、他テナントの付与を隠す。
+    if is_system_default {
+        grants.retain(|g| g.system || g.granter.as_deref() == Some(user_id.as_str()));
+    }
+    let granted_ids: std::collections::HashSet<i64> = grants.iter().map(|g| g.id).collect();
+    let servers: Vec<Value> = grants
+        .iter()
+        .map(|g| {
+            json!({
+                "id": g.id,
+                "name": g.name,
+                "enabled": g.enabled,
+                "system": g.system,
+                "mine": g.granter.as_deref() == Some(user_id.as_str()),
+            })
+        })
+        .collect();
+    // 付与できる「自分の」サーバー（このBotへ未付与のもののみ）。
+    let own_servers: Vec<Value> = repo::list_servers_for_owner(db, user_id)
+        .await?
+        .into_iter()
+        .filter(|s| !granted_ids.contains(&s.id))
+        .map(|s| {
+            json!({
+                "id": s.id,
+                "name": s.name,
+                "endpoint_url": s.endpoint_url,
+                "enabled": s.enabled,
+                "has_auth": s.has_auth,
+            })
+        })
+        .collect();
+    Ok(json_ok(json!({
+        "success": true,
+        "bot_id": bot_id,
+        "is_owner": is_owner,
+        "servers": servers,
+        "own_servers": own_servers,
+    })))
 }
 
 // ─── 利用許可トグル: 認証情報 ──────────────────────────────────────────────────
@@ -523,6 +595,19 @@ async fn is_grant_target_bot(
     }
     let bot = repo::get_bot(db, bot_id).await?;
     Ok(bot.is_some_and(|b| b.user_id == user_id))
+}
+
+/// 共有 bot の **MCP** を管理（付与/解除）できるユーザーか。オーナー本人 or `active` 共有相手
+/// （共同編集）。`system_default` は常に可（付与前に自動シード・解除は発話者スコープ厳守）。
+///
+/// 認証情報（`grants_credential`）・Google（`grants_google`）は対象外（オーナー限定のまま）。MCP のみ
+/// 共有相手へ開放するため [`is_grant_target_bot`]（オーナー限定）とは別ヘルパにしている。
+async fn can_manage_bot_mcp(
+    db: &yuuka_web::Db,
+    user_id: &str,
+    bot_id: &str,
+) -> Result<bool, ApiError> {
+    Ok(repo::has_bot_access(db, user_id, bot_id).await?)
 }
 
 /// start/restart の成否から `(200|502, {success, message, running, connected})` を組む。

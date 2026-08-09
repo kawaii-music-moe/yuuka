@@ -655,6 +655,38 @@ pub async fn is_channel_enabled(
         .await
 }
 
+/// 発言禁止チャンネルか（メンション/返信があっても応答しない・Rust 新機能）。
+///
+/// 登録された `(bot_id, guild_id, channel_id)` では、Bot はメンションや返信があっても応答しない。
+/// DM や未登録チャンネルでは false（＝通常判定へ）。
+///
+/// # Errors
+/// 読み取り失敗時 [`DbError`]。
+pub async fn is_channel_muted(
+    db: &Db,
+    bot_id: &str,
+    guild_id: &str,
+    channel_id: &str,
+) -> Result<bool, DbError> {
+    let (bot_id, guild_id, channel_id) = (
+        bot_id.to_owned(),
+        guild_id.to_owned(),
+        channel_id.to_owned(),
+    );
+    db.read
+        .read(move |conn| {
+            conn.query_row(
+                "SELECT 1 FROM bot_muted_channels WHERE bot_id = ?1 AND guild_id = ?2 AND channel_id = ?3",
+                params![bot_id, guild_id, channel_id],
+                |_| Ok(()),
+            )
+            .optional()
+            .map(|o| o.is_some())
+            .map_err(map_sqlite)
+        })
+        .await
+}
+
 /// 利用メンバーか（Node `isBotMember`。owner は呼び出し側で暗黙メンバー）。
 ///
 /// # Errors
@@ -923,6 +955,114 @@ pub async fn list_enabled_channels(db: &Db, bot_id: &str) -> Result<Vec<BotChann
         .await
 }
 
+// ─── 発言禁止チャンネル管理（メンション/返信があっても応答しない・Rust 新機能） ──────
+
+/// `bot_muted_channels` 1 行（発言禁止チャンネル）。
+#[derive(Debug, Clone)]
+pub struct BotMutedChannelRow {
+    pub bot_id: String,
+    pub guild_id: String,
+    pub channel_id: String,
+    pub added_by: String,
+    pub created_at: String,
+}
+
+/// 発言禁止チャンネルを追加（INSERT OR IGNORE）。追加できたら `true`。
+///
+/// # Errors
+/// 書き込み失敗時 [`DbError`]。
+pub async fn add_muted_channel(
+    db: &Db,
+    bot_id: &str,
+    guild_id: &str,
+    channel_id: &str,
+    added_by: &str,
+) -> Result<bool, DbError> {
+    let (b, g, c, by) = (
+        bot_id.to_owned(),
+        guild_id.to_owned(),
+        channel_id.to_owned(),
+        added_by.to_owned(),
+    );
+    db.writer
+        .transaction(move |tx| {
+            let n = tx
+                .execute(
+                    "INSERT OR IGNORE INTO bot_muted_channels (bot_id, guild_id, channel_id, added_by) \
+                     VALUES (?1, ?2, ?3, ?4)",
+                    params![b, g, c, by],
+                )
+                .map_err(map_sqlite)?;
+            Ok(n > 0)
+        })
+        .await
+}
+
+/// 発言禁止チャンネルを削除。削除できたら `true`。
+///
+/// # Errors
+/// 書き込み失敗時 [`DbError`]。
+pub async fn remove_muted_channel(
+    db: &Db,
+    bot_id: &str,
+    guild_id: &str,
+    channel_id: &str,
+) -> Result<bool, DbError> {
+    let (b, g, c) = (
+        bot_id.to_owned(),
+        guild_id.to_owned(),
+        channel_id.to_owned(),
+    );
+    db.writer
+        .transaction(move |tx| {
+            let n = tx
+                .execute(
+                    "DELETE FROM bot_muted_channels WHERE bot_id = ?1 AND guild_id = ?2 AND channel_id = ?3",
+                    params![b, g, c],
+                )
+                .map_err(map_sqlite)?;
+            Ok(n > 0)
+        })
+        .await
+}
+
+/// 発言禁止チャンネル一覧（created_at ASC）。
+///
+/// # Errors
+/// 読み取り失敗時 [`DbError`]。
+pub async fn list_muted_channels(
+    db: &Db,
+    bot_id: &str,
+) -> Result<Vec<BotMutedChannelRow>, DbError> {
+    let b = bot_id.to_owned();
+    db.read
+        .read(move |conn| {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT bot_id, guild_id, channel_id, added_by, created_at FROM bot_muted_channels \
+                     WHERE bot_id = ?1 ORDER BY created_at ASC",
+                )
+                .map_err(map_sqlite)?;
+            let rows = stmt
+                .query_map(params![b], |r| {
+                    Ok(BotMutedChannelRow {
+                        bot_id: r.get(0)?,
+                        guild_id: r.get(1)?,
+                        channel_id: r.get(2)?,
+                        added_by: r.get(3)?,
+                        created_at: r.get(4)?,
+                    })
+                })
+                .map_err(map_sqlite)?;
+            let mut out = Vec::new();
+            for row in rows {
+                out.push(row.map_err(map_sqlite)?);
+            }
+            Ok(out)
+        })
+        .await
+}
+
 /// 利用メンバーを追加（INSERT OR IGNORE・Node `addBotMember`）。追加できたら `true`。
 ///
 /// # Errors
@@ -1172,6 +1312,21 @@ pub async fn bot_user_note(db: &Db, bot_id: &str, user_id: &str) -> Result<Strin
                 .unwrap_or_default())
         })
         .await
+}
+
+/// 共有 bot の**設定オーナー**（owner-canonical キー）を解決する。
+///
+/// 実 bot は `bots.user_id`（オーナー）、`system_default`（共有秘書）や DB 未登録 bot は
+/// 発話ユーザー自身を返す。共有 bot の適用中ペルソナ・エラー応答ペルソナを共有相手（A/B）間で
+/// 同期するために使う（`UserScope::config_owner_id` の実行時（非 HTTP 経路）版）。
+pub async fn config_owner_for_bot(db: &Db, speaker_user_id: &str, bot_id: &str) -> String {
+    if bot_id == "system_default" {
+        return speaker_user_id.to_owned();
+    }
+    match get_bot(db, bot_id).await {
+        Ok(Some(bot)) => bot.owner_id,
+        _ => speaker_user_id.to_owned(),
+    }
 }
 
 /// ペルソナ prompt を id で引く（汎用モードの Bot 単位ペルソナ・Node `getPersonaById().prompt`）。

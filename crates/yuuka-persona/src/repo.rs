@@ -1,9 +1,11 @@
 //! `PersonaRepo` — `UserScope` 束縛のデータアクセス（分離キーを型で強制）。
 //!
-//! persona は `owner_id`（= ユーザーの Discord ID）でスコープされる（bot 単位ではなく
-//! **ユーザー単位**で独立）。従って全クエリは `WHERE owner_id = ?` を必須にし、
-//! `&UserScope` を取ることで「owner 無しクエリ」を型で不能化する。`bot_id` は persona の
-//! 所有権には関与しない（適用中ペルソナ `bot_active_personas` はコア CRUD 外＝deferred）。
+//! persona は `owner_id`（= ユーザーの Discord ID）でスコープされる。**設定オーナーキー**は
+//! [`UserScope::config_owner_id`]＝共有 bot ではその**オーナー**、`system_default`／user 単位の
+//! 経路では発話ユーザー自身。これにより A が B へ共有した bot では、ペルソナ（一覧・作成・編集・
+//! 削除・適用中）が**オーナーの名前空間へ正規化**され、A・B 双方で同一の共有ペルソナ集合を
+//! 共同編集できる（`system_default` 共有秘書は従来どおりユーザー単位で独立）。全クエリは
+//! `WHERE owner_id = ?` を必須にし、`&UserScope` を取ることで「owner 無しクエリ」を型で不能化する。
 //! 読みは [`ReadPool`]、書きは [`WriterHandle`]（BEGIN IMMEDIATE）へ送る。
 
 use rusqlite::{params, OptionalExtension, Row};
@@ -250,7 +252,9 @@ impl<'a> PersonaRepo<'a> {
         scope: &UserScope,
         persona_id: Option<i64>,
     ) -> Result<(), DbError> {
-        let user = scope.user_id().as_str().to_owned();
+        // 共有 bot ではオーナーの行（`config_owner_id`）へ upsert する＝適用中ペルソナを
+        // 全ユーザーで 1 つに同期する。`system_default` は発話ユーザー単位（従来どおり独立）。
+        let user = owner_id(scope);
         let bot = scope.bot_id().as_str().to_owned();
         self.writer
             .transaction(move |tx| {
@@ -284,7 +288,8 @@ impl<'a> PersonaRepo<'a> {
     /// # Errors
     /// 読み取り失敗時 [`DbError`]。
     pub async fn active_persona_id(&self, scope: &UserScope) -> Result<Option<i64>, DbError> {
-        let user = scope.user_id().as_str().to_owned();
+        // 共有 bot はオーナーの適用中ペルソナ（`config_owner_id`）を読む＝全ユーザーで同期。
+        let user = owner_id(scope);
         let bot = scope.bot_id().as_str().to_owned();
         self.read
             .read(move |conn| {
@@ -440,9 +445,11 @@ fn validate(name: &str, prompt: &str) -> Result<(), DbError> {
     Ok(())
 }
 
-/// スコープから所有者キー（owner_id）を取り出す（`spawn_blocking` の `'static` クロージャ用）。
+/// スコープから**設定オーナーキー**（owner_id）を取り出す（`spawn_blocking` の `'static`
+/// クロージャ用）。共有 bot ではオーナー、`system_default`／user 単位では発話ユーザー自身
+/// （[`UserScope::config_owner_id`]）。これにより共有 bot のペルソナが全ユーザーで同期される。
 fn owner_id(scope: &UserScope) -> String {
-    scope.user_id().as_str().to_owned()
+    scope.config_owner_id().as_str().to_owned()
 }
 
 /// SQLite 行を [`Persona`] へ変換する（`is_public` は 0/1 → bool）。

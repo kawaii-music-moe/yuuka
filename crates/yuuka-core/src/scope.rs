@@ -8,17 +8,39 @@ use crate::error::RepoError;
 use crate::ids::{BotId, UserId};
 
 /// データ分離スコープ。構築時に `UserId` を束縛する（生成後に user_id を差し替え不可）。
+///
+/// `bot_owner_id` は「解決された bot のオーナー」（`bots.user_id`）。共有 bot（`bot_shares`）を
+/// 別ユーザーが操作したときでも、**bot 単位で共有される設定（ペルソナ・MCP 等）はオーナーの
+/// 名前空間へ正規化（owner-canonical）**するために使う。`system_default`（共有秘書）や、bot 未束縛
+/// の経路では `None`＝発話ユーザー自身が設定オーナー（従来どおり user 単位で独立）。
 #[derive(Debug, Clone)]
 pub struct UserScope {
     user_id: UserId,
     bot_id: BotId,
+    bot_owner_id: Option<UserId>,
 }
 
 impl UserScope {
-    /// スコープを束縛して生成する。以後この scope 越しのクエリは必ず user_id を持つ。
+    /// スコープを束縛して生成する（bot オーナー未解決＝`system_default`／user 単位）。以後この
+    /// scope 越しのクエリは必ず user_id を持つ。
     #[must_use]
     pub fn new(user_id: UserId, bot_id: BotId) -> Self {
-        Self { user_id, bot_id }
+        Self {
+            user_id,
+            bot_id,
+            bot_owner_id: None,
+        }
+    }
+
+    /// bot オーナーを束ねて生成する（共有 bot の owner-canonical 解決用）。`resolve_scope` が
+    /// `system_default` 以外のアクセス可能な bot を解決したときに使う。
+    #[must_use]
+    pub fn with_owner(user_id: UserId, bot_id: BotId, bot_owner_id: UserId) -> Self {
+        Self {
+            user_id,
+            bot_id,
+            bot_owner_id: Some(bot_owner_id),
+        }
     }
 
     #[must_use]
@@ -29,6 +51,20 @@ impl UserScope {
     #[must_use]
     pub fn bot_id(&self) -> &BotId {
         &self.bot_id
+    }
+
+    /// 解決された bot のオーナー（`bots.user_id`）。`system_default`／未束縛では `None`。
+    #[must_use]
+    pub fn bot_owner_id(&self) -> Option<&UserId> {
+        self.bot_owner_id.as_ref()
+    }
+
+    /// **bot 単位で共有される設定のオーナーキー**。共有 bot ではオーナー、それ以外
+    /// （`system_default`・未束縛）では発話ユーザー自身。ペルソナ／MCP 等の owner-canonical
+    /// なクエリ・書き込みはこのキーで行い、共有 bot の設定を全ユーザーで同期する。
+    #[must_use]
+    pub fn config_owner_id(&self) -> &UserId {
+        self.bot_owner_id.as_ref().unwrap_or(&self.user_id)
     }
 }
 

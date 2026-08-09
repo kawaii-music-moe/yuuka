@@ -37,6 +37,22 @@ pub struct BotRow {
     pub capabilities: Option<String>,
 }
 
+/// 共有 bot が利用する MCP サーバーの bot-canonical ビュー 1 件（付与者を問わず全許可分 +
+/// システムレベル）。共有相手が「Bot が使う MCP」を閲覧・共同編集するために使う。
+#[derive(Debug, Clone)]
+pub struct BotGrantView {
+    /// サーバー ID。
+    pub id: i64,
+    /// 表示名。
+    pub name: String,
+    /// サーバー有効フラグ（`enabled == 1`）。無効サーバーは実行時に使われない。
+    pub enabled: bool,
+    /// システムレベル登録（`user_id IS NULL`＝全 Bot 常時利用・解除不可）か。
+    pub system: bool,
+    /// 付与したユーザー（`bot_mcp_access.owner_id`）。システムレベルは `None`。
+    pub granter: Option<String>,
+}
+
 /// MCP サーバー 1 件の統合管理ビュー（Node `McpServerRecord` のうち本ページで使う列のみ）。
 #[derive(Debug, Clone)]
 pub struct McpServerRow {
@@ -416,6 +432,80 @@ pub async fn revoke_mcp_from_bot(
         .await
 }
 
+/// **bot-canonical な解除**：付与者（owner_id）を問わず、当該 bot から当該サーバーの許可を外す。
+///
+/// 共有 bot（`system_default` 以外）の MCP 設定は共同編集のため、共有相手（A/B）のどちらが
+/// 付与したものでも解除できる（呼び出し側で bot アクセス権を検証済み前提）。**`system_default`
+/// には使わない**（共有秘書は発話者スコープ厳守＝[`revoke_mcp_from_bot`] で自分の付与分のみ解除）。
+///
+/// # Errors
+/// 書き込み失敗時 [`DbError`]。
+pub async fn revoke_mcp_from_bot_any(
+    db: &Db,
+    bot_id: &str,
+    server_id: i64,
+) -> Result<(), DbError> {
+    let bot_id = bot_id.to_owned();
+    db.writer
+        .transaction(move |tx| {
+            tx.execute(
+                "DELETE FROM bot_mcp_access WHERE bot_id = ?1 AND mcp_server_id = ?2",
+                params![bot_id, server_id],
+            )
+            .map_err(map_sqlite)?;
+            Ok(())
+        })
+        .await
+}
+
+/// 当該 bot に許可された MCP サーバーの**bot-canonical ビュー**（付与者を問わず全許可分 + システム
+/// レベル `user_id IS NULL`）。共有 bot の設定を共有相手が閲覧・共同編集するために使う。
+///
+/// `granter` は付与したユーザー（システムレベルは `None`）。呼び出し側で「自分の付与か」を判定し、
+/// 表示（自分/共有）と操作可否を決める。`created_at`（≒ id）昇順。
+///
+/// # Errors
+/// 読み取り失敗時 [`DbError`]。
+pub async fn list_bot_grant_views(
+    db: &Db,
+    bot_id: &str,
+) -> Result<Vec<BotGrantView>, DbError> {
+    let bot_id = bot_id.to_owned();
+    db.read
+        .read(move |conn| {
+            // LEFT JOIN で「当該 bot に付与されたサーバー ∪ システムレベル」を各サーバー
+            // 1 行で返す。UNION だと万一システムサーバー(`user_id IS NULL`)が bot_mcp_access に
+            // 存在した場合に id が重複しうるため、LEFT JOIN + WHERE で重複を構造的に排除する。
+            let mut stmt = conn
+                .prepare(
+                    "SELECT s.id, s.name, s.enabled, s.user_id, a.owner_id \
+                     FROM mcp_servers s \
+                     LEFT JOIN bot_mcp_access a ON a.mcp_server_id = s.id AND a.bot_id = ?1 \
+                     WHERE a.mcp_server_id IS NOT NULL OR s.user_id IS NULL \
+                     ORDER BY s.id ASC",
+                )
+                .map_err(map_sqlite)?;
+            let rows = stmt
+                .query_map(params![bot_id], |r| {
+                    let server_owner: Option<String> = r.get(3)?;
+                    Ok(BotGrantView {
+                        id: r.get::<_, i64>(0)?,
+                        name: r.get::<_, String>(1)?,
+                        enabled: r.get::<_, i64>(2)? == 1,
+                        system: server_owner.is_none(),
+                        granter: r.get::<_, Option<String>>(4)?,
+                    })
+                })
+                .map_err(map_sqlite)?;
+            let mut out = Vec::new();
+            for row in rows {
+                out.push(row.map_err(map_sqlite)?);
+            }
+            Ok(out)
+        })
+        .await
+}
+
 /// Bot が利用を許可された認証情報名一覧（owner 本人付与分・Node `listCredentialNamesForBot`）。
 ///
 /// # Errors
@@ -658,9 +748,9 @@ mod tests {
 
     use super::{
         bot_dm_context_floor_key, clear_context_floor, context_floor_key, credential_exists,
-        grant_credential_to_bot, grant_mcp_to_bot, is_guild_assistant, js_int,
+        grant_credential_to_bot, grant_mcp_to_bot, is_guild_assistant, js_int, list_bot_grant_views,
         list_credential_names_for_bot, list_server_ids_for_bot, parse_capabilities, preset_id_for,
-        revoke_credential_from_bot, revoke_mcp_from_bot, set_bot_stopped,
+        revoke_credential_from_bot, revoke_mcp_from_bot, revoke_mcp_from_bot_any, set_bot_stopped,
     };
     use yuuka_web::Db;
 
@@ -781,6 +871,52 @@ mod tests {
             .await
             .unwrap()
             .is_empty());
+    }
+
+    #[tokio::test]
+    async fn shared_bot_mcp_grant_views_and_canonical_revoke() {
+        let (db, path) = fresh_db();
+        seed_owner_bot(&path, "owner", "b1");
+        // 共有相手 friend と、owner 所有(7)・friend 所有(8)・システム(9) の MCP サーバー。
+        let conn = raw(&path);
+        conn.execute(
+            "INSERT OR IGNORE INTO users (discord_id, username, password_hash, salt) \
+             VALUES ('friend', 'friend', 'h', 's')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO mcp_servers (id, user_id, name, endpoint_url) VALUES \
+             (7, 'owner', 'srv-owner', 'https://a.test'), \
+             (8, 'friend', 'srv-friend', 'https://b.test'), \
+             (9, NULL, 'srv-system', 'https://sys.test')",
+            [],
+        )
+        .unwrap();
+        // owner が 7 を、friend が 8 を付与（共有 bot への共同付与）。
+        grant_mcp_to_bot(&db, "b1", "owner", 7).await.unwrap();
+        grant_mcp_to_bot(&db, "b1", "friend", 8).await.unwrap();
+
+        // bot-canonical ビュー: 付与者を問わず 7/8 + システム 9 が見える。
+        let views = list_bot_grant_views(&db, "b1").await.unwrap();
+        let by_id = |id: i64| views.iter().find(|v| v.id == id).cloned();
+        let v7 = by_id(7).expect("7");
+        let v8 = by_id(8).expect("8");
+        let v9 = by_id(9).expect("9");
+        assert_eq!(v7.granter.as_deref(), Some("owner"));
+        assert!(!v7.system);
+        assert_eq!(v8.granter.as_deref(), Some("friend"));
+        assert!(!v8.system);
+        assert!(v9.system);
+        assert_eq!(v9.granter, None);
+
+        // bot-canonical 解除: friend の付与(8)を、friend 以外からでも外せる（共同編集）。
+        revoke_mcp_from_bot_any(&db, "b1", 8).await.unwrap();
+        let after = list_bot_grant_views(&db, "b1").await.unwrap();
+        assert!(after.iter().all(|v| v.id != 8));
+        // 7（owner 付与）とシステム 9 は残る。
+        assert!(after.iter().any(|v| v.id == 7));
+        assert!(after.iter().any(|v| v.id == 9));
     }
 
     #[tokio::test]

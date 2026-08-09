@@ -1,9 +1,11 @@
 //! persona ルートハンドラ（`/api/personas*`・全て auth:user）。
 //!
 //! 認可は [`AuthenticatedUser`] extractor で型強制、DB は `State<Db>` サブステートで取得、
-//! スコープは **共通の [`resolve_scope`]** で束ねて repo に渡す（persona は owner=user 単位の
-//! ため実際に効くのは user_id・bot_id は不使用）。本ルータは supervisor 側で共通レイヤ
-//! （CSRF/body 上限）配下にマージされる。
+//! スコープは **共通の [`resolve_scope`]** で束ねて repo に渡す。persona の owner キーは
+//! `UserScope::config_owner_id`＝**共有 bot ではオーナー**（owner-canonical・A/B 共同編集）・
+//! `system_default`／所有 bot では自分。従って list/save/delete/publish/activate/import は
+//! すべて botId を解決に使う（フロントは該当ルートを `scope:'bot'` で呼ぶ）。marketplace は
+//! owner 非スコープの公開読み取り。本ルータは supervisor 側で共通レイヤ（CSRF/body 上限）配下へマージ。
 //!
 //! 参照スコープ = コア CRUD（list/save=create+update/delete）。activate/publish/marketplace/
 //! import/recommended-persona/admin は deferred（`bot_active_personas`・`bots` 連携が必要）。
@@ -184,7 +186,8 @@ async fn import_persona(
     let Some(id) = as_int_id(input.id) else {
         return missing_id();
     };
-    // persona は owner=user 単位（bot_id は不使用だが共通の解決経路を通す）。
+    // owner キーは config_owner_id（共有 bot はオーナー）。従って bot_id はインポート先の
+    // 名前空間を左右する（共有 bot ではオーナー集合へ追加＝共同編集）。
     let scope = match resolve_scope(&user.0, &db, bot_id.as_deref()).await {
         Ok(s) => s,
         Err(_) => return internal_error(),

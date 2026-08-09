@@ -34,6 +34,7 @@ use yuuka_web::Db;
 
 use crate::calendar_prompt;
 use crate::context_note;
+use crate::embed_recover;
 use crate::guild_prompt::{self, GuildScope};
 use crate::message_log::{self, ContextEntry};
 use crate::synapse_extract::{self, ExtractScope};
@@ -279,7 +280,15 @@ impl ChatEngine {
         let mut contents = build_contents(&history, &msg);
 
         // 3. システムプロンプト（ペルソナ + 固定ルール + 現在日時）。
-        let persona_prompt = persona::active_persona_prompt(&self.db, uid, bid)
+        //    共有 bot のペルソナは **owner-canonical**：適用中ペルソナはオーナー（`bots.user_id`）の
+        //    行を読む＝共有相手（A/B）双方で同一ペルソナに同期する。`system_default`（共有秘書）や
+        //    DB 未登録 bot は発話ユーザー単位（従来どおり独立）。bot 行は能力ゲート（後述）でも再利用する。
+        let bot_row = bot_repo::get_bot(&self.db, bid).await.map_err(db_fail)?;
+        let persona_uid: String = match &bot_row {
+            Some(bot) if bid != "system_default" => bot.owner_id.clone(),
+            _ => uid.to_owned(),
+        };
+        let persona_prompt = persona::active_persona_prompt(&self.db, &persona_uid, bid)
             .await
             .map_err(db_fail)?;
         let mut sys = system_prompt::build_system_instruction(
@@ -333,7 +342,8 @@ impl ChatEngine {
             .map_err(|e| llm_fail(e.to_string()))?;
 
         // 5. 能力ゲート: この Bot の能力集合を解決（Node `resolveBotCapabilities`・DB 未登録は秘書相当）。
-        let caps = match bot_repo::get_bot(&self.db, bid).await.map_err(db_fail)? {
+        //    上でロード済みの bot 行を再利用する（二重フェッチを避ける）。
+        let caps = match &bot_row {
             Some(bot) => bot.capability_set(),
             None => bot_repo::secretary_full_capabilities(),
         };
@@ -388,11 +398,14 @@ impl ChatEngine {
         };
 
         // 6. 応答テキスト（空なら fallback）。7. アシスタント応答を必ず保存（空でも fallback を保存）。
-        let reply_text = if result.text.trim().is_empty() {
+        //    モデルが Embed を ```json ブロックとして本文に埋めた場合は実 Embed へ復元し、本文からは除去する
+        //    （復元後テキストを保存＝履歴にも生 JSON を残さず、再発の学習を断つ）。
+        let base_text = if result.text.trim().is_empty() {
             FALLBACK_TEXT.to_owned()
         } else {
             result.text.clone()
         };
+        let (reply_text, recovered) = embed_recover::recover_embeds_from_text(&base_text);
         message_log::add_message_log(&self.db, uid, bid, "assistant", &reply_text, None, None)
             .await
             .map_err(db_fail)?;
@@ -409,9 +422,11 @@ impl ChatEngine {
             &log_text,
         );
 
+        let mut embeds = rich_parts_to_embeds(&result.rich_parts);
+        embeds.extend(recovered);
         Ok(TurnReply {
             text: reply_text,
-            embeds: rich_parts_to_embeds(&result.rich_parts),
+            embeds,
             files: rich_parts_to_files(&result.rich_parts),
             ..TurnReply::default()
         })
@@ -650,11 +665,14 @@ impl ChatEngine {
         };
 
         // 6. 応答テキスト（空は fallback）+ アシスタント応答を永続化。
-        let reply_text = if result.text.trim().is_empty() {
+        //    Embed を ```json ブロックとして本文へ埋めた場合は実 Embed へ復元し、本文からは除去する
+        //    （復元後テキストを保存＝履歴にも生 JSON を残さない）。
+        let base_text = if result.text.trim().is_empty() {
             FALLBACK_TEXT.to_owned()
         } else {
             result.text.clone()
         };
+        let (reply_text, recovered) = embed_recover::recover_embeds_from_text(&base_text);
         match (scope, gid) {
             (GuildScope::Guild, Some(gid)) => {
                 message_log::add_guild_message_log(
@@ -696,9 +714,11 @@ impl ChatEngine {
             &log_text,
         );
 
+        let mut embeds = rich_parts_to_embeds(&result.rich_parts);
+        embeds.extend(recovered);
         Ok(TurnReply {
             text: reply_text,
-            embeds: rich_parts_to_embeds(&result.rich_parts),
+            embeds,
             files: rich_parts_to_files(&result.rich_parts),
             ..TurnReply::default()
         })
@@ -718,9 +738,17 @@ impl ChatEngine {
         let crypto = self.crypto.as_ref()?;
         let (persona, model, enc, iv, tag) = match source {
             PersonaSource::Secretary => {
+                // Gemini キーは発話ユーザー自身のもの（各自のキー）。ペルソナは共有 bot では
+                // owner-canonical（オーナーの適用中ペルソナ）＝本編ターンと同一に同期する。
                 let cfg = user::user_gemini(&self.db, user_id.as_str()).await.ok()??;
+                let persona_uid = bot_repo::config_owner_for_bot(
+                    &self.db,
+                    user_id.as_str(),
+                    bot_id.as_str(),
+                )
+                .await;
                 let persona =
-                    persona::active_persona_prompt(&self.db, user_id.as_str(), bot_id.as_str())
+                    persona::active_persona_prompt(&self.db, &persona_uid, bot_id.as_str())
                         .await
                         .ok()
                         .flatten()

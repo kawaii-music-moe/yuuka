@@ -45,6 +45,9 @@ export const botAttributeApi = {
 	/** POST /api/bots/assistant/channels — 有効化チャンネル（メンション不要で応答） */
 	setChannels: (body: { botId: string; [k: string]: unknown }) =>
 		api.post<ApiResponse>("/api/bots/assistant/channels", body, USER),
+	/** POST /api/bots/assistant/muted-channels — 発言禁止チャンネル（メンション/返信があっても応答しない） */
+	setMutedChannels: (body: { botId: string; [k: string]: unknown }) =>
+		api.post<ApiResponse>("/api/bots/assistant/muted-channels", body, USER),
 	/** POST /api/bots/assistant/members */
 	setMembers: (body: { botId: string; [k: string]: unknown }) =>
 		api.post<ApiResponse>("/api/bots/assistant/members", body, USER),

@@ -20,6 +20,9 @@ const state = {
 		{ guild_id: "111111111111111111", channel_id: "444444444444444444", channel_name: "雑談" },
 		{ guild_id: "222222222222222222", channel_id: "555555555555555555", channel_name: null },
 	] as AssistantChannel[],
+	mutedChannels: [
+		{ guild_id: "222222222222222222", channel_id: "666666666666666666", channel_name: "運営専用" },
+	] as AssistantChannel[],
 	members: [
 		{ guild_id: "111111111111111111", user_id: "600000000000000001", member_name: "すずね" },
 		{ guild_id: "111111111111111111", user_id: "600000000000000002", member_name: "Komorida" },
@@ -69,6 +72,7 @@ function route(url: URL, method: string, body: any): unknown {
 			success: true,
 			guilds: state.guilds,
 			channels: state.channels,
+			muted_channels: state.mutedChannels,
 			members: state.members,
 			roles: state.roles,
 		};
@@ -85,6 +89,15 @@ function route(url: URL, method: string, body: any): unknown {
 			state.channels.push({ guild_id: body.guildId, channel_id: body.channelId, channel_name: null });
 		else
 			state.channels = state.channels.filter(
+				(c) => !(c.guild_id === body.guildId && c.channel_id === body.channelId),
+			);
+		return { success: true };
+	}
+	if (p === "/api/bots/assistant/muted-channels" && method === "POST") {
+		if (body.action === "add")
+			state.mutedChannels.push({ guild_id: body.guildId, channel_id: body.channelId, channel_name: null });
+		else
+			state.mutedChannels = state.mutedChannels.filter(
 				(c) => !(c.guild_id === body.guildId && c.channel_id === body.channelId),
 			);
 		return { success: true };

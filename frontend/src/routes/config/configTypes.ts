@@ -153,6 +153,8 @@ export interface AssistantConfigResp {
 	mcp_servers?: AssistantMcpServer[];
 	guilds?: AssistantGuild[];
 	channels?: AssistantChannel[];
+	/** 発言禁止チャンネル（メンション/返信があっても応答しない・AssistantChannel と同形） */
+	muted_channels?: AssistantChannel[];
 	members?: AssistantMember[];
 	roles?: AssistantRole[];
 	usage?: AssistantUsage[];

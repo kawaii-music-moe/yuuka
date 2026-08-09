@@ -467,6 +467,9 @@ mod tests {
         async fn is_channel_enabled(&self, _b: &BotId, _g: &GuildId, _c: &str) -> bool {
             false
         }
+        async fn is_channel_muted(&self, _b: &BotId, _g: &GuildId, _c: &str) -> bool {
+            false
+        }
         async fn is_any_role_allowed(&self, _b: &BotId, _g: &GuildId, _r: &[String]) -> bool {
             false
         }

@@ -318,6 +318,14 @@ pub trait BotDirectory: Send + Sync {
         channel_id: &str,
     ) -> bool;
 
+    /// 発言禁止チャンネルか（メンション/返信があっても応答しない・Rust 新機能）。DM/未登録は false。
+    async fn is_channel_muted(
+        &self,
+        bot_id: &BotId,
+        guild_id: &GuildId,
+        channel_id: &str,
+    ) -> bool;
+
     /// 保有ロールのいずれかが許可ロールか（現行 `isAnyRoleAllowed`）。
     async fn is_any_role_allowed(
         &self,

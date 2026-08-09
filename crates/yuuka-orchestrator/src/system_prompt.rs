@@ -45,7 +45,9 @@ const RICH_REPLY_ON: &str = "
 - データの一覧・サマリ（タスク一覧、家計サマリ、連絡先詳細など） → showRichContent（Embed）
 - 数値データの視覚化が有用な場合（カテゴリ別支出の内訳、月次推移、予算消化率、気温推移など） → sendChart（グラフ画像）
 - エラー・警告の通知 → showRichContent（colorに error / warning を指定）
-リッチ形式を使った場合も、本文テキストで要点を簡潔に添えてください。";
+リッチ形式を使った場合も、本文テキストで要点を簡潔に添えてください。
+⚠️ Embed は必ず showRichContent ツールで作成すること。Embed の JSON（title/description/fields など）を
+本文の ```json コードブロックとして書き出してはいけません（Discord では生の JSON がそのまま表示されます）。";
 
 const RICH_REPLY_OFF: &str = "
 # リッチ返信は無効

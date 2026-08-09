@@ -11,7 +11,7 @@ use axum::response::{IntoResponse, Response};
 use axum::{Extension, Json};
 use serde::Deserialize;
 use serde_json::json;
-use yuuka_web::{has_bot_access, ApiError, AppState, AuthenticatedUser};
+use yuuka_web::{resolve_scope, ApiError, AppState, AuthenticatedUser};
 
 use crate::repo;
 use crate::SettingsRuntime;
@@ -47,12 +47,14 @@ pub(crate) async fn status(
     let user_id = &user.0.discord_id;
 
     // ダッシュボードは選択中の Bot スコープで集計する（アクセス不可は system_default）。
-    let bot_id = match q.bot_id.as_deref() {
-        Some(b) if !b.is_empty() && has_bot_access(&state.db, user_id, b).await? => b.to_owned(),
-        _ => "system_default".to_owned(),
-    };
+    // 共通の resolve_scope で bot アクセス検証 + オーナー解決を行う。適用中ペルソナだけは
+    // owner-canonical（共有 bot はオーナー基準・runtime と一致）、その他の秘書業務データは
+    // 発話ユーザー自身で集計する。
+    let scope = resolve_scope(&user.0, &state.db, q.bot_id.as_deref()).await?;
+    let bot_id = scope.bot_id().as_str().to_owned();
+    let persona_owner = scope.config_owner_id().as_str().to_owned();
 
-    let snap = repo::status_snapshot(&state.db, user_id, &bot_id).await?;
+    let snap = repo::status_snapshot(&state.db, user_id, &persona_owner, &bot_id).await?;
 
     // Google 連携状況（primary アカウント基準）。
     let primary = yuuka_google::repo::get_primary_account(&state.db, user_id).await?;
