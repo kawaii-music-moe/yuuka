@@ -56,6 +56,26 @@ createServer(async (req, res) => {
       }],
     })
   }
+  // Administration dashboard bootstrap. These endpoints are requested in
+  // parallel when /admin opens, so returning the production-shaped empty
+  // state prevents a burst of misleading "Not found" notifications in mock
+  // development.
+  if (req.method === 'GET' && url.pathname === '/api/admin/stats') {
+    return json(res, { success: true, stats: { users: 1, bots: 1, suspendedBots: 0, inviteCodes: 0 } })
+  }
+  if (req.method === 'GET' && url.pathname === '/api/admin/users') {
+    return json(res, { success: true, users: [{ discord_id: 'admin', username: 'admin', role: 'admin' }] })
+  }
+  if (req.method === 'GET' && url.pathname === '/api/admin/bots') {
+    return json(res, { success: true, bots: [{ id: 'system_default', name: '既定の秘書', preset: 'secretary', has_token: true, running: true, suspended: false, is_system_default: true }] })
+  }
+  if (req.method === 'GET' && url.pathname === '/api/admin/invite-codes') return json(res, { success: true, codes: [] })
+  if (req.method === 'GET' && url.pathname === '/api/admin/audit-logs') return json(res, { success: true, logs: [], total: 0 })
+  if (req.method === 'GET' && url.pathname === '/api/admin/system-settings') return json(res, { success: true, privacyPolicyUrl: '', termsUrl: '' })
+  if (req.method === 'GET' && url.pathname === '/api/admin/bot-attribute-settings') {
+    return json(res, { success: true, presets: [{ id: 'secretary', displayName: 'パーソナル秘書' }, { id: 'mcp_assistant', displayName: '汎用モード' }], rate_limits: { userPerMinute: 5, userPerDay: 100, guildPerDay: 1000 } })
+  }
+  if (req.method === 'GET' && url.pathname === '/api/personas/marketplace') return json(res, { success: true, personas: [] })
   // PWA routes are namespaced in production. Keeping the legacy aliases makes
   // this mock useful for the existing administration UI during its migration.
   const apiPath = url.pathname.replace(/^\/api\/(?:pwa|client)(?=\/|$)/, '/api')
