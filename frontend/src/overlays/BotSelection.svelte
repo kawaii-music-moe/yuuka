@@ -14,7 +14,7 @@
 	import { botApi } from "$lib/api/services";
 	import { ApiError } from "$lib/api/client";
 	import { pushToast } from "$lib/stores/toast";
-	import { confirmDialog, Modal, Icon } from "$lib/components/ui";
+	import { AdminPageHeader, confirmDialog, Modal, Icon } from "$lib/components/ui";
 	import { selectBot } from "$lib/stores/activeBot";
 	import { currentUser, isAdmin } from "$lib/stores/session";
 	import { theme, toggleTheme } from "$lib/stores/theme";
@@ -298,18 +298,9 @@
 	{/if}
 
 	<main class="main-content">
-		<!-- スマホ専用バー（☰ + ブランド） -->
-		<header class="home-mobile-bar">
-			<button
-				type="button"
-				class="menu-toggle"
-				aria-label="メニューを開く"
-				onclick={() => (sidebarOpen = true)}
-			>
-				<Icon name="menu" />
-			</button>
-			<span class="home-nav-title">Yuuka</span>
-		</header>
+		<AdminPageHeader>
+			<h2>Bot一覧</h2>
+		</AdminPageHeader>
 
 		<div class="home-dashboard">
 
@@ -456,18 +447,6 @@
 	/* サイドバー内ブランド行 */
 	.home-sidebar-brand {
 		margin: 4px 4px 20px;
-	}
-	/* スマホ専用バー（PC ではサイドバー常設のため非表示） */
-	.home-mobile-bar {
-		display: none;
-	}
-	@media (max-width: 768px) {
-		.home-mobile-bar {
-			display: flex;
-			align-items: center;
-			gap: 10px;
-			margin-bottom: 14px;
-		}
 	}
 </style>
 

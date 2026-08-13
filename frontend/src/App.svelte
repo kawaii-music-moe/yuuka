@@ -30,6 +30,7 @@
 	type EffectiveView = RouteView | "loading";
 
 	import { Toast, ConfirmDialog, LazyView } from "$lib/components/ui";
+	import AdminNavigationDrawer from "$lib/components/AdminNavigationDrawer.svelte";
 
 	// ルート系オーバーレイ/ページ
 	// 初期表示で頻繁に踏む Login / BotSelection / BotShell は静的 import で据え置き
@@ -153,6 +154,9 @@
 <!-- ルート直下に一度だけ常設（alert()/confirm() 置換） -->
 <Toast />
 <ConfirmDialog />
+{#if authed}
+	<AdminNavigationDrawer />
+{/if}
 
 <style>
 	.app-boot {

@@ -19,3 +19,4 @@ export {
 } from "./ConfirmDialog.svelte";
 export { default as Toast } from "./Toast.svelte";
 export { default as LazyView } from "./LazyView.svelte";
+export { default as AdminPageHeader } from "./AdminPageHeader.svelte";

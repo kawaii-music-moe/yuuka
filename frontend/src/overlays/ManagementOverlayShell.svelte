@@ -7,8 +7,7 @@
 	// （#integrated-overlay / #admin-overlay）が効くよう id は props で受ける。
 	// ─────────────────────────────────────────────────────────────────────────
 	import type { Snippet } from "svelte";
-	import { navigateTo } from "$lib/router";
-	import { Button, Icon } from "$lib/components/ui";
+	import { AdminPageHeader, Icon } from "$lib/components/ui";
 
 	interface Props {
 		/** ルート要素 id（モバイル用 CSS が参照） */
@@ -23,12 +22,9 @@
 
 <div class="overlay active" {id}>
 	<div class="management-overlay-card">
-		<div class="management-overlay-header">
+		<AdminPageHeader>
 			<h1><Icon name={icon} size="1.6rem" /> {title}</h1>
-			<Button variant="secondary" onclick={() => navigateTo("/")}>
-				<Icon name="arrow_back" class="icon-button-left" /> Bot選択に戻る
-			</Button>
-		</div>
+		</AdminPageHeader>
 		<div class="management-overlay-body">
 			{@render children()}
 		</div>

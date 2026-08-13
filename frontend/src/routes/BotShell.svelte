@@ -24,7 +24,7 @@
 	import { pushToast } from "$lib/stores/toast";
 	import { navigateTo, DEFAULT_BOT_TAB, type BotTab } from "$lib/router";
 	import { SETTINGS_CHILD_TABS, botPreset } from "$lib/botTabs";
-	import { Icon } from "$lib/components/ui";
+	import { AdminPageHeader, Icon } from "$lib/components/ui";
 
 	// §P1b ルート遅延ロード: 16タブの静的 import を loader マップに変換する。
 	// Vite は各 import() を個別チャンク（BotDashboard-*.js 等）に分割するため、
@@ -253,17 +253,8 @@
 	{/if}
 
 	<main class="main-content">
-		<header class="top-header">
-			<button
-				type="button"
-				class="menu-toggle"
-				aria-label="メニューを開く"
-				onclick={() => (sidebarOpen = true)}
-			>
-				<Icon name="menu" />
-			</button>
-			<div class="header-title">
-				<h2 id="current-tab-title">
+		<AdminPageHeader>
+			<h2 id="current-tab-title">
 					{#if inSettingsChild}
 						<button
 							type="button"
@@ -276,9 +267,8 @@
 					{:else}
 						{title}
 					{/if}
-				</h2>
-			</div>
-		</header>
+			</h2>
+		</AdminPageHeader>
 
 		<div class="content-view-container">
 			{#await modulePromise}
