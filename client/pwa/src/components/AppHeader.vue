@@ -9,10 +9,12 @@ const router = useRouter()
 const title = computed(() => route.meta.title ?? 'Agent Desk')
 const fromChat = computed(() => route.query.from === 'chat')
 defineProps<{ user: SessionUser | null }>()
+defineEmits<{ openMenu: [] }>()
 </script>
 
 <template>
   <header class="app-header">
+    <button class="menu-trigger" type="button" aria-label="メニューを開く" @click="$emit('openMenu')"><AppIcon name="menu" /></button>
     <RouterLink class="brand" to="/">
       <AppIcon name="smart_toy" />
       <span>Agent Desk</span>
@@ -23,12 +25,6 @@ defineProps<{ user: SessionUser | null }>()
         <AppIcon name="arrow_back" />
         <span>Back to chat</span>
       </button>
-      <a v-if="user?.role === 'admin'" class="icon-button" href="/admin/" aria-label="Open administration">
-        <AppIcon name="admin_panel_settings" />
-      </a>
-      <RouterLink class="icon-button" to="/settings" aria-label="Open settings">
-        <AppIcon name="settings" />
-      </RouterLink>
     </div>
   </header>
 </template>

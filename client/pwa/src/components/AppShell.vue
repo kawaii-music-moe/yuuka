@@ -1,13 +1,15 @@
 <script setup lang="ts">
+import { ref } from 'vue'
 import type { SessionUser } from '../api/auth'
 import AppHeader from './AppHeader.vue'
-import BottomNavigation from './BottomNavigation.vue'
+import ClientNavigationDrawer from './ClientNavigationDrawer.vue'
 
 defineProps<{ user: SessionUser | null }>()
+const menuOpen = ref(false)
 </script>
 
 <template>
-  <AppHeader :user="user" />
+  <AppHeader :user="user" @open-menu="menuOpen = true" />
   <main class="app-main"><slot /></main>
-  <BottomNavigation />
+  <ClientNavigationDrawer :open="menuOpen" :user="user" @close="menuOpen = false" />
 </template>

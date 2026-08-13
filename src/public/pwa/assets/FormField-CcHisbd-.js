@@ -1,0 +1,1 @@
+import{d as s,c as o,b as t,t as l,z as r,h as n,_ as c}from"./index-C3K8iBTh.js";const d={class:"form-field"},_=s({__name:"FormField",props:{label:{}},setup(e){return(a,p)=>(n(),o("label",d,[t("span",null,l(e.label),1),r(a.$slots,"default",{},void 0,!0)]))}}),m=c(_,[["__scopeId","data-v-80d92aef"]]);export{m as F};
