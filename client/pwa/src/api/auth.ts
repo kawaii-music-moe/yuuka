@@ -12,10 +12,6 @@ export async function getCurrentUser(): Promise<SessionUser | null> {
   }
 }
 
-export async function login(discordId: string, password: string): Promise<void> {
-  await request('/api/login', { method: 'POST', body: JSON.stringify({ discordId, password }) })
-}
-
 export async function logout(): Promise<void> {
   await request('/api/logout', { method: 'POST' })
 }

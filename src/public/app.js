@@ -1328,6 +1328,13 @@ document.addEventListener("DOMContentLoaded", () => {
 			const data = await res.json();
 
 			if (data.success) {
+				const returnTo = new URLSearchParams(window.location.search).get(
+					"returnTo",
+				);
+				if (returnTo && returnTo.startsWith("/") && !returnTo.startsWith("//")) {
+					window.location.assign(returnTo);
+					return;
+				}
 				await initAppSession();
 			} else {
 				loginError.textContent = data.message;
