@@ -23,6 +23,9 @@ import { mcpRoutes } from "./server/routes/mcpRoutes.js";
 import { integratedRoutes } from "./server/routes/integratedRoutes.js";
 import { webhookRoutes } from "./server/routes/webhookRoutes.js";
 import { deliveryRoutes } from "./server/routes/deliveryRoutes.js";
+import { pwaRoutes } from "./server/routes/pwaRoutes.js";
+
+registerRoutes(pwaRoutes);
 
 registerRoutes(authRoutes); // 認証・登録（§5.4）
 registerRoutes(settingsRoutes); // ユーザー設定・ステータス・Google OAuth
@@ -45,6 +48,7 @@ registerRoutes(deliveryRoutes); // 朝報・日報・週報（§3.8, §3.9）
 // ─── 静的ファイル配信 ────────────────────────────────────────────────────────
 
 const PUBLIC_DIR = path.resolve(process.cwd(), "src", "public");
+const PWA_PUBLIC_DIR = path.join(PUBLIC_DIR, "pwa");
 
 // MCP管理ダッシュボード（ywrk-mcp の SPA）は、サンドボックス iframe（sandbox="allow-scripts" のみ＝
 // 不透明オリジン）に隔離して埋め込む。iframe 内のドキュメントは専用ルート
@@ -74,7 +78,9 @@ const MIME_TYPES: Record<string, string> = {
 	".jpg": "image/jpeg",
 	".jpeg": "image/jpeg",
 	".svg": "image/svg+xml",
-	".json": "application/json",
+".json": "application/json",
+	".webmanifest": "application/manifest+json; charset=utf-8",
+	".woff2": "font/woff2",
 	".webp": "image/webp",
 	".ico": "image/x-icon",
 };
@@ -87,13 +93,18 @@ function serveStaticFile(req: http.IncomingMessage, res: http.ServerResponse) {
 		req.url === "/" || !req.url || req.url.startsWith("/?")
 			? "/index.html"
 			: req.url.split("?")[0];
+	const isPwaRequest = urlPath === "/pwa" || urlPath.startsWith("/pwa/");
+	const staticRoot = isPwaRequest ? PWA_PUBLIC_DIR : PUBLIC_DIR;
+	const relativePath = isPwaRequest
+		? (urlPath.slice("/pwa".length) || "/index.html")
+		: urlPath;
 
 	// セキュリティ対策：パス・トラバーサルの防御
-	const resolvedPath = path.normalize(path.join(PUBLIC_DIR, urlPath));
+	const resolvedPath = path.normalize(path.join(staticRoot, relativePath));
 
 	if (
-		!resolvedPath.startsWith(PUBLIC_DIR + path.sep) &&
-		resolvedPath !== PUBLIC_DIR
+		!resolvedPath.startsWith(staticRoot + path.sep) &&
+		resolvedPath !== staticRoot
 	) {
 		res.writeHead(403, { "Content-Type": "text/plain" });
 		res.end("403 Forbidden");
@@ -106,7 +117,7 @@ function serveStaticFile(req: http.IncomingMessage, res: http.ServerResponse) {
 			const ext = path.extname(resolvedPath);
 			// SPAのパスルーティング（拡張子なしのパス）の場合は、index.htmlを配信する
 			if (!ext) {
-				finalPath = path.join(PUBLIC_DIR, "index.html");
+				finalPath = path.join(staticRoot, "index.html");
 			} else {
 				res.writeHead(404, { "Content-Type": "text/plain" });
 				res.end("404 Not Found");
