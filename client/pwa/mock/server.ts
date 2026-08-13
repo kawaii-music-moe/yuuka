@@ -23,6 +23,61 @@ let chatMessages: ChatMessage[] = [
 const json = (res: import('node:http').ServerResponse, body: unknown, status = 200, headers: Record<string, string> = {}) => { res.writeHead(status, { 'content-type': 'application/json', 'access-control-allow-origin': '*', ...headers }); res.end(JSON.stringify(body)) }
 const read = async (req: import('node:http').IncomingMessage) => { let body = ''; for await (const c of req) body += c; return body ? JSON.parse(body) : {} }
 
+/**
+ * 管理画面の各タブが初期表示時に使う最小データ。
+ * 実APIの形式が確定しても、このモックだけを拡張すればフロント本体は変更不要。
+ */
+function managementFixture(path: string): Record<string, unknown> {
+  if (/^\/api\/integrated\/google\/accounts\/\d+\/calendars$/.test(path)) {
+    return { success: true, calendars: [{ id: 'primary', summary: 'メインカレンダー', selected: true }] }
+  }
+  if (/^\/api\/mcp-servers\/\d+\/dashboard\/status$/.test(path)) return { success: true, available: false }
+  if (/^\/api\/timeline\/media\//.test(path)) return { success: true }
+
+  const fixtures: Record<string, Record<string, unknown>> = {
+    '/api/tasks': { success: true, tasks: [] },
+    '/api/tasks/gantt': { success: true, tasks: [] },
+    '/api/tasks/someday': { success: true, tasks: [] },
+    '/api/tasks/detail': { success: true, task: null, logs: [] },
+    '/api/schedules': { success: true, schedules: [] },
+    '/api/expenses': { success: true, expenses: [], total: 0, incomeTotal: 0, breakdown: [], trend: [] },
+    '/api/expenses/budget-limits': { success: true, limits: [] },
+    '/api/expenses/plans': { success: true, plans: [] },
+    '/api/reminders': { success: true, reminders: [] },
+    '/api/context-note': { success: true, content: '', max_length: 4000 },
+    '/api/clipboard': { success: true, entries: [] },
+    '/api/contacts': { success: true, contacts: [] },
+    '/api/personas': { success: true, personas: [], active_persona_id: null, max_length: 4000 },
+    '/api/briefing-config': { success: true, config: null },
+    '/api/report-configs': { success: true, configs: [] },
+    '/api/webhooks': { success: true, endpoints: [] },
+    '/api/webhooks/deliveries': { success: true, deliveries: [] },
+    '/api/mcp-servers': { success: true, servers: [] },
+    '/api/playbooks': { success: true, playbooks: [] },
+    '/api/playbooks/schedules': { success: true, schedules: [] },
+    '/api/playbooks/runs': { success: true, runs: [] },
+    '/api/timeline/day': { success: true, plans: [], records: [] },
+    '/api/devices': { success: true, devices: [] },
+    '/api/desktop/info': { success: true, available: false },
+    '/api/credentials': { success: true, credentials: [] },
+    '/api/integrated/bots/mcp': { success: true, bot_id: 'system_default', is_owner: true, servers: [], own_servers: [] },
+    '/api/integrated/overview': {
+      success: true,
+      bots: [{ id: 'system_default', name: '既定の秘書', preset: 'mcp_assistant', running: true, connected: true, is_system_default: true, granted_credentials: [], granted_mcp_ids: [] }],
+      credentials: [], mcpServers: [], googleAccounts: [],
+    },
+    '/api/settings/discord': { success: true, configured: false, tokenSet: false },
+    '/api/bots/presets': { success: true, presets: [{ preset: 'mcp_assistant', display_name: '汎用モード' }, { preset: 'secretary', display_name: 'パーソナル秘書' }] },
+    '/api/bots/modules': { success: true, modules: [] },
+    '/api/bots/assistant-config': { success: true, config: {} },
+    '/api/bots/assistant/guild-options': { success: true, guilds: [] },
+    '/api/bots/assistant/guild-note': { success: true, content: '' },
+    '/api/bots/shares': { success: true, shares: [] },
+    '/api/bots/member-requests': { success: true, requests: [] },
+  }
+  return fixtures[path] ?? { success: true }
+}
+
 createServer(async (req, res) => {
   if (req.method === 'OPTIONS') { res.writeHead(204, { 'access-control-allow-origin': '*', 'access-control-allow-methods': 'GET,POST,PUT,PATCH,OPTIONS', 'access-control-allow-headers': 'content-type' }); return res.end() }
   const url = new URL(req.url ?? '/', 'http://localhost:8787')
@@ -116,6 +171,14 @@ createServer(async (req, res) => {
       chatMessages.push(reply); return json(res, reply, 201)
     }
     return json(res, chatMessages)
+  }
+  // 管理画面の開発中は、未追加の操作APIも成功として扱う。
+  // 新しい画面を先に実装しても404トーストで操作確認が妨げられず、必要になった時点で
+  // managementFixture に実データの形を足していける。
+  if (url.pathname.startsWith('/api/')) {
+    if (!hasSession) return json(res, { success: false, message: 'Unauthorized' }, 401)
+    if (req.method === 'GET') return json(res, managementFixture(url.pathname))
+    return json(res, { success: true })
   }
   return json(res, { message: 'Not found' }, 404)
 }).listen(8787, () => console.log('Mock API listening on http://localhost:8787'))
