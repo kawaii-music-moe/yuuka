@@ -1,8 +1,10 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { getCurrentUser, type SessionUser } from './api/auth'
+import { agentGateway } from './api'
 import AppShell from './components/AppShell.vue'
+import { selectClientBot, selectClientBotById, selectedBot, setAvailableBots } from './stores/botSelection'
 
 const checkingSession = ref(true)
 const authenticated = ref(false)
@@ -22,10 +24,20 @@ async function checkSession() {
     window.location.replace(`/login?returnTo=${encodeURIComponent(returnTo)}`)
     return
   }
+  try {
+    const bots = await agentGateway.listBots()
+    setAvailableBots(bots)
+    const requestedBotId = typeof route.query.botId === 'string' ? route.query.botId : undefined
+    selectClientBotById(requestedBotId)
+    if (!selectedBot.value && bots[0]) selectClientBot(bots[0])
+  } catch {
+    // Bot 一覧が一時的に取得できなくても、既存の Client 機能は表示を継続する。
+  }
   checkingSession.value = false
 }
 
 onMounted(checkSession)
+watch(() => route.query.botId, (botId) => selectClientBotById(typeof botId === 'string' ? botId : undefined))
 </script>
 
 <template>

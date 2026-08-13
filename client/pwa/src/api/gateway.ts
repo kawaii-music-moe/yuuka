@@ -1,7 +1,8 @@
-import type { AgentSettings, CalendarEvent, ChatMessage, FinanceSummary, HealthStatus, SharedNote, Todo, Transaction } from './contracts'
+import type { AgentSettings, CalendarEvent, ChatMessage, ClientBot, FinanceSummary, HealthStatus, SharedNote, Todo, Transaction } from './contracts'
 
 /** UI が依存する唯一の API 契約。バックエンド仕様変更時は adapter だけを変更する。 */
 export interface AgentGateway {
+  listBots(): Promise<ClientBot[]>
   getHealth(): Promise<HealthStatus>
   getSettings(): Promise<AgentSettings>
   saveSettings(settings: AgentSettings): Promise<AgentSettings>

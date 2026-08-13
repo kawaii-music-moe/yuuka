@@ -1,4 +1,5 @@
 export type HealthStatus = { status: 'ok' | 'error'; service: string; checkedAt: string }
+export type ClientBot = { id: string; name: string; avatarUrl?: string; preset?: string }
 export type AgentSettings = {
   googleConnected: boolean
   googleAccount?: string

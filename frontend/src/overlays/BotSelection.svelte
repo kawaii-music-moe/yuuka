@@ -20,6 +20,7 @@
 	import { theme, toggleTheme } from "$lib/stores/theme";
 	import { authApi } from "$lib/api/services";
 	import { navigateTo } from "$lib/router";
+	import { openClientForBot } from "$lib/clientApp";
 	import type { BotView, PresetOption } from "$lib/api/types";
 
 	let bots = $state<BotView[]>([]);
@@ -99,14 +100,15 @@
 
 	// ── Bot 選択（旧 selectBot） ──
 	function choose(bot: BotView): void {
-		selectBot({
+		const selected = {
 			id: bot.id,
 			name: displayName(bot),
 			avatar: bot.discord_avatar_url || "",
 			preset: bot.preset || "secretary",
-		});
+		};
 		// 2階層化後の入口は一般情報（設定系はサイドバー「Bot設定」ハブ配下へ移動）。
-		navigateTo("/bot/dashboard");
+		selectBot(selected);
+		openClientForBot(selected);
 	}
 
 	// ── Discord 同期（旧 syncBtn） ──

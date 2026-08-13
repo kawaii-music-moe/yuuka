@@ -108,6 +108,14 @@ createServer(async (req, res) => {
         has_token: true,
         is_system_default: true,
         discord_username: 'yuuka-mock',
+      }, {
+        id: 'bot_mock_planner',
+        name: 'Planner mock',
+        preset: 'secretary',
+        has_token: true,
+        running: true,
+        connected: true,
+        discord_username: 'planner-mock',
       }],
     })
   }

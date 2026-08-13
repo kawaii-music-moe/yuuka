@@ -1,11 +1,13 @@
 <script setup lang="ts">
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { logout, type SessionUser } from '../api/auth'
 import AppIcon from './AppIcon.vue'
+import { availableBots, selectClientBot, selectedBot } from '../stores/botSelection'
 
 const props = defineProps<{ open: boolean; user: SessionUser | null }>()
 const emit = defineEmits<{ close: [] }>()
 const router = useRouter()
+const route = useRoute()
 
 const items = [
   { to: '/', icon: 'home', label: 'ホーム' },
@@ -18,6 +20,12 @@ const items = [
 ]
 
 function close() { emit('close') }
+function changeBot(event: Event) {
+  const bot = availableBots.value.find((item) => item.id === (event.target as HTMLSelectElement).value)
+  if (!bot) return
+  selectClientBot(bot)
+  void router.replace({ query: { ...route.query, botId: bot.id } })
+}
 async function signOut() {
   await logout()
   close()
@@ -37,6 +45,12 @@ async function signOut() {
           <span>Agent Desk</span>
           <button type="button" class="drawer-close" aria-label="メニューを閉じる" @click="close"><AppIcon name="close" /></button>
         </div>
+        <label v-if="availableBots.length" class="drawer-bot-switcher">
+          <span><AppIcon name="smart_toy" /> 操作対象のBot</span>
+          <select :value="selectedBot?.id" aria-label="操作対象のBotを切り替え" @change="changeBot">
+            <option v-for="bot in availableBots" :key="bot.id" :value="bot.id">{{ bot.name }}</option>
+          </select>
+        </label>
         <nav class="drawer-nav">
           <RouterLink v-for="item in items" :key="item.to" :to="item.to" @click="close">
             <AppIcon :name="item.icon" /><span>{{ item.label }}</span>
@@ -53,3 +67,10 @@ async function signOut() {
     </Transition>
   </Teleport>
 </template>
+
+<style scoped>
+.drawer-bot-switcher { display:grid; gap:7px; padding:14px 16px; border-bottom:1px solid var(--border-divider); color:var(--text-medium); font-size:12px; font-weight:600; }
+.drawer-bot-switcher > span { display:flex; align-items:center; gap:7px; }
+.drawer-bot-switcher .material-symbols-outlined { font-size:18px; color:var(--primary); }
+.drawer-bot-switcher select { width:100%; min-height:38px; border:1px solid var(--border-divider); border-radius:4px; padding:0 9px; background:var(--surface-2); color:var(--text-high); }
+</style>

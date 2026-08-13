@@ -1,9 +1,13 @@
 import type { AgentGateway } from './gateway'
-import type { AgentSettings, SharedNote, Todo, Transaction } from './contracts'
+import type { AgentSettings, ClientBot, SharedNote, Todo, Transaction } from './contracts'
 import { request } from './http'
 
 // このファイルだけが未確定の HTTP req/res 形式を知る。画面・状態管理層は Gateway のみを利用する。
 export const httpAgentGateway: AgentGateway = {
+  listBots: async () => {
+    const response = await request<{ bots?: ClientBot[] }>('/api/bots?scope=user')
+    return response.bots ?? []
+  },
   getHealth: () => request('/api/client/status'),
   getSettings: () => request('/api/client/settings'),
   saveSettings: (settings: AgentSettings) => request('/api/client/settings', { method: 'PUT', body: JSON.stringify(settings) }),

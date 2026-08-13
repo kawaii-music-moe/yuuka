@@ -1,9 +1,13 @@
+import { selectedBot } from '@/stores/botSelection'
+
 export class ApiError extends Error {
   constructor(message: string, public readonly status?: number) { super(message) }
 }
 
 export async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(path, {
+  const url = new URL(path, window.location.origin)
+  if (selectedBot.value?.id) url.searchParams.set('bot_id', selectedBot.value.id)
+  const response = await fetch(`${url.pathname}${url.search}`, {
     ...init,
     // `include` keeps the session cookie working both through Vite's dev
     // proxy and when the Client is served from the Yuuka origin.
