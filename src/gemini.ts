@@ -82,6 +82,7 @@ async function buildSystemInstruction(
 	userId: string,
 	botId: string,
 	richReplyEnabled: boolean,
+	source: "discord" | "pwa",
 ): Promise<string> {
 	const now = new Date();
 	const year = now.getFullYear();
@@ -183,6 +184,9 @@ async function buildSystemInstruction(
 		: "";
 
 	const parts = [
+		source === "pwa"
+			? `# Request channel\nThis request came from the personal PWA control panel, not Discord. Keep the PWA conversation context separate from Discord. Return standard Markdown suitable for the web client. When a task, calendar event, finance record, or shared note is relevant, state it clearly so the client can link to the corresponding screen.`
+			: `# Request channel\nThis request came from Discord. Follow the Discord response conventions and do not assume a web UI is visible.`,
 		personaSection,
 		memoryRuleSection,
 		confirmationRuleSection,
@@ -233,6 +237,8 @@ ${calendarInfo}`,
 
 export interface ChatMessage {
 	text: string;
+	/** Input channel controls context isolation and client-specific response policy. */
+	source?: "discord" | "pwa";
 	imageData?: {
 		data: string; // base64
 		mimeType: string;
@@ -591,6 +597,7 @@ export async function processMessage(
 	message: ChatMessage,
 	onStatusChange?: (status: "thinking" | "writing" | "idle") => void,
 ): Promise<ProcessResult> {
+	const source = message.source ?? "discord";
 	// リッチ返信のユーザー設定（§3.0.5）
 	let richReplyEnabled = true;
 	try {
@@ -622,11 +629,12 @@ export async function processMessage(
 			logText,
 			message.discordMsgId,
 			message.replyToMsgId,
+			source,
 		);
 	}
 
 	// 2. 会話コンテキストを取得（Redis直近15件 → SQLiteフォールバック §3.1.4）
-	const history = await getRecentContext(userId, botId, 15);
+	const history = await getRecentContext(userId, botId, 15, source);
 
 	// 3. 返信チェーンの解決（§3.1.4: 15件キャッシュとは別枠でコンテキストの先頭に追加）
 	const contents: Content[] = [];
@@ -729,6 +737,7 @@ export async function processMessage(
 		userId,
 		botId,
 		richReplyEnabled,
+		source,
 	);
 
 	try {
@@ -762,7 +771,7 @@ export async function processMessage(
 				: browserToolCalled || browserToolFailed
 					? "ブラウザ操作に失敗しました。求めた結果が得られませんでした。"
 					: "処理が完了しました。";
-		await addMessageLog(userId, botId, "assistant", replyText);
+		await addMessageLog(userId, botId, "assistant", replyText, undefined, source);
 		return { text: replyText, embeds: ctx.embeds, files: ctx.files };
 	} catch (error) {
 		if (error instanceof Error && error.message.includes("API Key")) {
