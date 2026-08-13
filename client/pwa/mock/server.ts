@@ -20,12 +20,23 @@ const events = [
 let chatMessages: ChatMessage[] = [
   { id: 'chat-1', role: 'agent', content: 'こんにちは。今日の予定と未完了タスクを確認できます。\n\n- 必要なら、タスクや家計をこのまま追加できます。\n- 詳細は下の参照から開けます。', createdAt: '2026-08-13T08:30:00+09:00', references: [{ type: 'calendar', title: '今日の予定', description: 'チーム定例 10:00 — 11:00', href: '/calendar', meta: 'カレンダー' }, { type: 'todo', title: '未完了タスク', description: '2 件のタスクが残っています', href: '/todo', meta: 'タスク' }] },
 ]
-const json = (res: import('node:http').ServerResponse, body: unknown, status = 200) => { res.writeHead(status, { 'content-type': 'application/json', 'access-control-allow-origin': '*' }); res.end(JSON.stringify(body)) }
+const json = (res: import('node:http').ServerResponse, body: unknown, status = 200, headers: Record<string, string> = {}) => { res.writeHead(status, { 'content-type': 'application/json', 'access-control-allow-origin': '*', ...headers }); res.end(JSON.stringify(body)) }
 const read = async (req: import('node:http').IncomingMessage) => { let body = ''; for await (const c of req) body += c; return body ? JSON.parse(body) : {} }
 
 createServer(async (req, res) => {
   if (req.method === 'OPTIONS') { res.writeHead(204, { 'access-control-allow-origin': '*', 'access-control-allow-methods': 'GET,POST,PUT,PATCH,OPTIONS', 'access-control-allow-headers': 'content-type' }); return res.end() }
   const url = new URL(req.url ?? '/', 'http://localhost:8787')
+  const hasSession = req.headers.cookie?.includes('yuuka-mock-session=admin') ?? false
+  if (req.method === 'POST' && url.pathname === '/api/login') {
+    const { discordId, password } = await read(req)
+    if (discordId !== 'admin' || password !== 'pass') return json(res, { message: 'Invalid credentials' }, 401)
+    return json(res, { success: true }, 200, { 'Set-Cookie': 'yuuka-mock-session=admin; Path=/; SameSite=Lax' })
+  }
+  if (req.method === 'POST' && url.pathname === '/api/logout') return json(res, { success: true }, 200, { 'Set-Cookie': 'yuuka-mock-session=; Path=/; Max-Age=0' })
+  if (req.method === 'GET' && url.pathname === '/api/me') {
+    if (!hasSession) return json(res, { message: 'Unauthorized' }, 401)
+    return json(res, { user: { discordId: 'admin', username: 'admin', role: 'admin' } })
+  }
   // PWA routes are namespaced in production. Keeping the legacy aliases makes
   // this mock useful for the existing administration UI during its migration.
   const apiPath = url.pathname.replace(/^\/api\/(?:pwa|client)(?=\/|$)/, '/api')
