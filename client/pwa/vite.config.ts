@@ -7,6 +7,7 @@ import vue from '@vitejs/plugin-vue'
 const adminRoot = fileURLToPath(new URL('../../src/public/', import.meta.url))
 const adminMimeTypes: Record<string, string> = {
   '.css': 'text/css; charset=utf-8',
+  '.html': 'text/html; charset=utf-8',
   '.ico': 'image/x-icon',
   '.js': 'application/javascript; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
