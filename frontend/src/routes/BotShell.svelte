@@ -253,7 +253,7 @@
 	{/if}
 
 	<main class="main-content">
-		<AdminPageHeader>
+		<AdminPageHeader class="admin-page-header--full-bleed">
 			<h2 id="current-tab-title">
 					{#if inSettingsChild}
 						<button

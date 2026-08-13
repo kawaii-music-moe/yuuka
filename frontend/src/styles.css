@@ -1115,6 +1115,11 @@ textarea:focus {
 	height: 100vh;
 }
 
+/* main-content 内の共通ヘッダーは画面端まで広げ、本文だけに余白を残す。 */
+.admin-page-header--full-bleed {
+	margin: -40px -40px 28px;
+}
+
 /* Header Area */
 .top-header {
 	display: flex;
@@ -2237,6 +2242,10 @@ input[type="checkbox"]:disabled,
 		padding: 28px 24px;
 	}
 
+	.admin-page-header--full-bleed {
+		margin: -28px -24px 24px;
+	}
+
 	.stats-grid {
 		grid-template-columns: repeat(3, 1fr);
 		gap: 16px;
@@ -2289,6 +2298,10 @@ input[type="checkbox"]:disabled,
 		padding: 18px 14px 28px;
 		height: auto;
 		min-height: 100vh;
+	}
+
+	.admin-page-header--full-bleed {
+		margin: -18px -14px 18px;
 	}
 
 	/* ハンバーガー（ドロワー開閉）をタイトル左に表示 */
@@ -2535,6 +2548,10 @@ input[type="checkbox"]:disabled,
 		padding: 16px 12px 24px 12px;
 	}
 
+	.admin-page-header--full-bleed {
+		margin: -16px -12px 16px;
+	}
+
 	.card {
 		padding: 14px 0;
 	}
@@ -2566,6 +2583,10 @@ input[type="checkbox"]:disabled,
 @media (max-width: 360px) {
 	.main-content {
 		padding: 14px 10px 20px 10px;
+	}
+
+	.admin-page-header--full-bleed {
+		margin: -14px -10px 14px;
 	}
 
 	.login-card {
