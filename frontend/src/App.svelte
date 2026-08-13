@@ -17,8 +17,7 @@
 	// meta[theme-color] 同期）が走る設計。
 	import "$lib/stores/theme";
 	import { isAuthed, isAdmin, bootstrapSession } from "$lib/stores/session";
-	import { botApi } from "$lib/api/services";
-	import { activeBot, selectBot } from "$lib/stores/activeBot";
+	import { activeBot } from "$lib/stores/activeBot";
 	import {
 		page,
 		initRouter,
@@ -111,27 +110,9 @@
 		document.documentElement.classList.remove("theme-no-transition");
 
 		// セッション取得（未ログインは匿名 = currentUser null のまま）。
-		void bootstrapSession()
-			.then(async () => {
-				// /admin/bot/* の直リンクでも、以前の選択が無い場合は最初に利用可能な
-				// Bot を復元して指定タブを表示する。Bot が無い場合のみ一覧へ戻る。
-				if (resolved.view !== "bot" || !$isAuthed || $activeBot) return;
-				const response = await botApi.list();
-				const bot = response.bots?.find((item) => !item.suspended) ?? response.bots?.[0];
-				if (!bot || resolved.view !== "bot" || $activeBot) return;
-				selectBot({
-					id: bot.id,
-					name: bot.discord_username || bot.name,
-					avatar: bot.discord_avatar_url || "",
-					preset: bot.preset || "secretary",
-				});
-			})
-			.catch(() => {
-				// 取得失敗時は既存のBot選択画面フォールバックを維持する。
-			})
-			.finally(() => {
+		void bootstrapSession().finally(() => {
 				bootstrapped = true;
-			});
+		});
 	});
 
 	onDestroy(() => {

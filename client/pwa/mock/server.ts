@@ -49,11 +49,29 @@ createServer(async (req, res) => {
       bots: [{
         id: 'system_default',
         name: '既定の秘書',
-        preset: 'secretary',
+        preset: 'mcp_assistant',
         has_token: true,
         is_system_default: true,
         discord_username: 'yuuka-mock',
       }],
+    })
+  }
+  if (req.method === 'GET' && url.pathname === '/api/bots/usage') {
+    if (!hasSession) return json(res, { success: false, message: 'Unauthorized' }, 401)
+    return json(res, {
+      success: true,
+      days: 7,
+      series: [
+        { date: '2026-08-08', requests: 18, responses: 17 },
+        { date: '2026-08-09', requests: 24, responses: 24 },
+        { date: '2026-08-10', requests: 12, responses: 12 },
+        { date: '2026-08-11', requests: 31, responses: 30 },
+        { date: '2026-08-12', requests: 27, responses: 26 },
+        { date: '2026-08-13', requests: 39, responses: 38 },
+        { date: '2026-08-14', requests: 22, responses: 21 },
+      ],
+      totals: { requests: 173, responses: 168 },
+      rate_limits: { userPerMinute: 5, userPerDay: 100, guildPerDay: 1000 },
     })
   }
   // Administration dashboard bootstrap. These endpoints are requested in
