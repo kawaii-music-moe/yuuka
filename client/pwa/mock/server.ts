@@ -39,6 +39,23 @@ createServer(async (req, res) => {
     // The administration UI relies on `success`, while the Client consumes `user`.
     return json(res, { success: true, user: { discordId: 'admin', username: 'admin', role: 'admin' } })
   }
+  // The administration application verifies that the system bot already has a
+  // token immediately after an admin signs in. The mock represents a ready-to-
+  // use development environment, so it must report that prerequisite as met.
+  if (req.method === 'GET' && url.pathname === '/api/bots') {
+    if (!hasSession) return json(res, { success: false, message: 'Unauthorized' }, 401)
+    return json(res, {
+      success: true,
+      bots: [{
+        id: 'system_default',
+        name: '既定の秘書',
+        preset: 'secretary',
+        has_token: true,
+        is_system_default: true,
+        discord_username: 'yuuka-mock',
+      }],
+    })
+  }
   // PWA routes are namespaced in production. Keeping the legacy aliases makes
   // this mock useful for the existing administration UI during its migration.
   const apiPath = url.pathname.replace(/^\/api\/(?:pwa|client)(?=\/|$)/, '/api')
