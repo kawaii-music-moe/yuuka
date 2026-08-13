@@ -1,10 +1,31 @@
-:root { --primary:#155eef; --primary-hover:#2d75f5; --primary-soft:rgba(21,94,239,.14); --primary-border:rgba(96,165,250,.5); --line:rgba(255,255,255,.12); --field:rgba(255,255,255,.2); --surface-1:#1d1d1d; --surface-2:#212121; --surface-3:#292929; --text-high:rgba(255,255,255,.87); --text-medium:rgba(255,255,255,.6); --border-divider:rgba(255,255,255,.12); font-family:Inter,'Noto Sans JP',sans-serif; color:var(--text-high); background:#121212; font-synthesis:none; }
+:root { --primary:#155eef; --primary-hover:#2d75f5; --primary-soft:rgba(21,94,239,.14); --primary-border:rgba(96,165,250,.5); --line:rgba(255,255,255,.12); --field:rgba(255,255,255,.2); --surface-1:#1d1d1d; --surface-2:#212121; --surface-3:#292929; --text-high:rgba(255,255,255,.87); --text-medium:rgba(255,255,255,.6); --border-divider:rgba(255,255,255,.12); font-family:Inter,'Noto Sans JP',sans-serif; color:var(--text-high); background:#121212; color-scheme:dark; font-synthesis:none; }
 * { box-sizing:border-box; }
 body { margin:0; min-width:320px; background:#121212; }
 button,input,textarea,select { font:inherit; }
 button { cursor:pointer; }
 a { color:inherit; text-decoration:none; }
 .material-symbols-outlined { font-size:21px; line-height:1; }
+
+/* 入力系はページ固有の指定に依存せず、Client 共通のダークテーマを適用する。 */
+input:not([type='checkbox']):not([type='radio']):not([type='range']),
+textarea,
+select {
+	width:100%;
+	min-height:40px;
+	padding:9px 10px;
+	border:1px solid var(--field);
+	border-radius:4px;
+	background:var(--surface-2);
+	color:var(--text-high);
+	outline:0;
+}
+input::placeholder, textarea::placeholder { color:var(--text-medium); opacity:1; }
+input:focus-visible, textarea:focus-visible, select:focus-visible { border-color:var(--primary); box-shadow:0 0 0 2px var(--primary-soft); }
+input:disabled, textarea:disabled, select:disabled { cursor:not-allowed; opacity:.55; background:var(--surface-1); }
+input[type='checkbox'], input[type='radio'], input[type='range'] { accent-color:var(--primary); }
+input[type='date']::-webkit-calendar-picker-indicator,
+input[type='month']::-webkit-calendar-picker-indicator { filter:invert(1); opacity:.75; }
+select option { background:var(--surface-2); color:var(--text-high); }
 
 .app-header { height:58px; border-bottom:1px solid var(--border-divider); padding:0 20px; display:flex; align-items:center; gap:14px; background:var(--surface-1); position:sticky; top:0; z-index:20; }
 .menu-trigger,.drawer-close,.icon-button,.back-button { display:grid; place-items:center; border:0; background:transparent; color:var(--primary); font:inherit; }
