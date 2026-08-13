@@ -2,9 +2,9 @@
   "name": "Agent Desk",
   "short_name": "Agent Desk",
   "description": "Personal AI agent control panel",
-  "start_url": "/pwa/",
+  "start_url": "/",
   "display": "standalone",
   "background_color": "#f8faff",
   "theme_color": "#155eef",
-  "icons": [{ "src": "/pwa/icons/app-icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
+  "icons": [{ "src": "/icons/app-icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
 }

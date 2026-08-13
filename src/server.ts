@@ -23,9 +23,9 @@ import { mcpRoutes } from "./server/routes/mcpRoutes.js";
 import { integratedRoutes } from "./server/routes/integratedRoutes.js";
 import { webhookRoutes } from "./server/routes/webhookRoutes.js";
 import { deliveryRoutes } from "./server/routes/deliveryRoutes.js";
-import { pwaRoutes } from "./server/routes/pwaRoutes.js";
+import { clientRoutes } from "./server/routes/clientRoutes.js";
 
-registerRoutes(pwaRoutes);
+registerRoutes(clientRoutes);
 
 registerRoutes(authRoutes); // 認証・登録（§5.4）
 registerRoutes(settingsRoutes); // ユーザー設定・ステータス・Google OAuth
@@ -49,6 +49,20 @@ registerRoutes(deliveryRoutes); // 朝報・日報・週報（§3.8, §3.9）
 
 const PUBLIC_DIR = path.resolve(process.cwd(), "src", "public");
 const PWA_PUBLIC_DIR = path.join(PUBLIC_DIR, "pwa");
+const CLIENT_ROUTES = new Set([
+	"/",
+	"/chat",
+	"/todo",
+	"/calendar",
+	"/finance",
+	"/notes",
+	"/settings",
+]);
+const CLIENT_STATIC_PATHS = new Set([
+	"/manifest.webmanifest",
+	"/sw.js",
+	"/icons/app-icon.svg",
+]);
 
 // MCP管理ダッシュボード（ywrk-mcp の SPA）は、サンドボックス iframe（sandbox="allow-scripts" のみ＝
 // 不透明オリジン）に隔離して埋め込む。iframe 内のドキュメントは専用ルート
@@ -89,16 +103,22 @@ const MIME_TYPES: Record<string, string> = {
  * セキュリティヘッダーを設定した静的ファイル配信
  */
 function serveStaticFile(req: http.IncomingMessage, res: http.ServerResponse) {
-	const requestedPath =
+	const urlPath =
 		req.url === "/" || !req.url || req.url.startsWith("/?")
-			? "/pwa/"
+			? "/"
 			: req.url.split("?")[0];
-	const urlPath = requestedPath;
-	const isPwaRequest = urlPath === "/pwa" || urlPath.startsWith("/pwa/");
+	const isClientRoute = CLIENT_ROUTES.has(urlPath);
+	const isClientAsset =
+		CLIENT_STATIC_PATHS.has(urlPath) || urlPath.startsWith("/assets/");
 	const isAdminRequest = urlPath === "/admin" || urlPath.startsWith("/admin/");
-	const staticRoot = isPwaRequest ? PWA_PUBLIC_DIR : PUBLIC_DIR;
-	const relativePath = isPwaRequest
-		? (urlPath.slice("/pwa".length) || "/index.html")
+	if (!isClientRoute && !isClientAsset && !isAdminRequest) {
+		res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
+		res.end("404 Not Found");
+		return;
+	}
+	const staticRoot = isClientRoute || isClientAsset ? PWA_PUBLIC_DIR : PUBLIC_DIR;
+	const relativePath = isClientRoute
+		? "/index.html"
 		: isAdminRequest
 			? (urlPath.slice("/admin".length) || "/index.html")
 			: urlPath;
@@ -147,7 +167,9 @@ function serveStaticFile(req: http.IncomingMessage, res: http.ServerResponse) {
 				}
 				let html = content;
 				if (isAdminRequest) {
-					html = html.replaceAll('href="/bot/', 'href="/admin/bot/');
+					html = html
+						.replaceAll('href="/', 'href="/admin/')
+						.replaceAll('src="/', 'src="/admin/');
 				}
 				if (config.googleSiteVerification) {
 					const metaTag = `<meta name="google-site-verification" content="${config.googleSiteVerification}" />`;

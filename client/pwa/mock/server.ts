@@ -28,7 +28,7 @@ createServer(async (req, res) => {
   const url = new URL(req.url ?? '/', 'http://localhost:8787')
   // PWA routes are namespaced in production. Keeping the legacy aliases makes
   // this mock useful for the existing administration UI during its migration.
-  const apiPath = url.pathname.replace(/^\/api\/pwa(?=\/|$)/, '/api')
+  const apiPath = url.pathname.replace(/^\/api\/(?:pwa|client)(?=\/|$)/, '/api')
   if (req.method === 'GET' && apiPath === '/api/status') return json(res, { status: 'ok', service: 'agent-mock', checkedAt: new Date().toISOString() })
   if (req.method === 'GET' && url.pathname === '/api/settings/google/oauth/url') return json(res, { success: true, url: 'https://example.com/google-authorize' })
   if (apiPath === '/api/settings') { if (req.method === 'PUT') settings = await read(req); return json(res, settings) }

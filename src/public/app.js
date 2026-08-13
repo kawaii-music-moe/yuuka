@@ -8208,6 +8208,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
 	// Service Worker 登録
 	if ("serviceWorker" in navigator) {
-		navigator.serviceWorker.register("/sw.js").catch(() => {});
+		navigator.serviceWorker
+			.register("/admin/sw.js", { scope: "/admin/" })
+			.catch(() => {});
 	}
 });

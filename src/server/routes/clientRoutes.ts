@@ -142,10 +142,10 @@ function mapTransaction(item: ReturnType<typeof listRecentExpenses>[number]) {
 	};
 }
 
-export const pwaRoutes: RouteDef[] = [
+export const clientRoutes: RouteDef[] = [
 	{
 		method: "GET",
-		path: "/api/pwa/status",
+		path: "/api/client/status",
 		auth: "user",
 		async handler(ctx) {
 			sendJson(ctx.res, 200, {
@@ -157,7 +157,7 @@ export const pwaRoutes: RouteDef[] = [
 	},
 	{
 		method: "GET",
-		path: "/api/pwa/settings",
+		path: "/api/client/settings",
 		auth: "user",
 		async handler(ctx) {
 			const currentUserId = requireUserId(ctx);
@@ -175,7 +175,7 @@ export const pwaRoutes: RouteDef[] = [
 	},
 	{
 		method: "PUT",
-		path: "/api/pwa/settings",
+		path: "/api/client/settings",
 		auth: "user",
 		async handler(ctx) {
 			const userId = requireUserId(ctx);
@@ -202,7 +202,7 @@ export const pwaRoutes: RouteDef[] = [
 	},
 	{
 		method: "GET",
-		path: "/api/pwa/shared-note",
+		path: "/api/client/shared-note",
 		auth: "user",
 		async handler(ctx) {
 			const userId = requireUserId(ctx);
@@ -217,7 +217,7 @@ export const pwaRoutes: RouteDef[] = [
 	},
 	{
 		method: "PUT",
-		path: "/api/pwa/shared-note",
+		path: "/api/client/shared-note",
 		auth: "user",
 		async handler(ctx) {
 			const userId = requireUserId(ctx);
@@ -233,7 +233,7 @@ export const pwaRoutes: RouteDef[] = [
 	},
 	{
 		method: "GET",
-		path: "/api/pwa/todos",
+		path: "/api/client/todos",
 		auth: "user",
 		async handler(ctx) {
 			sendJson(
@@ -245,7 +245,7 @@ export const pwaRoutes: RouteDef[] = [
 	},
 	{
 		method: "POST",
-		path: "/api/pwa/todos",
+		path: "/api/client/todos",
 		auth: "user",
 		async handler(ctx) {
 			const title = text(ctx.body.title).trim();
@@ -263,7 +263,7 @@ export const pwaRoutes: RouteDef[] = [
 	},
 	{
 		method: "PATCH",
-		path: "/api/pwa/todos/:id",
+		path: "/api/client/todos/:id",
 		auth: "user",
 		async handler(ctx) {
 			const todo = updateTodo(
@@ -278,7 +278,7 @@ export const pwaRoutes: RouteDef[] = [
 	},
 	{
 		method: "GET",
-		path: "/api/pwa/calendar/events",
+		path: "/api/client/calendar/events",
 		auth: "user",
 		async handler(ctx) {
 			const from = ctx.url.searchParams.get("from") || new Date().toISOString();
@@ -303,7 +303,7 @@ export const pwaRoutes: RouteDef[] = [
 	},
 	{
 		method: "GET",
-		path: "/api/pwa/finance/summary",
+		path: "/api/client/finance/summary",
 		auth: "user",
 		async handler(ctx) {
 			const [year, month] = (
@@ -325,7 +325,7 @@ export const pwaRoutes: RouteDef[] = [
 	},
 	{
 		method: "GET",
-		path: "/api/pwa/finance/transactions",
+		path: "/api/client/finance/transactions",
 		auth: "user",
 		async handler(ctx) {
 			sendJson(
@@ -337,7 +337,7 @@ export const pwaRoutes: RouteDef[] = [
 	},
 	{
 		method: "POST",
-		path: "/api/pwa/finance/transactions",
+		path: "/api/client/finance/transactions",
 		auth: "user",
 		async handler(ctx) {
 			const amount = Number(ctx.body.amount);
@@ -362,7 +362,7 @@ export const pwaRoutes: RouteDef[] = [
 	},
 	{
 		method: "GET",
-		path: "/api/pwa/chat/messages",
+		path: "/api/client/chat/messages",
 		auth: "user",
 		async handler(ctx) {
 			const messages = listPwaMessages(requireUserId(ctx), BOT_ID).map(
@@ -382,7 +382,7 @@ export const pwaRoutes: RouteDef[] = [
 	},
 	{
 		method: "POST",
-		path: "/api/pwa/chat/messages",
+		path: "/api/client/chat/messages",
 		auth: "user",
 		async handler(ctx) {
 			const content = text(ctx.body.content).trim();
