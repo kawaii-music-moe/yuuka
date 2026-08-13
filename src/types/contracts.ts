@@ -88,7 +88,7 @@ export interface RouteRequestCtx {
 }
 
 export interface RouteDef {
-	method: "GET" | "POST" | "DELETE" | "OPTIONS";
+	method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "OPTIONS";
 	/** 例: "/api/contacts", "/hook/:token" */
 	path: string;
 	auth: RouteAuth;

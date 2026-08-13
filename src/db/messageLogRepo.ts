@@ -22,12 +22,20 @@ export interface MessageLogRecord {
 	/** 発話ギルドID（NULL = DM・秘書利用。bot_attributes_requirements.md §4.6.1） */
 	guild_id: string | null;
 	created_at: string;
+	source: "discord" | "pwa";
 }
 
 /** LLMへ受け渡す会話コンテキストの1エントリ */
 export interface ContextEntry {
 	role: "user" | "assistant";
 	content: string;
+}
+
+/** PWA history is stored separately from Discord history. */
+export function listPwaMessages(userId: string, botId: string, limit: number = 100): MessageLogRecord[] {
+	const db = getDb();
+	return db.prepare(`SELECT * FROM message_logs WHERE user_id = ? AND bot_id = ? AND source = 'pwa' ORDER BY id DESC LIMIT ?`)
+		.all(userId, botId, Math.min(Math.max(limit, 1), 200)).reverse() as MessageLogRecord[];
 }
 
 /** searchMessages の検索条件 */
@@ -142,12 +150,13 @@ export async function addMessageLog(
 	content: string,
 	discordMsgId?: string,
 	replyToMsgId?: string,
+	source: "discord" | "pwa" = "discord",
 ): Promise<void> {
 	// 1. SQLite へ永続化（正の履歴。guild_id = NULL は DM・秘書利用）
 	const db = getDb();
 	db.prepare(
-		`INSERT INTO message_logs (user_id, bot_id, discord_msg_id, role, content, reply_to_msg_id)
-     VALUES (?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO message_logs (user_id, bot_id, discord_msg_id, role, content, reply_to_msg_id, source)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
 	).run(
 		userId,
 		botId,
@@ -155,11 +164,12 @@ export async function addMessageLog(
 		role,
 		content,
 		replyToMsgId ?? null,
+		source,
 	);
 
 	// 2. Redis コンテキストキャッシュへ追記（末尾が最新、直近15件のみ保持、TTLリセット）
 	await pushContextEntry(
-		contextKey(userId, botId),
+		contextKey(userId, `${botId}:${source}`),
 		{ role, content },
 		CONTEXT_LIMIT,
 	);
@@ -175,8 +185,9 @@ export async function getRecentContext(
 	userId: string,
 	botId: string,
 	limit: number = CONTEXT_LIMIT,
+	source: "discord" | "pwa" = "discord",
 ): Promise<ContextEntry[]> {
-	const key = contextKey(userId, botId);
+	const key = contextKey(userId, `${botId}:${source}`);
 	const redis = getRedisClient();
 
 	// 1. Redis キャッシュからの読み出しを試みる
@@ -201,17 +212,18 @@ export async function getRecentContext(
 	//    ギルド会話（guild_id 付き）および汎用モードBot（secretary なし）の owner DM は
 	//    秘書コンテキストへ復元しない（要件 §4.6.1: 秘書とギルドBotのコンテキスト完全分離）
 	const db = getDb();
-	const floor = getContextFloor(userId, botId);
+	// Keep reset boundaries separate as well as the Redis keys and SQL rows.
+	const floor = getContextFloor(userId, `${botId}:${source}`);
 	const rows = db
 		.prepare(
 			`SELECT role, content FROM (
          SELECT id, role, content FROM message_logs
-         WHERE user_id = ? AND bot_id = ? AND id > ? AND guild_id IS NULL
+         WHERE user_id = ? AND bot_id = ? AND id > ? AND guild_id IS NULL AND source = ?
          ORDER BY id DESC
          LIMIT ?
        ) ORDER BY id ASC`,
 		)
-		.all(userId, botId, floor, limit) as { role: string; content: string }[];
+		.all(userId, botId, floor, source, limit) as { role: string; content: string }[];
 
 	const history: ContextEntry[] = rows.map((row) => ({
 		role: row.role as "user" | "assistant",

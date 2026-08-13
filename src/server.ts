@@ -35,6 +35,9 @@ import { settingsRoutes } from "./server/routes/settingsRoutes.js";
 import { timelineRoutes } from "./server/routes/timelineRoutes.js";
 import { todoRoutes } from "./server/routes/todoRoutes.js";
 import { webhookRoutes } from "./server/routes/webhookRoutes.js";
+import { clientRoutes } from "./server/routes/clientRoutes.js";
+
+registerRoutes(clientRoutes);
 
 registerRoutes(authRoutes); // 認証・登録（§5.4）
 registerRoutes(settingsRoutes); // ユーザー設定・ステータス・Google OAuth
@@ -68,6 +71,24 @@ registerRoutes(desktopClientRoutes); // デスクトップ: Windows版バイナ�
 const PUBLIC_DIR = process.env.STATIC_DIR
 	? path.resolve(process.cwd(), process.env.STATIC_DIR)
 	: path.resolve(process.cwd(), "dist", "public");
+// PWA は独立してビルドされる。開発用に旧静的出力にもフォールバックする。
+const PWA_PUBLIC_DIR = fs.existsSync(path.join(PUBLIC_DIR, "pwa"))
+	? path.join(PUBLIC_DIR, "pwa")
+	: path.resolve(process.cwd(), "src", "public", "pwa");
+const CLIENT_ROUTES = new Set([
+	"/",
+	"/chat",
+	"/todo",
+	"/calendar",
+	"/finance",
+	"/notes",
+	"/settings",
+]);
+const CLIENT_STATIC_PATHS = new Set([
+	"/manifest.webmanifest",
+	"/sw.js",
+	"/icons/app-icon.svg",
+]);
 
 // MCP管理ダッシュボード（ywrk-mcp の SPA）は、サンドボックス iframe（sandbox="allow-scripts" のみ＝
 // 不透明オリジン）に隔離して埋め込む。iframe 内のドキュメントは専用ルート
@@ -97,7 +118,9 @@ const MIME_TYPES: Record<string, string> = {
 	".jpg": "image/jpeg",
 	".jpeg": "image/jpeg",
 	".svg": "image/svg+xml",
-	".json": "application/json",
+".json": "application/json",
+	".webmanifest": "application/manifest+json; charset=utf-8",
+	".woff2": "font/woff2",
 	".webp": "image/webp",
 	".ico": "image/x-icon",
 };
@@ -115,15 +138,34 @@ function acceptsGzip(req: http.IncomingMessage): boolean {
 function serveStaticFile(req: http.IncomingMessage, res: http.ServerResponse) {
 	const urlPath =
 		req.url === "/" || !req.url || req.url.startsWith("/?")
-			? "/index.html"
+			? "/"
 			: req.url.split("?")[0];
+	const isClientRoute = CLIENT_ROUTES.has(urlPath);
+	const isClientAsset =
+		CLIENT_STATIC_PATHS.has(urlPath) || urlPath.startsWith("/assets/");
+	const isLoginRequest = urlPath === "/login";
+	const isAdminRequest =
+		isLoginRequest || urlPath === "/admin" || urlPath.startsWith("/admin/");
+	if (!isClientRoute && !isClientAsset && !isAdminRequest) {
+		res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
+		res.end("404 Not Found");
+		return;
+	}
+	const staticRoot = isClientRoute || isClientAsset ? PWA_PUBLIC_DIR : PUBLIC_DIR;
+	const relativePath = isClientRoute
+		? "/index.html"
+		: isLoginRequest
+			? "/index.html"
+			: isAdminRequest
+			? (urlPath.slice("/admin".length) || "/index.html")
+			: urlPath;
 
 	// セキュリティ対策：パス・トラバーサルの防御
-	const resolvedPath = path.normalize(path.join(PUBLIC_DIR, urlPath));
+	const resolvedPath = path.normalize(path.join(staticRoot, relativePath));
 
 	if (
-		!resolvedPath.startsWith(PUBLIC_DIR + path.sep) &&
-		resolvedPath !== PUBLIC_DIR
+		!resolvedPath.startsWith(staticRoot + path.sep) &&
+		resolvedPath !== staticRoot
 	) {
 		res.writeHead(403, { "Content-Type": "text/plain" });
 		res.end("403 Forbidden");
@@ -136,7 +178,7 @@ function serveStaticFile(req: http.IncomingMessage, res: http.ServerResponse) {
 			const ext = path.extname(resolvedPath);
 			// SPAのパスルーティング（拡張子なしのパス）の場合は、index.htmlを配信する
 			if (!ext) {
-				finalPath = path.join(PUBLIC_DIR, "index.html");
+				finalPath = path.join(staticRoot, "index.html");
 			} else {
 				const notFoundPage = path.join(PUBLIC_DIR, "404.html");
 				fs.readFile(notFoundPage, (readErr, html) => {
@@ -179,6 +221,11 @@ function serveStaticFile(req: http.IncomingMessage, res: http.ServerResponse) {
 					return;
 				}
 				let html = content;
+				if (isAdminRequest) {
+					html = html
+						.replaceAll('href="/', 'href="/admin/')
+						.replaceAll('src="/', 'src="/admin/');
+				}
 				if (config.googleSiteVerification) {
 					const metaTag = `<meta name="google-site-verification" content="${config.googleSiteVerification}" />`;
 					html = html.replace("<!-- GOOGLE_SITE_VERIFICATION -->", metaTag);
@@ -252,6 +299,12 @@ export async function serverHandler(
 		`http://${req.headers.host || "localhost"}`,
 	);
 	const pathname = parsedUrl.pathname;
+	const legacyAdminPaths = ["/bot", "/bots", "/usage", "/terms", "/privacy"];
+	if (legacyAdminPaths.some((path) => pathname === path || pathname.startsWith(`${path}/`))) {
+		res.writeHead(302, { Location: `/admin${url || "/"}` });
+		res.end();
+		return;
+	}
 
 	// 1. HTTPからHTTPSへのリダイレクト判定
 	if (config.baseUrl && config.baseUrl.toLowerCase().startsWith("https://")) {

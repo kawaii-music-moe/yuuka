@@ -148,7 +148,7 @@ export async function dispatchRoute(
 
 		// CSRF対策: 認証必須の状態変更（POST/DELETE）はクロスサイト元を拒否する。
 		// 外部Webhook受信など auth:"none" のルートは対象外（クロスオリジンが正当なため）。
-		if ((method === "POST" || method === "DELETE") && route.auth !== "none") {
+		if ((method === "POST" || method === "PUT" || method === "PATCH" || method === "DELETE") && route.auth !== "none") {
 			if (isCrossSiteStateChange(req)) {
 				sendJson(res, 403, {
 					success: false,
@@ -182,7 +182,7 @@ export async function dispatchRoute(
 		// ボディの読み込み（POST/DELETE のみ）
 		let rawBody: Buffer = Buffer.alloc(0);
 		let body: Record<string, unknown> = {};
-		if (method === "POST" || method === "DELETE") {
+		if (method === "POST" || method === "PUT" || method === "PATCH" || method === "DELETE") {
 			try {
 				rawBody = await readBody(req);
 				if (rawBody.length > 0) {

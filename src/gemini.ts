@@ -132,6 +132,7 @@ async function buildSystemInstruction(
 	userId: string,
 	botId: string,
 	richReplyEnabled: boolean,
+	source: "discord" | "pwa",
 ): Promise<string> {
 	const dateTimeStr = formatDateTimeJa(new Date());
 
@@ -225,6 +226,9 @@ async function buildSystemInstruction(
 		: "";
 
 	const parts = [
+		source === "pwa"
+			? `# Request channel\nThis request came from the personal PWA control panel, not Discord. Keep the PWA conversation context separate from Discord. Return standard Markdown suitable for the web client. When a task, calendar event, finance record, or shared note is relevant, state it clearly so the client can link to the corresponding screen.`
+			: `# Request channel\nThis request came from Discord. Follow the Discord response conventions and do not assume a web UI is visible.`,
 		personaSection,
 		memoryRuleSection,
 		confirmationRuleSection,
@@ -358,6 +362,8 @@ async function buildRecallSection(
 
 export interface ChatMessage {
 	text: string;
+	/** Input channel controls context isolation and client-specific response policy. */
+	source?: "discord" | "pwa";
 	imageData?: {
 		data: string; // base64
 		mimeType: string;
@@ -986,6 +992,7 @@ export async function processMessage(
 	onStatusChange?: (status: "thinking" | "writing" | "idle") => void,
 	asyncDelivery?: TurnAsyncDelivery,
 ): Promise<ProcessResult> {
+	const source = message.source ?? "discord";
 	// リッチ返信のユーザー設定（§3.0.5）
 	let richReplyEnabled = true;
 	try {
@@ -1011,11 +1018,12 @@ export async function processMessage(
 			logText,
 			message.discordMsgId,
 			message.replyToMsgId,
+			source,
 		);
 	}
 
 	// 2. 会話コンテキストを取得（Redis直近15件 → SQLiteフォールバック §3.1.4）
-	const history = await getRecentContext(userId, botId, 15);
+	const history = await getRecentContext(userId, botId, 15, source);
 
 	// 3. 返信チェーンの解決（§3.1.4: 15件キャッシュとは別枠でコンテキストの先頭に追加）
 	// 解決結果は L2 想起の返信スレッド化クエリ（B）でも再利用するためブロック外へ保持する。
@@ -1056,6 +1064,7 @@ export async function processMessage(
 		userId,
 		botId,
 		richReplyEnabled,
+		source,
 	);
 
 	// L2 連想想起（シナプス）を systemInstruction の末尾へ追記する（エンジン無効時は ""）。
@@ -1086,7 +1095,15 @@ export async function processMessage(
 			planInput: buildPlanInput(message),
 			recordActions: true,
 			saveAssistant: (replyText) =>
-				addMessageLog(userId, botId, "assistant", replyText),
+				addMessageLog(
+					userId,
+					botId,
+					"assistant",
+					replyText,
+					undefined,
+					undefined,
+					source,
+				),
 			fallbackText: (browserToolCalled, browserToolFailed) =>
 				browserToolCalled || browserToolFailed
 					? "ブラウザ操作に失敗しました。求めた結果が得られませんでした。"

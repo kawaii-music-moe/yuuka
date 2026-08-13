@@ -1092,6 +1092,7 @@ export async function runMigrations(): Promise<void> {
 	// 既存DBの message_logs へ guild_id 列を後付け（要件 §5）
 	ensureColumns(db, "message_logs", [
 		{ name: "guild_id", ddl: "guild_id TEXT" },
+		{ name: "source", ddl: "source TEXT NOT NULL DEFAULT 'discord'" },
 	]);
 
 	// 既存DBに users へのFK付き旧定義が残っている場合は、FKを撤廃する再構築を行う
