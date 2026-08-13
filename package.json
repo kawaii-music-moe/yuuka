@@ -11,6 +11,9 @@
   },
   "scripts": {
     "dev": "tsx watch src/index.ts",
+	"dev:admin": "pnpm dev",
+    "dev:client:mock": "node scripts/dev-client-mock.mjs",
+    "dev:frontend": "pnpm dev:client:mock",
     "build:pwa": "node scripts/build-pwa.mjs",
     "build": "pnpm build:pwa && cargo build --release --manifest-path src/rust_crawler/Cargo.toml && mkdir -p dist/bin dist/assets && cp src/rust_crawler/target/release/yuuka-crawler dist/bin/ && cp -r src/assets/. dist/assets/ && tsgo",
     "start": "node dist/index.js",

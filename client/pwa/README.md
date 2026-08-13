@@ -1,5 +1,25 @@
 # Agent Desk PWA
 
+## Development commands
+
+From the repository root:
+
+```bash
+pnpm dev:frontend
+```
+
+Starts the Vue Client at `http://localhost:5173` and the mock API at
+`http://localhost:8787`. The Vite proxy is automatically configured for the
+mock API.
+
+```bash
+pnpm dev:admin
+```
+
+Starts Yuuka's application server for the administration UI at `/admin/` and
+the built Client routes at `/`. Run `pnpm build:pwa` after Client source
+changes when using this mode.
+
 Discord エージェント基盤向けの Web コントロールパネルです。Vue 3 + TypeScript + Vite を使用し、PWA としてインストールできます。
 
 ## 起動

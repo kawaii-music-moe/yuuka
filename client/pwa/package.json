@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:client": "vite",
     "build": "vue-tsc --noEmit && vite build",
     "preview": "vite preview",
     "mock": "tsx mock/server.ts",
