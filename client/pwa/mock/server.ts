@@ -35,7 +35,9 @@ createServer(async (req, res) => {
   if (req.method === 'POST' && url.pathname === '/api/logout') return json(res, { success: true }, 200, { 'Set-Cookie': 'yuuka-mock-session=; Path=/; Max-Age=0' })
   if (req.method === 'GET' && url.pathname === '/api/me') {
     if (!hasSession) return json(res, { message: 'Unauthorized' }, 401)
-    return json(res, { user: { discordId: 'admin', username: 'admin', role: 'admin' } })
+    // Keep this response compatible with the production authentication API.
+    // The administration UI relies on `success`, while the Client consumes `user`.
+    return json(res, { success: true, user: { discordId: 'admin', username: 'admin', role: 'admin' } })
   }
   // PWA routes are namespaced in production. Keeping the legacy aliases makes
   // this mock useful for the existing administration UI during its migration.

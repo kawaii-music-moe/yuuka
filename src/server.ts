@@ -121,7 +121,9 @@ function serveStaticFile(req: http.IncomingMessage, res: http.ServerResponse) {
 	const staticRoot = isClientRoute || isClientAsset ? PWA_PUBLIC_DIR : PUBLIC_DIR;
 	const relativePath = isClientRoute
 		? "/index.html"
-		: isAdminRequest
+		: isLoginRequest
+			? "/index.html"
+			: isAdminRequest
 			? (urlPath.slice("/admin".length) || "/index.html")
 			: urlPath;
 

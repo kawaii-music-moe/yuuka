@@ -2,11 +2,13 @@
 import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import AppIcon from './AppIcon.vue'
+import type { SessionUser } from '../api/auth'
 
 const route = useRoute()
 const router = useRouter()
 const title = computed(() => route.meta.title ?? 'Agent Desk')
 const fromChat = computed(() => route.query.from === 'chat')
+defineProps<{ user: SessionUser | null }>()
 </script>
 
 <template>
@@ -21,7 +23,7 @@ const fromChat = computed(() => route.query.from === 'chat')
         <AppIcon name="arrow_back" />
         <span>Back to chat</span>
       </button>
-      <a class="icon-button" href="/admin/" aria-label="Open administration">
+      <a v-if="user?.role === 'admin'" class="icon-button" href="/admin/" aria-label="Open administration">
         <AppIcon name="admin_panel_settings" />
       </a>
       <RouterLink class="icon-button" to="/settings" aria-label="Open settings">

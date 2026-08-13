@@ -353,6 +353,39 @@ document.addEventListener("DOMContentLoaded", () => {
 		applyRoute(adminPath);
 	}
 
+	function getRequestedPath() {
+		return `${window.location.pathname}${window.location.search}${window.location.hash}`;
+	}
+
+	function redirectToLogin() {
+		// Authentication is shared by the Client and administration application.
+		// Use a document navigation so the address bar is always /login, not a
+		// management-only /admin/login pseudo-route.
+		if (window.location.pathname === "/login") return;
+		const returnTo = getRequestedPath();
+		window.location.replace(`/login?returnTo=${encodeURIComponent(returnTo)}`);
+	}
+
+	function isAllowedReturnPath(returnTo, role) {
+		if (!returnTo || !returnTo.startsWith("/") || returnTo.startsWith("//")) {
+			return false;
+		}
+		return !returnTo.startsWith("/admin") || role === "admin";
+	}
+
+	async function getPostLoginPath() {
+		const returnTo = new URLSearchParams(window.location.search).get("returnTo");
+		try {
+			const response = await originalFetch("/api/me");
+			const session = await response.json();
+			const role = session.success ? session.user?.role || "user" : "user";
+			if (isAllowedReturnPath(returnTo, role)) return returnTo;
+			return role === "admin" ? "/admin/" : "/";
+		} catch {
+			return "/";
+		}
+	}
+
 	function applyRoute(path) {
 		const cleanPath =
 			path
@@ -386,7 +419,7 @@ document.addEventListener("DOMContentLoaded", () => {
 				return;
 			}
 			if (cleanPath === "/admin" && activeUserRole !== "admin") {
-				navigateTo("/", false);
+				window.location.replace("/");
 				return;
 			}
 			loginOverlay.classList.remove("active");
@@ -513,7 +546,7 @@ document.addEventListener("DOMContentLoaded", () => {
 		if (activeUserId) {
 			navigateTo("/", false);
 		} else {
-			navigateTo("/login", false);
+			redirectToLogin();
 		}
 	}
 
@@ -1250,6 +1283,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
 				activeUserId = data.user.discordId;
 				activeUserRole = data.user.role || "user";
+				if (window.location.pathname === "/login") {
+					window.location.replace(await getPostLoginPath());
+					return;
+				}
 				document.getElementById("current-user-display").textContent =
 					`${data.user.username} (${activeUserId})`;
 				const homeUsernameEl = document.getElementById("home-username-display");
@@ -1303,12 +1340,12 @@ document.addEventListener("DOMContentLoaded", () => {
 					if (btnTabLogin) btnTabLogin.classList.add("active");
 					if (loginTabContent) loginTabContent.classList.add("active");
 				}
-				navigateTo("/login", false);
+				redirectToLogin();
 			}
 		} catch (err) {
 			activeUserId = "";
 			await checkSetupStatus();
-			navigateTo("/login", false);
+			redirectToLogin();
 		}
 	}
 
@@ -1328,14 +1365,7 @@ document.addEventListener("DOMContentLoaded", () => {
 			const data = await res.json();
 
 			if (data.success) {
-				const returnTo = new URLSearchParams(window.location.search).get(
-					"returnTo",
-				);
-				if (returnTo && returnTo.startsWith("/") && !returnTo.startsWith("//")) {
-					window.location.assign(returnTo);
-					return;
-				}
-				await initAppSession();
+				window.location.assign(await getPostLoginPath());
 			} else {
 				loginError.textContent = data.message;
 			}
