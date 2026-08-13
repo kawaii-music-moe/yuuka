@@ -19,7 +19,7 @@
     "typecheck:front": "svelte-check --tsconfig frontend/tsconfig.json",
     "dev:admin": "pnpm dev:front",
     "dev:client:mock": "node scripts/dev-client-mock.mjs",
-    "dev:frontend": "pnpm dev:client:mock",
+    "dev:frontend": "concurrently -k \"pnpm dev:client:mock\" \"pnpm dev:front\"",
     "build:pwa": "node scripts/build-pwa.mjs",
     "build": "pnpm build:pwa && cargo build --release && mkdir -p dist/bin dist/assets && cp target/release/yuuka dist/bin/ && cp target/release/yuuka-crawler dist/bin/ && cp target/release/yuuka-synapse dist/bin/ && cp -r src/assets/. dist/assets/ && pnpm exec vite build --config frontend/vite.config.ts && cp -r src/public/pwa dist/public/",
     "start": "./dist/bin/yuuka",

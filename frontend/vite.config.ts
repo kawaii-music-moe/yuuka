@@ -44,7 +44,7 @@ const workboxWindowPath = resolveWorkboxWindow();
 
 export default defineConfig({
 	root: __dirname,
-	base: "/", // ★デフォルト維持（/theme-init.js 等の絶対パス参照が書き換わらないよう）
+	base: "/admin/",
 	publicDir: "public",
 	build: {
 		outDir: "../dist/public",
@@ -122,7 +122,8 @@ export default defineConfig({
 		},
 	},
 	server: {
-		port: 5173,
+		port: 5174,
+		strictPort: true,
 		// 真に必要なのは /api と /ws/chat のみ（§5.6 参照）
 		proxy: {
 			"/api": { target: API, changeOrigin: false },

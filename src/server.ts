@@ -221,11 +221,6 @@ function serveStaticFile(req: http.IncomingMessage, res: http.ServerResponse) {
 					return;
 				}
 				let html = content;
-				if (isAdminRequest) {
-					html = html
-						.replaceAll('href="/', 'href="/admin/')
-						.replaceAll('src="/', 'src="/admin/');
-				}
 				if (config.googleSiteVerification) {
 					const metaTag = `<meta name="google-site-verification" content="${config.googleSiteVerification}" />`;
 					html = html.replace("<!-- GOOGLE_SITE_VERIFICATION -->", metaTag);
