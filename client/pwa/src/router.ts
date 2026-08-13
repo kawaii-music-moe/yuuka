@@ -10,6 +10,7 @@ export default createRouter({
     { path: '/notes', component: () => import('./pages/NotesPage.vue'), meta: { title: '共有ノート' } },
     { path: '/chat', component: () => import('./pages/ChatPage.vue'), meta: { title: 'チャット' } },
     { path: '/settings', component: () => import('./pages/SettingsPage.vue'), meta: { title: '設定' } },
+    { path: '/management-vue', component: () => import('./features/admin/pages/AdminBotSelectionPage.vue'), meta: { title: 'Bot一覧' } },
     {
       path: '/:pathMatch(.*)*',
       component: () => import('./pages/NotFoundPage.vue'),
