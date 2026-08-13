@@ -1,13 +1,20 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
+import { useRoute } from 'vue-router'
 import { getCurrentUser, type SessionUser } from './api/auth'
 import AppShell from './components/AppShell.vue'
 
 const checkingSession = ref(true)
 const authenticated = ref(false)
 const user = ref<SessionUser | null>(null)
+const route = useRoute()
+const isPublicRoute = computed(() => route.meta.public === true)
 
 async function checkSession() {
+  if (isPublicRoute.value) {
+    checkingSession.value = false
+    return
+  }
   user.value = await getCurrentUser()
   authenticated.value = Boolean(user.value)
   if (!authenticated.value) {
@@ -23,6 +30,7 @@ onMounted(checkSession)
 
 <template>
   <div v-if="checkingSession" class="session-loading">Loading…</div>
+  <RouterView v-else-if="isPublicRoute" />
   <AppShell v-else-if="authenticated" :user="user"><RouterView /></AppShell>
 </template>
 

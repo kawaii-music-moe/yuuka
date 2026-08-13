@@ -71,6 +71,15 @@
 		errorMsg = "";
 	}
 
+	function continueAfterAuthentication(): void {
+		const returnTo = new URLSearchParams(window.location.search).get("returnTo");
+		if (returnTo && returnTo.startsWith("/") && !returnTo.startsWith("//")) {
+			window.location.assign(returnTo);
+			return;
+		}
+		navigateTo("/");
+	}
+
 	// ── ログイン（旧 loginForm submit） ──
 	async function submitLogin(e: SubmitEvent): Promise<void> {
 		e.preventDefault();
@@ -82,7 +91,7 @@
 			});
 			// セッション再取得 → App 側が isAuthed を検知して Bot 選択へ遷移。
 			await bootstrapSession();
-			navigateTo("/");
+			continueAfterAuthentication();
 		} catch (e) {
 			reportError(e);
 		}
@@ -474,13 +483,13 @@
 			<div
 				style="margin-top: 24px; text-align: center; border-top: 1px solid var(--border-divider); padding-top: 16px; display: flex; justify-content: center; gap: 16px; flex-wrap: wrap;"
 			>
-				<a href="/usage" class="login-footer-link">
+				<a href="/admin/usage" class="login-footer-link">
 					<span class="material-symbols-outlined" style="font-size: 18px;">help</span> 使い方ガイドを読む
 				</a>
-				<a href="/terms" class="login-footer-link">
+				<a href="/admin/terms" class="login-footer-link">
 					<span class="material-symbols-outlined" style="font-size: 18px;">gavel</span> 利用規約
 				</a>
-				<a href="/privacy" class="login-footer-link">
+				<a href="/admin/privacy" class="login-footer-link">
 					<span class="material-symbols-outlined" style="font-size: 18px;">policy</span> プライバシーポリシー
 				</a>
 			</div>

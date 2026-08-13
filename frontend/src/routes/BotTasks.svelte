@@ -234,7 +234,7 @@
 		</div>
 		<div class="tasks-actions-right">
 			<a
-				href="/tasks/guide"
+				href="/admin/tasks/guide"
 				class="btn btn-secondary tasks-guide-link"
 			>
 				<Icon name="help" size={18} /> 使い方

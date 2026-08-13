@@ -16,6 +16,18 @@
 
 import { writable } from "svelte/store";
 
+export const ADMIN_PREFIX = "/admin";
+
+export function adminPath(path: string): string {
+	if (path === "/login" || path.startsWith("/login?")) return path;
+	if (
+		path === ADMIN_PREFIX ||
+		path.startsWith(`${ADMIN_PREFIX}/`) ||
+		path.startsWith(`${ADMIN_PREFIX}?`)
+	) return path;
+	return `${ADMIN_PREFIX}${path.startsWith("/") ? path : `/${path}`}`;
+}
+
 /** §8 対応表のルート識別子。 */
 export type RouteView =
 	| "bots" // /, /bots, /index.html
@@ -119,7 +131,14 @@ export function resolveRoute(input: URL | string): ResolvedRoute {
 		typeof input === "string"
 			? new URL(input, typeof window !== "undefined" ? window.location.origin : "http://localhost")
 			: input;
-	const cp = cleanPath(url.pathname);
+	const requestedPath = cleanPath(url.pathname);
+	const isLogin = requestedPath === "/login";
+	if (!isLogin && requestedPath !== ADMIN_PREFIX && !requestedPath.startsWith(`${ADMIN_PREFIX}/`)) {
+		return { view: "notfound" };
+	}
+	const cp = isLogin
+		? "/login"
+		: requestedPath.slice(ADMIN_PREFIX.length) || "/";
 
 	// 公開ページ
 	if (cp === "/usage") return { view: "usage" };
@@ -169,10 +188,11 @@ export function applyRoute(path: string): void {
  */
 export function navigateTo(path: string, pushState = true): void {
 	if (typeof window === "undefined") return;
+	const destination = adminPath(path);
 	if (pushState) {
-		window.history.pushState({}, "", path);
+		window.history.pushState({}, "", destination);
 	}
-	applyRoute(path);
+	applyRoute(destination);
 }
 
 /** goto: api client の 401 ハンドラ・各コンポーネントが使う navigateTo エイリアス。 */
