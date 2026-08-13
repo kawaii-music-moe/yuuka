@@ -30,3 +30,11 @@
 <span class="material-symbols-outlined {klass}" {style} aria-hidden="true"
 	>{name}</span
 >
+
+<style>
+	.material-symbols-outlined {
+		user-select: none;
+		-webkit-user-select: none;
+		-moz-user-select: none;
+	}
+</style>

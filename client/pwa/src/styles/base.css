@@ -1,4 +1,4 @@
-:root { --primary:#bb86fc; --primary-hover:#cda3ff; --primary-soft:rgba(187,134,252,.12); --primary-border:rgba(187,134,252,.42); --line:rgba(255,255,255,.12); --field:rgba(255,255,255,.2); --surface-1:#1d1d1d; --surface-2:#212121; --surface-3:#292929; --text-high:rgba(255,255,255,.87); --text-medium:rgba(255,255,255,.6); --border-divider:rgba(255,255,255,.12); font-family:Inter,'Noto Sans JP',sans-serif; color:var(--text-high); background:#121212; font-synthesis:none; }
+:root { --primary:#155eef; --primary-hover:#2d75f5; --primary-soft:rgba(21,94,239,.14); --primary-border:rgba(96,165,250,.5); --line:rgba(255,255,255,.12); --field:rgba(255,255,255,.2); --surface-1:#1d1d1d; --surface-2:#212121; --surface-3:#292929; --text-high:rgba(255,255,255,.87); --text-medium:rgba(255,255,255,.6); --border-divider:rgba(255,255,255,.12); font-family:Inter,'Noto Sans JP',sans-serif; color:var(--text-high); background:#121212; font-synthesis:none; }
 * { box-sizing:border-box; }
 body { margin:0; min-width:320px; background:#121212; }
 button,input,textarea,select { font:inherit; }

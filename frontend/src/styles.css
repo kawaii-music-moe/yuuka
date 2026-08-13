@@ -24,8 +24,8 @@
 	--surface-24dp: #383838;
 
 	/* Material Dark Theme Colors */
-	--color-primary: #bb86fc; /* desaturated purple */
-	--color-primary-variant: #3700b3;
+	--color-primary: #155eef;
+	--color-primary-variant: #0b4bc4;
 	--color-secondary: #03dac6; /* desaturated teal */
 	--color-error: #cf6679; /* Material Dark error */
 
@@ -55,8 +55,8 @@
 	--text-secondary: rgba(255, 255, 255, 0.6);
 
 	--discord-blurple: var(--color-primary);
-	--discord-blurple-hover: #cda3ff;
-	--discord-blurple-active: #a370e2;
+	--discord-blurple-hover: #2d75f5;
+	--discord-blurple-active: #0b4bc4;
 	--discord-grey-secondary: var(--surface-4dp);
 	--discord-grey-secondary-hover: var(--surface-8dp);
 
@@ -261,6 +261,9 @@ body {
 		"opsz" 24;
 	vertical-align: middle;
 	line-height: 1;
+	user-select: none;
+	-webkit-user-select: none;
+	-moz-user-select: none;
 }
 
 /* Sidebar navigation adjustments */
@@ -932,10 +935,10 @@ textarea:focus {
 
 /* Sidebar Shell */
 .sidebar {
-	width: 260px;
-	background-color: var(--bg-sidebar);
+	width: 304px;
+	background-color: var(--surface-1dp);
 	border-right: 1px solid var(--border-matte);
-	padding: 24px 16px;
+	padding: 0 8px 8px;
 	display: flex;
 	flex-direction: column;
 	flex-shrink: 0;
@@ -956,8 +959,9 @@ textarea:focus {
 	font-size: 0.8rem;
 	font-weight: 600;
 	cursor: pointer;
-	padding: 8px;
-	margin-bottom: 24px;
+	min-height: 44px;
+	padding: 0 12px;
+	margin: 8px 0 4px;
 	border-radius: 4px;
 	transition:
 		background-color 0.15s ease,
@@ -978,8 +982,9 @@ textarea:focus {
 	display: flex;
 	align-items: center;
 	gap: 12px;
-	margin-bottom: 28px;
-	padding: 0 8px;
+	margin: 4px 4px 12px;
+	padding: 12px 8px 16px;
+	border-bottom: 1px solid var(--border-divider);
 }
 
 .app-sidebar-avatar-container {
@@ -1034,15 +1039,17 @@ textarea:focus {
 .sidebar-menu {
 	display: flex;
 	flex-direction: column;
-	gap: 4px;
+	gap: 2px;
 	flex-grow: 1;
+	padding: 6px 0;
 }
 
 .menu-item {
 	display: flex;
 	align-items: center;
 	gap: 12px;
-	padding: 12px 16px;
+	min-height: 44px;
+	padding: 0 12px;
 	border-radius: 4px;
 	font-size: 0.88rem;
 	font-weight: 500;
@@ -1057,7 +1064,7 @@ textarea:focus {
 
 .menu-item.active {
 	color: var(--color-primary);
-	background-color: rgba(187, 134, 252, 0.12);
+	background-color: rgba(21, 94, 239, 0.14);
 	font-weight: 600;
 }
 
@@ -1067,8 +1074,8 @@ textarea:focus {
 	align-items: center;
 	justify-content: space-between;
 	gap: 8px;
-	margin-top: 12px;
-	padding-top: 12px;
+	margin-top: auto;
+	padding: 10px 4px 2px;
 	border-top: 1px solid var(--border-divider);
 	flex-shrink: 0;
 }
@@ -2255,23 +2262,23 @@ input[type="checkbox"]:disabled,
 		top: 0;
 		bottom: 0;
 		left: 0;
-		width: min(300px, 82vw);
+		width: min(320px, 88vw);
 		height: 100dvh;
 		z-index: 1600;
 		transform: translateX(-100%);
-		transition: transform 0.25s ease;
+		transition: transform 0.2s ease;
 	}
 
 	.sidebar.open {
 		transform: translateX(0);
-		box-shadow: 8px 0 32px rgba(0, 0, 0, 0.55);
+		box-shadow: 12px 0 32px rgba(0, 0, 0, 0.34);
 	}
 
 	/* ドロワー背面オーバーレイ（BotShell が開時のみ描画。タップで閉じる） */
 	.sidebar-backdrop {
 		position: fixed;
 		inset: 0;
-		background: rgba(0, 0, 0, 0.5);
+		background: rgba(0, 0, 0, 0.58);
 		border: none;
 		padding: 0;
 		z-index: 1500;
@@ -2713,6 +2720,14 @@ input[type="checkbox"]:disabled,
 	align-items: center;
 	gap: 10px;
 	flex-shrink: 0;
+}
+
+/* Client のドロワーと同じ、固定高のブランド行。 */
+.home-sidebar-brand {
+	min-height: 58px;
+	margin: 0 !important;
+	padding: 0 8px;
+	border-bottom: 1px solid var(--border-divider);
 }
 
 .home-nav-logo {
