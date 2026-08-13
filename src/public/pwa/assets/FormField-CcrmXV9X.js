@@ -1,1 +1,0 @@
-import{d as s,c as o,b as t,t as l,B as r,i as n,_ as c}from"./index-Clz-a-Rf.js";const d={class:"form-field"},_=s({__name:"FormField",props:{label:{}},setup(e){return(a,i)=>(n(),o("label",d,[t("span",null,l(e.label),1),r(a.$slots,"default",{},void 0,!0)]))}}),m=c(_,[["__scopeId","data-v-80d92aef"]]);export{m as F};

@@ -12,6 +12,13 @@ const user = ref<SessionUser | null>(null)
 const route = useRoute()
 const isPublicRoute = computed(() => route.meta.public === true)
 
+function loginUrl(returnTo: string): string {
+  const target = new URL('/login', window.location.origin)
+  if (target.port === '5173') target.port = '5174'
+  target.searchParams.set('returnTo', returnTo)
+  return target.toString()
+}
+
 async function checkSession() {
   if (isPublicRoute.value) {
     checkingSession.value = false
@@ -20,8 +27,10 @@ async function checkSession() {
   user.value = await getCurrentUser()
   authenticated.value = Boolean(user.value)
   if (!authenticated.value) {
-    const returnTo = `${window.location.pathname}${window.location.search}${window.location.hash}`
-    window.location.replace(`/login?returnTo=${encodeURIComponent(returnTo)}`)
+    const returnTo = window.location.port === '5173'
+      ? window.location.href
+      : `${window.location.pathname}${window.location.search}${window.location.hash}`
+    window.location.replace(loginUrl(returnTo))
     return
   }
   try {

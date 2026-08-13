@@ -73,9 +73,22 @@
 
 	function continueAfterAuthentication(): void {
 		const returnTo = new URLSearchParams(window.location.search).get("returnTo");
-		if (returnTo && returnTo.startsWith("/") && !returnTo.startsWith("//")) {
-			window.location.assign(returnTo);
-			return;
+		if (returnTo) {
+			try {
+				const destination = new URL(returnTo, window.location.origin);
+				const sameOrigin = destination.origin === window.location.origin;
+				const clientDevelopmentOrigin =
+					import.meta.env.DEV &&
+					destination.protocol === window.location.protocol &&
+					destination.hostname === window.location.hostname &&
+					destination.port === "5173";
+				if (sameOrigin || clientDevelopmentOrigin) {
+					window.location.assign(destination);
+					return;
+				}
+			} catch {
+				/* 不正な returnTo は既定の遷移先へ戻す。 */
+			}
 		}
 		navigateTo("/");
 	}

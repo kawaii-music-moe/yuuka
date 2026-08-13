@@ -54,6 +54,17 @@ export default defineConfig({
 	},
 	plugins: [
 		svelte(),
+		{
+			name: "serve-login-outside-admin-prefix-in-development",
+			configureServer(server) {
+				server.middlewares.use((req, _res, next) => {
+					if (req.url?.startsWith("/login")) {
+						req.url = `/admin/${req.url.slice("/login".length)}`;
+					}
+					next();
+				});
+			},
+		},
 		// Service Worker は **無効化**（selfDestroying）。
 		// 経緯: autoUpdate + precache + StaleWhileRevalidate の構成では、アプリを開いたまま
 		//   新ビルドがデプロイされるとブラウザ内の旧 SW が旧ハッシュ資産を掴んだまま
