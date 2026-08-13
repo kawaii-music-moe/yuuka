@@ -10,7 +10,7 @@ async function checkSession() {
   authenticated.value = Boolean(await getCurrentUser())
   if (!authenticated.value) {
     const returnTo = `${window.location.pathname}${window.location.search}${window.location.hash}`
-    window.location.replace(`/admin/login?returnTo=${encodeURIComponent(returnTo)}`)
+    window.location.replace(`/login?returnTo=${encodeURIComponent(returnTo)}`)
     return
   }
   checkingSession.value = false

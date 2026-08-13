@@ -110,7 +110,9 @@ function serveStaticFile(req: http.IncomingMessage, res: http.ServerResponse) {
 	const isClientRoute = CLIENT_ROUTES.has(urlPath);
 	const isClientAsset =
 		CLIENT_STATIC_PATHS.has(urlPath) || urlPath.startsWith("/assets/");
-	const isAdminRequest = urlPath === "/admin" || urlPath.startsWith("/admin/");
+	const isLoginRequest = urlPath === "/login";
+	const isAdminRequest =
+		isLoginRequest || urlPath === "/admin" || urlPath.startsWith("/admin/");
 	if (!isClientRoute && !isClientAsset && !isAdminRequest) {
 		res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
 		res.end("404 Not Found");
@@ -216,7 +218,7 @@ export async function serverHandler(
 		`http://${req.headers.host || "localhost"}`,
 	);
 	const pathname = parsedUrl.pathname;
-	const legacyAdminPaths = ["/bot", "/bots", "/login", "/usage", "/terms", "/privacy"];
+	const legacyAdminPaths = ["/bot", "/bots", "/usage", "/terms", "/privacy"];
 	if (legacyAdminPaths.some((path) => pathname === path || pathname.startsWith(`${path}/`))) {
 		res.writeHead(302, { Location: `/admin${url || "/"}` });
 		res.end();

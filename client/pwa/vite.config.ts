@@ -22,10 +22,11 @@ function adminDevelopmentPlugin(): Plugin {
     configureServer(server) {
       server.middlewares.use((request, response, next) => {
         const pathname = new URL(request.url ?? '/', 'http://localhost').pathname
-        if (pathname !== '/admin' && !pathname.startsWith('/admin/')) return next()
+        const isLogin = pathname === '/login'
+        if (!isLogin && pathname !== '/admin' && !pathname.startsWith('/admin/')) return next()
 
         void (async () => {
-          const relativePath = pathname.slice('/admin'.length) || '/index.html'
+          const relativePath = isLogin ? '/index.html' : pathname.slice('/admin'.length) || '/index.html'
           const requestedPath = path.normalize(path.join(adminRoot, relativePath))
           if (!requestedPath.startsWith(adminRoot)) return next()
 
