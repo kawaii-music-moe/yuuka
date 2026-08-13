@@ -298,7 +298,7 @@
 	{/if}
 
 	<main class="main-content">
-		<AdminPageHeader>
+		<AdminPageHeader class="bot-selection-header">
 			<h2>Bot一覧</h2>
 		</AdminPageHeader>
 
@@ -447,6 +447,35 @@
 	/* サイドバー内ブランド行 */
 	.home-sidebar-brand {
 		margin: 4px 4px 20px;
+	}
+
+	/* main-content の余白は一覧本文にだけ適用し、共通ヘッダーは画面端まで広げる。 */
+	:global(.bot-selection-header) {
+		margin: -40px -40px 28px;
+	}
+
+	@media (max-width: 1024px) and (min-width: 769px) {
+		:global(.bot-selection-header) {
+			margin: -28px -24px 24px;
+		}
+	}
+
+	@media (max-width: 768px) {
+		:global(.bot-selection-header) {
+			margin: -18px -14px 18px;
+		}
+	}
+
+	@media (max-width: 420px) {
+		:global(.bot-selection-header) {
+			margin: -16px -12px 16px;
+		}
+	}
+
+	@media (max-width: 360px) {
+		:global(.bot-selection-header) {
+			margin: -14px -10px 14px;
+		}
 	}
 </style>
 
