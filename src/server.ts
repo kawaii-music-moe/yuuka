@@ -89,15 +89,19 @@ const MIME_TYPES: Record<string, string> = {
  * セキュリティヘッダーを設定した静的ファイル配信
  */
 function serveStaticFile(req: http.IncomingMessage, res: http.ServerResponse) {
-	const urlPath =
+	const requestedPath =
 		req.url === "/" || !req.url || req.url.startsWith("/?")
-			? "/index.html"
+			? "/pwa/"
 			: req.url.split("?")[0];
+	const urlPath = requestedPath;
 	const isPwaRequest = urlPath === "/pwa" || urlPath.startsWith("/pwa/");
+	const isAdminRequest = urlPath === "/admin" || urlPath.startsWith("/admin/");
 	const staticRoot = isPwaRequest ? PWA_PUBLIC_DIR : PUBLIC_DIR;
 	const relativePath = isPwaRequest
 		? (urlPath.slice("/pwa".length) || "/index.html")
-		: urlPath;
+		: isAdminRequest
+			? (urlPath.slice("/admin".length) || "/index.html")
+			: urlPath;
 
 	// セキュリティ対策：パス・トラバーサルの防御
 	const resolvedPath = path.normalize(path.join(staticRoot, relativePath));
@@ -142,6 +146,9 @@ function serveStaticFile(req: http.IncomingMessage, res: http.ServerResponse) {
 					return;
 				}
 				let html = content;
+				if (isAdminRequest) {
+					html = html.replaceAll('href="/bot/', 'href="/admin/bot/');
+				}
 				if (config.googleSiteVerification) {
 					const metaTag = `<meta name="google-site-verification" content="${config.googleSiteVerification}" />`;
 					html = html.replace("<!-- GOOGLE_SITE_VERIFICATION -->", metaTag);
@@ -187,6 +194,12 @@ export async function serverHandler(
 		`http://${req.headers.host || "localhost"}`,
 	);
 	const pathname = parsedUrl.pathname;
+	const legacyAdminPaths = ["/bot", "/bots", "/login", "/usage", "/terms", "/privacy"];
+	if (legacyAdminPaths.some((path) => pathname === path || pathname.startsWith(`${path}/`))) {
+		res.writeHead(302, { Location: `/admin${url || "/"}` });
+		res.end();
+		return;
+	}
 
 	// 1. HTTPからHTTPSへのリダイレクト判定
 	if (config.baseUrl && config.baseUrl.toLowerCase().startsWith("https://")) {

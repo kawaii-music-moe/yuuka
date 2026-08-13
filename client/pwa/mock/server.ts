@@ -26,16 +26,20 @@ const read = async (req: import('node:http').IncomingMessage) => { let body = ''
 createServer(async (req, res) => {
   if (req.method === 'OPTIONS') { res.writeHead(204, { 'access-control-allow-origin': '*', 'access-control-allow-methods': 'GET,POST,PUT,PATCH,OPTIONS', 'access-control-allow-headers': 'content-type' }); return res.end() }
   const url = new URL(req.url ?? '/', 'http://localhost:8787')
-  if (req.method === 'GET' && url.pathname === '/api/status') return json(res, { status: 'ok', service: 'agent-mock', checkedAt: new Date().toISOString() })
-  if (url.pathname === '/api/settings') { if (req.method === 'PUT') settings = await read(req); return json(res, settings) }
-  if (req.method === 'POST' && url.pathname === '/api/integrations/google/authorize') return json(res, { authorizationUrl: 'https://example.com/google-authorize' })
-  if (url.pathname === '/api/shared-note') { if (req.method === 'PUT') note = { ...note, ...await read(req), updatedAt: new Date().toISOString() }; return json(res, note) }
-  if (url.pathname === '/api/todos') { if (req.method === 'POST') { const todo = { ...await read(req), id: crypto.randomUUID(), completed: false }; todos.unshift(todo); return json(res, todo, 201) }; return json(res, todos) }
-  if (req.method === 'PATCH' && url.pathname.startsWith('/api/todos/')) { const id = url.pathname.split('/').pop(); const todo = todos.find((item) => item.id === id); if (!todo) return json(res, { message: 'Not found' }, 404); Object.assign(todo, await read(req)); return json(res, todo) }
-  if (req.method === 'GET' && url.pathname === '/api/calendar/events') return json(res, events)
-  if (req.method === 'GET' && url.pathname === '/api/finance/summary') { const income = transactions.filter(x => x.kind === 'income').reduce((n, x) => n + x.amount, 0); const expense = transactions.filter(x => x.kind === 'expense').reduce((n, x) => n + x.amount, 0); return json(res, { income, expense, balance: income - expense, month: url.searchParams.get('month') }) }
-  if (url.pathname === '/api/finance/transactions') { if (req.method === 'POST') { const entry = { ...await read(req), id: crypto.randomUUID() }; transactions.unshift(entry); return json(res, entry, 201) }; return json(res, transactions) }
-  if (url.pathname === '/api/chat/messages') {
+  // PWA routes are namespaced in production. Keeping the legacy aliases makes
+  // this mock useful for the existing administration UI during its migration.
+  const apiPath = url.pathname.replace(/^\/api\/pwa(?=\/|$)/, '/api')
+  if (req.method === 'GET' && apiPath === '/api/status') return json(res, { status: 'ok', service: 'agent-mock', checkedAt: new Date().toISOString() })
+  if (req.method === 'GET' && url.pathname === '/api/settings/google/oauth/url') return json(res, { success: true, url: 'https://example.com/google-authorize' })
+  if (apiPath === '/api/settings') { if (req.method === 'PUT') settings = await read(req); return json(res, settings) }
+  if (req.method === 'POST' && apiPath === '/api/integrations/google/authorize') return json(res, { authorizationUrl: 'https://example.com/google-authorize' })
+  if (apiPath === '/api/shared-note') { if (req.method === 'PUT') note = { ...note, ...await read(req), updatedAt: new Date().toISOString() }; return json(res, note) }
+  if (apiPath === '/api/todos') { if (req.method === 'POST') { const todo = { ...await read(req), id: crypto.randomUUID(), completed: false }; todos.unshift(todo); return json(res, todo, 201) }; return json(res, todos) }
+  if (req.method === 'PATCH' && apiPath.startsWith('/api/todos/')) { const id = apiPath.split('/').pop(); const todo = todos.find((item) => item.id === id); if (!todo) return json(res, { message: 'Not found' }, 404); Object.assign(todo, await read(req)); return json(res, todo) }
+  if (req.method === 'GET' && apiPath === '/api/calendar/events') return json(res, events)
+  if (req.method === 'GET' && apiPath === '/api/finance/summary') { const income = transactions.filter(x => x.kind === 'income').reduce((n, x) => n + x.amount, 0); const expense = transactions.filter(x => x.kind === 'expense').reduce((n, x) => n + x.amount, 0); return json(res, { income, expense, balance: income - expense, month: url.searchParams.get('month') }) }
+  if (apiPath === '/api/finance/transactions') { if (req.method === 'POST') { const entry = { ...await read(req), id: crypto.randomUUID() }; transactions.unshift(entry); return json(res, entry, 201) }; return json(res, transactions) }
+  if (apiPath === '/api/chat/messages') {
     if (req.method === 'POST') {
       const { content } = await read(req); const now = new Date().toISOString()
       chatMessages.push({ id: crypto.randomUUID(), role: 'user', content, createdAt: now })

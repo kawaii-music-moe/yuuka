@@ -344,15 +344,22 @@ document.addEventListener("DOMContentLoaded", () => {
 	}
 
 	function navigateTo(path, pushState = true) {
+		const adminPath = path.startsWith("/admin")
+			? path
+			: `/admin${path.startsWith("/") ? path : `/${path}`}`;
 		if (pushState) {
-			window.history.pushState({}, "", path);
+			window.history.pushState({}, "", adminPath);
 		}
-		applyRoute(path);
+		applyRoute(adminPath);
 	}
 
 	function applyRoute(path) {
 		const cleanPath =
-			path.split("?")[0].split("#")[0].replace(/\/$/, "") || "/";
+			path
+				.split("?")[0]
+				.split("#")[0]
+				.replace(/^\/admin(?=\/|$)/, "")
+				.replace(/\/$/, "") || "/";
 
 		const usageOverlay = document.getElementById("usage-overlay");
 		if (usageOverlay) usageOverlay.classList.remove("active");
@@ -476,9 +483,6 @@ document.addEventListener("DOMContentLoaded", () => {
 			}
 			const BOT_TABS = [
 				"dashboard",
-				"tasks",
-				"schedules",
-				"expenses",
 				"reminders",
 				"personal",
 				"personas",
