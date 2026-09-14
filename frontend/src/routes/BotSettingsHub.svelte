@@ -17,10 +17,6 @@
 </script>
 
 <section class="tab-view">
-	<p class="description-text">
-		Bot の動作・連携・システムに関する設定の入口です。タスクや予定などの日常のデータ管理はサイドバーから直接開けます。
-	</p>
-
 	<div class="settings-hub-list">
 		{#each items as item (item.tab)}
 			<button
