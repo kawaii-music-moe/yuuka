@@ -127,12 +127,9 @@ pub async fn handle_message(deps: &FlowDeps, rt: &RuntimeBot, message: Message) 
     // 別チャンネル・別 Bot は並行のまま。ガードは本ターンの返信送信完了まで保持する。
     let gate_key = format!("{}:{}", rt.bot_id.as_str(), message.channel_id.get());
     let _turn = deps.turn_gate.acquire(&gate_key).await;
-    // Bot 種別でルーティング（現行 `isGuildAssistantBot(botId)`）。
+    // Bot 種別でルーティング。削除済み・未知の Bot は決して共有 Bot へフォールバックしない。
     let bot = match deps.directory.get_bot(&rt.bot_id).await {
         Some(b) => b,
-        // system_default はレコードが無くても常に秘書として応答する（現行はデフォルト Bot の
-        // レコードを引かず secretary 経路にハードコード）。custom はレコード必須（無ければ黙殺）。
-        None if rt.bot_id.as_str() == BotId::SYSTEM_DEFAULT => default_secretary_record(),
         None => {
             tracing::debug!(bot_id = %rt.bot_id, "黙殺: Bot レコード無し");
             return;
@@ -142,21 +139,6 @@ pub async fn handle_message(deps: &FlowDeps, rt: &RuntimeBot, message: Message) 
         assistant_flow(deps, rt, &bot, message).await;
     } else {
         secretary_flow(deps, rt, &bot, message).await;
-    }
-}
-
-/// system_default にレコードが無い場合の既定秘書レコード。owner_id は秘書経路（is_custom=false）で
-/// 参照されないため空。name/persona も秘書フローでは未使用。
-fn default_secretary_record() -> BotRecord {
-    BotRecord {
-        id: BotId::system_default(),
-        owner_id: UserId::new(""),
-        name: "早瀬ユウカ".to_owned(),
-        suspended: false,
-        stopped: false,
-        recommended_persona_id: None,
-        is_guild_assistant: false,
-        has_gemini_key: true,
     }
 }
 

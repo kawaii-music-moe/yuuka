@@ -12,7 +12,7 @@ use yuuka_types::SessionUser;
 
 use crate::state::Db;
 
-/// 認証ユーザーが指定 bot にアクセスできるか（`system_default` は常に可）。
+/// 認証ユーザーが指定 bot にアクセスできるか。
 ///
 /// 既存 Node `hasBotAccess`（botRepo.ts）と同一クエリ: 自分がオーナー、または
 /// `bot_shares` に `status='active'` の共有がある場合に可。
@@ -20,9 +20,6 @@ use crate::state::Db;
 /// # Errors
 /// クエリ失敗時 [`DbError`]。
 pub async fn has_bot_access(db: &Db, user_id: &str, bot_id: &str) -> Result<bool, DbError> {
-    if bot_id == "system_default" {
-        return Ok(true);
-    }
     let uid = user_id.to_owned();
     let bid = bot_id.to_owned();
     db.read

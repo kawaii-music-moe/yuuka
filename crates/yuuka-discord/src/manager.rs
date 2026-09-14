@@ -5,8 +5,7 @@
 //! [`TenantRunner`]（supervisor が `run` を監督する単位）として返す。あわせて [`DiscordMessenger`]
 //! （[`Notifier`] 実装＋DM 送信）を作り、FlowDelivery / services から共有配信基盤として使わせる。
 //!
-//! 起動対象は現行 `startBot` と同じ: system_default（トークンがあれば）＋ 各 custom（`stopped`/
-//! `suspended` でなくトークンがあるもの）。
+//! 起動対象は、停止・停止処分中でなく Discord トークンを持つ**明示作成済み Bot**だけである。
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -26,7 +25,7 @@ use crate::ports::{
     ActionRow, BotDirectory, Button, ButtonStyle, DeliverTarget, MembershipService, Notifier,
     RateLimiter, TurnProcessor, TurnReply,
 };
-use crate::reply::{send_channel_reply, to_twilight_components};
+use crate::reply::send_channel_reply;
 use crate::tenant::{run_tenant, TenantConfig, TenantStatus};
 use crate::turn_gate::TurnGate;
 
@@ -72,17 +71,9 @@ impl DiscordManager {
     pub async fn prepare(&self) -> Prepared {
         let mut eligible: Vec<(BotId, SecretString)> = Vec::new();
 
-        // system_default（トークンがあれば）。
-        let sysid = BotId::system_default();
-        if let Some(token) = self.ports.directory.decrypt_token(&sysid).await {
-            eligible.push((sysid.clone(), token));
-        } else {
-            tracing::info!("system_default のトークン未登録（初期セットアップ未完了）");
-        }
-
-        // 各 custom（stopped/suspended でなくトークンがあるもの）。
+        // 個別 Bot（stopped/suspended でなくトークンがあるもの）のみ起動する。
         for bot in self.ports.directory.list_all_bots().await {
-            if bot.id.as_str() == BotId::SYSTEM_DEFAULT || bot.stopped || bot.suspended {
+            if bot.stopped || bot.suspended {
                 continue;
             }
             if let Some(token) = self.ports.directory.decrypt_token(&bot.id).await {
@@ -96,10 +87,8 @@ impl DiscordManager {
             clients.insert(bot_id.clone(), Arc::new(new_client(token)));
         }
 
-        let default_client = clients.get(&sysid).cloned();
         let messenger = Arc::new(DiscordMessenger {
             clients: RwLock::new(clients.clone()),
-            default_client: RwLock::new(default_client),
             directory: self.ports.directory.clone(),
         });
 
@@ -217,48 +206,27 @@ impl TenantRunner {
 /// 差し替えられるように）。読みは短時間の read lock でクローンを取り出し、await を跨がない。
 pub struct DiscordMessenger {
     clients: RwLock<HashMap<BotId, Arc<Client>>>,
-    default_client: RwLock<Option<Arc<Client>>>,
     directory: Arc<dyn BotDirectory>,
 }
 
 impl DiscordMessenger {
     /// 動的起動/トークン更新時に REST クライアントを登録・差し替える（prepare_runner から呼ぶ）。
-    /// system_default はデフォルト（フォールバック）クライアントも更新する。
     pub fn register_client(&self, bot_id: &BotId, client: Arc<Client>) {
-        if bot_id.as_str() == BotId::SYSTEM_DEFAULT {
-            if let Ok(mut d) = self.default_client.write() {
-                *d = Some(client.clone());
-            }
-        }
         if let Ok(mut map) = self.clients.write() {
             map.insert(bot_id.clone(), client);
         }
     }
 
-    /// デフォルト（system_default）クライアントのクローンを取り出す。
-    fn default_client(&self) -> Option<Arc<Client>> {
-        self.default_client.read().ok().and_then(|d| d.clone())
-    }
-
-    /// bot_id 指定時のクライアント解決（現行 `resolveClientForUser` の botId 経路）。
-    /// 当該 Bot のクライアントがあればそれ、無ければデフォルト（system_default）へフォールバック。
+    /// bot_id 指定時のクライアント解決。対象の個別 Bot が起動していない場合は配信しない。
     ///
     /// **意図的 divergence**: Node は `readyAt`（gateway 接続済み）を要求するが、twilight の HTTP
     /// クライアントはトークンだけで REST 送信できる（gateway 非依存）ため readiness ゲートを設けない。
     /// gateway 未接続でも DM/チャンネル送信は成功する＝Node が拒否するケースでも配信できる（改善側）。
     fn resolve_client(&self, bot_id: &BotId) -> Option<Arc<Client>> {
-        if bot_id.as_str() != BotId::SYSTEM_DEFAULT {
-            if let Some(c) = self
-                .clients
-                .read()
-                .ok()
-                .and_then(|m| m.get(bot_id).cloned())
-            {
-                return Some(c);
-            }
-            // 当該 Bot がオフラインでもデフォルトへ届ける（現行フォールバック）。
-        }
-        self.default_client()
+        self.clients
+            .read()
+            .ok()
+            .and_then(|m| m.get(bot_id).cloned())
     }
 
     /// DM チャンネルを開いて channel id を得る。
@@ -332,22 +300,10 @@ impl DiscordMessenger {
         }
     }
 
-    /// オーナー宛の DM を、デフォルト（共有）クライアントからボタン付きで送る（DM 招待系の共通）。
-    async fn send_owner_dm(&self, user_id: &str, content: &str, components: &[ActionRow]) -> bool {
-        let Some(client) = self.default_client() else {
-            tracing::warn!("デフォルト Bot が未起動のため DM を送れません");
-            return false;
-        };
-        let client = &client;
-        let Ok(uid) = user_id.parse::<Id<UserMarker>>() else {
-            return false;
-        };
-        let Some(channel_id) = Self::open_dm(client, uid).await else {
-            return false;
-        };
-        let comps = to_twilight_components(components);
-        // 送信可否をそのまま返す（現行 DM sender の boolean 戻り・偽の成功を返さない）。
-        crate::reply::send_channel_text(client, channel_id, None, content, &comps).await
+    /// Bot を特定できない所有者通知は送らない。共有既定 Bot への横流しを禁止する。
+    async fn send_owner_dm(&self, _user_id: &str, _content: &str, _components: &[ActionRow]) -> bool {
+        tracing::warn!("送信元 Bot が未指定の所有者 DM は送信しません");
+        false
     }
 
     // ── DM 送信ヘルパ（web/services が呼ぶ・現行 sendShareInviteDM 等） ──
@@ -525,13 +481,12 @@ fn new_client(token: &SecretString) -> Client {
 mod tests {
     use super::*;
 
-    fn messenger_with(clients: &[&str], default: Option<&str>) -> DiscordMessenger {
+    fn messenger_with(clients: &[&str]) -> DiscordMessenger {
         let map: HashMap<BotId, Arc<Client>> = clients
             .iter()
             .map(|id| (BotId::new(*id), Arc::new(Client::new(String::new()))))
             .collect();
         DiscordMessenger {
-            default_client: RwLock::new(default.and_then(|d| map.get(&BotId::new(d)).cloned())),
             clients: RwLock::new(map),
             directory: Arc::new(NoopDirectory),
         }
@@ -539,19 +494,15 @@ mod tests {
 
     // twilight `Client::new` は ratelimiter で Tokio ランタイムを要求するため tokio::test で回す。
     #[tokio::test]
-    async fn resolve_client_prefers_custom_then_default() {
-        let m = messenger_with(&["system_default", "botX"], Some("system_default"));
-        // custom がある → custom（None にならない）。
+    async fn resolve_client_requires_the_requested_bot() {
+        let m = messenger_with(&["botX"]);
         assert!(m.resolve_client(&BotId::new("botX")).is_some());
-        // 未知の custom → デフォルトへフォールバック。
-        assert!(m.resolve_client(&BotId::new("unknown")).is_some());
-        // system_default → デフォルト。
-        assert!(m.resolve_client(&BotId::system_default()).is_some());
+        assert!(m.resolve_client(&BotId::new("unknown")).is_none());
     }
 
     #[tokio::test]
-    async fn resolve_client_none_when_no_default() {
-        let m = messenger_with(&["botX"], None);
+    async fn resolve_client_none_when_not_registered() {
+        let m = messenger_with(&["botX"]);
         // custom はある。
         assert!(m.resolve_client(&BotId::new("botX")).is_some());
         // 未知の custom かつデフォルト無し → None。
@@ -560,19 +511,13 @@ mod tests {
 
     #[tokio::test]
     async fn register_client_updates_map_and_default() {
-        let m = messenger_with(&[], None);
-        // 未登録 → None（デフォルトも無し）。
+        let m = messenger_with(&[]);
+        // 未登録 → None。
         assert!(m.resolve_client(&BotId::new("botX")).is_none());
-        // custom を動的登録 → 当該 Bot は解決可・デフォルトは未設定のまま。
+        // 個別 Bot を動的登録 → 当該 Bot だけ解決可。
         m.register_client(&BotId::new("botX"), Arc::new(Client::new(String::new())));
         assert!(m.resolve_client(&BotId::new("botX")).is_some());
         assert!(m.resolve_client(&BotId::new("unknown")).is_none());
-        // system_default を動的登録 → デフォルトも更新され、未知 Bot がフォールバック解決可能に。
-        m.register_client(
-            &BotId::system_default(),
-            Arc::new(Client::new(String::new())),
-        );
-        assert!(m.resolve_client(&BotId::new("unknown")).is_some());
     }
 
     // 最小ダミー directory（resolve_client のテストでは実際には呼ばれない）。
