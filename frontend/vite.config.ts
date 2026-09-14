@@ -44,7 +44,9 @@ const workboxWindowPath = resolveWorkboxWindow();
 
 export default defineConfig({
 	root: __dirname,
-	base: "/admin/",
+	// Rust の本番/開発サーバーは dist/public をサイト直下へ配信する。
+	// `/admin` は SPA 内の画面ルートであり、静的アセットのプレフィックスではない。
+	base: "/",
 	publicDir: "public",
 	build: {
 		outDir: "../dist/public",
