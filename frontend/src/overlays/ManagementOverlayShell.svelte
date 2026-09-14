@@ -1,10 +1,8 @@
 <script lang="ts">
 	// ─────────────────────────────────────────────────────────────────────────
-	// ManagementOverlayShell — 全体管理オーバーレイ共通シェル。
-	// アカウント管理 / Bot統合管理 / 管理者設定の3画面で重複していた
-	// .overlay > .management-overlay-card > header(タイトル + Bot選択に戻る) + body
-	// の骨格を集約する。styles.css の #id 別モバイル全画面規則
-	// （#integrated-overlay / #admin-overlay）が効くよう id は props で受ける。
+// ManagementOverlayShell — 全体管理ページ共通シェル。
+// アカウント管理 / Bot統合管理 / 管理者設定はルーターで切り替える通常ページであり、
+// モーダル用の .overlay / .management-overlay-card には載せない。
 	// ─────────────────────────────────────────────────────────────────────────
 	import type { Snippet } from "svelte";
 	import { AdminPageHeader, Icon } from "$lib/components/ui";
@@ -20,13 +18,29 @@
 	let { id, icon, title, children }: Props = $props();
 </script>
 
-<div class="overlay active" {id}>
-	<div class="management-overlay-card">
-		<AdminPageHeader>
-			<h1><Icon name={icon} size="1.6rem" /> {title}</h1>
-		</AdminPageHeader>
-		<div class="management-overlay-body">
-			{@render children()}
-		</div>
-	</div>
+
+<div class="management-page" {id}>
+	<AdminPageHeader class="management-page-header">
+		<h1><Icon name={icon} size="1.6rem" /> {title}</h1>
+	</AdminPageHeader>
+	<main class="management-page-body">
+		{@render children()}
+	</main>
 </div>
+
+<style>
+	.management-page {
+		width: 100%;
+		min-height: 100vh;
+		min-height: 100dvh;
+		background: var(--bg-secondary);
+	}
+	.management-page-body {
+		width: min(1100px, 100%);
+		margin: 0 auto;
+		padding: 24px;
+	}
+	@media (max-width: 768px) {
+		.management-page-body { padding: 14px 12px; }
+	}
+</style>
