@@ -48,6 +48,10 @@
 	}
 
 	.admin-menu-trigger:hover { background: rgba(21, 94, 239, 0.14); }
+	/* PC では各画面の左サイドバーが常設されるため、重複するドロワー起動ボタンは出さない。 */
+	@media (min-width: 769px) {
+		.admin-menu-trigger { display: none; }
+	}
 	.admin-page-heading { min-width: 0; flex: 1; }
 	.admin-page-heading :global(h1),
 	.admin-page-heading :global(h2) {

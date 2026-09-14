@@ -15,12 +15,12 @@
 	import { ApiError } from "$lib/api/client";
 	import { pushToast } from "$lib/stores/toast";
 	import { AdminPageHeader, confirmDialog, Modal, Icon } from "$lib/components/ui";
-	import { selectBot } from "$lib/stores/activeBot";
+	import { activeBot, selectBot } from "$lib/stores/activeBot";
+	import { get } from "svelte/store";
 	import { currentUser, isAdmin } from "$lib/stores/session";
 	import { theme, toggleTheme } from "$lib/stores/theme";
 	import { authApi } from "$lib/api/services";
 	import { navigateTo } from "$lib/router";
-	import { openClientForBot } from "$lib/clientApp";
 	import type { BotView, PresetOption } from "$lib/api/types";
 
 	let bots = $state<BotView[]>([]);
@@ -42,15 +42,13 @@
 		pushToast(e instanceof ApiError ? e.message : "エラーが発生しました", "error");
 	}
 
-	function isDefaultBot(id: string): boolean {
-		return id.startsWith("bot_default_") || id === "system_default";
-	}
-
 	async function loadBots(): Promise<void> {
 		loading = true;
 		try {
 			const res = await botApi.list();
 			bots = res.bots ?? [];
+			const selected = get(activeBot);
+			if (selected && !bots.some((bot) => bot.id === selected.id)) selectBot(null);
 		} catch (e) {
 			reportError(e);
 			bots = [];
@@ -106,9 +104,9 @@
 			avatar: bot.discord_avatar_url || "",
 			preset: bot.preset || "secretary",
 		};
-		// 2階層化後の入口は一般情報（設定系はサイドバー「Bot設定」ハブ配下へ移動）。
+		// Client のルートではなく、この管理ポータル内の Bot 画面へ遷移する。
 		selectBot(selected);
-		openClientForBot(selected);
+		navigateTo("/bot/dashboard");
 	}
 
 	// ── Discord 同期（旧 syncBtn） ──
@@ -252,7 +250,7 @@
 				<button
 					type="button"
 					class="menu-item"
-					onclick={() => navigateTo("/admin")}
+					onclick={() => navigateTo("/admin/admin")}
 				>
 					<Icon name="admin_panel_settings" class="menu-icon-symbol" />
 					<span class="menu-text">管理者設定</span>
@@ -355,7 +353,6 @@
 					{@const st = statusOf(bot)}
 					<div
 						class="bot-item-card"
-						class:default-bot={isDefaultBot(bot.id)}
 						role="button"
 						tabindex="0"
 						onclick={() => choose(bot)}
@@ -398,7 +395,6 @@
 								>
 									<Icon name="sync" size={15} />
 								</button>
-								{#if !isDefaultBot(bot.id)}
 									<button
 										type="button"
 										class="btn-sync-discord"
@@ -421,7 +417,6 @@
 									>
 										<Icon name="delete" size={15} />
 									</button>
-								{/if}
 							</div>
 						</div>
 					</div>

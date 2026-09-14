@@ -491,7 +491,6 @@ export type GoogleOAuthUrlResponse = ApiResponse<{ url: string }>;
 export interface IntegratedBotView {
 	id: string;
 	name: string;
-	is_system_default: boolean;
 	preset: string;
 	suspended: boolean;
 	stopped: boolean;

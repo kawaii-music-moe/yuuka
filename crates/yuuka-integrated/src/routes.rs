@@ -40,25 +40,16 @@ pub(crate) async fn overview(
     let user_id = &user.0.discord_id;
     let db = &state.db;
 
-    // 対象 Bot = 共有秘書(system_default) + 所有 Bot。system_default はヘルス表示のみ。
-    // DB 未登録時はフォールバックの合成エントリを使う（MCP 付与 UI を常に表示するため）。
-    let system_default = repo::get_bot(db, "system_default")
-        .await?
-        .unwrap_or_else(|| repo::synthetic_system_default(user_id));
-    let owned: Vec<repo::BotRow> = repo::list_bots_owned_by(db, user_id)
+    // 統合管理の対象は実在する所有 Bot のみ。廃止済み system_default を
+    // 合成して表示・操作可能にするフォールバックは持たない。
+    let records: Vec<repo::BotRow> = repo::list_bots_owned_by(db, user_id)
         .await?
         .into_iter()
         .filter(|b| b.id != "system_default")
         .collect();
 
-    let mut records: Vec<(repo::BotRow, bool)> = Vec::new();
-    records.push((system_default, true));
-    for b in owned {
-        records.push((b, false));
-    }
-
     let mut bots = Vec::with_capacity(records.len());
-    for (bot, is_system_default) in records {
+    for bot in records {
         let caps = repo::parse_capabilities(bot.capabilities.as_deref());
         let status = rt.lifecycle.run_status(&bot.id);
         let granted_mcp_ids = repo::list_server_ids_for_bot(db, &bot.id, user_id).await?;
@@ -69,7 +60,6 @@ pub(crate) async fn overview(
         bots.push(json!({
             "id": bot.id,
             "name": bot.name,
-            "is_system_default": is_system_default,
             "preset": repo::preset_id_for(&caps),
             "suspended": bot.suspended,
             "stopped": bot.stopped,
@@ -230,9 +220,8 @@ pub(crate) async fn bots_clear_history(
     let db = &state.db;
     let bot_id = body_bot_id(&body);
     let bot = repo::get_bot(db, &bot_id).await?;
-    // 自分が会話できる Bot のみ（system_default は共有秘書）。
-    let accessible = bot.is_some()
-        && (bot_id == "system_default" || repo::has_bot_access(db, user_id, &bot_id).await?);
+    // 自分がアクセスできる実在 Bot のみ。
+    let accessible = bot.is_some() && repo::has_bot_access(db, user_id, &bot_id).await?;
     if !accessible {
         return Ok(forbidden("このBotへのアクセス権がありません。"));
     }

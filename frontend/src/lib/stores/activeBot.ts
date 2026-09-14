@@ -10,19 +10,36 @@ export type Bot = {
 
 const KEY = "currentBot";
 
+function clearStoredBot(): void {
+	localStorage.removeItem(KEY);
+	localStorage.removeItem("currentBotId");
+	localStorage.removeItem("currentBotName");
+	localStorage.removeItem("currentBotAvatar");
+	localStorage.removeItem("currentBotPreset");
+}
+
+function isRetiredBotId(id: string | undefined): boolean {
+	return !id || id === "system_default" || id.startsWith("bot_default_");
+}
+
 function load(): Bot {
 	if (typeof window === "undefined") return null;
 	const raw = localStorage.getItem(KEY);
 	if (raw) {
 		try {
-			return JSON.parse(raw) as Bot;
+			const bot = JSON.parse(raw) as Bot;
+			if (bot && isRetiredBotId(bot.id)) {
+				clearStoredBot();
+				return null;
+			}
+			return bot;
 		} catch {
 			/* fallthrough: 破損時は旧4キー移行を試す */
 		}
 	}
 	// one-time マイグレーション: 旧4キー → 新オブジェクト
 	const id = localStorage.getItem("currentBotId");
-	if (id) {
+	if (id && !isRetiredBotId(id)) {
 		const migrated: Bot = {
 			id,
 			name: localStorage.getItem("currentBotName") ?? "",
@@ -32,6 +49,7 @@ function load(): Bot {
 		localStorage.setItem(KEY, JSON.stringify(migrated)); // 書き戻し
 		return migrated;
 	}
+	if (id) clearStoredBot();
 	return null;
 }
 
@@ -47,7 +65,7 @@ activeBot.subscribe((b) => {
 		localStorage.setItem("currentBotAvatar", b.avatar);
 		localStorage.setItem("currentBotPreset", b.preset);
 	} else {
-		localStorage.removeItem(KEY);
+		clearStoredBot();
 	}
 });
 

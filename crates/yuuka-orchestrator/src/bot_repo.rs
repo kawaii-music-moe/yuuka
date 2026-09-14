@@ -263,7 +263,7 @@ pub async fn get_bot_detail(db: &Db, bot_id: &str) -> Result<Option<BotDetail>, 
         .await
 }
 
-/// ユーザーがアクセス可能な Bot の詳細一覧（owner + system_default + 共有 active・Node `listBotsForUser`）。
+/// ユーザーがアクセス可能な Bot の詳細一覧（owner + 共有 active）。
 ///
 /// # Errors
 /// 読み取り失敗時 [`DbError`]。
@@ -280,7 +280,7 @@ pub async fn list_bots_for_user(db: &Db, user_id: &str) -> Result<Vec<BotDetail>
                  FROM bots b \
                  LEFT JOIN bot_shares s ON s.bot_id = b.id AND s.shared_user_id = ?1 \
                     AND s.status = 'active' \
-                 WHERE b.user_id = ?1 OR b.id = 'system_default' OR s.id IS NOT NULL \
+                 WHERE (b.user_id = ?1 OR s.id IS NOT NULL) AND b.id != 'system_default' \
                  ORDER BY b.created_at ASC";
             let mut stmt = conn.prepare(sql).map_err(map_sqlite)?;
             let rows = stmt

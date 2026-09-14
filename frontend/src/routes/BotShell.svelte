@@ -148,8 +148,8 @@
 	const title = $derived(TAB_TITLES[tab] ?? "ダッシュボード");
 
 	// Bot ブランディング（旧 updateSidebarBotBranding）。
-	const botName = $derived($activeBot?.name ?? "システムデフォルト");
-	const botId = $derived($activeBot?.id ?? "system_default");
+	const botName = $derived($activeBot?.name ?? "Bot未選択");
+	const botId = $derived($activeBot?.id ?? "");
 	const botIdLabel = $derived(botId.startsWith("bot_") ? botId.slice(4) : botId);
 	const botAvatar = $derived($activeBot?.avatar ?? "");
 	const DEFAULT_AVATAR =

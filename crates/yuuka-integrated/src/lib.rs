@@ -216,7 +216,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn overview_lists_system_default_and_owned() {
+    async fn overview_lists_only_owned_real_bots() {
         let (db, path) = fresh_db();
         seed_user(&path, "owner");
         seed_user(&path, "admin");
@@ -239,18 +239,16 @@ mod tests {
         assert_eq!(j["success"], Value::Bool(true));
         let bots = j["bots"].as_array().unwrap();
         // system_default（health のみ・is_system_default:true）＋所有 b1。
-        assert_eq!(bots.len(), 2);
-        assert_eq!(bots[0]["id"], "system_default");
-        assert_eq!(bots[0]["is_system_default"], Value::Bool(true));
-        assert_eq!(bots[1]["id"], "b1");
-        assert_eq!(bots[1]["is_system_default"], Value::Bool(false));
+        assert_eq!(bots.len(), 1);
+        assert_eq!(bots[0]["id"], "b1");
+        assert!(bots[0].get("is_system_default").is_none());
         // Null シーム → running/connected は false。
-        assert_eq!(bots[1]["running"], Value::Bool(false));
-        assert_eq!(bots[1]["connected"], Value::Bool(false));
+        assert_eq!(bots[0]["running"], Value::Bool(false));
+        assert_eq!(bots[0]["connected"], Value::Bool(false));
         // b1 は has_token:true、preset は既定 capabilities（secretary）。
-        assert_eq!(bots[1]["has_token"], Value::Bool(true));
-        assert_eq!(bots[1]["preset"], "secretary");
-        assert_eq!(bots[1]["google_setting"], "primary");
+        assert_eq!(bots[0]["has_token"], Value::Bool(true));
+        assert_eq!(bots[0]["preset"], "secretary");
+        assert_eq!(bots[0]["google_setting"], "primary");
     }
 
     #[tokio::test]

@@ -2,7 +2,6 @@
 	import { authApi } from "$lib/api/services";
 	import { Icon } from "$lib/components/ui";
 	import { navigateTo } from "$lib/router";
-	import { openClientForBot } from "$lib/clientApp";
 	import { activeBot, selectBot } from "$lib/stores/activeBot";
 	import { closeAdminNavigation, adminNavigationOpen } from "$lib/stores/adminNavigation";
 	import { currentUser, isAdmin } from "$lib/stores/session";
@@ -16,13 +15,6 @@
 	function go(path: string): void {
 		closeAdminNavigation();
 		navigateTo(path);
-	}
-
-	function openClient(): void {
-		const bot = $activeBot;
-		if (!bot) return;
-		closeAdminNavigation();
-		openClientForBot(bot);
 	}
 
 	async function logout(): Promise<void> {
@@ -49,11 +41,10 @@
 				<button type="button" onclick={() => go(item.path)}><Icon name={item.icon} /><span>{item.label}</span></button>
 			{/each}
 			{#if $isAdmin}
-				<button type="button" onclick={() => go("/admin")}><Icon name="admin_panel_settings" /><span>管理者設定</span></button>
+				<button type="button" onclick={() => go("/admin/admin")}><Icon name="admin_panel_settings" /><span>管理者設定</span></button>
 			{/if}
 			{#if $activeBot}
 				<button type="button" onclick={() => go("/bot/dashboard")}><Icon name="space_dashboard" /><span>{currentBot}</span></button>
-				<button type="button" onclick={openClient}><Icon name="open_in_new" /><span>Clientを開く</span></button>
 			{/if}
 		</nav>
 		<div class="admin-drawer-footer">

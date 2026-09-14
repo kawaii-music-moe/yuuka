@@ -147,8 +147,7 @@
 		if (b.suspended) return { status: "stopped", label: "停止中(管理者)" };
 		if (b.connected) return { status: "running", label: "稼働中" };
 		if (b.running) return { status: "pending", label: "接続中…" };
-		if (!b.has_token && !b.is_system_default)
-			return { status: "unset", label: "トークン未設定" };
+		if (!b.has_token) return { status: "unset", label: "トークン未設定" };
 		return { status: "unset", label: "停止" };
 	}
 
@@ -316,7 +315,7 @@
 	}
 
 	// Bot 別 使用 Google アカウント割当（primary / none / account）。
-	const ownedBots = $derived(bots.filter((b) => !b.is_system_default));
+	const ownedBots = $derived(bots);
 	function assignValue(b: IntegratedBotView): string {
 		const gs = b.google_setting;
 		return gs === "primary" || gs === "none" ? String(gs) : `acct:${gs}`;
@@ -371,15 +370,10 @@
 				{@const chip = botChip(b)}
 				<div class="glass int-bot-row">
 					<div class="int-bot-info">
-						<Icon
-							name={b.is_system_default ? "shield_person" : "smart_toy"}
-							class="int-bot-icon"
-						/>
+						<Icon name="smart_toy" class="int-bot-icon" />
 						<div class="int-bot-meta">
 							<div class="int-bot-name">
 								{b.name}
-								{#if b.is_system_default}<span class="int-bot-sub">(共有秘書)</span
-									>{/if}
 							</div>
 							<div class="int-bot-detail">
 								{b.preset}・{b.discord_username || b.id}
@@ -388,8 +382,7 @@
 					</div>
 					<div class="int-bot-actions">
 						<StatusChip status={chip.status} label={chip.label} />
-						{#if !b.is_system_default}
-							{#if b.suspended || !b.has_token}
+						{#if b.suspended || !b.has_token}
 								<Button variant="secondary" small disabled
 									>{b.running ? "停止" : "起動"}</Button
 								>
@@ -402,7 +395,6 @@
 									>起動</Button
 								>
 							{/if}
-						{/if}
 						<div class="int-menu-wrap">
 							<button
 								type="button"
@@ -416,7 +408,6 @@
 							>
 							{#if openMenuId === b.id}
 								<div class="int-action-menu open" role="menu">
-									{#if !b.is_system_default}
 										<button
 											type="button"
 											class="int-menu-item"
@@ -426,7 +417,6 @@
 												botAction("restart", b.id);
 											}}>再起動</button
 										>
-									{/if}
 									<button
 										type="button"
 										class="int-menu-item int-menu-danger"
@@ -734,10 +724,6 @@
 	}
 	.int-bot-name {
 		font-weight: 600;
-	}
-	.int-bot-sub {
-		font-size: 0.7rem;
-		color: var(--color-zinc-muted, #a1a1aa);
 	}
 	.int-bot-detail {
 		font-size: 0.75rem;

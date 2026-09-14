@@ -7,7 +7,6 @@
 	//   - "login"     … ログイン（Discord ID + パスワード）
 	//   - "register"  … アカウント作成 → DM チャレンジ（確認コード）
 	//   - "setup"     … 初期セットアップ Step1（最初の管理者登録。needSetup 時のみ）
-	//   - "bot-setup" … 初期セットアップ Step2（system_default Bot トークン登録）
 	//
 	// setup モードは /api/setup/status の needSetup=true で自動表示（タブ非表示）。
 	// ─────────────────────────────────────────────────────────────────────────
@@ -15,10 +14,9 @@
 	import { authApi } from "$lib/api/services";
 	import { ApiError } from "$lib/api/client";
 	import { bootstrapSession } from "$lib/stores/session";
-	import { selectBot } from "$lib/stores/activeBot";
 	import { navigateTo } from "$lib/router";
 
-	type Mode = "login" | "register" | "setup" | "bot-setup";
+	type Mode = "login" | "register" | "setup";
 
 	let mode = $state<Mode>("login");
 	let errorMsg = $state("");
@@ -46,8 +44,6 @@
 	let setupPassword = $state("");
 	let setupGeminiKey = $state("");
 
-	// ── デフォルト Bot セットアップ ──
-	let botSetupToken = $state("");
 
 	function reportError(e: unknown): void {
 		errorMsg = e instanceof ApiError ? e.message : "サーバー接続に失敗しました。";
@@ -178,32 +174,15 @@
 				password: setupPassword,
 				geminiApiKey: setupGeminiKey.trim(),
 			});
-			// 管理者登録直後は自動でログイン済み → デフォルト Bot 設定 Step2 へ。
+			// 管理者登録直後は自動でログイン済み。Bot は一覧から個別に作成する。
 			await bootstrapSession();
 			needSetup = false;
-			mode = "bot-setup";
+			navigateTo("/");
 		} catch (e) {
 			reportError(e);
 		}
 	}
 
-	// ── 初期セットアップ Step2（旧 botSetupForm submit） ──
-	async function submitBotSetup(e: SubmitEvent): Promise<void> {
-		e.preventDefault();
-		errorMsg = "";
-		try {
-			await authApi.setDefaultBotToken({ token: botSetupToken.trim() });
-			selectBot({
-				id: "system_default",
-				name: "システムデフォルト",
-				avatar: "",
-				preset: "secretary",
-			});
-			navigateTo("/bot/dashboard");
-		} catch (e) {
-			reportError(e);
-		}
-	}
 </script>
 
 <div class="overlay active" id="login-overlay">
@@ -456,34 +435,6 @@
 						</div>
 						<button type="submit" class="btn btn-primary btn-block" style="margin-top: 20px;"
 							>管理者アカウントを登録する</button
-						>
-					</form>
-				</div>
-			{:else if mode === "bot-setup"}
-				<div class="login-tab-pane active">
-					<div
-						style="margin-bottom: 16px; border-bottom: 1px solid var(--border-divider); padding-bottom: 12px; text-align: center;"
-					>
-						<h2 style="font-size: 1.25rem; font-weight: 600;">デフォルトBotセットアップ</h2>
-						<p class="field-sub" style="margin-top: 4px;">
-							システム共通で動作するデフォルトBotのトークンを登録してください。
-						</p>
-					</div>
-					<form onsubmit={submitBotSetup}>
-						<div class="form-group">
-							<label for="bot-setup-token">デフォルト Bot トークン *</label>
-							<input
-								type="password"
-								id="bot-setup-token"
-								required
-								placeholder="Discord Bot Token を入力"
-								autocomplete="new-password"
-								bind:value={botSetupToken}
-							/>
-							<span class="field-sub">※Discord Developer Portalから取得したBotのトークン</span>
-						</div>
-						<button type="submit" class="btn btn-primary btn-block" style="margin-top: 20px;"
-							>デフォルトBotをセットアップする</button
 						>
 					</form>
 				</div>

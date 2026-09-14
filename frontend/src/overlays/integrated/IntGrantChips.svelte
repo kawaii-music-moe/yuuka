@@ -19,9 +19,7 @@
 	const granted = $derived(bots.filter((b) => grantedIds.has(b.id)));
 	const available = $derived(bots.filter((b) => !grantedIds.has(b.id)));
 
-	function botName(b: IntegratedBotView): string {
-		return b.is_system_default ? "既定の秘書（早瀬ユウカ）" : b.name;
-	}
+	function botName(b: IntegratedBotView): string { return b.name; }
 
 	function onSelect(e: Event) {
 		const sel = e.currentTarget as HTMLSelectElement;

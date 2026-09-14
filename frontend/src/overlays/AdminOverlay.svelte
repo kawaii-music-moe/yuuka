@@ -39,7 +39,6 @@
 	let personas = $state<PublicPersonaView[]>([]);
 
 	// フォーム state
-	let defaultBotToken = $state("");
 	let privacyUrl = $state("");
 	let termsUrl = $state("");
 	let presetSecretary = $state("");
@@ -278,19 +277,6 @@
 		}
 	}
 
-	// ── フォーム: デフォルトBotトークン / システム設定 / Bot属性設定 ──
-	async function submitDefaultBotToken(e: SubmitEvent) {
-		e.preventDefault();
-		const token = defaultBotToken.trim();
-		if (!token) return;
-		try {
-			await adminApi.setDefaultBotToken({ token });
-			defaultBotToken = "";
-			pushToast("システムデフォルト Bot のトークンを更新しました！", "success");
-		} catch (err) {
-			reportError(err);
-		}
-	}
 	async function submitSystemSettings(e: SubmitEvent) {
 		e.preventDefault();
 		try {
@@ -359,37 +345,6 @@
 			>
 		</div>
 	</div>
-
-	<!-- Default Bot -->
-	<details class="admin-section" name="admin-acc">
-		<summary class="admin-section-header">
-			<span class="admin-section-title"><Icon name="smart_toy" />システムデフォルト Bot</span>
-			<span class="hud-tag admin-tag-system">SYSTEM</span>
-		</summary>
-		<p class="description-text">
-			システム共通で動作するデフォルトBotのDiscordトークンを更新します。トークンは安全に暗号化されて保存されます。
-		</p>
-		<form class="admin-form-top" onsubmit={submitDefaultBotToken}>
-			<div class="form-group">
-				<label for="admin-default-bot-token">デフォルト Bot トークン *</label>
-				<div class="admin-inline-form">
-					<input
-						type="password"
-						id="admin-default-bot-token"
-						bind:value={defaultBotToken}
-						required
-						placeholder="新しい Discord Bot Token を入力"
-						autocomplete="new-password"
-						class="admin-grow"
-					/>
-					<Button variant="primary" type="submit">設定を更新</Button>
-				</div>
-				<span class="field-sub"
-					>※更新すると、デフォルトBotは自動的に新しいトークンで再起動します。</span
-				>
-			</div>
-		</form>
-	</details>
 
 	<!-- System Settings -->
 	<details class="admin-section" name="admin-acc">
