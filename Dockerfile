@@ -35,22 +35,13 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 
 # ---- stage: frontend（Vite → dist/public） -----------------------------------
 FROM node:24-bookworm AS frontend-builder
-# puppeteer の chromium ダウンロードを抑止（フロントビルドに不要）。
-ENV PUPPETEER_SKIP_DOWNLOAD=true
 WORKDIR /app
 # lockfile と同じ pnpm 9 系（pnpm 11 は overrides を読まず lockfile 不一致になる）。
 RUN corepack enable && corepack prepare pnpm@9.15.0 --activate
-# pnpm-workspace の allowBuilds に better-sqlite3 があり install 時にネイティブビルドが走るため、
-# ビルド段にのみツールチェーンを置く（最終イメージには載らない）。
-RUN apt-get update \
- && apt-get install -y --no-install-recommends python3 make g++ \
- && rm -rf /var/lib/apt/lists/*
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
     pnpm install --frozen-lockfile
-# フロントのみビルド（Node サーバ束 tsgo は不要）。outDir は frontend/vite.config.ts の
-# `../dist/public` に従い /app/dist/public へ出力される。frontend は ../src を import しない。
-COPY tsconfig.json ./
+# outDir は frontend/vite.config.ts の `../dist/public` に従い /app/dist/public へ出力される。
 COPY frontend ./frontend
 RUN pnpm exec vite build --config frontend/vite.config.ts
 

@@ -1,12 +1,9 @@
 # workspace ルート Cargo.toml。Phase 0（契約凍結）で新設。
 # 絶対制約1（anyhow等の握り潰し禁止）の機械強制。検証: docs/rust-rewrite/verification/rpt-clippy-cargodeny.md
 #
-# 逸脱#1（本タスク指示）: yuuka-synapse は Phase H で daemon をライブラリ吸収し、workspace
-# member（crates/yuuka-synapse）へ取り込み済み（deps=tokio 不要の serde/serde_json/rusqlite/base64
-# のみでクリーン・deny 影響なし）。yuuka-crawler は依然 members に入れない（fxhash unmaintained /
-# MPL-2.0 の未整理が残るため）。また既存/独立の nested Cargo.toml（旧 src/rust_synapse[非採用]・
-# src/rust_crawler・clients/desktop・.claude/worktrees 配下のコピー）は本 workspace に取り込まない
-# よう exclude する。
+# yuuka-synapse は Phase H で daemon をライブラリ吸収し、workspace member（crates/yuuka-synapse）へ
+# 取り込み済み。独立の nested Cargo.toml（clients/desktop・.claude/worktrees 配下のコピー）は本
+# workspace に取り込まないよう exclude する。
 
 [workspace]
 resolver = "2"
@@ -50,13 +47,6 @@ members = [
 exclude = [
     ".claude",
     "clients/desktop",
-    # crawler は依然 members に入れない（fxhash unmaintained RUSTSEC-2025-0057 / MPL-2.0 ×4 未許可 /
-    # license 欄欠落で unlicensed）。取り込みは license 欄追加 + deny.toml 調整とセットで行う。
-    "src/rust_crawler",
-    # 旧 synapse daemon（Phase H で crates/yuuka-synapse へライブラリ吸収済み）。旧ディレクトリは
-    # 独立 nested Cargo.toml を持つため、二重定義を避けるよう本 workspace からは exclude し続ける
-    # （新実装は crates/yuuka-synapse が正）。
-    "src/rust_synapse",
 ]
 
 [workspace.package]

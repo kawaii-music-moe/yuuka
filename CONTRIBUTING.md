@@ -4,13 +4,13 @@ Yuuka への貢献ありがとうございます。このドキュメントは�
 
 ## 開発環境
 
-- **Node.js** >= 20
-- **pnpm**（パッケージマネージャ）
-- **Rust / cargo**（`rust_crawler` / `rust_synapse` のビルドに必要。`pnpm build` 実行時のみ）
+- **Rust / cargo**（バックエンド本体。toolchain は `rust-toolchain.toml` で固定）
+- **Node.js** >= 20 + **pnpm 9**（管理画面 SPA `frontend/` のビルド・開発用）
 
 ```bash
-pnpm install        # 依存関係のインストール
-pnpm dev            # tsx watch で開発起動
+pnpm install        # フロントの依存関係をインストール
+cargo run --bin yuuka   # バックエンド起動
+pnpm dev            # フロント（Vite）。VITE_API_TARGET でバックエンドへ proxy
 ```
 
 設定（環境変数・config.yaml 等）の準備は [`docs/guide/setup.md`](docs/guide/setup.md) を参照してください。
@@ -39,15 +39,15 @@ git switch -c fix/something develop
 PR を出す前に、ローカルで以下が通ることを確認してください。
 
 ```bash
-pnpm check          # = pnpm typecheck && pnpm lint
+cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace
+pnpm check          # = pnpm typecheck:front && pnpm lint
 ```
 
-- `pnpm typecheck` … `tsgo --noEmit`（型エラー 0）
-- `pnpm lint` … `biome check src/`
-- `pnpm format` … `biome format --write src/`（整形のみ）
+- `pnpm typecheck:front` … `svelte-check`（型エラー 0）
+- `pnpm lint` … `biome check frontend/src scripts`
 - `pnpm lint:fix` … 自動修正可能な lint の一括適用
 
-> CI（`.github/workflows/ci.yml`）でも PR / push 時に typecheck・lint が実行されます。
+> CI（`.github/workflows/rust-ci.yml` / `ci.yml`）でも PR / push 時に同等のチェックが実行されます。
 
 ### コミットメッセージ
 
@@ -63,12 +63,10 @@ pnpm check          # = pnpm typecheck && pnpm lint
 ## ビルドとデプロイ
 
 ```bash
-pnpm build          # Rust バイナリ + tsgo（dist/ を生成）
-pnpm start          # node dist/index.js
+pnpm build          # Rust バイナリ（target/release/yuuka）+ SPA（dist/public）
 
 # Docker による本番 / 開発インスタンス運用（詳細は docs/guide/deployment.md）
-pnpm deploy         # prod を更新
-pnpm deploy:dev     # dev を更新
+pnpm run deploy     # prod を更新（dev の更新手順は deploy/README.md 参照）
 pnpm deploy:rollback
 ```
 

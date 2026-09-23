@@ -14,8 +14,8 @@ permissions:
   contents: read
 
 jobs:
-  typecheck:
-    name: Typecheck (tsgo)
+  frontend:
+    name: Frontend (svelte-check / vite build)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -24,18 +24,17 @@ jobs:
           version: 9
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           cache: pnpm
-      # better-sqlite3 等のネイティブビルドは typecheck/lint には不要。
-      # ビルドスクリプトを走らせず依存のみ取得する（pnpm 9 は既定でブロックするため --frozen-lockfile で十分）。
       - run: pnpm install --frozen-lockfile
-      - run: pnpm typecheck
+      - run: pnpm typecheck:front
+      - run: pnpm build:front
 
   lint:
     name: Lint (biome)
     runs-on: ubuntu-latest
-    # NOTE: lint は現状 red（#11）のため当面 non-blocking。
-    #       #11 で green 化したら下の continue-on-error を削除して必須化する。
+    # NOTE: lint は現状 red（#59）のため当面 non-blocking。
+    #       #59 で green 化したら下の continue-on-error を削除して必須化する。
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
@@ -44,7 +43,7 @@ jobs:
           version: 9
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm lint

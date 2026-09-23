@@ -13,8 +13,6 @@ docs/design
 **/*.db-shm
 **/*.db-journal
 **/*.db.bak-*
-src/rust_crawler/target
-src/rust_synapse/target
 clients/desktop/target
 deploy/*/data
 deploy/*/secret.key

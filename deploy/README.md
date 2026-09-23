@@ -29,12 +29,11 @@ deploy/
 ## 更新・デプロイ（推奨）
 
 コードを変更したら **`pnpm run deploy`** だけでOK。内部で「現行イメージ退避 → ビルド
-（rust crawler + tsgo）→ コンテナ再作成 → ヘルスチェック（HTTP/Botログイン/エラー件数）」を実行する。
+（Rust バイナリ + SPA）→ コンテナ再作成 → ヘルスチェック（HTTP/Botログイン/エラー件数）」を実行する。
 DB マイグレーションは起動時に自動適用される。
 
 ```bash
 pnpm run deploy            # 本番(prod)をビルドして反映（= deploy/instance.sh prod update）
-pnpm run deploy:dev        # 開発(dev)を反映
 pnpm run deploy:rollback   # 直前イメージ(yuuka:prev-prod)へ戻す
 pnpm run deploy:verify     # ヘルスチェックのみ
 pnpm run deploy:logs       # 本番ログ追従
@@ -70,82 +69,36 @@ deploy/instance.sh dev  up -d          # 開発インスタンス（ホスト :7
 2. `deploy/instance.sh <name> up -d` → 起動時に全暗号化データが新鍵で再暗号化される
 3. 完了後 `secret.key` を新鍵に置き換え、`secret.key.new` を削除して再起動
 
-## 移行期（Rust 直起動）の運用注意 — カットオーバー必読
+## 運用注意（Rust 直起動）
 
-本番イメージは Rust バイナリ単独（CMD `./yuuka`・スリム化で `dist/bin/` 配下ではなく `/app/yuuka`）。以下は
-Node/systemd 運用から Rust 直起動へ移す際、**データ喪失・二重 writer を避けるための必須事項**
-（詳細は `docs/rust-rewrite/remaining-work.md` P0-2/P0-4）。
+本番イメージは Rust バイナリ単独（CMD `./yuuka`）。旧 Node 実装・systemd 運用・nginx strangler・
+カットオーバースクリプトは撤去済み（最後に残っていたコミット: `bb97bae`）。
 
 ### DB は起動前に必ず存在させる（P0-4）
 Rust は**存在しない DB を作らない**（`open_conn` は `SQLITE_OPEN_CREATE` を付けず、無ければ即エラー
-で起動失敗）。まっさらなインスタンスを Rust で立ち上げる前に、`DATA_DIR/yuuka.db` を必ず用意する:
-- 既存インスタンスの移行: 旧 Node/systemd が作成済みの `data/yuuka.db` をそのまま `DATA_DIR` に置く。
-- 新規インスタンス: 一度旧 Node で起動して DB を生成させてから Rust に切替える（Rust の baseline は
-  既存 DB に対して冪等・`schema_version='17'` を刻印する。V17 凍結）。
+で起動失敗）。まっさらなインスタンスを立ち上げる前に `DATA_DIR/yuuka.db` を用意する必要がある。
+Node 撤去により「一度 Node で起動して DB を生成」する手順は使えないため、当面は `bb97bae` を
+別 worktree にチェックアウトして旧 Node で DB を生成する（Rust 側での新規 DB 作成は #55）。
 
-### cron を回すプロセスは厳密に 1 つ（P0-2・最重要リスク R-1）
+### cron を回すプロセスは厳密に 1 つ（P0-2）
 `Dockerfile` は `ENV YUUKA_RUST_CRON=1` を焼き込むため、**コンテナ内 Rust が cron の所有者**になる。
-同一 `data/` に対する writer は 1 つでなければならない（SQLite WAL 単一ライター）。したがって:
-- **Rust コンテナと旧 systemd（`yuuka` = Node・自前 cron 持ち）を同時稼働させない**。同時起動は
-  reminder/backup 等の書き込みが二重に走り即 `SQLITE_BUSY`（busy_timeout でも解決不能）。
-- 逆に「Rust は web 専任・cron は Node」で並走させる 経路 A（strangler）を採る場合は、Rust 側の
-  `YUUKA_RUST_CRON=0` を明示（`instance.env` で上書き）し、cron 所有を Node 一択にする。
-- カットオーバー後は cron 所有 = Rust。ロールバック時（下記）は Rust を落としてから systemd を起動する。
+同一 `data/` に対する writer は 1 つでなければならない（SQLite WAL 単一ライター）。同じ `DATA_DIR` を
+指すコンテナを複数同時に起動しないこと。
 
-## dev を Rust へ隔離カットオーバー（`cutover-dev-rust.sh`）— prod タグ共有に注意
+## dev インスタンス — prod タグ共有に注意
 
-> **⚠️ `deploy/instance.sh dev update` は dev では使わない。** `docker-compose.yml` は
-> 全インスタンス共有で `image: yuuka:latest` を使う（prod もこのタグ）。`dev update` は
-> `dc build` でこの **yuuka:latest を再ビルド**するため、prod の次回再作成時に dev/feature
-> ビルドへ差し替わる副作用がある。
+> **⚠️ `deploy/instance.sh dev update`（`pnpm run deploy:dev`）は dev では使わない。**
+> `docker-compose.yml` は全インスタンス共有で `image: yuuka:latest` を使う（prod もこのタグ）。
+> `dev update` はこの **yuuka:latest を再ビルド**するため、prod の次回再作成時に dev ビルドへ
+> 差し替わる（恒久対応は #56）。
 
-dev を Rust へ置き換える際は、prod と共有の `yuuka:latest` を一切触らない**隔離タグ方式**を使う:
+dev は隔離オーバーレイ `docker-compose.dev-rust.yml`（`image: yuuka:dev-rust`）を重ねて起動する:
 
 ```bash
-# 1. dev 専用イメージをビルド（yuuka:latest は不変）
 docker build -t yuuka:dev-rust -f Dockerfile .
-# 2. 安全カットオーバー（dev DB バックアップ → Node dev-hot 停止 → Rust dev 起動 → ヘルス確認 → 失敗時 自動ロールバック）
-deploy/cutover-dev-rust.sh
-# ロールバック（Rust dev → Node dev-hot 復帰）
-deploy/cutover-dev-rust.sh rollback
+export YUUKA_ENCRYPTION_SECRET="$(cat deploy/dev/secret.key)"
+docker compose -p yuuka-dev --env-file deploy/dev/instance.env \
+  -f docker-compose.yml -f docker-compose.dev-rust.yml up -d
 ```
 
-- 隔離オーバーレイ `docker-compose.dev-rust.yml`（`image: yuuka:dev-rust`）を base に重ねて起動する。
-- Node dev-hot（`tsx watch`・:7855・同一 `deploy/dev/data/yuuka.db`）を停止してから起動する（SQLite 単一ライター・P0-2）。
-- 既定は **Discord OFF**（`YUUKA_RUST_DISCORD` 未設定＝web/API/cron のみ Rust 化）。dev の Discord bot を
-  Rust へ移す場合は `deploy/dev/instance.env` に `YUUKA_RUST_DISCORD=1` を置き、`docker-compose.dev-rust.yml`
-  の `environment:` pass-through を有効化して再 up（dev-hot 停止後＝dev 専用トークンの単一 owner）。
-
-## prod を Rust へカットオーバー（`cutover-prod-rust.sh`）— タグ付け替え + 自動ロールバック
-
-prod は base `docker-compose.yml` を `image: yuuka:latest` で使うため、dev のような隔離タグ問題は
-生じない（**タグの付け替え**で Node ↔ Rust を切替える）。専用スクリプトがダウンタイムを最小化しつつ、
-失敗時は現行 Node イメージへ自動で戻す:
-
-```bash
-# 一発カットオーバー（Node 稼働のまま Rust を staging ビルド → 検証 → Node 停止 → DB backup
-#  → latest へ昇格 → Rust 起動 → ヘルス → 失敗時 yuuka:prev-prod へ自動ロールバック）
-deploy/cutover-prod-rust.sh
-deploy/cutover-prod-rust.sh --no-cache   # Rust をフル再ビルドしてから切替
-# 手動ロールバック（yuuka:prev-prod = 切替前の Node イメージへ戻す）
-deploy/cutover-prod-rust.sh rollback
-```
-
-- **ダウンタイム最小化**: 重い Rust クロスコンパイルは `yuuka:rust-staging` タグへ行い、その間 prod の
-  Node は無停止。停止するのは「Node stop → DB backup → タグ昇格 → Rust up」の数十秒のみ。
-- **一貫した DB backup**: Node を**クリーン停止**（WAL チェックポイント）してから `yuuka.db`(+wal/shm) を
-  退避するため、稼働中コピーの不整合を避ける。
-- **単一ライター遵守（P0-2）**: 同一 app サービスの recreate なので Node 停止後に Rust が起動＝二重 writer なし。
-  cron 所有は Rust（Dockerfile `YUUKA_RUST_CRON=1`）、Discord は `YUUKA_RUST_DISCORD=1`（`deploy/prod/instance.env`
-  に常設・base compose が pass-through）で Rust に移る。Node イメージはこの env を無視するのでロールバックしても安全。
-- **自動ロールバック**: ヘルス（`/` 200 + `/api/setup/status` JSON）が 60s 以内に緑にならなければ、退避した
-  `yuuka:prev-prod`（Node）を latest へ戻して再起動する。DB を戻す必要があれば `cp data/yuuka.db.bak-<ts> data/yuuka.db`。
-- **`instance.sh prod update` との違い**: 標準 update は DB backup も staging 隔離も自動ロールバックも持たない。
-  Node→Rust の初回移行は本スクリプトを使う（移行完了後の通常更新は `instance.sh prod update` でよい）。
-
-## 本番ロールバック（systemd へ戻す）
-コンテナと systemd は同じ `data/` を共有するため **同時起動は不可**（SQLite WAL 単一ライター・上記 cron 所有も参照）。
-```bash
-deploy/instance.sh prod down
-sudo systemctl start yuuka       # 旧 systemd 運用へ復帰
-```
+フロント開発はホストで `pnpm dev`（Vite）を起動し、`VITE_API_TARGET` で dev API（`HOST_PORT`）へ proxy する。

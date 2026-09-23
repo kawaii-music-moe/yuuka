@@ -6,13 +6,8 @@
 # はこの yuuka:latest を再ビルドしてしまい、prod の次回再作成時に dev/feature ビルドへ
 # 差し替わる副作用がある。それを避けるため、dev は **専用タグ yuuka:dev-rust** で起動する。
 #
-# 使い方（deploy/cutover-dev-rust.sh が内部で使用）:
-#   docker build -t yuuka:dev-rust -f Dockerfile .
-#   docker compose -p yuuka-dev --env-file deploy/dev/instance.env \
-#     -f docker-compose.yml -f docker-compose.dev-rust.yml up -d
-#
-# Discord を live 化する場合は instance.env に `YUUKA_RUST_DISCORD=1` を置き、
-# 下の environment pass-through のコメントアウトを外す（Node dev-hot 停止後・単一 owner）。
+# 使い方は deploy/README.md「dev インスタンス」を参照。
+# Discord を live 化する場合は instance.env に `YUUKA_RUST_DISCORD=1` を置く。
 # ==============================================================================
 
 services:

@@ -5,8 +5,7 @@ import { svelte } from "@sveltejs/vite-plugin-svelte";
 import { defineConfig } from "vite";
 import { VitePWA } from "vite-plugin-pwa";
 
-// dev-hot(compose)標準フロー = 7855 / ホスト直 tsx watch(dev:host) = 7854
-// prod の HOST_PORT は環境毎に異なる(dev=7855, prod=7701 等)ため、必ず env で切替可能に
+// API の proxy 先。HOST_PORT は環境毎に異なる(dev=7856, prod=7701 等)ため、必ず env で切替可能に
 const API = process.env.VITE_API_TARGET ?? "http://127.0.0.1:7855";
 
 // P1a: vite-plugin-pwa の virtual:pwa-register は `workbox-window` を import するが、
@@ -48,7 +47,7 @@ export default defineConfig({
 	publicDir: "public",
 	build: {
 		outDir: "../dist/public",
-		emptyOutDir: true, // dist/public 配下のみクリア（dist/ 直下の tsgo 出力は無事）
+		emptyOutDir: true, // dist/public 配下のみクリア
 		assetsDir: "assets", // ★固定: ハッシュ資産を assets/ 直下に集約（chunk 含む）
 		assetsInlineLimit: 0, // CSP script-src 'self' 準拠: inline module/data-URI を出さない
 	},
