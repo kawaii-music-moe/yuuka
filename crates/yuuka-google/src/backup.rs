@@ -368,6 +368,15 @@ impl GoogleBackupClient {
 /// # Errors
 /// スキーマ/データコピーの SQL 失敗時 [`rusqlite::Error`]（テーブル不在の skip は含まない）。
 fn export_user_data(src: &Connection, dest: &Connection, user_id: &str) -> rusqlite::Result<()> {
+    // 0) 外部キー制約を無効化する。`rusqlite` の `bundled` feature は
+    //    `-DSQLITE_DEFAULT_FOREIGN_KEYS=1` でビルドされるため、`dest`（新規接続）は既定で FK が
+    //    有効になる。本人分だけを抽出コピーする都合上 `users` → ユーザースコープ各テーブル →
+    //    `bots` の順で INSERT するが、この並びでは `bots(id)` 等を参照する行が親より先に入り
+    //    `FOREIGN KEY constraint failed` になる（#50・本番の毎時バックアップ失敗）。コピー先は
+    //    一貫したスナップショット（親行は最終的に必ず入る）であり、FK を切るのは検証を後回しに
+    //    するだけでデータそのものは欠落しない＝リストア可能なコピーのまま保たれる。
+    dest.execute_batch("PRAGMA foreign_keys = OFF;")?;
+
     // 1) スキーマ（table/index 定義）をコピー。個々の失敗は skip（Node の per-statement try/catch）。
     let schema: Vec<String> = {
         let mut stmt = src.prepare(
@@ -709,6 +718,56 @@ mod tests {
             )
             .unwrap();
         assert_eq!(has_fts, 0);
+    }
+
+    /// FK 付きスキーマ（issue #50 が報告した失敗クラスの最小再現）を持つソース DB を作る。
+    ///
+    /// `export_user_data` は `users` → ユーザースコープの各テーブル → `bots` の順でコピーするため、
+    /// `bots(id)` を参照する行は親（`bots`）より先に INSERT される。`bot_active_personas` は実際の
+    /// migrations（`crates/yuuka-db/migrations/V17__baseline.sql`）にある実テーブル名を借りるが、
+    /// ここでの `bot_id → bots(id)` FK は本番スキーマの厳密な複製ではなく、「`bots` より先にコピー
+    /// される表が `bots(id)` を参照する」という issue #50 の依存関係の形を再現するためのもの。
+    /// `rusqlite` の `bundled` feature は `-DSQLITE_DEFAULT_FOREIGN_KEYS=1` でビルドされるため、
+    /// 送り先 DB（新規接続）でも既定で外部キー制約が有効になり、この順序で INSERT すると
+    /// `FOREIGN KEY constraint failed` になる（本番で実際に発生した障害）。
+    fn source_db_with_foreign_keys() -> Connection {
+        let conn = Connection::open_in_memory().expect("mem db");
+        conn.execute_batch(
+            "CREATE TABLE users (discord_id TEXT PRIMARY KEY, username TEXT NOT NULL);\
+             CREATE TABLE bots (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, name TEXT NOT NULL,\
+                FOREIGN KEY (user_id) REFERENCES users(discord_id) ON DELETE CASCADE);\
+             CREATE TABLE bot_active_personas (user_id TEXT NOT NULL, bot_id TEXT NOT NULL,\
+                PRIMARY KEY (user_id, bot_id),\
+                FOREIGN KEY (user_id) REFERENCES users(discord_id) ON DELETE CASCADE,\
+                FOREIGN KEY (bot_id) REFERENCES bots(id) ON DELETE CASCADE);",
+        )
+        .expect("ddl");
+        conn.execute_batch(
+            "INSERT INTO users (discord_id, username) VALUES ('alice','A');\
+             INSERT INTO bots (id, user_id, name) VALUES ('b1','alice','MyBot');\
+             INSERT INTO bot_active_personas (user_id, bot_id) VALUES ('alice','b1');",
+        )
+        .expect("seed");
+        conn
+    }
+
+    #[test]
+    fn export_survives_foreign_keys_when_parent_copied_later() {
+        // #50: dest は新規接続のため FK 既定 ON（bundled の -DSQLITE_DEFAULT_FOREIGN_KEYS=1）。
+        // bots が最後にコピーされる現行の並びでも失敗せず、両テーブルの行が両方とも
+        // コピーされる（FK を切っても対象データが欠落しない）ことを検証する。
+        let src = source_db_with_foreign_keys();
+        let dest = Connection::open_in_memory().expect("dest");
+        export_user_data(&src, &dest, "alice").expect("export must survive FK-ordered copy");
+
+        let bots: i64 = dest
+            .query_row("SELECT COUNT(*) FROM bots", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(bots, 1);
+        let links: i64 = dest
+            .query_row("SELECT COUNT(*) FROM bot_active_personas", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(links, 1);
     }
 
     #[test]
