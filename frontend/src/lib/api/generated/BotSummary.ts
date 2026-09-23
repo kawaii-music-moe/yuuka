@@ -6,4 +6,12 @@
  * **機密トークン/APIキーの暗号文は含めない**（構造的フェイルクローズ）。
  * 露出してよい存在フラグ（`has_token` 等）のみで機密の有無を表す。
  */
-export type BotSummary = { id: string, user_id: string, name: string, has_token: boolean, has_gemini_key: boolean, running: boolean, connected: boolean, };
+export type BotSummary = {
+	id: string;
+	user_id: string;
+	name: string;
+	has_token: boolean;
+	has_gemini_key: boolean;
+	running: boolean;
+	connected: boolean;
+};

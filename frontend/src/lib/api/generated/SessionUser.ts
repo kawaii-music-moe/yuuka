@@ -8,4 +8,4 @@ import type { Role } from "./Role";
  * Redis セッション値のシリアライズ（§11.3・`{"discordId","username","role"}` camelCase）
  * と往復するため `Serialize`/`Deserialize` の両方を導出する。
  */
-export type SessionUser = { discordId: string, username: string, role: Role, };
+export type SessionUser = { discordId: string; username: string; role: Role };

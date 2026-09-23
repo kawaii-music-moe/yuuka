@@ -1,33 +1,34 @@
 <script lang="ts">
-	// 進捗更新モーダル（旧 app.js:2725 openProgressModal + task-progress-form submit）。
-	// 手動進捗（0-100, step 5）+ 任意メモ。サブタスクを持つ親では呼ばれない
-	//  （TaskCard 側で「進捗更新」ボタンを出さない）。
-	import { Modal, Button } from "$lib/components/ui";
-	import type { TodoWithSubtasks } from "$lib/api/types";
+// 進捗更新モーダル（旧 app.js:2725 openProgressModal + task-progress-form submit）。
+// 手動進捗（0-100, step 5）+ 任意メモ。サブタスクを持つ親では呼ばれない
+//  （TaskCard 側で「進捗更新」ボタンを出さない）。
 
-	interface Props {
-		open?: boolean;
-		task?: TodoWithSubtasks | null;
-		onsave: (payload: { id: number; progress: number; note: string }) => void;
-	}
+import type { TodoWithSubtasks } from "$lib/api/types";
+import { Button, Modal } from "$lib/components/ui";
 
-	let { open = $bindable(false), task = null, onsave }: Props = $props();
+interface Props {
+	open?: boolean;
+	task?: TodoWithSubtasks | null;
+	onsave: (payload: { id: number; progress: number; note: string }) => void;
+}
 
-	let progress = $state(0);
-	let note = $state("");
+let { open = $bindable(false), task = null, onsave }: Props = $props();
 
-	// 開くたびに task.progress で初期化（旧 range.value = task.progress）。
-	$effect(() => {
-		if (!open) return;
-		progress = task?.progress ?? 0;
-		note = "";
-	});
+let progress = $state(0);
+let note = $state("");
 
-	function submit(e: SubmitEvent) {
-		e.preventDefault();
-		if (task == null) return;
-		onsave({ id: task.id, progress: Number(progress), note: note.trim() });
-	}
+// 開くたびに task.progress で初期化（旧 range.value = task.progress）。
+$effect(() => {
+	if (!open) return;
+	progress = task?.progress ?? 0;
+	note = "";
+});
+
+function submit(e: SubmitEvent) {
+	e.preventDefault();
+	if (task == null) return;
+	onsave({ id: task.id, progress: Number(progress), note: note.trim() });
+}
 </script>
 
 <Modal bind:open title="進捗を更新">

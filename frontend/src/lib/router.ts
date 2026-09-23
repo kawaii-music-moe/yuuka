@@ -82,7 +82,12 @@ export const BOT_TABS: BotTab[] = [
 export const DEFAULT_BOT_TAB: BotTab = "config";
 
 /** §8 PUBLIC_PATHS: 認証を待たず描画できる公開ルート。 */
-export const PUBLIC_PATHS = ["/usage", "/terms", "/privacy", "/tasks/guide"] as const;
+export const PUBLIC_PATHS = [
+	"/usage",
+	"/terms",
+	"/privacy",
+	"/tasks/guide",
+] as const;
 
 /**
  * cleanPath 正規化（app.js:369-370 流用）。
@@ -117,7 +122,12 @@ export const page = writable<URL>(
 export function resolveRoute(input: URL | string): ResolvedRoute {
 	const url =
 		typeof input === "string"
-			? new URL(input, typeof window !== "undefined" ? window.location.origin : "http://localhost")
+			? new URL(
+					input,
+					typeof window !== "undefined"
+						? window.location.origin
+						: "http://localhost",
+				)
 			: input;
 	const cp = cleanPath(url.pathname);
 

@@ -9,10 +9,8 @@
 // - 型: types.ts の全エクスポート
 // - デバイス OAuth: pollToken / requestDeviceCode（エンベロープ外・§10.4）
 
-export { api, ApiError } from "./client";
-export type { Scope, RequestOpts, NoBodyOpts } from "./client";
-
+export type { NoBodyOpts, RequestOpts, Scope } from "./client";
+export { ApiError, api } from "./client";
+export { pollToken, requestDeviceCode } from "./device";
 export * from "./services";
 export * from "./types";
-
-export { pollToken, requestDeviceCode } from "./device";

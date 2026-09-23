@@ -1,175 +1,187 @@
 <script lang="ts">
-	// ─────────────────────────────────────────────────────────────────────────
-	// 配信設定タブ（旧 app.js fetchBriefingConfig / fetchReportConfigs +
-	//  index.html #tab-delivery を移植）。deliveryApi 使用（scope:'bot'）。
-	//   - 朝報（モーニングブリーフィング）: 有効/cron/配信先/天気地点/RSSフィード/キーワード
-	//   - 日報・週報: 有効/cron の定期配信 + テスト配信
-	// bot-scoped のため activeBot 切替に $effect で追従する。
-	// ─────────────────────────────────────────────────────────────────────────
-	import { deliveryApi } from "$lib/api/services";
-	import { ApiError } from "$lib/api/client";
-	import { activeBot } from "$lib/stores/activeBot";
-	import { pushToast } from "$lib/stores/toast";
-	import { Button, Icon, Checkbox } from "$lib/components/ui";
+// ─────────────────────────────────────────────────────────────────────────
+// 配信設定タブ（旧 app.js fetchBriefingConfig / fetchReportConfigs +
+//  index.html #tab-delivery を移植）。deliveryApi 使用（scope:'bot'）。
+//   - 朝報（モーニングブリーフィング）: 有効/cron/配信先/天気地点/RSSフィード/キーワード
+//   - 日報・週報: 有効/cron の定期配信 + テスト配信
+// bot-scoped のため activeBot 切替に $effect で追従する。
+// ─────────────────────────────────────────────────────────────────────────
 
-	// ── 朝報フォーム state ──
-	let bEnabled = $state(false);
-	let bCron = $state("");
-	let bTargetType = $state<"dm" | "channel">("dm");
-	let bTargetId = $state("");
-	let bLocation = $state("");
-	let bLat = $state("");
-	let bLng = $state("");
-	let bKeywords = $state("");
-	let feeds = $state<string[]>([]);
-	let feedInput = $state("");
-	let briefingSaving = $state(false);
-	let briefingTesting = $state(false);
+import { ApiError } from "$lib/api/client";
+import { deliveryApi } from "$lib/api/services";
+import { Button, Checkbox, Icon } from "$lib/components/ui";
+import { activeBot } from "$lib/stores/activeBot";
+import { pushToast } from "$lib/stores/toast";
 
-	// ── 日報/週報フォーム state ──
-	type ReportKind = "daily" | "weekly";
-	let reports = $state<Record<ReportKind, { enabled: boolean; cron: string }>>({
-		daily: { enabled: false, cron: "" },
-		weekly: { enabled: false, cron: "" },
-	});
-	let reportSaving = $state<Record<ReportKind, boolean>>({ daily: false, weekly: false });
-	let reportTesting = $state<Record<ReportKind, boolean>>({ daily: false, weekly: false });
+// ── 朝報フォーム state ──
+let bEnabled = $state(false);
+let bCron = $state("");
+let bTargetType = $state<"dm" | "channel">("dm");
+let bTargetId = $state("");
+let bLocation = $state("");
+let bLat = $state("");
+let bLng = $state("");
+let bKeywords = $state("");
+let feeds = $state<string[]>([]);
+let feedInput = $state("");
+let briefingSaving = $state(false);
+let briefingTesting = $state(false);
 
-	function reportError(e: unknown) {
-		pushToast(e instanceof ApiError ? e.message : "エラーが発生しました", "error");
+// ── 日報/週報フォーム state ──
+type ReportKind = "daily" | "weekly";
+let reports = $state<Record<ReportKind, { enabled: boolean; cron: string }>>({
+	daily: { enabled: false, cron: "" },
+	weekly: { enabled: false, cron: "" },
+});
+let reportSaving = $state<Record<ReportKind, boolean>>({
+	daily: false,
+	weekly: false,
+});
+let reportTesting = $state<Record<ReportKind, boolean>>({
+	daily: false,
+	weekly: false,
+});
+
+function reportError(e: unknown) {
+	pushToast(
+		e instanceof ApiError ? e.message : "エラーが発生しました",
+		"error",
+	);
+}
+
+async function loadBriefing() {
+	try {
+		const res = await deliveryApi.getBriefingConfig();
+		const c = res.config;
+		bEnabled = !!c?.enabled;
+		bCron = c?.schedule_cron ?? "";
+		bTargetType = c?.target_type === "channel" ? "channel" : "dm";
+		bTargetId = c?.target_id ?? "";
+		bLocation = c?.location_name ?? "";
+		bLat = c?.weather_lat != null ? String(c.weather_lat) : "";
+		bLng = c?.weather_lng != null ? String(c.weather_lng) : "";
+		bKeywords = Array.isArray(c?.news_keywords)
+			? c.news_keywords.join(", ")
+			: "";
+		feeds = Array.isArray(c?.news_feeds) ? c.news_feeds.slice() : [];
+	} catch (e) {
+		reportError(e);
 	}
+}
 
-	async function loadBriefing() {
-		try {
-			const res = await deliveryApi.getBriefingConfig();
-			const c = res.config;
-			bEnabled = !!c?.enabled;
-			bCron = c?.schedule_cron ?? "";
-			bTargetType = c?.target_type === "channel" ? "channel" : "dm";
-			bTargetId = c?.target_id ?? "";
-			bLocation = c?.location_name ?? "";
-			bLat = c?.weather_lat != null ? String(c.weather_lat) : "";
-			bLng = c?.weather_lng != null ? String(c.weather_lng) : "";
-			bKeywords = Array.isArray(c?.news_keywords) ? c.news_keywords.join(", ") : "";
-			feeds = Array.isArray(c?.news_feeds) ? c.news_feeds.slice() : [];
-		} catch (e) {
-			reportError(e);
-		}
-	}
-
-	async function loadReports() {
-		try {
-			const res = await deliveryApi.reportConfigs();
-			for (const c of res.configs ?? []) {
-				if (c.type === "daily" || c.type === "weekly") {
-					reports[c.type] = {
-						enabled: !!c.enabled,
-						cron: c.schedule_cron ?? "",
-					};
-				}
+async function loadReports() {
+	try {
+		const res = await deliveryApi.reportConfigs();
+		for (const c of res.configs ?? []) {
+			if (c.type === "daily" || c.type === "weekly") {
+				reports[c.type] = {
+					enabled: !!c.enabled,
+					cron: c.schedule_cron ?? "",
+				};
 			}
-		} catch (e) {
-			reportError(e);
 		}
+	} catch (e) {
+		reportError(e);
 	}
+}
 
-	function addFeed() {
-		const url = feedInput.trim();
-		if (!url) return;
-		if (feeds.includes(url)) {
-			pushToast("同じフィードが既に登録されています。", "warning");
-			return;
-		}
-		feeds = [...feeds, url];
-		feedInput = "";
+function addFeed() {
+	const url = feedInput.trim();
+	if (!url) return;
+	if (feeds.includes(url)) {
+		pushToast("同じフィードが既に登録されています。", "warning");
+		return;
 	}
+	feeds = [...feeds, url];
+	feedInput = "";
+}
 
-	function removeFeed(idx: number) {
-		feeds = feeds.filter((_, i) => i !== idx);
+function removeFeed(idx: number) {
+	feeds = feeds.filter((_, i) => i !== idx);
+}
+
+async function saveBriefing(e: SubmitEvent) {
+	e.preventDefault();
+	briefingSaving = true;
+	try {
+		const keywords = bKeywords
+			.split(",")
+			.map((k) => k.trim())
+			.filter((k) => k.length > 0);
+		const payload = {
+			enabled: bEnabled,
+			...(bCron.trim() ? { schedule_cron: bCron.trim() } : {}),
+			target_type: bTargetType,
+			target_id: bTargetId.trim(),
+			weather_lat: bLat === "" ? null : Number(bLat),
+			weather_lng: bLng === "" ? null : Number(bLng),
+			location_name: bLocation.trim(),
+			news_feeds: feeds,
+			news_keywords: keywords,
+		};
+		const res = await deliveryApi.saveBriefingConfig(payload);
+		pushToast(res.message ?? "保存しました。", "success");
+	} catch (e) {
+		reportError(e);
+	} finally {
+		briefingSaving = false;
 	}
+}
 
-	async function saveBriefing(e: SubmitEvent) {
-		e.preventDefault();
-		briefingSaving = true;
-		try {
-			const keywords = bKeywords
-				.split(",")
-				.map((k) => k.trim())
-				.filter((k) => k.length > 0);
-			const payload = {
-				enabled: bEnabled,
-				...(bCron.trim() ? { schedule_cron: bCron.trim() } : {}),
-				target_type: bTargetType,
-				target_id: bTargetId.trim(),
-				weather_lat: bLat === "" ? null : Number(bLat),
-				weather_lng: bLng === "" ? null : Number(bLng),
-				location_name: bLocation.trim(),
-				news_feeds: feeds,
-				news_keywords: keywords,
-			};
-			const res = await deliveryApi.saveBriefingConfig(payload);
-			pushToast(res.message ?? "保存しました。", "success");
-		} catch (e) {
-			reportError(e);
-		} finally {
-			briefingSaving = false;
-		}
+async function testBriefing() {
+	briefingTesting = true;
+	try {
+		const res = await deliveryApi.testBriefing();
+		pushToast(res.message ?? "テスト配信しました。", "success");
+	} catch (e) {
+		reportError(e);
+	} finally {
+		briefingTesting = false;
 	}
+}
 
-	async function testBriefing() {
-		briefingTesting = true;
-		try {
-			const res = await deliveryApi.testBriefing();
-			pushToast(res.message ?? "テスト配信しました。", "success");
-		} catch (e) {
-			reportError(e);
-		} finally {
-			briefingTesting = false;
-		}
+async function saveReport(kind: ReportKind, e: SubmitEvent) {
+	e.preventDefault();
+	reportSaving[kind] = true;
+	try {
+		const cron = reports[kind].cron.trim();
+		const payload: Record<string, unknown> = {
+			type: kind,
+			enabled: reports[kind].enabled,
+			...(cron ? { schedule_cron: cron } : {}),
+		};
+		const res = await deliveryApi.saveReportConfig(payload);
+		pushToast(res.message ?? "保存しました。", "success");
+	} catch (e) {
+		reportError(e);
+	} finally {
+		reportSaving[kind] = false;
 	}
+}
 
-	async function saveReport(kind: ReportKind, e: SubmitEvent) {
-		e.preventDefault();
-		reportSaving[kind] = true;
-		try {
-			const cron = reports[kind].cron.trim();
-			const payload: Record<string, unknown> = {
-				type: kind,
-				enabled: reports[kind].enabled,
-				...(cron ? { schedule_cron: cron } : {}),
-			};
-			const res = await deliveryApi.saveReportConfig(payload);
-			pushToast(res.message ?? "保存しました。", "success");
-		} catch (e) {
-			reportError(e);
-		} finally {
-			reportSaving[kind] = false;
-		}
+async function testReport(kind: ReportKind) {
+	reportTesting[kind] = true;
+	try {
+		const res = await deliveryApi.testReport({ type: kind });
+		pushToast(res.message ?? "テスト配信しました。", "success");
+	} catch (e) {
+		reportError(e);
+	} finally {
+		reportTesting[kind] = false;
 	}
+}
 
-	async function testReport(kind: ReportKind) {
-		reportTesting[kind] = true;
-		try {
-			const res = await deliveryApi.testReport({ type: kind });
-			pushToast(res.message ?? "テスト配信しました。", "success");
-		} catch (e) {
-			reportError(e);
-		} finally {
-			reportTesting[kind] = false;
-		}
-	}
+const REPORT_META: { kind: ReportKind; label: string; cronHint: string }[] = [
+	{ kind: "daily", label: "日報", cronHint: "0 22 * * * (毎晩22時)" },
+	{ kind: "weekly", label: "週報", cronHint: "0 21 * * 0 (毎週日曜21時)" },
+];
 
-	const REPORT_META: { kind: ReportKind; label: string; cronHint: string }[] = [
-		{ kind: "daily", label: "日報", cronHint: "0 22 * * * (毎晩22時)" },
-		{ kind: "weekly", label: "週報", cronHint: "0 21 * * 0 (毎週日曜21時)" },
-	];
-
-	// activeBot 切替に追従して両設定を再取得
-	$effect(() => {
-		void $activeBot?.id;
-		loadBriefing();
-		loadReports();
-	});
+// activeBot 切替に追従して両設定を再取得
+$effect(() => {
+	void $activeBot?.id;
+	loadBriefing();
+	loadReports();
+});
 </script>
 
 <section class="tab-view">

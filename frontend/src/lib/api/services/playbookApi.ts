@@ -3,10 +3,10 @@
 // scope:'bot'（client が botId を自動注入）。
 import { api } from "../client";
 import type {
-	PlaybooksResponse,
-	PlaybookSchedulesResponse,
-	PlaybookRunsResponse,
 	ApiResponse,
+	PlaybookRunsResponse,
+	PlaybookSchedulesResponse,
+	PlaybooksResponse,
 } from "../types";
 
 const BOT = { scope: "bot" } as const;
@@ -32,7 +32,8 @@ export const playbookApi = {
 
 	// ── スケジュール（定期実行） ──
 	/** GET /api/playbooks/schedules */
-	schedules: () => api.get<PlaybookSchedulesResponse>("/api/playbooks/schedules", BOT),
+	schedules: () =>
+		api.get<PlaybookSchedulesResponse>("/api/playbooks/schedules", BOT),
 	/** POST /api/playbooks/schedules/save（playbookName + cronExpression） */
 	saveSchedule: (body: {
 		playbookName: string;

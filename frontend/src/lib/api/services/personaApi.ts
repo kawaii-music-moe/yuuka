@@ -8,10 +8,10 @@
 //   - marketplace（公開ペルソナの横断閲覧）は owner 非スコープ → scope:'user'。
 import { api } from "../client";
 import type {
-	PersonasResponse,
-	PersonaMarketplaceResponse,
-	PersonaMarketplaceDetailResponse,
 	ApiResponse,
+	PersonaMarketplaceDetailResponse,
+	PersonaMarketplaceResponse,
+	PersonasResponse,
 } from "../types";
 
 const USER = { scope: "user" } as const;
@@ -25,7 +25,8 @@ export const personaApi = {
 	save: (body: { id?: number; name: string; prompt: string }) =>
 		api.post<ApiResponse>("/api/personas/save", body, BOT),
 	/** POST /api/personas/delete（共有Botはオーナー集合から・bot-scoped） */
-	delete: (id: number) => api.post<ApiResponse>("/api/personas/delete", { id }, BOT),
+	delete: (id: number) =>
+		api.post<ApiResponse>("/api/personas/delete", { id }, BOT),
 
 	/** POST /api/personas/activate — 適用中ペルソナ切替（bot-scoped。null でデフォルトへ戻す） */
 	activate: (id: number | null) =>
@@ -45,5 +46,6 @@ export const personaApi = {
 			USER,
 		),
 	/** POST /api/personas/import — 公開ペルソナを独立コピー（共有Botはオーナー集合へ追加・bot-scoped） */
-	import: (id: number) => api.post<ApiResponse>("/api/personas/import", { id }, BOT),
+	import: (id: number) =>
+		api.post<ApiResponse>("/api/personas/import", { id }, BOT),
 };

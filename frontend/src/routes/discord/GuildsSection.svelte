@@ -1,57 +1,74 @@
 <script lang="ts">
-	// 応答許可ギルド（旧 renderAssistantGuilds + btn-add-assistant-guild）。
-	import { botAttributeApi } from "$lib/api/services";
-	import { ApiError } from "$lib/api/client";
-	import { pushToast } from "$lib/stores/toast";
-	import { confirmDialog, Button } from "$lib/components/ui";
-	import type { AssistantGuild } from "../config/configTypes";
+// 応答許可ギルド（旧 renderAssistantGuilds + btn-add-assistant-guild）。
 
-	interface Props {
-		botId: string;
-		guilds: AssistantGuild[];
-		/** 追加/削除の成功後に親へ再取得を要求 */
-		onchanged: () => void;
+import { ApiError } from "$lib/api/client";
+import { botAttributeApi } from "$lib/api/services";
+import { Button, confirmDialog } from "$lib/components/ui";
+import { pushToast } from "$lib/stores/toast";
+import type { AssistantGuild } from "../config/configTypes";
+
+interface Props {
+	botId: string;
+	guilds: AssistantGuild[];
+	/** 追加/削除の成功後に親へ再取得を要求 */
+	onchanged: () => void;
+}
+let { botId, guilds, onchanged }: Props = $props();
+
+let guildInput = $state("");
+
+async function add() {
+	const guildId = guildInput.trim();
+	if (!/^\d{5,25}$/.test(guildId)) {
+		pushToast(
+			"ギルドID（数字）を入力してください。Discordの開発者モードでサーバーを右クリック →「IDをコピー」で取得できます。",
+			"error",
+		);
+		return;
 	}
-	let { botId, guilds, onchanged }: Props = $props();
-
-	let guildInput = $state("");
-
-	async function add() {
-		const guildId = guildInput.trim();
-		if (!/^\d{5,25}$/.test(guildId)) {
-			pushToast(
-				"ギルドID（数字）を入力してください。Discordの開発者モードでサーバーを右クリック →「IDをコピー」で取得できます。",
-				"error",
-			);
-			return;
-		}
-		try {
-			const res = await botAttributeApi.setGuilds({ botId, guildId, action: "add" });
-			if (res.success) {
-				guildInput = "";
-				onchanged();
-			} else pushToast(res.message ?? "操作に失敗しました。", "error");
-		} catch (err) {
-			pushToast(err instanceof ApiError ? err.message : "通信エラーが発生しました。", "error");
-		}
-	}
-
-	async function remove(g: AssistantGuild) {
-		const label = g.guild_name ? `${g.guild_name}（${g.guild_id}）` : `ギルド ${g.guild_id}`;
-		const ok = await confirmDialog({
-			message: `${label} を応答許可リストから削除しますか？`,
-			danger: true,
-			confirmLabel: "削除",
+	try {
+		const res = await botAttributeApi.setGuilds({
+			botId,
+			guildId,
+			action: "add",
 		});
-		if (!ok) return;
-		try {
-			const res = await botAttributeApi.setGuilds({ botId, guildId: g.guild_id, action: "remove" });
-			if (res.success) onchanged();
-			else pushToast(res.message ?? "操作に失敗しました。", "error");
-		} catch (err) {
-			pushToast(err instanceof ApiError ? err.message : "通信エラーが発生しました。", "error");
-		}
+		if (res.success) {
+			guildInput = "";
+			onchanged();
+		} else pushToast(res.message ?? "操作に失敗しました。", "error");
+	} catch (err) {
+		pushToast(
+			err instanceof ApiError ? err.message : "通信エラーが発生しました。",
+			"error",
+		);
 	}
+}
+
+async function remove(g: AssistantGuild) {
+	const label = g.guild_name
+		? `${g.guild_name}（${g.guild_id}）`
+		: `ギルド ${g.guild_id}`;
+	const ok = await confirmDialog({
+		message: `${label} を応答許可リストから削除しますか？`,
+		danger: true,
+		confirmLabel: "削除",
+	});
+	if (!ok) return;
+	try {
+		const res = await botAttributeApi.setGuilds({
+			botId,
+			guildId: g.guild_id,
+			action: "remove",
+		});
+		if (res.success) onchanged();
+		else pushToast(res.message ?? "操作に失敗しました。", "error");
+	} catch (err) {
+		pushToast(
+			err instanceof ApiError ? err.message : "通信エラーが発生しました。",
+			"error",
+		);
+	}
+}
 </script>
 
 <details class="form-group collapsible-group" open>

@@ -1,86 +1,90 @@
 <script lang="ts">
-	// ─────────────────────────────────────────────────────────────────────────
-	// Discord連携 タブ（旧 app.js の fetchDiscordSettings / loadAssistantConfig の
-	//   Discord 部分 + index.html #tab-discord を移植）。
-	//
-	// 「汎用モード Discord 設定」カードのみ（owner かつ mcp_assistant プリセット時）。
-	//   応答許可ギルド / 利用メンバー / 利用可能ロール / 利用申請 / 共有ノートを子部品に分割。
-	//   assistant-config を1回 fetch し、各セクションへ props で配る。操作後は再取得（nonce）。
-	//
-	//   ※ Discord独自Botトークンカードは #tab-config（BotConfig）に配置されるため、
-	//     ここでは扱わない（旧 HTML の構成に忠実）。
-	// ─────────────────────────────────────────────────────────────────────────
-	import { activeBot } from "$lib/stores/activeBot";
-	import { botAttributeApi } from "$lib/api/services";
-	import { isDefaultBot } from "./config/configTypes";
-	import type {
-		AssistantConfigResp,
-		AssistantGuild,
-		AssistantChannel,
-		AssistantMember,
-		AssistantRole,
-	} from "./config/configTypes";
+// ─────────────────────────────────────────────────────────────────────────
+// Discord連携 タブ（旧 app.js の fetchDiscordSettings / loadAssistantConfig の
+//   Discord 部分 + index.html #tab-discord を移植）。
+//
+// 「汎用モード Discord 設定」カードのみ（owner かつ mcp_assistant プリセット時）。
+//   応答許可ギルド / 利用メンバー / 利用可能ロール / 利用申請 / 共有ノートを子部品に分割。
+//   assistant-config を1回 fetch し、各セクションへ props で配る。操作後は再取得（nonce）。
+//
+//   ※ Discord独自Botトークンカードは #tab-config（BotConfig）に配置されるため、
+//     ここでは扱わない（旧 HTML の構成に忠実）。
+// ─────────────────────────────────────────────────────────────────────────
 
-	import GuildsSection from "./discord/GuildsSection.svelte";
-	import ChannelsSection from "./discord/ChannelsSection.svelte";
-	import MutedChannelsSection from "./discord/MutedChannelsSection.svelte";
-	import MembersSection from "./discord/MembersSection.svelte";
-	import RolesSection from "./discord/RolesSection.svelte";
-	import RequestsSection from "./discord/RequestsSection.svelte";
-	import NoteSection from "./discord/NoteSection.svelte";
+import { botAttributeApi } from "$lib/api/services";
+import { activeBot } from "$lib/stores/activeBot";
+import type {
+	AssistantChannel,
+	AssistantConfigResp,
+	AssistantGuild,
+	AssistantMember,
+	AssistantRole,
+} from "./config/configTypes";
+import { isDefaultBot } from "./config/configTypes";
+import ChannelsSection from "./discord/ChannelsSection.svelte";
+import GuildsSection from "./discord/GuildsSection.svelte";
+import MembersSection from "./discord/MembersSection.svelte";
+import MutedChannelsSection from "./discord/MutedChannelsSection.svelte";
+import NoteSection from "./discord/NoteSection.svelte";
+import RequestsSection from "./discord/RequestsSection.svelte";
+import RolesSection from "./discord/RolesSection.svelte";
 
-	let guilds = $state<AssistantGuild[]>([]);
-	let channels = $state<AssistantChannel[]>([]);
-	let mutedChannels = $state<AssistantChannel[]>([]);
-	let members = $state<AssistantMember[]>([]);
-	let roles = $state<AssistantRole[]>([]);
-	let isAssistantOwner = $state(false);
-	// 操作後の再取得トリガ。RequestsSection のリロード同期にも渡す。
-	let reloadKey = $state(0);
+let guilds = $state<AssistantGuild[]>([]);
+let channels = $state<AssistantChannel[]>([]);
+let mutedChannels = $state<AssistantChannel[]>([]);
+let members = $state<AssistantMember[]>([]);
+let roles = $state<AssistantRole[]>([]);
+let isAssistantOwner = $state(false);
+// 操作後の再取得トリガ。RequestsSection のリロード同期にも渡す。
+let reloadKey = $state(0);
 
-	const botId = $derived($activeBot?.id ?? "");
-	const isAssistant = $derived(($activeBot?.preset ?? "secretary") === "mcp_assistant");
+const botId = $derived($activeBot?.id ?? "");
+const isAssistant = $derived(
+	($activeBot?.preset ?? "secretary") === "mcp_assistant",
+);
 
-	// activeBot / reloadKey 変更で assistant-config を再取得。
-	$effect(() => {
-		void $activeBot?.id;
-		void reloadKey;
-		void load();
-	});
+// activeBot / reloadKey 変更で assistant-config を再取得。
+$effect(() => {
+	void $activeBot?.id;
+	void reloadKey;
+	void load();
+});
 
-	async function load() {
-		const id = $activeBot?.id;
-		// 汎用モードでないか、デフォルト Bot は対象外。
-		if (!id || isDefaultBot(id) || !isAssistant) {
+async function load() {
+	const id = $activeBot?.id;
+	// 汎用モードでないか、デフォルト Bot は対象外。
+	if (!id || isDefaultBot(id) || !isAssistant) {
+		isAssistantOwner = false;
+		guilds = [];
+		channels = [];
+		mutedChannels = [];
+		members = [];
+		roles = [];
+		return;
+	}
+	try {
+		const res = (await botAttributeApi.assistantConfig(
+			id,
+		)) as AssistantConfigResp;
+		if (!res.success) {
+			// 403（非オーナー）等 → カード非表示。
 			isAssistantOwner = false;
-			guilds = [];
-			channels = [];
-			mutedChannels = [];
-			members = [];
-			roles = [];
 			return;
 		}
-		try {
-			const res = (await botAttributeApi.assistantConfig(id)) as AssistantConfigResp;
-			if (!res.success) {
-				// 403（非オーナー）等 → カード非表示。
-				isAssistantOwner = false;
-				return;
-			}
-			isAssistantOwner = true;
-			guilds = res.guilds ?? [];
-			channels = res.channels ?? [];
-			mutedChannels = res.muted_channels ?? [];
-			members = res.members ?? [];
-			roles = res.roles ?? [];
-		} catch {
-			isAssistantOwner = false;
-		}
+		isAssistantOwner = true;
+		guilds = res.guilds ?? [];
+		channels = res.channels ?? [];
+		mutedChannels = res.muted_channels ?? [];
+		members = res.members ?? [];
+		roles = res.roles ?? [];
+	} catch {
+		isAssistantOwner = false;
 	}
+}
 
-	function refresh() {
-		reloadKey++;
-	}
+function refresh() {
+	reloadKey++;
+}
 </script>
 
 <section class="tab-view discord-tab">

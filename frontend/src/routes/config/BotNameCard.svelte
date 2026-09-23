@@ -1,44 +1,45 @@
 <script lang="ts">
-	// Bot登録名カード（旧 bot-name-form / fetchBotAttributeConfig の name 部分）。
-	// owner/Admin かつ非デフォルト Bot のときだけ親が描画する。
-	import { botAttributeApi } from "$lib/api/services";
-	import { ApiError } from "$lib/api/client";
-	import { pushToast } from "$lib/stores/toast";
-	import { Button } from "$lib/components/ui";
-	import type { BotAttrView } from "./configTypes";
+// Bot登録名カード（旧 bot-name-form / fetchBotAttributeConfig の name 部分）。
+// owner/Admin かつ非デフォルト Bot のときだけ親が描画する。
 
-	interface Props {
-		botId: string;
-		bot: BotAttrView;
-		/** 保存成功後に親へ通知（Bot一覧・サイドバー再取得など） */
-		onsaved?: () => void;
+import { ApiError } from "$lib/api/client";
+import { botAttributeApi } from "$lib/api/services";
+import { Button } from "$lib/components/ui";
+import { pushToast } from "$lib/stores/toast";
+import type { BotAttrView } from "./configTypes";
+
+interface Props {
+	botId: string;
+	bot: BotAttrView;
+	/** 保存成功後に親へ通知（Bot一覧・サイドバー再取得など） */
+	onsaved?: () => void;
+}
+let { botId, bot, onsaved }: Props = $props();
+
+let name = $state("");
+// bot が変わるたびに現在の登録名で初期化。
+$effect(() => {
+	name = bot.name ?? "";
+});
+
+async function submit(e: SubmitEvent) {
+	e.preventDefault();
+	const trimmed = name.trim();
+	if (!trimmed) {
+		pushToast("登録名を入力してください。", "error");
+		return;
 	}
-	let { botId, bot, onsaved }: Props = $props();
-
-	let name = $state("");
-	// bot が変わるたびに現在の登録名で初期化。
-	$effect(() => {
-		name = bot.name ?? "";
-	});
-
-	async function submit(e: SubmitEvent) {
-		e.preventDefault();
-		const trimmed = name.trim();
-		if (!trimmed) {
-			pushToast("登録名を入力してください。", "error");
-			return;
-		}
-		try {
-			await botAttributeApi.updateBotProfile({ botId, name: trimmed });
-			pushToast("登録名を変更しました。", "success");
-			onsaved?.();
-		} catch (err) {
-			pushToast(
-				err instanceof ApiError ? err.message : "変更に失敗しました。",
-				"error",
-			);
-		}
+	try {
+		await botAttributeApi.updateBotProfile({ botId, name: trimmed });
+		pushToast("登録名を変更しました。", "success");
+		onsaved?.();
+	} catch (err) {
+		pushToast(
+			err instanceof ApiError ? err.message : "変更に失敗しました。",
+			"error",
+		);
 	}
+}
 </script>
 
 <details class="config-card card" open>

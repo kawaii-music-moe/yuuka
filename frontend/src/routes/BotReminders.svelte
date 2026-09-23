@@ -1,105 +1,105 @@
 <script lang="ts">
-	// ─────────────────────────────────────────────────────────────────────────
-	// リマインダー タブ（旧 app.js fetchRemindersList / reminder-form + index.html
-	// #tab-reminders を移植）。reminderApi 使用（bot-scoped）。
-	//
-	// 挙動の忠実移植:
-	//   - 登録フォーム（メッセージ / 通知日時 / cron / 送信先 / チャンネルID）。
-	//   - 一覧（全件表示チェックボックスで sent/cancelled も含める → ?all=1）。
-	//   - pending のみキャンセル可（ConfirmDialog で確認）。
-	//   - activeBot 変更でリロード。
-	// ─────────────────────────────────────────────────────────────────────────
-	import { activeBot } from "$lib/stores/activeBot";
-	import { reminderApi } from "$lib/api/services";
-	import { ApiError } from "$lib/api/client";
-	import { pushToast } from "$lib/stores/toast";
-	import { confirmDialog } from "$lib/components/ui";
-	import { EmptyState } from "$lib/components/ui";
-	import type { ReminderRecord } from "$lib/api/types";
+// ─────────────────────────────────────────────────────────────────────────
+// リマインダー タブ（旧 app.js fetchRemindersList / reminder-form + index.html
+// #tab-reminders を移植）。reminderApi 使用（bot-scoped）。
+//
+// 挙動の忠実移植:
+//   - 登録フォーム（メッセージ / 通知日時 / cron / 送信先 / チャンネルID）。
+//   - 一覧（全件表示チェックボックスで sent/cancelled も含める → ?all=1）。
+//   - pending のみキャンセル可（ConfirmDialog で確認）。
+//   - activeBot 変更でリロード。
+// ─────────────────────────────────────────────────────────────────────────
 
-	import ReminderCard from "./reminders/ReminderCard.svelte";
-	import { toTriggerAt } from "./reminders/reminderUtils";
+import { ApiError } from "$lib/api/client";
+import { reminderApi } from "$lib/api/services";
+import type { ReminderRecord } from "$lib/api/types";
+import { confirmDialog, EmptyState } from "$lib/components/ui";
+import { activeBot } from "$lib/stores/activeBot";
+import { pushToast } from "$lib/stores/toast";
 
-	let reminders = $state<ReminderRecord[]>([]);
-	let showAll = $state(false);
-	let loading = $state(false);
+import ReminderCard from "./reminders/ReminderCard.svelte";
+import { toTriggerAt } from "./reminders/reminderUtils";
 
-	// フォーム state
-	let message = $state("");
-	let triggerAt = $state("");
-	let repeatRule = $state("");
-	let targetType = $state<"" | "dm" | "channel">("");
-	let targetId = $state("");
-	let submitting = $state(false);
+let reminders = $state<ReminderRecord[]>([]);
+let showAll = $state(false);
+let loading = $state(false);
 
-	function reportError(e: unknown) {
-		const msg = e instanceof ApiError ? e.message : "エラーが発生しました";
-		pushToast(msg, "error");
+// フォーム state
+let message = $state("");
+let triggerAt = $state("");
+let repeatRule = $state("");
+let targetType = $state<"" | "dm" | "channel">("");
+let targetId = $state("");
+let submitting = $state(false);
+
+function reportError(e: unknown) {
+	const msg = e instanceof ApiError ? e.message : "エラーが発生しました";
+	pushToast(msg, "error");
+}
+
+async function loadReminders() {
+	loading = true;
+	try {
+		const res = await reminderApi.list({ all: showAll });
+		reminders = res.reminders ?? [];
+	} catch (e) {
+		reportError(e);
+		reminders = [];
+	} finally {
+		loading = false;
 	}
+}
 
-	async function loadReminders() {
-		loading = true;
-		try {
-			const res = await reminderApi.list({ all: showAll });
-			reminders = res.reminders ?? [];
-		} catch (e) {
-			reportError(e);
-			reminders = [];
-		} finally {
-			loading = false;
-		}
-	}
+// activeBot（bot-scoped）変更 or showAll 変更で再取得。
+$effect(() => {
+	void $activeBot?.id;
+	void showAll;
+	void loadReminders();
+});
 
-	// activeBot（bot-scoped）変更 or showAll 変更で再取得。
-	$effect(() => {
-		void $activeBot?.id;
-		void showAll;
-		void loadReminders();
-	});
-
-	async function onSubmit(e: SubmitEvent) {
-		e.preventDefault();
-		const msg = message.trim();
-		if (!msg || !triggerAt) return;
-		submitting = true;
-		try {
-			await reminderApi.add({
-				message: msg,
-				trigger_at: toTriggerAt(triggerAt),
-				...(repeatRule.trim() ? { repeat_rule: repeatRule.trim() } : {}),
-				...(targetType ? { target_type: targetType } : {}),
-				...(targetId.trim() ? { target_id: targetId.trim() } : {}),
-			});
-			// フォームリセット（旧 reminderForm.reset()）
-			message = "";
-			triggerAt = "";
-			repeatRule = "";
-			targetType = "";
-			targetId = "";
-			pushToast("リマインダーを登録しました。", "success");
-			await loadReminders();
-		} catch (err) {
-			reportError(err);
-		} finally {
-			submitting = false;
-		}
-	}
-
-	async function onCancel(id: number) {
-		const target = reminders.find((r) => r.id === id);
-		const ok = await confirmDialog({
-			message: `リマインダー「${target?.message ?? ""}」をキャンセルしますか？`,
-			danger: true,
-			confirmLabel: "キャンセルする",
+async function onSubmit(e: SubmitEvent) {
+	e.preventDefault();
+	const msg = message.trim();
+	if (!msg || !triggerAt) return;
+	submitting = true;
+	try {
+		await reminderApi.add({
+			message: msg,
+			trigger_at: toTriggerAt(triggerAt),
+			...(repeatRule.trim() ? { repeat_rule: repeatRule.trim() } : {}),
+			...(targetType ? { target_type: targetType } : {}),
+			...(targetId.trim() ? { target_id: targetId.trim() } : {}),
 		});
-		if (!ok) return;
-		try {
-			await reminderApi.cancel(id);
-			await loadReminders();
-		} catch (e) {
-			reportError(e);
-		}
+		// フォームリセット（旧 reminderForm.reset()）
+		message = "";
+		triggerAt = "";
+		repeatRule = "";
+		targetType = "";
+		targetId = "";
+		pushToast("リマインダーを登録しました。", "success");
+		await loadReminders();
+	} catch (err) {
+		reportError(err);
+	} finally {
+		submitting = false;
 	}
+}
+
+async function onCancel(id: number) {
+	const target = reminders.find((r) => r.id === id);
+	const ok = await confirmDialog({
+		message: `リマインダー「${target?.message ?? ""}」をキャンセルしますか？`,
+		danger: true,
+		confirmLabel: "キャンセルする",
+	});
+	if (!ok) return;
+	try {
+		await reminderApi.cancel(id);
+		await loadReminders();
+	} catch (e) {
+		reportError(e);
+	}
+}
 </script>
 
 <section class="tab-view">

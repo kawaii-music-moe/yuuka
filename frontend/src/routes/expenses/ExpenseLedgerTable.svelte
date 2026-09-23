@@ -1,13 +1,13 @@
 <script lang="ts">
-	// 直近の支出履歴テーブル（旧 app.js:3859 fetchExpensesList の Ledger 描画部）。
-	import type { ExpenseRecord } from "$lib/api/types";
-	import { expenseSource, formatExpenseDate, yen } from "./expenseUtils";
+// 直近の支出履歴テーブル（旧 app.js:3859 fetchExpensesList の Ledger 描画部）。
+import type { ExpenseRecord } from "$lib/api/types";
+import { expenseSource, formatExpenseDate, yen } from "./expenseUtils";
 
-	interface Props {
-		expenses: ExpenseRecord[];
-	}
+interface Props {
+	expenses: ExpenseRecord[];
+}
 
-	let { expenses }: Props = $props();
+let { expenses }: Props = $props();
 </script>
 
 <div class="table-responsive">

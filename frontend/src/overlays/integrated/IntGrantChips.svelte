@@ -1,35 +1,35 @@
 <script lang="ts">
-	// リソース許可 UI（旧 intGrantChips + wireIntGrantChips を {#each} + onclick/onchange 直結へ）。
-	// 許可済み Bot は「× で解除できるチップ」、未許可 Bot は <select> から選んで追加する。
-	// 手動 innerHTML/intEsc は不要（Svelte 自動エスケープ）。トグルは親の ontoggle に委譲。
-	import type { IntegratedBotView } from "$lib/api/types";
-	import Icon from "$lib/components/ui/Icon.svelte";
+// リソース許可 UI（旧 intGrantChips + wireIntGrantChips を {#each} + onclick/onchange 直結へ）。
+// 許可済み Bot は「× で解除できるチップ」、未許可 Bot は <select> から選んで追加する。
+// 手動 innerHTML/intEsc は不要（Svelte 自動エスケープ）。トグルは親の ontoggle に委譲。
+import type { IntegratedBotView } from "$lib/api/types";
+import Icon from "$lib/components/ui/Icon.svelte";
 
-	interface Props {
-		/** 全 Bot 一覧（overview.bots） */
-		bots: IntegratedBotView[];
-		/** 許可済み botId の集合 */
-		grantedIds: Set<string>;
-		/** (botId, granted) を受け取るトグル。granted=true で付与, false で解除 */
-		ontoggle: (botId: string, granted: boolean) => void;
-	}
+interface Props {
+	/** 全 Bot 一覧（overview.bots） */
+	bots: IntegratedBotView[];
+	/** 許可済み botId の集合 */
+	grantedIds: Set<string>;
+	/** (botId, granted) を受け取るトグル。granted=true で付与, false で解除 */
+	ontoggle: (botId: string, granted: boolean) => void;
+}
 
-	let { bots, grantedIds, ontoggle }: Props = $props();
+let { bots, grantedIds, ontoggle }: Props = $props();
 
-	const granted = $derived(bots.filter((b) => grantedIds.has(b.id)));
-	const available = $derived(bots.filter((b) => !grantedIds.has(b.id)));
+const granted = $derived(bots.filter((b) => grantedIds.has(b.id)));
+const available = $derived(bots.filter((b) => !grantedIds.has(b.id)));
 
-	function botName(b: IntegratedBotView): string {
-		return b.is_system_default ? "既定の秘書（早瀬ユウカ）" : b.name;
-	}
+function botName(b: IntegratedBotView): string {
+	return b.is_system_default ? "既定の秘書（早瀬ユウカ）" : b.name;
+}
 
-	function onSelect(e: Event) {
-		const sel = e.currentTarget as HTMLSelectElement;
-		const botId = sel.value;
-		if (!botId) return;
-		ontoggle(botId, true);
-		sel.value = "";
-	}
+function onSelect(e: Event) {
+	const sel = e.currentTarget as HTMLSelectElement;
+	const botId = sel.value;
+	if (!botId) return;
+	ontoggle(botId, true);
+	sel.value = "";
+}
 </script>
 
 <div class="int-grant-chips">

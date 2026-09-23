@@ -1,73 +1,74 @@
 <script lang="ts">
-	// Bot属性（プリセット）カード（旧 fetchBotAttributeConfig attr 部分 + btn-save-bot-attribute）。
-	import { botAttributeApi } from "$lib/api/services";
-	import { ApiError } from "$lib/api/client";
-	import { pushToast } from "$lib/stores/toast";
-	import { confirmDialog, Button } from "$lib/components/ui";
-	import { activeBot, selectBot } from "$lib/stores/activeBot";
-	import { get } from "svelte/store";
-	import type { BotAttrView, PresetItem, PresetsResp } from "./configTypes";
+// Bot属性（プリセット）カード（旧 fetchBotAttributeConfig attr 部分 + btn-save-bot-attribute）。
 
-	interface Props {
-		botId: string;
-		bot: BotAttrView;
-		/** 変更成功後に親の属性系カードを再取得 */
-		onchanged?: () => void;
+import { get } from "svelte/store";
+import { ApiError } from "$lib/api/client";
+import { botAttributeApi } from "$lib/api/services";
+import { Button, confirmDialog } from "$lib/components/ui";
+import { activeBot, selectBot } from "$lib/stores/activeBot";
+import { pushToast } from "$lib/stores/toast";
+import type { BotAttrView, PresetItem, PresetsResp } from "./configTypes";
+
+interface Props {
+	botId: string;
+	bot: BotAttrView;
+	/** 変更成功後に親の属性系カードを再取得 */
+	onchanged?: () => void;
+}
+let { botId, bot, onchanged }: Props = $props();
+
+let presets = $state<PresetItem[]>([]);
+let selected = $state("");
+const currentBadge = $derived(bot.preset_display_name ?? "");
+
+// bot 変更でプリセット一覧を取得し、現在値を選択。
+$effect(() => {
+	void botId;
+	void load(bot.preset ?? "secretary");
+});
+
+async function load(current: string) {
+	try {
+		// presets() の戻り型（types.ts PresetOption）は config タブが読む形状（id/displayName/
+		// capabilities）と異なるため unknown 経由でこのタブ用の PresetsResp に読み替える。
+		const res = (await botAttributeApi.presets()) as unknown as PresetsResp;
+		presets = res.presets ?? [];
+	} catch {
+		presets = [];
 	}
-	let { botId, bot, onchanged }: Props = $props();
+	selected = current;
+}
 
-	let presets = $state<PresetItem[]>([]);
-	let selected = $state("");
-	const currentBadge = $derived(bot.preset_display_name ?? "");
+function labelFor(p: PresetItem): string {
+	return `${p.displayName}（${p.capabilities.join(" + ")}）`;
+}
 
-	// bot 変更でプリセット一覧を取得し、現在値を選択。
-	$effect(() => {
-		void botId;
-		void load(bot.preset ?? "secretary");
+async function save() {
+	if (!selected) return;
+	const p = presets.find((x) => x.id === selected);
+	const presetLabel = p ? labelFor(p) : selected;
+	const ok = await confirmDialog({
+		message: `Botの属性を「${presetLabel}」へ変更しますか？\n機能セットが切り替わります（会話の文脈は属性ごとに分離されます）。`,
+		confirmLabel: "変更する",
 	});
-
-	async function load(current: string) {
-		try {
-			// presets() の戻り型（types.ts PresetOption）は config タブが読む形状（id/displayName/
-			// capabilities）と異なるため unknown 経由でこのタブ用の PresetsResp に読み替える。
-			const res = (await botAttributeApi.presets()) as unknown as PresetsResp;
-			presets = res.presets ?? [];
-		} catch {
-			presets = [];
-		}
-		selected = current;
-	}
-
-	function labelFor(p: PresetItem): string {
-		return `${p.displayName}（${p.capabilities.join(" + ")}）`;
-	}
-
-	async function save() {
-		if (!selected) return;
-		const p = presets.find((x) => x.id === selected);
-		const presetLabel = p ? labelFor(p) : selected;
-		const ok = await confirmDialog({
-			message: `Botの属性を「${presetLabel}」へ変更しますか？\n機能セットが切り替わります（会話の文脈は属性ごとに分離されます）。`,
-			confirmLabel: "変更する",
+	if (!ok) return;
+	try {
+		const res = await botAttributeApi.updateAttributes({
+			botId,
+			preset: selected,
 		});
-		if (!ok) return;
-		try {
-			const res = await botAttributeApi.updateAttributes({
-				botId,
-				preset: selected,
-			});
-			pushToast(res.message ?? "変更しました。", "success");
-			// activeBot の preset も更新（サイドバーのタブフィルタに反映）。
-			const cur = get(activeBot);
-			if (cur && cur.id === botId) selectBot({ ...cur, preset: selected });
-			onchanged?.();
-		} catch (err) {
-			pushToast(
-				err instanceof ApiError ? err.message : "変更に失敗しました。",
-				"error",
-			);
-		}
+		pushToast(res.message ?? "変更しました。", "success");
+		// activeBot の preset も更新（サイドバーのタブフィルタに反映）。
+		const cur = get(activeBot);
+		if (cur && cur.id === botId) selectBot({ ...cur, preset: selected });
+		onchanged?.();
+	} catch (err) {
+		pushToast(
+			err instanceof ApiError ? err.message : "変更に失敗しました。",
+			"error",
+		);
 	}
+}
 </script>
 
 <details class="config-card card">

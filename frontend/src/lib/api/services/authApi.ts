@@ -2,11 +2,11 @@
 // /api/login|register|logout|me|setup* は botId 除外（プレフィックス一致）。
 import { api } from "../client";
 import type {
-	MeResponse,
-	SetupStatusResponse,
-	LoginResponse,
-	RegisterResponse,
 	ApiResponse,
+	LoginResponse,
+	MeResponse,
+	RegisterResponse,
+	SetupStatusResponse,
 } from "../types";
 
 const USER = { scope: "user" } as const;
@@ -21,7 +21,10 @@ export const authApi = {
 
 	/** GET /api/setup/status — 共通エンベロープ外（success を持たない） */
 	setupStatus: () =>
-		api.get<SetupStatusResponse>("/api/setup/status", { ...USER, isBootstrap: true }),
+		api.get<SetupStatusResponse>("/api/setup/status", {
+			...USER,
+			isBootstrap: true,
+		}),
 
 	/** POST /api/setup — 初期セットアップ（最初のユーザー＝管理者登録） */
 	setup: (body: {

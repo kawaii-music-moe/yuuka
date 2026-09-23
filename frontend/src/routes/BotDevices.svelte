@@ -1,90 +1,90 @@
 <script lang="ts">
-	// ─────────────────────────────────────────────────────────────────────────
-	// 接続端末 タブ（旧 app.js buildDeviceCard / fetchDevices / fetchDesktopDownload
-	//   + index.html #tab-devices を移植）。
-	//
-	// デバイス系は user-scoped（deviceApi は scope:'user'、botId を付けない）。activeBot 非依存。
-	//   デスクトップ配布状況の取得と、認可済み端末の一覧・失効を扱う。
-	// ─────────────────────────────────────────────────────────────────────────
-	import { onMount } from "svelte";
-	import { deviceApi } from "$lib/api/services";
-	import { ApiError } from "$lib/api/client";
-	import { pushToast } from "$lib/stores/toast";
-	import { confirmDialog, EmptyState } from "$lib/components/ui";
-	import type { DesktopDevice } from "$lib/api/services/deviceApi";
-	import DeviceCard from "./devices/DeviceCard.svelte";
+// ─────────────────────────────────────────────────────────────────────────
+// 接続端末 タブ（旧 app.js buildDeviceCard / fetchDevices / fetchDesktopDownload
+//   + index.html #tab-devices を移植）。
+//
+// デバイス系は user-scoped（deviceApi は scope:'user'、botId を付けない）。activeBot 非依存。
+//   デスクトップ配布状況の取得と、認可済み端末の一覧・失効を扱う。
+// ─────────────────────────────────────────────────────────────────────────
+import { onMount } from "svelte";
+import { ApiError } from "$lib/api/client";
+import { deviceApi } from "$lib/api/services";
+import type { DesktopDevice } from "$lib/api/services/deviceApi";
+import { confirmDialog, EmptyState } from "$lib/components/ui";
+import { pushToast } from "$lib/stores/toast";
+import DeviceCard from "./devices/DeviceCard.svelte";
 
-	let devices = $state<DesktopDevice[]>([]);
-	let loaded = $state(false);
-	let loadError = $state(false);
+let devices = $state<DesktopDevice[]>([]);
+let loaded = $state(false);
+let loadError = $state(false);
 
-	// デスクトップ配布状況。
-	let downloadAvailable = $state(false);
-	let downloadMeta = $state("確認中…");
+// デスクトップ配布状況。
+let downloadAvailable = $state(false);
+let downloadMeta = $state("確認中…");
 
-	onMount(() => {
-		void loadDevices();
-		void loadDesktop();
+onMount(() => {
+	void loadDevices();
+	void loadDesktop();
+});
+
+async function loadDevices() {
+	loadError = false;
+	try {
+		const res = await deviceApi.list();
+		devices = res.success ? (res.devices ?? []) : [];
+	} catch {
+		devices = [];
+		loadError = true;
+	} finally {
+		loaded = true;
+	}
+}
+
+async function loadDesktop() {
+	downloadAvailable = false;
+	downloadMeta = "確認中…";
+	try {
+		const res = await deviceApi.desktopInfo();
+		if (res.success && res.available) {
+			const mb = ((res.size ?? 0) / (1024 * 1024)).toFixed(1);
+			const ver =
+				res.version && res.version !== "unknown" ? `v${res.version} ・ ` : "";
+			downloadMeta = `${ver}${mb} MB ・ Windows (x64)`;
+			downloadAvailable = true;
+		} else {
+			downloadMeta =
+				"現在配布できるビルドがありません（デプロイ後に利用可能になります）。";
+		}
+	} catch {
+		downloadMeta = "配布情報の取得に失敗しました。";
+	}
+}
+
+function download() {
+	if (!downloadAvailable) return;
+	window.location.href = "/api/desktop/download";
+}
+
+async function revoke(id: number) {
+	const ok = await confirmDialog({
+		message: "この端末のアクセスを失効しますか？",
+		danger: true,
+		confirmLabel: "失効",
 	});
-
-	async function loadDevices() {
-		loadError = false;
-		try {
-			const res = await deviceApi.list();
-			devices = res.success ? (res.devices ?? []) : [];
-		} catch {
-			devices = [];
-			loadError = true;
-		} finally {
-			loaded = true;
+	if (!ok) return;
+	try {
+		const res = await deviceApi.revoke(id);
+		if (!res.success) {
+			pushToast(res.message ?? "端末の失効に失敗しました。", "error");
 		}
+	} catch (err) {
+		pushToast(
+			err instanceof ApiError ? err.message : "端末の失効に失敗しました。",
+			"error",
+		);
 	}
-
-	async function loadDesktop() {
-		downloadAvailable = false;
-		downloadMeta = "確認中…";
-		try {
-			const res = await deviceApi.desktopInfo();
-			if (res.success && res.available) {
-				const mb = ((res.size ?? 0) / (1024 * 1024)).toFixed(1);
-				const ver =
-					res.version && res.version !== "unknown" ? `v${res.version} ・ ` : "";
-				downloadMeta = `${ver}${mb} MB ・ Windows (x64)`;
-				downloadAvailable = true;
-			} else {
-				downloadMeta =
-					"現在配布できるビルドがありません（デプロイ後に利用可能になります）。";
-			}
-		} catch {
-			downloadMeta = "配布情報の取得に失敗しました。";
-		}
-	}
-
-	function download() {
-		if (!downloadAvailable) return;
-		window.location.href = "/api/desktop/download";
-	}
-
-	async function revoke(id: number) {
-		const ok = await confirmDialog({
-			message: "この端末のアクセスを失効しますか？",
-			danger: true,
-			confirmLabel: "失効",
-		});
-		if (!ok) return;
-		try {
-			const res = await deviceApi.revoke(id);
-			if (!res.success) {
-				pushToast(res.message ?? "端末の失効に失敗しました。", "error");
-			}
-		} catch (err) {
-			pushToast(
-				err instanceof ApiError ? err.message : "端末の失効に失敗しました。",
-				"error",
-			);
-		}
-		await loadDevices();
-	}
+	await loadDevices();
+}
 </script>
 
 <section class="tab-view">

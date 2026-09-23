@@ -1,38 +1,46 @@
 <script lang="ts">
-	// 親タスク1件のカード（旧 app.js:2386 buildTaskCard）。
-	// チェックボックス／進捗バー／操作ボタン／折りたたみサブタスクを含む。
-	import { Icon, Checkbox, ProgressBar, MetaItem, TagChip } from "$lib/components/ui";
-	import type { TodoWithSubtasks } from "$lib/api/types";
-	import {
-		fmtTaskDate,
-		parseTaskTags,
-		priorityLabel,
-		displayPercent,
-		countDescendants,
-	} from "./taskUtils";
-	import SubtaskRow from "./SubtaskRow.svelte";
+// 親タスク1件のカード（旧 app.js:2386 buildTaskCard）。
+// チェックボックス／進捗バー／操作ボタン／折りたたみサブタスクを含む。
 
-	interface Props {
-		task: TodoWithSubtasks;
-		onToggle: (id: number, checked: boolean) => void;
-		onEdit: (task: TodoWithSubtasks) => void;
-		onAddSub: (parent: TodoWithSubtasks) => void;
-		onProgress: (task: TodoWithSubtasks) => void;
-		onDelete: (id: number) => void;
-	}
+import type { TodoWithSubtasks } from "$lib/api/types";
+import {
+	Checkbox,
+	Icon,
+	MetaItem,
+	ProgressBar,
+	TagChip,
+} from "$lib/components/ui";
+import SubtaskRow from "./SubtaskRow.svelte";
+import {
+	countDescendants,
+	displayPercent,
+	fmtTaskDate,
+	parseTaskTags,
+	priorityLabel,
+} from "./taskUtils";
 
-	let { task, onToggle, onEdit, onAddSub, onProgress, onDelete }: Props = $props();
+interface Props {
+	task: TodoWithSubtasks;
+	onToggle: (id: number, checked: boolean) => void;
+	onEdit: (task: TodoWithSubtasks) => void;
+	onAddSub: (parent: TodoWithSubtasks) => void;
+	onProgress: (task: TodoWithSubtasks) => void;
+	onDelete: (id: number) => void;
+}
 
-	const subtasks = $derived(task.subtasks || []);
-	const hasSubtasks = $derived(subtasks.length > 0);
-	const percent = $derived(displayPercent(task));
-	// 旧仕様: サブタスクを持ち進捗<100% のとき手動完了不可。
-	const checkboxDisabled = $derived(hasSubtasks && percent < 100);
-	const tags = $derived(parseTaskTags(task.tags));
-	const doneCount = $derived(subtasks.filter((s) => s.status === "done").length);
+let { task, onToggle, onEdit, onAddSub, onProgress, onDelete }: Props =
+	$props();
 
-	// 折りたたみ状態（旧 subtask-toggle。既定は展開＝旧 flex 相当）。
-	let expanded = $state(true);
+const subtasks = $derived(task.subtasks || []);
+const hasSubtasks = $derived(subtasks.length > 0);
+const percent = $derived(displayPercent(task));
+// 旧仕様: サブタスクを持ち進捗<100% のとき手動完了不可。
+const checkboxDisabled = $derived(hasSubtasks && percent < 100);
+const tags = $derived(parseTaskTags(task.tags));
+const doneCount = $derived(subtasks.filter((s) => s.status === "done").length);
+
+// 折りたたみ状態（旧 subtask-toggle。既定は展開＝旧 flex 相当）。
+let expanded = $state(true);
 </script>
 
 <div class="card-item glass hover-lift task-card-col" class:done={task.status === "done"}>

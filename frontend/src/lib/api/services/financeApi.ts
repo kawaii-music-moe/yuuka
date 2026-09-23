@@ -1,10 +1,10 @@
 // financeApi — bot-scoped（scope:'bot'）。src/server/routes/financeRoutes.ts に対応。
 import { api } from "../client";
 import type {
-	ExpensesResponse,
-	BudgetLimitsResponse,
-	PlannedPaymentsResponse,
 	ApiResponse,
+	BudgetLimitsResponse,
+	ExpensesResponse,
+	PlannedPaymentsResponse,
 } from "../types";
 
 const BOT = { scope: "bot" } as const;
@@ -45,13 +45,18 @@ export const financeApi = {
 
 	// ── 予算上限 ──
 	/** GET /api/expenses/budget-limits */
-	budgetLimits: () => api.get<BudgetLimitsResponse>("/api/expenses/budget-limits", BOT),
+	budgetLimits: () =>
+		api.get<BudgetLimitsResponse>("/api/expenses/budget-limits", BOT),
 	/** POST /api/expenses/budget-limits — サーバは limitAmount（camelCase）を読む。 */
 	saveBudgetLimit: (body: { category: string; limitAmount: number }) =>
 		api.post<ApiResponse>("/api/expenses/budget-limits", body, BOT),
 	/** POST /api/expenses/budget-limits/delete */
 	deleteBudgetLimit: (category: string) =>
-		api.post<ApiResponse>("/api/expenses/budget-limits/delete", { category }, BOT),
+		api.post<ApiResponse>(
+			"/api/expenses/budget-limits/delete",
+			{ category },
+			BOT,
+		),
 
 	// ── 予定支払（plannedPayment） ──
 	/** GET /api/expenses/plans（既定 pending のみ。includePaid=true で全件） */
@@ -69,7 +74,8 @@ export const financeApi = {
 		description?: string;
 	}) => api.post<ApiResponse>("/api/expenses/plans/add", body, BOT),
 	/** POST /api/expenses/plans/pay */
-	payPlan: (id: number) => api.post<ApiResponse>("/api/expenses/plans/pay", { id }, BOT),
+	payPlan: (id: number) =>
+		api.post<ApiResponse>("/api/expenses/plans/pay", { id }, BOT),
 	/** POST /api/expenses/plans/delete */
 	deletePlan: (id: number) =>
 		api.post<ApiResponse>("/api/expenses/plans/delete", { id }, BOT),

@@ -1,187 +1,187 @@
 <script lang="ts">
-	// ─────────────────────────────────────────────────────────────────────────
-	// Login — ログイン / アカウント作成 / 初期セットアップ の統合オーバーレイ。
-	// 旧 index.html #login-overlay + app.js の各 submit ハンドラ（1442-1631付近）を移植。
-	//
-	// 画面モード（ローカル state。旧: login-tabs + *-tab-content の .active 排他）:
-	//   - "login"     … ログイン（Discord ID + パスワード）
-	//   - "register"  … アカウント作成 → DM チャレンジ（確認コード）
-	//   - "setup"     … 初期セットアップ Step1（最初の管理者登録。needSetup 時のみ）
-	//   - "bot-setup" … 初期セットアップ Step2（system_default Bot トークン登録）
-	//
-	// setup モードは /api/setup/status の needSetup=true で自動表示（タブ非表示）。
-	// ─────────────────────────────────────────────────────────────────────────
-	import { onMount } from "svelte";
-	import { authApi } from "$lib/api/services";
-	import { ApiError } from "$lib/api/client";
-	import { bootstrapSession } from "$lib/stores/session";
-	import { selectBot } from "$lib/stores/activeBot";
-	import { navigateTo } from "$lib/router";
+// ─────────────────────────────────────────────────────────────────────────
+// Login — ログイン / アカウント作成 / 初期セットアップ の統合オーバーレイ。
+// 旧 index.html #login-overlay + app.js の各 submit ハンドラ（1442-1631付近）を移植。
+//
+// 画面モード（ローカル state。旧: login-tabs + *-tab-content の .active 排他）:
+//   - "login"     … ログイン（Discord ID + パスワード）
+//   - "register"  … アカウント作成 → DM チャレンジ（確認コード）
+//   - "setup"     … 初期セットアップ Step1（最初の管理者登録。needSetup 時のみ）
+//   - "bot-setup" … 初期セットアップ Step2（system_default Bot トークン登録）
+//
+// setup モードは /api/setup/status の needSetup=true で自動表示（タブ非表示）。
+// ─────────────────────────────────────────────────────────────────────────
+import { onMount } from "svelte";
+import { ApiError } from "$lib/api/client";
+import { authApi } from "$lib/api/services";
+import { navigateTo } from "$lib/router";
+import { selectBot } from "$lib/stores/activeBot";
+import { bootstrapSession } from "$lib/stores/session";
 
-	type Mode = "login" | "register" | "setup" | "bot-setup";
+type Mode = "login" | "register" | "setup" | "bot-setup";
 
-	let mode = $state<Mode>("login");
-	let errorMsg = $state("");
-	// needSetup=true のあいだは login/register タブを隠す（旧 checkSetupStatus）。
-	let needSetup = $state(false);
+let mode = $state<Mode>("login");
+let errorMsg = $state("");
+// needSetup=true のあいだは login/register タブを隠す（旧 checkSetupStatus）。
+let needSetup = $state(false);
 
-	// ── ログインフォーム ──
-	let loginDiscordId = $state("");
-	let loginPassword = $state("");
+// ── ログインフォーム ──
+let loginDiscordId = $state("");
+let loginPassword = $state("");
 
-	// ── 登録フォーム ──
-	let regDiscordId = $state("");
-	let regUsername = $state("");
-	let regPassword = $state("");
-	let regGeminiKey = $state("");
-	let regInviteCode = $state("");
-	// DM チャレンジ（確認コード）ステップ。
-	let awaitingVerify = $state(false);
-	let verifyCode = $state("");
-	let pendingRegisterDiscordId = $state("");
+// ── 登録フォーム ──
+let regDiscordId = $state("");
+let regUsername = $state("");
+let regPassword = $state("");
+let regGeminiKey = $state("");
+let regInviteCode = $state("");
+// DM チャレンジ（確認コード）ステップ。
+let awaitingVerify = $state(false);
+let verifyCode = $state("");
+let pendingRegisterDiscordId = $state("");
 
-	// ── 初期セットアップ（管理者登録） ──
-	let setupDiscordId = $state("");
-	let setupUsername = $state("");
-	let setupPassword = $state("");
-	let setupGeminiKey = $state("");
+// ── 初期セットアップ（管理者登録） ──
+let setupDiscordId = $state("");
+let setupUsername = $state("");
+let setupPassword = $state("");
+let setupGeminiKey = $state("");
 
-	// ── デフォルト Bot セットアップ ──
-	let botSetupToken = $state("");
+// ── デフォルト Bot セットアップ ──
+let botSetupToken = $state("");
 
-	function reportError(e: unknown): void {
-		errorMsg = e instanceof ApiError ? e.message : "サーバー接続に失敗しました。";
-	}
+function reportError(e: unknown): void {
+	errorMsg = e instanceof ApiError ? e.message : "サーバー接続に失敗しました。";
+}
 
-	// 起動時に setup 要否をプローブ（旧 checkSetupStatus）。needSetup なら setup 表示。
-	onMount(async () => {
-		try {
-			const res = await authApi.setupStatus();
-			if (res.needSetup) {
-				needSetup = true;
-				mode = "setup";
-			}
-		} catch {
-			/* 取得失敗時はログイン画面のまま続行 */
+// 起動時に setup 要否をプローブ（旧 checkSetupStatus）。needSetup なら setup 表示。
+onMount(async () => {
+	try {
+		const res = await authApi.setupStatus();
+		if (res.needSetup) {
+			needSetup = true;
+			mode = "setup";
 		}
-	});
-
-	function switchMode(m: Mode): void {
-		mode = m;
-		errorMsg = "";
+	} catch {
+		/* 取得失敗時はログイン画面のまま続行 */
 	}
+});
 
-	// ── ログイン（旧 loginForm submit） ──
-	async function submitLogin(e: SubmitEvent): Promise<void> {
-		e.preventDefault();
-		errorMsg = "";
-		try {
-			await authApi.login({
-				discordId: loginDiscordId.trim(),
-				password: loginPassword,
-			});
-			// セッション再取得 → App 側が isAuthed を検知して Bot 選択へ遷移。
-			await bootstrapSession();
-			navigateTo("/");
-		} catch (e) {
-			reportError(e);
-		}
+function switchMode(m: Mode): void {
+	mode = m;
+	errorMsg = "";
+}
+
+// ── ログイン（旧 loginForm submit） ──
+async function submitLogin(e: SubmitEvent): Promise<void> {
+	e.preventDefault();
+	errorMsg = "";
+	try {
+		await authApi.login({
+			discordId: loginDiscordId.trim(),
+			password: loginPassword,
+		});
+		// セッション再取得 → App 側が isAuthed を検知して Bot 選択へ遷移。
+		await bootstrapSession();
+		navigateTo("/");
+	} catch (e) {
+		reportError(e);
 	}
+}
 
-	// ── アカウント作成（旧 registerForm submit → DM チャレンジ） ──
-	async function submitRegister(e: SubmitEvent): Promise<void> {
-		e.preventDefault();
-		errorMsg = "";
-		const discordId = regDiscordId.trim();
-		try {
-			const res = await authApi.register({
-				discordId,
-				username: regUsername.trim(),
-				password: regPassword,
-				inviteCode: regInviteCode.trim(),
-				geminiApiKey: regGeminiKey.trim(),
-			});
-			if (res.pending) {
-				// 確認コード入力ステップへ遷移。
-				pendingRegisterDiscordId = discordId;
-				awaitingVerify = true;
-				verifyCode = "";
-			} else {
-				// 稀: 即時作成された場合はログインへ誘導。
-				switchMode("login");
-				loginDiscordId = discordId;
-			}
-		} catch (e) {
-			reportError(e);
-		}
-	}
-
-	// ── 確認コード検証（旧 registerVerifyForm submit） ──
-	async function submitVerify(e: SubmitEvent): Promise<void> {
-		e.preventDefault();
-		errorMsg = "";
-		try {
-			await authApi.registerVerify({
-				discordId: pendingRegisterDiscordId,
-				code: verifyCode.trim(),
-			});
-			const did = pendingRegisterDiscordId;
-			resetRegister();
+// ── アカウント作成（旧 registerForm submit → DM チャレンジ） ──
+async function submitRegister(e: SubmitEvent): Promise<void> {
+	e.preventDefault();
+	errorMsg = "";
+	const discordId = regDiscordId.trim();
+	try {
+		const res = await authApi.register({
+			discordId,
+			username: regUsername.trim(),
+			password: regPassword,
+			inviteCode: regInviteCode.trim(),
+			geminiApiKey: regGeminiKey.trim(),
+		});
+		if (res.pending) {
+			// 確認コード入力ステップへ遷移。
+			pendingRegisterDiscordId = discordId;
+			awaitingVerify = true;
+			verifyCode = "";
+		} else {
+			// 稀: 即時作成された場合はログインへ誘導。
 			switchMode("login");
-			loginDiscordId = did;
-		} catch (e) {
-			reportError(e);
+			loginDiscordId = discordId;
 		}
+	} catch (e) {
+		reportError(e);
 	}
+}
 
-	function resetRegister(): void {
-		awaitingVerify = false;
-		pendingRegisterDiscordId = "";
-		verifyCode = "";
-		regDiscordId = "";
-		regUsername = "";
-		regPassword = "";
-		regGeminiKey = "";
-		regInviteCode = "";
+// ── 確認コード検証（旧 registerVerifyForm submit） ──
+async function submitVerify(e: SubmitEvent): Promise<void> {
+	e.preventDefault();
+	errorMsg = "";
+	try {
+		await authApi.registerVerify({
+			discordId: pendingRegisterDiscordId,
+			code: verifyCode.trim(),
+		});
+		const did = pendingRegisterDiscordId;
+		resetRegister();
+		switchMode("login");
+		loginDiscordId = did;
+	} catch (e) {
+		reportError(e);
 	}
+}
 
-	// ── 初期セットアップ Step1（旧 setupForm submit） ──
-	async function submitSetup(e: SubmitEvent): Promise<void> {
-		e.preventDefault();
-		errorMsg = "";
-		try {
-			await authApi.setup({
-				discordId: setupDiscordId.trim(),
-				username: setupUsername.trim(),
-				password: setupPassword,
-				geminiApiKey: setupGeminiKey.trim(),
-			});
-			// 管理者登録直後は自動でログイン済み → デフォルト Bot 設定 Step2 へ。
-			await bootstrapSession();
-			needSetup = false;
-			mode = "bot-setup";
-		} catch (e) {
-			reportError(e);
-		}
-	}
+function resetRegister(): void {
+	awaitingVerify = false;
+	pendingRegisterDiscordId = "";
+	verifyCode = "";
+	regDiscordId = "";
+	regUsername = "";
+	regPassword = "";
+	regGeminiKey = "";
+	regInviteCode = "";
+}
 
-	// ── 初期セットアップ Step2（旧 botSetupForm submit） ──
-	async function submitBotSetup(e: SubmitEvent): Promise<void> {
-		e.preventDefault();
-		errorMsg = "";
-		try {
-			await authApi.setDefaultBotToken({ token: botSetupToken.trim() });
-			selectBot({
-				id: "system_default",
-				name: "システムデフォルト",
-				avatar: "",
-				preset: "secretary",
-			});
-			navigateTo("/bot/dashboard");
-		} catch (e) {
-			reportError(e);
-		}
+// ── 初期セットアップ Step1（旧 setupForm submit） ──
+async function submitSetup(e: SubmitEvent): Promise<void> {
+	e.preventDefault();
+	errorMsg = "";
+	try {
+		await authApi.setup({
+			discordId: setupDiscordId.trim(),
+			username: setupUsername.trim(),
+			password: setupPassword,
+			geminiApiKey: setupGeminiKey.trim(),
+		});
+		// 管理者登録直後は自動でログイン済み → デフォルト Bot 設定 Step2 へ。
+		await bootstrapSession();
+		needSetup = false;
+		mode = "bot-setup";
+	} catch (e) {
+		reportError(e);
 	}
+}
+
+// ── 初期セットアップ Step2（旧 botSetupForm submit） ──
+async function submitBotSetup(e: SubmitEvent): Promise<void> {
+	e.preventDefault();
+	errorMsg = "";
+	try {
+		await authApi.setDefaultBotToken({ token: botSetupToken.trim() });
+		selectBot({
+			id: "system_default",
+			name: "システムデフォルト",
+			avatar: "",
+			preset: "secretary",
+		});
+		navigateTo("/bot/dashboard");
+	} catch (e) {
+		reportError(e);
+	}
+}
 </script>
 
 <div class="overlay active" id="login-overlay">

@@ -1,73 +1,73 @@
 <script lang="ts">
-	// 計画ブロック 追加/編集モーダル（旧 app.js openPlanBlockModal + plan-block-form）。
-	// 子モーダルは自前 state を持ち、open のたび editingBlock で初期化。
-	// 保存は onsave コールバックで親へ委譲（子は API を叩かない）。
-	import type { DayPlanBlock, PlanBlockType } from "$lib/api/types";
-	import { Modal, Button } from "$lib/components/ui";
-	import { PLAN_TYPE_LABEL } from "./timelineUtils";
+// 計画ブロック 追加/編集モーダル（旧 app.js openPlanBlockModal + plan-block-form）。
+// 子モーダルは自前 state を持ち、open のたび editingBlock で初期化。
+// 保存は onsave コールバックで親へ委譲（子は API を叩かない）。
+import type { DayPlanBlock, PlanBlockType } from "$lib/api/types";
+import { Button, Modal } from "$lib/components/ui";
+import { PLAN_TYPE_LABEL } from "./timelineUtils";
 
-	export interface PlanBlockFormPayload {
-		id: number | null;
-		type: PlanBlockType;
-		title: string;
-		startTime: string;
-		endTime: string;
-		description: string;
-		transitFrom: string;
-		transitTo: string;
-		transitLine: string;
-	}
+export interface PlanBlockFormPayload {
+	id: number | null;
+	type: PlanBlockType;
+	title: string;
+	startTime: string;
+	endTime: string;
+	description: string;
+	transitFrom: string;
+	transitTo: string;
+	transitLine: string;
+}
 
-	interface Props {
-		open?: boolean;
-		editingBlock?: DayPlanBlock | null;
-		onsave: (payload: PlanBlockFormPayload) => void;
-	}
+interface Props {
+	open?: boolean;
+	editingBlock?: DayPlanBlock | null;
+	onsave: (payload: PlanBlockFormPayload) => void;
+}
 
-	let { open = $bindable(false), editingBlock = null, onsave }: Props = $props();
+let { open = $bindable(false), editingBlock = null, onsave }: Props = $props();
 
-	const TYPES: PlanBlockType[] = ["event", "task", "transit", "free"];
+const TYPES: PlanBlockType[] = ["event", "task", "transit", "free"];
 
-	let type = $state<PlanBlockType>("event");
-	let title = $state("");
-	let startTime = $state("");
-	let endTime = $state("");
-	let description = $state("");
-	let transitFrom = $state("");
-	let transitTo = $state("");
-	let transitLine = $state("");
+let type = $state<PlanBlockType>("event");
+let title = $state("");
+let startTime = $state("");
+let endTime = $state("");
+let description = $state("");
+let transitFrom = $state("");
+let transitTo = $state("");
+let transitLine = $state("");
 
-	const isEdit = $derived(editingBlock != null);
+const isEdit = $derived(editingBlock != null);
 
-	// 開くたびに editingBlock で初期化（旧 openPlanBlockModal のフォーム埋め）。
-	$effect(() => {
-		if (!open) return;
-		const b = editingBlock;
-		type = b?.type ?? "event";
-		title = b?.title ?? "";
-		startTime = b?.start_time ?? "";
-		endTime = b?.end_time ?? "";
-		description = b?.description ?? "";
-		transitFrom = b?.transit_from ?? "";
-		transitTo = b?.transit_to ?? "";
-		transitLine = b?.transit_line ?? "";
+// 開くたびに editingBlock で初期化（旧 openPlanBlockModal のフォーム埋め）。
+$effect(() => {
+	if (!open) return;
+	const b = editingBlock;
+	type = b?.type ?? "event";
+	title = b?.title ?? "";
+	startTime = b?.start_time ?? "";
+	endTime = b?.end_time ?? "";
+	description = b?.description ?? "";
+	transitFrom = b?.transit_from ?? "";
+	transitTo = b?.transit_to ?? "";
+	transitLine = b?.transit_line ?? "";
+});
+
+function onSubmit(e: SubmitEvent) {
+	e.preventDefault();
+	if (!title.trim()) return;
+	onsave({
+		id: editingBlock?.id ?? null,
+		type,
+		title: title.trim(),
+		startTime,
+		endTime,
+		description,
+		transitFrom,
+		transitTo,
+		transitLine,
 	});
-
-	function onSubmit(e: SubmitEvent) {
-		e.preventDefault();
-		if (!title.trim()) return;
-		onsave({
-			id: editingBlock?.id ?? null,
-			type,
-			title: title.trim(),
-			startTime,
-			endTime,
-			description,
-			transitFrom,
-			transitTo,
-			transitLine,
-		});
-	}
+}
 </script>
 
 <Modal bind:open title={isEdit ? "計画ブロックを編集" : "計画ブロックを追加"}>

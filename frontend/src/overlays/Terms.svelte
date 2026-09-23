@@ -1,7 +1,8 @@
 <script lang="ts">
-	// 利用規約（旧 index.html #terms-overlay）。公開ルート・API 不要。
-	import { goto } from "$lib/router";
-	import { Icon } from "$lib/components/ui";
+// 利用規約（旧 index.html #terms-overlay）。公開ルート・API 不要。
+
+import { Icon } from "$lib/components/ui";
+import { goto } from "$lib/router";
 </script>
 
 <div class="overlay active">

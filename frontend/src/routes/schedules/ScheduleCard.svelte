@@ -1,16 +1,17 @@
 <script lang="ts">
-	// 予定1件のカード（旧 app.js:3394 fetchSchedulesList の card 生成部）。
-	// event アイコン＋タイトル＋説明＋日時メタ＋Google同期バッジ＋削除ボタン。
-	import { Icon, MetaItem } from "$lib/components/ui";
-	import type { ScheduleRecord } from "$lib/api/types";
-	import { formatScheduleRange } from "./scheduleUtils";
+// 予定1件のカード（旧 app.js:3394 fetchSchedulesList の card 生成部）。
+// event アイコン＋タイトル＋説明＋日時メタ＋Google同期バッジ＋削除ボタン。
 
-	interface Props {
-		schedule: ScheduleRecord;
-		onDelete: (id: number) => void;
-	}
+import type { ScheduleRecord } from "$lib/api/types";
+import { Icon, MetaItem } from "$lib/components/ui";
+import { formatScheduleRange } from "./scheduleUtils";
 
-	let { schedule, onDelete }: Props = $props();
+interface Props {
+	schedule: ScheduleRecord;
+	onDelete: (id: number) => void;
+}
+
+let { schedule, onDelete }: Props = $props();
 </script>
 
 <div class="card-item glass hover-lift">

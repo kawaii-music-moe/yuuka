@@ -7,4 +7,4 @@ import type { TimelineRecord } from "./TimelineRecord";
  * Node は `{success, blocks, records}` を返すが、`day_plan_blocks` は deferred のため
  * T1 コアでは `records` のみ返す（blocks は day_plan_blocks 実装時に追加）。
  */
-export type TimelineDayData = { records: Array<TimelineRecord>, };
+export type TimelineDayData = { records: Array<TimelineRecord> };

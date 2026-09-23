@@ -85,7 +85,9 @@ export interface PriceTrendChart {
 }
 
 /** 直近6日（5日前〜今日）の日次支出合計から line/area path と点を計算する。 */
-export function priceTrendChart(expenses: DashboardExpense[] | undefined): PriceTrendChart {
+export function priceTrendChart(
+	expenses: DashboardExpense[] | undefined,
+): PriceTrendChart {
 	const dateStrings: string[] = [];
 	const dateLabels: string[] = [];
 	for (let i = 5; i >= 0; i--) {
@@ -224,8 +226,14 @@ export function usageChart(series: UsageSeriesPoint[]): UsageChart {
 			)
 			.join(" ");
 
-	const reqPts: [number, number][] = series.map((s, i) => [xAt(i), yAt(s.requests)]);
-	const resPts: [number, number][] = series.map((s, i) => [xAt(i), yAt(s.responses)]);
+	const reqPts: [number, number][] = series.map((s, i) => [
+		xAt(i),
+		yAt(s.requests),
+	]);
+	const resPts: [number, number][] = series.map((s, i) => [
+		xAt(i),
+		yAt(s.responses),
+	]);
 	const reqLine = toLine(reqPts);
 	const resLine = toLine(resPts);
 	const baseY = padTop + innerH;

@@ -224,10 +224,7 @@ export interface CredentialsResp {
 }
 
 /** ギルドの表示ラベル（名前が解決できていれば名前・できなければ「ギルド <ID>」）。 */
-export function guildLabel(
-	guilds: AssistantGuild[],
-	guildId: string,
-): string {
+export function guildLabel(guilds: AssistantGuild[], guildId: string): string {
 	const g = guilds.find((x) => x.guild_id === guildId);
 	return g?.guild_name ? g.guild_name : `ギルド ${guildId}`;
 }

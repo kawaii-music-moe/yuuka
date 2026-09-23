@@ -4,4 +4,4 @@ import type { Reminder } from "./Reminder";
 /**
  * `GET /api/reminders` のペイロード（`Envelope<ReminderListData>` = `{success, reminders}`）。
  */
-export type ReminderListData = { reminders: Array<Reminder>, };
+export type ReminderListData = { reminders: Array<Reminder> };

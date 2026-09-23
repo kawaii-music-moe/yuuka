@@ -1,37 +1,37 @@
 <script lang="ts">
-	// 利用可能なAI認証情報カード（読み取り専用。旧 fetchCredentialsSettings）。
-	// 登録・管理は「Bot統合管理」ページ（他グループ）へ誘導するのみ。
-	import { credentialApi } from "$lib/api/services";
-	import type { CredentialRow, CredentialsResp } from "./configTypes";
+// 利用可能なAI認証情報カード（読み取り専用。旧 fetchCredentialsSettings）。
+// 登録・管理は「Bot統合管理」ページ（他グループ）へ誘導するのみ。
+import { credentialApi } from "$lib/api/services";
+import type { CredentialRow, CredentialsResp } from "./configTypes";
 
-	interface Props {
-		/** botId 変更で付与状況を再取得（/api/credentials は bot-scoped） */
-		botId: string;
+interface Props {
+	/** botId 変更で付与状況を再取得（/api/credentials は bot-scoped） */
+	botId: string;
+}
+let { botId }: Props = $props();
+
+let rows = $state<CredentialRow[]>([]);
+
+$effect(() => {
+	void botId;
+	void load();
+});
+
+async function load() {
+	try {
+		const res = (await credentialApi.list()) as CredentialsResp;
+		rows = res.success ? (res.credentials ?? []) : [];
+	} catch {
+		rows = [];
 	}
-	let { botId }: Props = $props();
+}
 
-	let rows = $state<CredentialRow[]>([]);
-
-	$effect(() => {
-		void botId;
-		void load();
-	});
-
-	async function load() {
-		try {
-			const res = (await credentialApi.list()) as CredentialsResp;
-			rows = res.success ? (res.credentials ?? []) : [];
-		} catch {
-			rows = [];
-		}
-	}
-
-	function serviceOf(c: CredentialRow): string {
-		return c.service_name ?? c.serviceName ?? "";
-	}
-	function updatedOf(c: CredentialRow): string {
-		return c.updated_at ?? c.updatedAt ?? "";
-	}
+function serviceOf(c: CredentialRow): string {
+	return c.service_name ?? c.serviceName ?? "";
+}
+function updatedOf(c: CredentialRow): string {
+	return c.updated_at ?? c.updatedAt ?? "";
+}
 </script>
 
 <details class="config-card card">

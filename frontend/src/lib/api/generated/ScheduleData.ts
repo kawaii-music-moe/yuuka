@@ -4,4 +4,4 @@ import type { Schedule } from "./Schedule";
 /**
  * 単一予定を返すペイロード（add。`{success, schedule}`）。
  */
-export type ScheduleData = { schedule: Schedule, };
+export type ScheduleData = { schedule: Schedule };

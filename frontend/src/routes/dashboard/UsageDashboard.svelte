@@ -1,44 +1,44 @@
 <script lang="ts">
-	// 汎用モード（mcp_assistant）のAPI使用量ダッシュボード（旧 renderUsageDashboard 群）。
-	// 手描きSVGは innerHTML 廃止し {#each} で <path>/<line> をバインド描画。
-	import { Icon } from "$lib/components/ui";
-	import type { UsageDashboardData } from "./dashboardTypes";
-	import {
-		usageChart,
-		usageYAxis,
-		usageXAxis,
-		usageSummary,
-	} from "./dashboardCharts";
-	import { peakDateLabel } from "./dashboardUtils";
+// 汎用モード（mcp_assistant）のAPI使用量ダッシュボード（旧 renderUsageDashboard 群）。
+// 手描きSVGは innerHTML 廃止し {#each} で <path>/<line> をバインド描画。
+import { Icon } from "$lib/components/ui";
+import {
+	usageChart,
+	usageSummary,
+	usageXAxis,
+	usageYAxis,
+} from "./dashboardCharts";
+import type { UsageDashboardData } from "./dashboardTypes";
+import { peakDateLabel } from "./dashboardUtils";
 
-	interface Props {
-		data: UsageDashboardData;
-	}
+interface Props {
+	data: UsageDashboardData;
+}
 
-	let { data }: Props = $props();
+let { data }: Props = $props();
 
-	const series = $derived(data.series ?? []);
-	const totals = $derived(data.totals ?? { requests: 0, responses: 0 });
-	const days = $derived(data.days ?? series.length ?? 14);
-	const summary = $derived(usageSummary(series, totals, days));
-	const chart = $derived(usageChart(series));
-	const yAxis = $derived(usageYAxis(series));
-	const xAxis = $derived(usageXAxis(series));
+const series = $derived(data.series ?? []);
+const totals = $derived(data.totals ?? { requests: 0, responses: 0 });
+const days = $derived(data.days ?? series.length ?? 14);
+const summary = $derived(usageSummary(series, totals, days));
+const chart = $derived(usageChart(series));
+const yAxis = $derived(usageYAxis(series));
+const xAxis = $derived(usageXAxis(series));
 
-	const rateLimits = $derived(data.rate_limits);
-	const rlItems = $derived(
-		rateLimits
-			? [
-					{ label: "ユーザー1人 / 分", value: rateLimits.userPerMinute },
-					{ label: "ユーザー1人 / 日", value: rateLimits.userPerDay },
-					{ label: "サーバー1つ / 日", value: rateLimits.guildPerDay },
-				]
-			: [],
-	);
+const rateLimits = $derived(data.rate_limits);
+const rlItems = $derived(
+	rateLimits
+		? [
+				{ label: "ユーザー1人 / 分", value: rateLimits.userPerMinute },
+				{ label: "ユーザー1人 / 日", value: rateLimits.userPerDay },
+				{ label: "サーバー1つ / 日", value: rateLimits.guildPerDay },
+			]
+		: [],
+);
 
-	function fmtVal(v: number | undefined | null): string {
-		return v === undefined || v === null ? "—" : v.toLocaleString();
-	}
+function fmtVal(v: number | undefined | null): string {
+	return v === undefined || v === null ? "—" : v.toLocaleString();
+}
 </script>
 
 <!-- 使用量サマリカード -->
