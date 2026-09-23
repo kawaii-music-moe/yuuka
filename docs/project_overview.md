@@ -4,6 +4,16 @@
 > 仕様の根拠・詳細は [docs/](../docs/) の各文書に委ねます（重複させず、ポインタを張ります）。
 > 人間向けの導入・セットアップは [README.md](../README.md) を参照。
 
+> ⚠️ **Node 実装は撤去済み（`chore/remove-legacy-node-env`）**。バックエンドは `crates/`（Rust workspace・
+> `axum` + `twilight` + `rusqlite` 等、詳細は §2/§3）、フロントエンドは `frontend/`（Svelte + Vite）に
+> 置き換わっています。**§2・§3 は Rust 版に更新済み**ですが、**§4 以降（全体アーキテクチャ図・ディレクトリ/
+> モジュールマップ・コーディング規約・落とし穴等）は撤去前の Node 実装（`src/*.ts`）をそのまま記述して
+> おり、未更新です**。`crates/` 配下のクレート一覧は [Cargo.toml](../Cargo.toml) の `[workspace] members`
+> を、実装規範は [docs/architecture/architecture_v2.md](architecture/architecture_v2.md)（同じく Node 前提
+> のまま未更新）を参照してください。Rust 版に合わせた全面書き換えは
+> [docs/rust-rewrite/remaining-work.md](rust-rewrite/remaining-work.md) が「Node 撤去後の後続タスク」として
+> 既に指摘している通り、本 PR のスコープ外の別作業です。
+
 ---
 
 ## 1. これは何か（30秒サマリ）
@@ -23,45 +33,46 @@
 
 | 項目 | 値 |
 |---|---|
-| 言語 / 実行系 | TypeScript（**ESM**, `"type": "module"`）/ **Node.js 20+** |
-| パッケージ管理 | **pnpm**（`pnpm-workspace.yaml` あり） |
-| DB | **SQLite**（`better-sqlite3`、同期 API）+ **FTS5** 全文検索 |
-| キャッシュ / セッション | **Redis**（未接続時はインメモリへ自動フォールバック） |
-| LLM | `@google/generative-ai`（Gemini）。秘書=ユーザー鍵 / 汎用=Bot 鍵 |
-| Discord | `discord.js` v14 |
-| Web サーバ | **生 `node:http`**（フレームワーク不使用、独自ルータ） |
-| フロントエンド | **依存ゼロのバニラ JS SPA**（PWA / Service Worker 付き） |
-| ブラウザ自動操作 | **Rust 製クローラーデーモン**（`yuuka-crawler`） → `puppeteer` フォールバック |
-| 記憶エンジン | **Rust 製シナプスエンジン**（`yuuka-synapse`、埋め込み + RAM ベクトル索引 + 1st Hop 連想。子プロセス IPC） |
-| 汎用チャット | **WebSocket**（`ws`）`/ws/chat` + OAuth デバイスフロー（デスクトップクライアント用バックエンド） |
-| グラフ描画 | `chart.js` + `@napi-rs/canvas`（PNG 生成） |
-| 暗号 | `@node-rs/argon2`（PW マネージャ用）/ Node `crypto`（AES-256-GCM） |
-| 認証 | `bcryptjs`(cost 12) + Redis セッション |
-| スケジューラ | `node-cron`（ジョブ登録）+ `cron-parser`（次回時刻計算） |
-| Lint / Format / 型 | **Biome**（`@biomejs/biome`、`pnpm lint`/`format`）+ **tsgo**（`@typescript/native-preview`、`pnpm typecheck`） |
-| テスト | **Vitest**（`pnpm test`/`test:watch`。`*.test.ts` を併置） |
+| 言語 / 実行系 | **Rust**（バックエンド本体・`crates/`、edition 2021）/ **TypeScript + Svelte**（管理画面 SPA・`frontend/`、Vite ビルド） |
+| パッケージ管理 | **cargo**（workspace、`Cargo.toml`）/ **pnpm**（フロントエンドのみ、`pnpm-workspace.yaml`） |
+| DB | **SQLite**（`rusqlite`、bundled）。read pool + 単一 writer actor（`crates/yuuka-db`） |
+| キャッシュ / セッション | **Redis**（`redis` crate、`crates/yuuka-auth::SessionStore`）。到達不能でも起動継続＝Cookie のみへ縮退 |
+| LLM | `crates/yuuka-gemini`（Gemini・`reqwest`/rustls 経由）。秘書=ユーザー鍵 / 汎用=Bot 鍵 |
+| Discord | `twilight-gateway` / `twilight-http` / `twilight-model`（`crates/yuuka-discord`） |
+| Web サーバ | **axum**（`ws` feature） + `tower-http`（`crates/yuuka-web`・`crates/yuuka-supervisor`） |
+| フロントエンド | **Svelte 5 + Vite**（`frontend/`。旧バニラ JS SPA `src/public/` から移行済み） |
+| ブラウザ自動操作 | **`crates/yuuka-browser`**（インプロセス。`find_chrome` で Chromium 実行ファイルを検出し CLI 起動。旧 Rust クローラーデーモン + Puppeteer フォールバックは撤去） |
+| 記憶エンジン | **`crates/yuuka-synapse`**（埋め込み + KNN + 1st Hop 連想。旧・子プロセス IPC 版から**インプロセスライブラリ**へ統合済み） |
+| 汎用チャット | **WebSocket**（axum `ws`）`/ws/chat` + OAuth デバイスフロー（`crates/yuuka-auth`。デスクトップクライアント用バックエンド） |
+| グラフ描画 | `crates/yuuka-chart`（`image` + `ab_glyph` で PNG 生成） |
+| 暗号 | `aes-gcm`（システム鍵・AES-256-GCM）+ `scrypt`（システム鍵導出）+ `argon2`（PW マネージャの per-user 鍵導出。`crates/yuuka-crypto`） |
+| 認証 | `bcrypt`（旧 `bcryptjs` cost 12 と相互運用）+ Redis セッション（`crates/yuuka-auth`） |
+| スケジューラ | `croner`（cron 式の次回発火計算。旧 `node-cron`/`cron-parser` 相当） |
+| Lint / Format / 型 | Rust: `cargo fmt --check` + `cargo clippy -D warnings`（`rust-toolchain.toml` で 1.96.1 固定）。フロント: **Biome**（`pnpm lint`、対象は `frontend/src scripts` のみ）+ `svelte-check`（`pnpm typecheck:front`） |
+| テスト | Rust: `cargo test --workspace`（各クレートに `#[cfg(test)]` 併置。`.github/workflows/rust-ci.yml`） |
 
 ---
 
 ## 3. ビルド・実行コマンド
 
 ```bash
-pnpm install            # 依存導入（Puppeteer が Chromium も取得）
-pnpm dev                # 開発: tsx watch src/index.ts（ホットリロード）
-pnpm build              # 本番ビルド: Rustクローラー+シナプス(cargo) → バイナリ/アセットコピー → tsgo
-pnpm test               # Vitest（*.test.ts）
-pnpm start              # 本番起動: node dist/index.js
-pnpm typecheck          # 型チェックのみ（tsgo --noEmit）
-pnpm lint / lint:fix    # Biome lint（--write で自動修正）
-pnpm format             # Biome でコード整形
-pnpm check              # typecheck + lint をまとめて実行
+pnpm install            # フロントエンド依存のみ導入（バックエンドの依存は cargo が取得）
+cargo run --bin yuuka   # バックエンド開発起動（config.yaml のある repo ルートで実行）
+pnpm dev                # フロントエンド開発（Vite）。VITE_API_TARGET でバックエンドへ proxy
+cargo test --workspace  # Rust テスト
+pnpm build              # 本番ビルド: cargo build --release --bin yuuka + フロントエンド本番ビルド(dist/public)
+cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings   # Rust lint/format
+pnpm typecheck:front    # svelte-check
+pnpm lint / lint:fix    # Biome lint（--write で自動修正。対象は frontend/src scripts のみ）
+pnpm check              # typecheck:front + lint をまとめて実行
 ```
 
-- **Rust ツールチェイン（stable / `cargo`）が `pnpm build` に必須**（`src/rust_crawler` と `src/rust_synapse` をビルドし `dist/bin/` へ配置。バイナリ不在時はシナプスは現行挙動へ自動デグレード）。
-- 起動には **環境変数 `YUUKA_ENCRYPTION_SECRET` が必須**。未設定だと `src/index.ts` が即 `exit(1)`（§8）。
-- 設定は `config.yaml`（一般設定・git 管理外）と `.env`（機密・git 管理外）。テンプレは [example.yaml](../example.yaml) / [.env.example](../.env.example)。
-- 既定ポートはコード上 `3000`（[src/config.ts](../src/config.ts)）だが、本デプロイは `config.yaml` で **7854** に上書き。
-- テストは **Vitest**（`pnpm test`）。`financeFunctions.test.ts` / `paymentRecurrenceService.test.ts` / `turnPlanner.test.ts` / `webhookSignature.test.ts` 等を該当ファイルへ併置。
+- Rust ツールチェイン（`rust-toolchain.toml` で 1.96.1 固定）が `cargo run`/`cargo build`/`pnpm build` に必須。
+- 起動には **環境変数 `YUUKA_ENCRYPTION_SECRET` が必須**。未設定だと `crates/yuuka-supervisor` の起動シーケンスが `require_encryption_secret` で fail-fast する（§8）。バックエンドは `.env` を自動読込しないため、実環境変数として渡す必要がある（詳細は [docs/guide/setup.md](guide/setup.md)）。
+- 設定は `config.yaml`（一般設定・git 管理外・cwd 相対で固定パス）と実環境変数（機密）。テンプレは [example.yaml](../example.yaml) / [.env.example](../.env.example)。
+- 既定ポートはコード上 `3000`（`crates/yuuka-core/src/config.rs`）だが、`example.yaml`/本デプロイは `config.yaml` で **7854** に上書き。
+- テストは **`cargo test --workspace`**（Rust 側のみ。フロントエンド `frontend/` には現状テストコマンドは未設定）。
+- 既知の制限: バックエンドは存在しない DB ファイルを新規作成しない（[#55](https://github.com/kawaii-music-moe/yuuka/issues/55)）。新規環境では事前に空の SQLite ファイルを用意する（[docs/guide/setup.md](guide/setup.md) 参照）。
 
 ---
 
