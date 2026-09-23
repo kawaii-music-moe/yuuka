@@ -2,11 +2,12 @@
 import { onMounted, ref } from 'vue'
 import { agentGateway, type FinanceSummary, type Transaction } from '@/api'
 import PageState from '@/components/PageState.vue'
-import { yen } from '@/utils/format'
+import { localDateKey, localMonthKey, yen } from '@/utils/format'
 import FormField from '@/components/FormField.vue'
 import PageTitle from '@/components/PageTitle.vue'
 import UiButton from '@/components/UiButton.vue'
-const month = ref(new Date().toISOString().slice(0, 7)); const summary = ref<FinanceSummary>(); const transactions = ref<Transaction[]>([]); const loading = ref(true); const error = ref(''); const form = ref({ date: new Date().toISOString().slice(0, 10), category: '食費', description: '', amount: 0, kind: 'expense' as 'income' | 'expense' })
+// `toISOString()` は UTC 基準のため、JST の 00:00〜08:59 は前日・前月になってしまう（issue #43）。
+const month = ref(localMonthKey(new Date())); const summary = ref<FinanceSummary>(); const transactions = ref<Transaction[]>([]); const loading = ref(true); const error = ref(''); const form = ref({ date: localDateKey(new Date()), category: '食費', description: '', amount: 0, kind: 'expense' as 'income' | 'expense' })
 async function load() { loading.value = true; try { [summary.value, transactions.value] = await Promise.all([agentGateway.getFinanceSummary(month.value), agentGateway.listTransactions(month.value)]) } catch { error.value = '家計データを取得できません。' } finally { loading.value = false } }
 async function add() { if (!form.value.description || form.value.amount <= 0) return; const entry = await agentGateway.createTransaction(form.value); transactions.value.unshift(entry); await load(); form.value.description = ''; form.value.amount = 0 }
 onMounted(load)
