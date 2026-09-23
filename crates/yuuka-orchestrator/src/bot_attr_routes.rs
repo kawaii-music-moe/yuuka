@@ -367,7 +367,7 @@ async fn set_gemini_key(
     // 形式検証。
     if !is_likely_gemini_key(api_key.trim()) {
         return bad_request(
-            "Gemini APIキーの形式が正しくありません。「AIza」で始まるキーを入力してください（Google AI Studio で取得）。",
+            "Gemini APIキーの形式が正しくありません。Google AI Studio で取得したキーをそのまま入力してください。",
         );
     }
     // 暗号化して保存。
@@ -396,17 +396,14 @@ async fn set_gemini_key(
     ok_message("Bot専用のGemini APIキーを保存しました。")
 }
 
-/// Gemini API キーらしさ（Node `isLikelyGeminiKey` = `^AIza[0-9A-Za-z_-]{30,}$`）。
+/// Gemini API キーらしさ（Node `isLikelyGeminiKey` = `^[0-9A-Za-z_.-]{20,256}$`）。
+/// 旧形式（`AIza…`）以外のキー形式も通すため接頭辞は問わず、誤値保存の防止に必要な
+/// 「空白・制御文字・非 ASCII を含まない 20〜256 文字」だけを検証する。
 fn is_likely_gemini_key(value: &str) -> bool {
-    match value.strip_prefix("AIza") {
-        Some(rest) => {
-            rest.len() >= 30
-                && rest
-                    .bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
-        }
-        None => false,
-    }
+    (20..=256).contains(&value.len())
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.'))
 }
 
 fn ok_message(message: &str) -> Response {

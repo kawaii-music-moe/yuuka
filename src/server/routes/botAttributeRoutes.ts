@@ -72,9 +72,9 @@ function isSnowflake(value: string): boolean {
 	return /^\d{5,25}$/.test(value);
 }
 
-/** Gemini APIキーの形式検証（"AIza" 始まり・英数記号。誤値保存の防止用） */
+/** Gemini APIキーの形式検証（接頭辞は問わず英数記号 20〜256 文字。誤値保存の防止用） */
 export function isLikelyGeminiKey(value: string): boolean {
-	return /^AIza[0-9A-Za-z_-]{30,}$/.test(value);
+	return /^[0-9A-Za-z_.-]{20,256}$/.test(value);
 }
 
 /**
@@ -387,12 +387,12 @@ export const botAttributeRoutes: RouteDef[] = [
 				});
 			}
 
-			// キー形式の検証（誤った値の保存を防ぐ。Gemini APIキーは "AIza" で始まる）
+			// キー形式の検証（誤った値の保存を防ぐ）
 			if (!isLikelyGeminiKey(apiKey.trim())) {
 				return sendJson(ctx.res, 400, {
 					success: false,
 					message:
-						"Gemini APIキーの形式が正しくありません。「AIza」で始まるキーを入力してください（Google AI Studio で取得）。",
+						"Gemini APIキーの形式が正しくありません。Google AI Studio で取得したキーをそのまま入力してください。",
 				});
 			}
 
