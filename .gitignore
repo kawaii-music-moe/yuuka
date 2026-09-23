@@ -17,7 +17,10 @@ yuuka-voice.service
 
 # Docker インスタンスの機密・環境依存設定（*.example はテンプレートとして追跡する）
 # config.yaml / data/ は上のパターンで既に除外
-deploy/*/instance.env
+# instance.env* で手動バックアップ（instance.env.bak-YYYYMMDD 等）も含めて無視し、
+# .example だけ明示的に再許可する（#48: バックアップの誤コミット防止）。
+deploy/*/instance.env*
+!deploy/*/instance.env.example
 deploy/*/secret.key
 deploy/*/secret.key.new
 deploy/*/data/
