@@ -25,13 +25,35 @@ impl WriterHandle {
     /// writer コネクションを開き、専用スレッドで直列処理を開始する。
     ///
     /// コネクションは 1 本のみをこのスレッドが所有し、他所からは触れない（並行 writer 排除）。
+    /// DB ファイルが存在しない場合は `CREATE` を付けずに即エラーとなる（C-2）。新規インスタンスの
+    /// ブートストラップ（無ければ作る）が必要な場合は [`Self::spawn_bootstrapping`] を使う。
     ///
     /// # Errors
     /// コネクション open（PRAGMA 含む）やスレッド生成に失敗した場合 [`DbError`]。
     pub fn spawn(path: PathBuf) -> Result<Self, DbError> {
-        // writer は READ_WRITE で開く。
-        let mut conn = open_conn(&path, false)?;
+        // writer は READ_WRITE で開く（CREATE は付けない）。
+        let conn = open_conn(&path, false)?;
+        Self::spawn_with_conn(conn)
+    }
 
+    /// [`Self::spawn`] と同じだが、DB ファイルが存在しなければ新規作成してから開く
+    /// （`SQLITE_OPEN_CREATE`・親ディレクトリも無ければ作成）。既存ファイルには影響しない。
+    ///
+    /// 呼び出し側が [`crate::pool::init_db_enabled`]（`YUUKA_INIT_DB=1` 等）で明示オプトイン
+    /// した場合にのみ使うこと。誤設定パスで無条件に空 DB を作ってしまわないよう、既定経路
+    /// （[`Self::spawn`]）は `CREATE` を付けない（issue #55）。
+    ///
+    /// # Errors
+    /// コネクション open（親ディレクトリ作成・PRAGMA 含む）やスレッド生成、migrations 失敗時
+    /// [`DbError`]。
+    pub fn spawn_bootstrapping(path: PathBuf) -> Result<Self, DbError> {
+        let conn = crate::pool::create_conn(&path)?;
+        Self::spawn_with_conn(conn)
+    }
+
+    /// 開いた writer コネクションに migrations を適用し、専用スレッドで直列処理を開始する
+    /// （[`Self::spawn`] / [`Self::spawn_bootstrapping`] 共通部）。
+    fn spawn_with_conn(mut conn: Connection) -> Result<Self, DbError> {
         // Phase 5: Rust が DDL の所有権を持ち、起動時にマイグレーションを適用する。
         crate::schema::run_migrations(&mut conn)?;
 
