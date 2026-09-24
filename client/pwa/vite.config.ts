@@ -1,57 +1,32 @@
-import { readFile, stat } from 'node:fs/promises'
-import path from 'node:path'
 import { fileURLToPath, URL } from 'node:url'
 import { defineConfig, type Plugin } from 'vite'
 import vue from '@vitejs/plugin-vue'
 
-const adminRoot = fileURLToPath(new URL('../../src/public/', import.meta.url))
-const adminMimeTypes: Record<string, string> = {
-  '.css': 'text/css; charset=utf-8',
-  '.html': 'text/html; charset=utf-8',
-  '.ico': 'image/x-icon',
-  '.js': 'application/javascript; charset=utf-8',
-  '.json': 'application/json; charset=utf-8',
-  '.png': 'image/png',
-  '.svg': 'image/svg+xml',
-  '.webp': 'image/webp',
-}
+// 管理画面（共有ログイン）は `frontend`（Svelte + Vite）の dev server が配信する。
+// 旧 `src/public` 直下の静的ファイルを読む方式は撤去済みの admin UI を参照しており
+// ENOENT → 500 になっていた（#44）。frontend の dev server はこの Client と同じ既定
+// ポート(5173)を使うため衝突を避けて別ポートで起動する
+// （scripts/dev-client-mock.mjs 参照）。
+const adminDevServer = process.env.VITE_ADMIN_DEV_SERVER ?? 'http://localhost:5174'
 
-function adminDevelopmentPlugin(): Plugin {
+function adminDevelopmentRedirectPlugin(): Plugin {
   return {
-    name: 'yuuka-admin-development-server',
+    name: 'yuuka-admin-development-redirect',
     configureServer(server) {
       server.middlewares.use((request, response, next) => {
         const pathname = new URL(request.url ?? '/', 'http://localhost').pathname
-        const isLogin = pathname === '/login'
-        if (!isLogin && pathname !== '/admin' && !pathname.startsWith('/admin/')) return next()
+        const isLogin = pathname === '/login' || pathname.startsWith('/login/')
+        const isAdmin = pathname === '/admin' || pathname.startsWith('/admin/')
+        if (!isLogin && !isAdmin) return next()
 
-        void (async () => {
-          const relativePath = isLogin ? '/index.html' : pathname.slice('/admin'.length) || '/index.html'
-          const requestedPath = path.normalize(path.join(adminRoot, relativePath))
-          if (!requestedPath.startsWith(adminRoot)) return next()
-
-          const extension = path.extname(requestedPath)
-          let target = requestedPath
-          try {
-            if (!(await stat(target)).isFile()) throw new Error('not a file')
-          } catch {
-            if (extension) return next()
-            target = path.join(adminRoot, 'index.html')
-          }
-
-          let content = await readFile(target)
-          if (path.basename(target) === 'index.html') {
-            content = Buffer.from(
-              content
-                .toString('utf8')
-                .replaceAll('href="/', 'href="/admin/')
-                .replaceAll('src="/', 'src="/admin/'),
-            )
-          }
-          response.statusCode = 200
-          response.setHeader('Content-Type', adminMimeTypes[path.extname(target)] ?? 'application/octet-stream')
-          response.end(content)
-        })().catch(next)
+        // フル別オリジンへ遷移させる（プロキシではなく redirect）。frontend の Vite
+        // dev server が返す HTML は `/@vite/client` や `/src/...` をルート相対で参照する
+        // ため、この Client 自身の dev server 越しに透過プロキシすると HMR/モジュール
+        // 解決がこの Client 側のモジュールグラフと衝突して壊れる。ブラウザ自体を
+        // frontend の dev server オリジンへ移すことで、そちら側で正しく解決させる。
+        response.statusCode = 302
+        response.setHeader('Location', `${adminDevServer}${request.url}`)
+        response.end()
       })
     },
   }
@@ -59,7 +34,7 @@ function adminDevelopmentPlugin(): Plugin {
 
 export default defineConfig({
   base: '/',
-  plugins: [adminDevelopmentPlugin(), vue()],
+  plugins: [adminDevelopmentRedirectPlugin(), vue()],
   resolve: { alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) } },
   server: {
     proxy: {
