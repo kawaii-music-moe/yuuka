@@ -10,6 +10,12 @@
 # 重要: 暗号化シークレットは "$" 等を含むため compose の変数展開を通さず、
 #       environment の pass-through 形式（値なし）でホスト環境変数から literal 注入する。
 #       instance.sh が `export YUUKA_ENCRYPTION_SECRET="$(cat secret.key)"` してから呼ぶ。
+#
+# ネットワーク: 既定 bridge の subnet を `DOCKER_NET_SUBNET`（instance.env）で固定する（#51）。
+#       未固定だとネットワーク再作成のたびに Docker ゲートウェイ IP が変わりうるため、
+#       cloudflared 等のリバースプロキシ経由リクエストを信頼する `TRUSTED_PROXIES` が
+#       ズレて機能しなくなる（＝XFF が信頼されず全リクエストがゲートウェイ IP に化ける）。
+#       prod/dev で必ず別サブネットを instance.env に設定すること（重複させない）。
 # ==============================================================================
 
 services:
@@ -55,3 +61,10 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+
+networks:
+  default:
+    ipam:
+      driver: default
+      config:
+        - subnet: "${DOCKER_NET_SUBNET:?set DOCKER_NET_SUBNET in instance.env, distinct per instance}"
