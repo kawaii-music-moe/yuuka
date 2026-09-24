@@ -8,9 +8,11 @@ From the repository root:
 pnpm dev:frontend
 ```
 
-Starts the Vue Client at `http://localhost:5173` and the mock API at
-`http://localhost:8787`. The Vite proxy is automatically configured for the
-mock API.
+Starts the Vue Client at `http://localhost:5173`, the mock API at
+`http://localhost:8787`, and the shared-login admin dev server (`frontend`)
+at `http://localhost:5174` pointed at the same mock API. The Vite proxy is
+automatically configured for the mock API, and `/login`/`/admin` redirect to
+the admin dev server.
 
 ```bash
 pnpm dev:admin
