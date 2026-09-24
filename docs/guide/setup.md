@@ -38,7 +38,7 @@ cp example.yaml config.yaml
 主な項目:
 
 - **`INVITE_CODES`**: ユーザー登録に必須の招待コード。推測されにくい独自の値に変更してください。
-- **`DB_PATH`**: SQLite データベースの保存パス（デフォルト: `./data/yuuka.db`）。
+- **`DB_PATH`**: SQLite データベースの保存パス（デフォルト: `./data/yuuka.db`）。`DB_PATH` が指すファイルが無い状態で起動すると既定では即エラーになる。新規インスタンスの初回起動のみ、環境変数 `YUUKA_INIT_DB=1`（`.env` ではなく実際の環境変数として設定）を付けて起動すると、無ければ DB を新規作成して migrations を適用する（詳細は後述）。
 - **`REDIS_URL`**: 会話コンテキスト・セッション管理用の Redis 接続 URL。
 - **`PORT` / `HOST`**: バックエンドサーバーがリスンするポートとホスト名。デフォルトはローカル接続のみ (`127.0.0.1` / `7854`)。リバースプロキシ経由で公開する場合は `HOST` を `"0.0.0.0"` に変更します。
 - **`GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`**: Google OAuth 認証情報（カレンダー/Drive 連携用のシステム共通設定、任意）。
@@ -65,16 +65,16 @@ export YUUKA_ENCRYPTION_SECRET="$(openssl rand -base64 48)"
 
 > プレリリース版（v1 スキーマ）からの移行について: 現行バージョンはデータベーススキーマを全面再構築しています。旧スキーマを検出すると自動で再作成され、旧データは破棄されます。また、プレリリース版を `YUUKA_ENCRYPTION_SECRET` なしで運用していた場合は、`YUUKA_ENCRYPTION_SECRET_NEW` に新しい鍵を設定して一度起動すると、既存の暗号化データが新しい鍵で再暗号化されます。
 
-### 既知の制限: 新規 DB の作成（#55）
+### 新規 DB の作成（`YUUKA_INIT_DB`）
 
-Rust バックエンドは**存在しない DB ファイルを新規作成しません**（既存 DB がある前提で開きます）。まっさらな環境で初めて起動する場合は、事前に空の SQLite ファイルを用意してください。起動時にマイグレーションがスキーマを作成します。
+Rust バックエンドは既定では**存在しない DB ファイルを新規作成しません**（`DB_PATH` の設定ミスで意図せず空 DB を作ってしまう事故を防ぐための安全策）。まっさらな環境で初めて起動する場合は、初回起動時のみ環境変数 `YUUKA_INIT_DB=1` を設定してください。DB ファイル（と親ディレクトリ）が無ければ新規作成し、マイグレーション（baseline を含む）を適用します。起動確認後は `YUUKA_INIT_DB` を外して（または未設定に戻して）再起動してください（既定 off を維持するため）。既存 DB がある場合、この設定は「無ければ作る」だけなので通常起動でデータが失われることはありません。
 
 ```bash
-mkdir -p data
-sqlite3 data/yuuka.db ""   # 空の SQLite ファイルを作成（sqlite3 CLI が無ければ `touch data/yuuka.db` でも可）
+YUUKA_INIT_DB=1 cargo run --bin yuuka   # 初回のみ。DB（と data/ ディレクトリ）が無ければ作成してマイグレーションを適用する
+# 起動を確認したら Ctrl-C で止め、YUUKA_INIT_DB を外して（unset するか .env から外して）再度起動する
 ```
 
-この制限は [#55](https://github.com/kawaii-music-moe/yuuka/issues/55) で解消予定です。
+[#55](https://github.com/kawaii-music-moe/yuuka/issues/55) の修正として [PR #64](https://github.com/kawaii-music-moe/yuuka/pull/64) で導入されました。
 
 ## 3. ビルド・起動
 

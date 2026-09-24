@@ -72,7 +72,7 @@ pnpm check              # typecheck:front + lint をまとめて実行
 - 設定は `config.yaml`（一般設定・git 管理外・cwd 相対で固定パス）と実環境変数（機密）。テンプレは [example.yaml](../example.yaml) / [.env.example](../.env.example)。
 - 既定ポートはコード上 `3000`（`crates/yuuka-core/src/config.rs`）だが、`example.yaml`/本デプロイは `config.yaml` で **7854** に上書き。
 - テストは **`cargo test --workspace`**（Rust 側のみ。フロントエンド `frontend/` には現状テストコマンドは未設定）。
-- 既知の制限: バックエンドは存在しない DB ファイルを新規作成しない（[#55](https://github.com/kawaii-music-moe/yuuka/issues/55)）。新規環境では事前に空の SQLite ファイルを用意する（[docs/guide/setup.md](guide/setup.md) 参照）。
+- バックエンドは既定では存在しない DB ファイルを新規作成しない。新規インスタンスの初回起動のみ環境変数 `YUUKA_INIT_DB=1` を設定すると、無ければ DB を新規作成して migrations を適用する（[#55](https://github.com/kawaii-music-moe/yuuka/issues/55) / [PR #64](https://github.com/kawaii-music-moe/yuuka/pull/64)。詳細は [docs/guide/setup.md](guide/setup.md) 参照）。
 
 ---
 
