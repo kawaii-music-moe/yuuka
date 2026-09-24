@@ -16,6 +16,17 @@ use yuuka_core::{
     ToolOutcome,
 };
 
+/// Discord Embed の各項目文字数上限（`clip_chars` での切り詰めに使う）。
+/// `embed_recover`（#37）も同じ上限を共有する（Embed 形でモデルが直接書いた JSON は
+/// `showRichContent` 経由と異なりノーチェックのため、復元時に同じ規則で切り詰める）。
+pub const TITLE_MAX: usize = 256;
+pub const DESCRIPTION_MAX: usize = 4000;
+pub const FIELD_NAME_MAX: usize = 256;
+pub const FIELD_VALUE_MAX: usize = 1024;
+pub const FOOTER_MAX: usize = 2048;
+/// 1 Embed あたりのフィールド数上限。
+pub const FIELDS_MAX: usize = 25;
+
 /// このクレートが公開するツール（showRichContent）。
 ///
 /// # Errors
@@ -119,7 +130,7 @@ fn build_embed(title: &str, args: &Value) -> EmbedPart {
         .get("description")
         .and_then(Value::as_str)
         .filter(|s| !s.is_empty())
-        .map(|s| clip_chars(s, 4000));
+        .map(|s| clip_chars(s, DESCRIPTION_MAX));
 
     // color: 既知キーのみ採用・未指定/未知は default（Node `COLOR_MAP[color ?? "default"] ?? default`）。
     let color = color_for(args.get("color").and_then(Value::as_str));
@@ -130,15 +141,15 @@ fn build_embed(title: &str, args: &Value) -> EmbedPart {
         .and_then(Value::as_array)
         .map(|arr| {
             arr.iter()
-                .take(25)
+                .take(FIELDS_MAX)
                 .map(|f| EmbedFieldPart {
                     name: clip_chars(
                         f.get("name").and_then(Value::as_str).unwrap_or_default(),
-                        256,
+                        FIELD_NAME_MAX,
                     ),
                     value: clip_chars(
                         f.get("value").and_then(Value::as_str).unwrap_or_default(),
-                        1024,
+                        FIELD_VALUE_MAX,
                     ),
                     inline: f.get("inline").and_then(Value::as_bool).unwrap_or(false),
                 })
@@ -151,10 +162,10 @@ fn build_embed(title: &str, args: &Value) -> EmbedPart {
         .get("footer")
         .and_then(Value::as_str)
         .filter(|s| !s.is_empty())
-        .map(|s| clip_chars(s, 2048));
+        .map(|s| clip_chars(s, FOOTER_MAX));
 
     EmbedPart {
-        title: Some(clip_chars(title, 256)),
+        title: Some(clip_chars(title, TITLE_MAX)),
         description,
         color,
         fields,
@@ -181,7 +192,10 @@ fn color_for(name: Option<&str>) -> u32 {
 ///
 /// JS `.slice` は UTF-16 単位・Rust は Unicode スカラー単位のため非 BMP で僅差。いずれも Discord
 /// の上限に対する安全側クリップで、実入力（数十〜数百文字）では到達しないため実害はない。
-fn clip_chars(s: &str, max: usize) -> String {
+///
+/// `embed_recover`（#37）が Embed 復元時の切り詰めを共通化するために再利用する。
+#[must_use]
+pub fn clip_chars(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
         s.to_owned()
     } else {

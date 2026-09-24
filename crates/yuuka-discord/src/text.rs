@@ -14,6 +14,13 @@ use regex::{Captures, Regex};
 /// Discord 1 メッセージの最大文字数（現行 `2000`）。
 pub const DISCORD_MAX_MESSAGE_LEN: usize = 2000;
 
+/// Discord 1 メッセージに添付できる Embed 数の上限。
+///
+/// `showRichContent` の複数回呼び出し + `embed_recover` の復元分を合算すると超過しうる（#37）。
+/// 超過分を送ると `create_message` 自体が検証エラーで失敗し、本文を含めて返信が届かなくなるため、
+/// reply 層の choke point（[`crate::reply::to_twilight_embeds`]）で強制する。
+pub const DISCORD_MAX_EMBEDS: usize = 10;
+
 /// 対応音声フォーマット（現行 `SUPPORTED_AUDIO_TYPES` [`src/bot.ts:61-72`]）。
 pub const SUPPORTED_AUDIO_TYPES: &[&str] = &[
     "audio/ogg",

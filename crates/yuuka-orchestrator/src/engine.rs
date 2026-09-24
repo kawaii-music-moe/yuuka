@@ -406,6 +406,14 @@ impl ChatEngine {
             result.text.clone()
         };
         let (reply_text, recovered) = embed_recover::recover_embeds_from_text(&base_text);
+        // #36: 返信が Embed JSON ブロックだけだった場合、復元後に reply_text が空文字化しうる。
+        // 「空でも fallback を保存」という不変条件を復元後にも適用し直す（そのまま保存すると、
+        // 次ターンで Gemini へ空の text パートが渡り 400 を招きうる）。
+        let reply_text = if reply_text.trim().is_empty() {
+            FALLBACK_TEXT.to_owned()
+        } else {
+            reply_text
+        };
         message_log::add_message_log(&self.db, uid, bid, "assistant", &reply_text, None, None)
             .await
             .map_err(db_fail)?;
@@ -673,6 +681,13 @@ impl ChatEngine {
             result.text.clone()
         };
         let (reply_text, recovered) = embed_recover::recover_embeds_from_text(&base_text);
+        // #36: Embed JSON ブロックだけの返信は復元後に空文字化しうる。「空でも fallback を保存」
+        // という不変条件を復元後にも適用し直す（次ターンで Gemini へ空の text パートが渡るのを防ぐ）。
+        let reply_text = if reply_text.trim().is_empty() {
+            FALLBACK_TEXT.to_owned()
+        } else {
+            reply_text
+        };
         match (scope, gid) {
             (GuildScope::Guild, Some(gid)) => {
                 message_log::add_guild_message_log(
@@ -741,12 +756,9 @@ impl ChatEngine {
                 // Gemini キーは発話ユーザー自身のもの（各自のキー）。ペルソナは共有 bot では
                 // owner-canonical（オーナーの適用中ペルソナ）＝本編ターンと同一に同期する。
                 let cfg = user::user_gemini(&self.db, user_id.as_str()).await.ok()??;
-                let persona_uid = bot_repo::config_owner_for_bot(
-                    &self.db,
-                    user_id.as_str(),
-                    bot_id.as_str(),
-                )
-                .await;
+                let persona_uid =
+                    bot_repo::config_owner_for_bot(&self.db, user_id.as_str(), bot_id.as_str())
+                        .await;
                 let persona =
                     persona::active_persona_prompt(&self.db, &persona_uid, bot_id.as_str())
                         .await
@@ -931,6 +943,11 @@ fn build_contents(history: &[ContextEntry], msg: &IncomingChat) -> Vec<Content> 
     let mut out: Vec<Content> = Vec::new();
     let mut last_role: Option<&str> = None;
     for e in history {
+        // #36 防御的追加（Node に無い拡張）: 空文字の履歴行（復元前の旧データ等）はそのまま
+        // 積むと Gemini が空 text パートを拒否しうるため送出しない。
+        if e.content.is_empty() {
+            continue;
+        }
         if last_role == Some(e.role.as_str()) {
             if let Some(last) = out.last_mut() {
                 if let Some(first) = last.parts.first_mut() {
@@ -1139,6 +1156,34 @@ mod tests {
         assert!(
             last.parts.iter().any(|p| p.inline_data.is_some()),
             "末尾 user content に inline data が合流している"
+        );
+    }
+
+    /// #36 防御的追加: 空文字の履歴行（旧データ等）は Gemini contents へ送出しない
+    /// （空 text パートは Gemini API が拒否しうる）。前後の同一 role とはマージされない
+    /// （スキップ後も role 交互列が保たれることを検証）。
+    #[test]
+    fn build_contents_skips_empty_history_entries() {
+        let history = vec![
+            entry("user", "こんにちは"),
+            entry("assistant", ""), // #36: 復元後に空文字化した旧アシスタント行を模す。
+            entry("user", "聞こえてる？"),
+        ];
+        let msg = IncomingChat {
+            text: "聞こえてる？".to_owned(),
+            ..IncomingChat::default()
+        };
+        let contents = build_contents(&history, &msg);
+        // 空行はスキップされ、残る 2 件の user 発言は連続同一 role として 1 content へマージされる。
+        assert_eq!(
+            contents.len(),
+            1,
+            "空行スキップ後、連続 user は 1 content へ結合: {contents:?}"
+        );
+        assert!(matches!(contents[0].role, Role::User));
+        assert_eq!(
+            contents[0].parts[0].text.as_deref(),
+            Some("こんにちは\n聞こえてる？")
         );
     }
 
