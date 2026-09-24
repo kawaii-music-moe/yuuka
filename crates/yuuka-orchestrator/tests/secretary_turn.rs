@@ -113,6 +113,18 @@ fn count_logs(path: &std::path::Path, user_id: &str, role: &str) -> i64 {
     .expect("count")
 }
 
+/// 保存済みログ本文を古い順で返す（#36: 空文字保存の回帰検証に使う）。
+fn log_contents(path: &std::path::Path, user_id: &str, role: &str) -> Vec<String> {
+    let conn = rusqlite::Connection::open(path).expect("open");
+    let mut stmt = conn
+        .prepare("SELECT content FROM message_logs WHERE user_id = ?1 AND role = ?2 ORDER BY id")
+        .expect("prepare");
+    stmt.query_map(rusqlite::params![user_id, role], |r| r.get(0))
+        .expect("query")
+        .collect::<Result<Vec<String>, _>>()
+        .expect("rows")
+}
+
 fn engine_with(db: Db, crypto: Option<Arc<SystemCrypto>>, text: &str) -> ChatEngine {
     ChatEngine::new(
         db,
@@ -159,6 +171,48 @@ async fn secretary_turn_persists_and_replies() {
         count_logs(&path, "u1", "assistant"),
         1,
         "assistant 応答が保存される"
+    );
+}
+
+/// #36: モデルの返信が Embed 形 JSON ブロックだけのとき、復元後の本文が空文字のまま
+/// 会話ログに保存されてはいけない（「空でも fallback を保存」不変条件が復元後にも効く）。
+#[tokio::test]
+async fn embed_only_reply_does_not_persist_empty_string() {
+    let (db, path) = fresh_db();
+    let crypto =
+        Arc::new(SystemCrypto::new(SecretString::from("orch-test-secret".to_owned())).unwrap());
+    seed_user_with_key(&path, &crypto, "u6");
+
+    let engine = engine_with(
+        db,
+        Some(crypto),
+        "```json\n{\"title\":\"天気\",\"description\":\"晴れ\"}\n```",
+    );
+    let reply = engine
+        .secretary_turn(
+            &BotId::system_default(),
+            &UserId::new("u6"),
+            IncomingChat {
+                text: "天気教えて".to_owned(),
+                ..IncomingChat::default()
+            },
+            &null_sink(),
+        )
+        .await
+        .expect("turn ok");
+
+    assert_eq!(reply.embeds.len(), 1, "Embed は復元される");
+    assert!(
+        !reply.text.trim().is_empty(),
+        "reply.text が空文字: {:?}",
+        reply.text
+    );
+
+    let saved = log_contents(&path, "u6", "assistant");
+    assert_eq!(saved.len(), 1);
+    assert!(
+        !saved[0].trim().is_empty(),
+        "会話ログに空文字が保存されてはいけない: {saved:?}"
     );
 }
 
