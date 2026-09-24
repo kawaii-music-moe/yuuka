@@ -26,7 +26,7 @@ pub use extract::ScopedJson;
 pub use scope::{has_bot_access, resolve_scope};
 pub use settings::{get_system_setting, public_legal_urls};
 pub use state::{AppState, Db};
-pub use static_files::mount_static;
+pub use static_files::{mount_static, ADMIN_PREFIX};
 
 use axum::extract::{DefaultBodyLimit, Request};
 use axum::http::header::{

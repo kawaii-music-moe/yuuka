@@ -44,7 +44,12 @@ const workboxWindowPath = resolveWorkboxWindow();
 
 export default defineConfig({
 	root: __dirname,
-	base: "/", // ★デフォルト維持（/theme-init.js 等の絶対パス参照が書き換わらないよう）
+	// #34: 管理画面 SPA は Rust 側で /admin 配下に nest される
+	// （crates/yuuka-web/src/static_files.rs の ADMIN_PREFIX と一字一句一致させること）。
+	// index.html 内の public/ 直下参照（manifest/icons/theme-init.js）は %BASE_URL% で
+	// この base を反映させ、コンポーネント内の参照（materials/*）は import.meta.env.BASE_URL
+	// を使う（どちらも public/ はビルド時に書き換えられないため）。
+	base: "/admin/",
 	publicDir: "public",
 	build: {
 		outDir: "../dist/public",

@@ -9,6 +9,12 @@
 //! - `.br`/`.gz` サイドカーがあれば `ServeDir` が precompressed を優先配信。
 //! - パストラバーサルは `ServeDir` が正規化してルート外を弾く。
 //!
+//! **配信パス（#34）**: フロント（`frontend/`・管理画面 SPA）は `vite.config.ts` の
+//! `base: "/admin/"` に合わせて [`ADMIN_PREFIX`] 配下にのみ載せる（`nest_service`）。ルート
+//! `"/"` はまだ Rust に PWA が無い（issue #33）ため、暫定で `/admin/` へ 302 する。`/admin` 以外の
+//! 未登録パスは本サービスの対象外＝素の 404（以前はどんな未知パスも index.html(200) を返していたが、
+//! それは `/admin` 移設前の名残で、PWA 領域を誤って呑み込む状態だった）。
+//!
 //! セキュリティヘッダ（CSP/Referrer/HSTS/nosniff/X-Frame）は `apply_common_layers` が
 //! 全応答へ付与する（本モジュールは `Cache-Control` のみ担当）。
 //! index.html への google-site-verification meta 注入は後続増分（deferred・機能非依存）。
@@ -20,7 +26,8 @@ use axum::body::Body;
 use axum::extract::Request;
 use axum::http::header::{HeaderValue, CACHE_CONTROL, CONTENT_TYPE};
 use axum::http::StatusCode;
-use axum::response::{IntoResponse, Response};
+use axum::response::{IntoResponse, Redirect, Response};
+use axum::routing::get;
 use axum::Router;
 use tower::{service_fn, ServiceExt};
 use tower_http::services::ServeDir;
@@ -30,18 +37,60 @@ const IMMUTABLE: &str = "public, max-age=31536000, immutable";
 /// 非ハッシュ資産・index.html・404・SPA フォールバックの Cache-Control（Node 一致）。
 const NO_CACHE: &str = "no-cache, no-store, must-revalidate";
 
-/// `dist_dir`（例 `dist/public`）を SPA として `router` の `fallback_service` に載せる。
+/// 管理画面 SPA の配信プレフィックス。`frontend/vite.config.ts` の `base` と一字一句一致させる
+/// こと（ズレると資産 404・deep link 崩壊に直結する）。OAuth コールバック等サーバ側リダイレクト
+/// 先の構築にも使う（[`crate::static_files`] 外からは `yuuka_web::ADMIN_PREFIX` で参照）。
+pub const ADMIN_PREFIX: &str = "/admin";
+
+/// `dist_dir`（例 `dist/public`）を管理画面 SPA として [`ADMIN_PREFIX`] 配下に `nest_service` で載せる。
 ///
-/// API ルートは明示登録されており本サービスは最後に評価されるため `/api/*` を食い潰さない。
+/// API ルートは明示登録されており `/admin` はそれと衝突しないため（`yuuka-admin` の API は全て
+/// `/api/admin/*`）、この呼び出し順は問わない。ルート `"/"` は `/admin/` へ 302 する（PWA が Rust に
+/// 未実装の間の暫定挙動・issue #33 で置き換え予定）。
 pub fn mount_static<S>(router: Router<S>, dist_dir: &Path) -> Router<S>
 where
     S: Clone + Send + Sync + 'static,
 {
     let dist = dist_dir.to_path_buf();
-    router.fallback_service(service_fn(move |req: Request| {
+    let admin_service = service_fn(move |req: Request| {
         let dist = dist.clone();
         async move { Ok::<Response, Infallible>(serve_static(&dist, req).await) }
-    }))
+    });
+    let dist_for_fallback = dist_dir.to_path_buf();
+    router
+        .route("/", get(redirect_to_admin_root))
+        .nest_service(ADMIN_PREFIX, admin_service)
+        .fallback_service(service_fn(move |req: Request| {
+            let dist = dist_for_fallback.clone();
+            async move { Ok::<Response, Infallible>(top_level_fallback(&dist, req).await) }
+        }))
+}
+
+/// `GET /` ハンドラ（PWA 未実装の間の暫定ルート・issue #33）。
+async fn redirect_to_admin_root() -> Redirect {
+    Redirect::temporary("/admin/")
+}
+
+/// `/admin` にも `/` にもマッチしなかった全リクエストの最終フォールバック。
+///
+/// `/api/*` は（`/admin` 配下同様）明示 JSON 404 を維持する（B6 parity・`/admin` 移設の前後で
+/// API 未実装 404 の挙動が変わらないように）。それ以外は真の 404（`dist/404.html`）を返し、
+/// 管理画面 SPA を呑み込まない（旧実装は未知パスを何でも index.html(200) にフォールバックしていたが、
+/// それは `/admin` 分離前の名残であり、PWA 領域（issue #33）を誤って管理画面が横取りしてしまう）。
+async fn top_level_fallback(dist: &Path, req: Request) -> Response {
+    let path = req.uri().path().to_owned();
+    if path.starts_with("/api/") {
+        return api_not_found();
+    }
+    let mut resp = file_response(
+        &dist.join("404.html"),
+        StatusCode::NOT_FOUND,
+        "404 Not Found",
+    )
+    .await;
+    resp.headers_mut()
+        .insert(CACHE_CONTROL, HeaderValue::from_static(NO_CACHE));
+    resp
 }
 
 /// Node `serveStaticFile` の写像: `ServeDir` で配信し、未存在は拡張子で分岐、最後に Cache-Control。
@@ -193,7 +242,7 @@ mod tests {
     #[tokio::test]
     async fn hashed_asset_gets_immutable_cache() {
         let dir = dist();
-        let resp = get_resp(dir.path(), "/assets/app-BIDAdKj3.js").await;
+        let resp = get_resp(dir.path(), "/admin/assets/app-BIDAdKj3.js").await;
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(
             cache_control(&resp).as_deref(),
@@ -205,7 +254,7 @@ mod tests {
     async fn short_hash_asset_is_not_immutable() {
         // 6 文字ハッシュは Node 正規表現 {8,} に一致しない → no-cache（境界の凍結）。
         let dir = dist();
-        let resp = get_resp(dir.path(), "/assets/app-abc123.js").await;
+        let resp = get_resp(dir.path(), "/admin/assets/app-abc123.js").await;
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(
             cache_control(&resp).as_deref(),
@@ -217,7 +266,7 @@ mod tests {
     async fn missing_asset_is_404_not_immutable() {
         // M-3(a): /assets の未存在は 404 で、immutable を付けない。
         let dir = dist();
-        let resp = get_resp(dir.path(), "/assets/missing-BIDAdKj3.js").await;
+        let resp = get_resp(dir.path(), "/admin/assets/missing-BIDAdKj3.js").await;
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
         assert_eq!(
             cache_control(&resp).as_deref(),
@@ -229,7 +278,12 @@ mod tests {
     async fn index_html_and_manifest_are_no_cache() {
         // M-3(b): 非ハッシュ資産は no-cache（古い SPA シェル残留＝白画面の防止）。
         let dir = dist();
-        for uri in ["/index.html", "/manifest.json", "/"] {
+        for uri in [
+            "/admin/index.html",
+            "/admin/manifest.json",
+            "/admin",
+            "/admin/",
+        ] {
             let resp = get_resp(dir.path(), uri).await;
             assert_eq!(resp.status(), StatusCode::OK, "uri={uri}");
             assert_eq!(
@@ -242,9 +296,9 @@ mod tests {
 
     #[tokio::test]
     async fn extensionless_unknown_falls_back_to_index_html() {
-        // 拡張子なしの未知パスは index.html を 200 で返す（SPA ルーティング）。
+        // /admin 配下の拡張子なし未知パスは index.html を 200 で返す（SPA ルーティング・deep link）。
         let dir = dist();
-        let resp = get_resp(dir.path(), "/dashboard/tasks").await;
+        let resp = get_resp(dir.path(), "/admin/dashboard/tasks").await;
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(
             cache_control(&resp).as_deref(),
@@ -260,7 +314,11 @@ mod tests {
     async fn extension_unknown_returns_404_not_index() {
         // M-3(c): 拡張子付きの未存在は index.html を返さず 404（SW 更新・欠落検知を壊さない）。
         let dir = dist();
-        for uri in ["/old-removed.js", "/sw-missing.js", "/style.css"] {
+        for uri in [
+            "/admin/old-removed.js",
+            "/admin/sw-missing.js",
+            "/admin/style.css",
+        ] {
             let resp = get_resp(dir.path(), uri).await;
             assert_eq!(resp.status(), StatusCode::NOT_FOUND, "uri={uri}");
             let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
@@ -273,6 +331,31 @@ mod tests {
                 "uri={uri} 404 が index を返している"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn root_redirects_to_admin_root() {
+        // #34: PWA が Rust に未実装の間、"/" は暫定で "/admin/" へ 302 する（issue #33 で置換予定）。
+        let dir = dist();
+        let resp = get_resp(dir.path(), "/").await;
+        assert_eq!(resp.status(), StatusCode::TEMPORARY_REDIRECT);
+        assert_eq!(
+            resp.headers().get("location").map(|v| v.as_bytes()),
+            Some(&b"/admin/"[..])
+        );
+    }
+
+    #[tokio::test]
+    async fn path_outside_admin_is_404_not_admin_shell() {
+        // #34: `/admin` 移設後は "/admin" 以外の未知パスを管理画面 index.html で呑み込まない
+        // （旧実装はどんな未知パスも SPA にフォールバックし、PWA 領域〔issue #33〕を横取りしていた）。
+        let dir = dist();
+        let resp = get_resp(dir.path(), "/dashboard/tasks").await;
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert!(!String::from_utf8_lossy(&bytes).contains("SPA-SHELL"));
     }
 
     #[tokio::test]

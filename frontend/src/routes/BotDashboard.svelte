@@ -53,7 +53,8 @@
 	const baTheme = $derived($theme === "blue-archive");
 
 	// ウェルカムカードのアイコンは選択中Botのアバター（未設定Botは従来の固定画像へフォールバック）。
-	const botAvatar = $derived($activeBot?.avatar || "/materials/yuka.webp");
+	// #34: フォールバック画像は public/materials 配下（Vite が書き換えないため BASE_URL を明示）。
+	const botAvatar = $derived($activeBot?.avatar || `${import.meta.env.BASE_URL}materials/yuka.webp`);
 	const botName = $derived($activeBot?.name || "アシスタント");
 
 	function reportError(e: unknown) {
