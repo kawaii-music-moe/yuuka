@@ -11,6 +11,11 @@
 #       environment の pass-through 形式（値なし）でホスト環境変数から literal 注入する。
 #       instance.sh が `export YUUKA_ENCRYPTION_SECRET="$(cat secret.key)"` してから呼ぶ。
 #
+# イメージタグ: `image` はインスタンスごとに `YUUKA_IMAGE_TAG`（instance.env・既定 latest）で
+#       分離する（#56）。prod は `latest` のまま、dev は `dev` 等の専用タグを使うことで、
+#       `instance.sh dev update` が `yuuka:latest`（＝prod が次回再作成時に使う値）を
+#       巻き込んで再ビルドしてしまう事故を防ぐ。
+#
 # ネットワーク: 既定 bridge の subnet を `DOCKER_NET_SUBNET`（instance.env）で固定する（#51）。
 #       未固定だとネットワーク再作成のたびに Docker ゲートウェイ IP が変わりうるため、
 #       cloudflared 等のリバースプロキシ経由リクエストを信頼する `TRUSTED_PROXIES` が
@@ -20,7 +25,7 @@
 
 services:
   app:
-    image: yuuka:latest
+    image: "yuuka:${YUUKA_IMAGE_TAG:-latest}"
     build:
       context: .
       dockerfile: Dockerfile

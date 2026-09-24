@@ -27,7 +27,8 @@ chmod 600 deploy/prod/secret.key
 # instance.env（ポート/パス/プロジェクト名）と config.yaml（招待コード/OAuth/BASE_URL 等）を編集
 ```
 
-- `instance.env` — 非機密の起動パラメータ（`COMPOSE_PROJECT_NAME` / `HOST_PORT` / `BIND_ADDR` / `DATA_DIR` / `CONFIG_FILE` / `PUID` / `PGID` / `DOCKER_NET_SUBNET` / `TRUSTED_PROXIES`）。値に `$` を含めないこと。
+- `instance.env` — 非機密の起動パラメータ（`COMPOSE_PROJECT_NAME` / `HOST_PORT` / `BIND_ADDR` / `DATA_DIR` / `CONFIG_FILE` / `PUID` / `PGID` / `YUUKA_IMAGE_TAG` / `DOCKER_NET_SUBNET` / `TRUSTED_PROXIES`）。値に `$` を含めないこと。
+  - `YUUKA_IMAGE_TAG` — このインスタンス専用の Docker イメージタグ（例: prod=`latest` / dev=`dev`）。他インスタンスと共有すると `update` が互いのイメージを巻き込んで壊す。
   - `DOCKER_NET_SUBNET` / `TRUSTED_PROXIES` — 下記「外部公開」を参照。他インスタンスと重複しない値にすること。
 - `secret.key` — 暗号化シークレット（`YUUKA_ENCRYPTION_SECRET`）。生値のみを 1 行で保存。
 - `config.yaml` — システム共通設定。`*.example` を参照。
@@ -59,7 +60,7 @@ chmod 600 deploy/prod/secret.key
 
 ## 新しいインスタンスを追加する
 
-1. `deploy/<name>/` を作成し `instance.env` / `config.yaml` / `secret.key` を用意（`COMPOSE_PROJECT_NAME` / `HOST_PORT` / `DOCKER_NET_SUBNET` は他インスタンスと重複させない）。
+1. `deploy/<name>/` を作成し `instance.env` / `config.yaml` / `secret.key` を用意（`COMPOSE_PROJECT_NAME` / `HOST_PORT` / `YUUKA_IMAGE_TAG` / `DOCKER_NET_SUBNET` は他インスタンスと重複させない）。
 2. `openssl rand -base64 48 | tr -d '\n' > deploy/<name>/secret.key && chmod 600 deploy/<name>/secret.key`
 3. `deploy/instance.sh <name> update`
 

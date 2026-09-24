@@ -67,6 +67,12 @@ fi
 dc()     { docker compose -p "$COMPOSE_PROJECT_NAME"      --env-file "$ENV_FILE" -f "$ROOT/docker-compose.yml"         "$@"; }
 dc_hot() { docker compose -p "${COMPOSE_PROJECT_NAME}-hot" --env-file "$ENV_FILE" -f "$ROOT/docker-compose.dev-hot.yml" "$@"; }
 
+# インスタンスごとのイメージタグ（#56・instance.env の YUUKA_IMAGE_TAG。未設定なら従来通り latest）。
+# docker-compose.yml の `image: yuuka:${YUUKA_IMAGE_TAG:-latest}` と同じ既定値にしておくことで、
+# `dc build`/`dc up -d` が実際に作る/使うタグと、ここで退避・ロールバックするタグを一致させる。
+IMG_TAG="${YUUKA_IMAGE_TAG:-latest}"
+IMG="yuuka:$IMG_TAG"
+
 health_check() {
   local port="${HOST_PORT:-7854}" code=""
   echo "🔎 ヘルスチェック: http://127.0.0.1:$port/ （最大40秒待機）"
@@ -123,9 +129,9 @@ health_check() {
 CMD="${1:-}"
 case "$CMD" in
   update|deploy)
-    echo "🚀 [$INST] デプロイ開始..."
-    if docker image inspect yuuka:latest >/dev/null 2>&1; then
-      docker tag yuuka:latest "yuuka:prev-$INST" && echo "🏷  現行イメージを退避: yuuka:prev-$INST"
+    echo "🚀 [$INST] デプロイ開始（イメージ: $IMG）..."
+    if docker image inspect "$IMG" >/dev/null 2>&1; then
+      docker tag "$IMG" "yuuka:prev-$INST" && echo "🏷  現行イメージを退避: yuuka:prev-$INST"
     fi
     # 既定はレイヤキャッシュ有効（変更の無い層＝重い Rust クロスコンパイル等は再利用＝高速）。
     # Dockerfile は Cargo.toml/lock・package.json を src より先に COPY する構造のため、
@@ -145,8 +151,8 @@ case "$CMD" in
   rollback)
     docker image inspect "yuuka:prev-$INST" >/dev/null 2>&1 \
       || { echo "❌ 退避イメージ yuuka:prev-$INST がありません（まだ update していない可能性）" >&2; exit 1; }
-    echo "⏪ [$INST] ロールバック: yuuka:prev-$INST → yuuka:latest"
-    docker tag "yuuka:prev-$INST" yuuka:latest
+    echo "⏪ [$INST] ロールバック: yuuka:prev-$INST → $IMG"
+    docker tag "yuuka:prev-$INST" "$IMG"
     dc up -d
     health_check
     ;;
