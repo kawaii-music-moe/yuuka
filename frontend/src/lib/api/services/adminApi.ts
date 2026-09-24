@@ -3,13 +3,13 @@
 // botId は付けない。
 import { api } from "../client";
 import type {
-	AdminStatsResponse,
-	AdminUsersResponse,
+	AdminAuditLogsResponse,
+	AdminBotAttributeSettingsResponse,
 	AdminBotsResponse,
 	AdminInviteCodesResponse,
-	AdminAuditLogsResponse,
+	AdminStatsResponse,
 	AdminSystemSettingsResponse,
-	AdminBotAttributeSettingsResponse,
+	AdminUsersResponse,
 	ApiResponse,
 } from "../types";
 
@@ -64,7 +64,8 @@ export const adminApi = {
 
 	// ── 招待コード ──
 	/** GET /api/admin/invite-codes */
-	inviteCodes: () => api.get<AdminInviteCodesResponse>("/api/admin/invite-codes", USER),
+	inviteCodes: () =>
+		api.get<AdminInviteCodesResponse>("/api/admin/invite-codes", USER),
 	/** POST /api/admin/invite-codes — 発行（ハンドラは ctx.body.code を読む） */
 	createInviteCode: (code: string) =>
 		api.post<ApiResponse>("/api/admin/invite-codes", { code }, USER),
@@ -77,7 +78,10 @@ export const adminApi = {
 		),
 	/** DELETE /api/admin/invite-codes/:code */
 	deleteInviteCode: (code: string) =>
-		api.del<ApiResponse>(`/api/admin/invite-codes/${encodeURIComponent(code)}`, USER),
+		api.del<ApiResponse>(
+			`/api/admin/invite-codes/${encodeURIComponent(code)}`,
+			USER,
+		),
 
 	// ── Bot 属性のグローバル既定（botAttributeRoutes: admin） ──
 	/** GET /api/admin/bot-attribute-settings */

@@ -1,351 +1,365 @@
 <script lang="ts">
-	// ─────────────────────────────────────────────────────────────────────────
-	// Bot 統合管理オーバービュー（旧 app.js: fetchIntegratedOverview / wireIntegratedForms /
-	// renderIntBots / renderIntCredentials / renderIntMcp / renderIntGoogle / closeIntMenus）。
-	//
-	// 全面書換方針（§11.4 XSS）:
-	//   - 旧 innerHTML テンプレートリテラル + data-int-* 属性 + 後付けリスナー →
-	//     {#each} + onclick=/onchange= 直結。手動 intEsc() は撤去（Svelte 自動エスケープ）。
-	//   - ⋮ メニューは openMenuId を単一 state で保持し、window クリックで閉じる（旧 closeIntMenus）。
-	//   - 起動/停止/再起動後は少し待って overview を再取得（Discord 接続確立待ち）。
-	//   - 許可トグルは overview を即時再取得せず楽観更新（旧 wireIntGrantChips の局所再描画）せず、
-	//     ここではシンプルに toggle 成功後 overview を再取得する（正確性優先・少データ）。
-	// ─────────────────────────────────────────────────────────────────────────
-	import { integratedApi, credentialApi, settingsApi, mcpApi } from "$lib/api/services";
-	import { ApiError } from "$lib/api/client";
-	import { pushToast } from "$lib/stores/toast";
-	import { confirmDialog } from "$lib/components/ui";
-	import { Button, Icon, StatusChip } from "$lib/components/ui";
-	import { isAdmin } from "$lib/stores/session";
-	import ManagementOverlayShell from "./ManagementOverlayShell.svelte";
-	import type {
-		IntegratedBotView,
-		IntegratedMcpServerView,
-		IntegratedCredentialView,
-		IntegratedGoogleAccountView,
-	} from "$lib/api/types";
-	import type { ChipStatus } from "$lib/components/ui";
+// ─────────────────────────────────────────────────────────────────────────
+// Bot 統合管理オーバービュー（旧 app.js: fetchIntegratedOverview / wireIntegratedForms /
+// renderIntBots / renderIntCredentials / renderIntMcp / renderIntGoogle / closeIntMenus）。
+//
+// 全面書換方針（§11.4 XSS）:
+//   - 旧 innerHTML テンプレートリテラル + data-int-* 属性 + 後付けリスナー →
+//     {#each} + onclick=/onchange= 直結。手動 intEsc() は撤去（Svelte 自動エスケープ）。
+//   - ⋮ メニューは openMenuId を単一 state で保持し、window クリックで閉じる（旧 closeIntMenus）。
+//   - 起動/停止/再起動後は少し待って overview を再取得（Discord 接続確立待ち）。
+//   - 許可トグルは overview を即時再取得せず楽観更新（旧 wireIntGrantChips の局所再描画）せず、
+//     ここではシンプルに toggle 成功後 overview を再取得する（正確性優先・少データ）。
+// ─────────────────────────────────────────────────────────────────────────
 
-	import IntGrantChips from "./integrated/IntGrantChips.svelte";
-	import IntCalendarsModal from "./integrated/IntCalendarsModal.svelte";
-	import McpDashboardModal from "../routes/mcp/McpDashboardModal.svelte";
+import { ApiError } from "$lib/api/client";
+import {
+	credentialApi,
+	integratedApi,
+	mcpApi,
+	settingsApi,
+} from "$lib/api/services";
+import type {
+	IntegratedBotView,
+	IntegratedCredentialView,
+	IntegratedGoogleAccountView,
+	IntegratedMcpServerView,
+} from "$lib/api/types";
+import type { ChipStatus } from "$lib/components/ui";
+import { Button, confirmDialog, Icon, StatusChip } from "$lib/components/ui";
+import { isAdmin } from "$lib/stores/session";
+import { pushToast } from "$lib/stores/toast";
+import McpDashboardModal from "../routes/mcp/McpDashboardModal.svelte";
+import IntCalendarsModal from "./integrated/IntCalendarsModal.svelte";
+import IntGrantChips from "./integrated/IntGrantChips.svelte";
+import ManagementOverlayShell from "./ManagementOverlayShell.svelte";
 
-	let bots = $state<IntegratedBotView[]>([]);
-	let mcpServers = $state<IntegratedMcpServerView[]>([]);
-	let credentials = $state<IntegratedCredentialView[]>([]);
-	let googleAccounts = $state<IntegratedGoogleAccountView[]>([]);
-	let loading = $state(false);
+let bots = $state<IntegratedBotView[]>([]);
+let mcpServers = $state<IntegratedMcpServerView[]>([]);
+let credentials = $state<IntegratedCredentialView[]>([]);
+let googleAccounts = $state<IntegratedGoogleAccountView[]>([]);
+let loading = $state(false);
 
-	// dashboard 提供有無キャッシュ（serverId → available）
-	let dashAvailable = $state<Record<number, boolean>>({});
+// dashboard 提供有無キャッシュ（serverId → available）
+let dashAvailable = $state<Record<number, boolean>>({});
 
-	// ⋮ メニュー開閉（単一のみ開く）
-	let openMenuId = $state<string | null>(null);
+// ⋮ メニュー開閉（単一のみ開く）
+let openMenuId = $state<string | null>(null);
 
-	// カレンダーモーダル
-	let calOpen = $state(false);
-	let calAccount = $state<IntegratedGoogleAccountView | null>(null);
+// カレンダーモーダル
+let calOpen = $state(false);
+let calAccount = $state<IntegratedGoogleAccountView | null>(null);
 
-	// MCP ダッシュボードモーダル
-	let dashOpen = $state(false);
-	let dashServer = $state<{ id: number; name: string } | null>(null);
+// MCP ダッシュボードモーダル
+let dashOpen = $state(false);
+let dashServer = $state<{ id: number; name: string } | null>(null);
 
-	// 認証情報フォーム
-	let credService = $state("");
-	let credUsername = $state("");
-	let credPassword = $state("");
-	let credUrl = $state("");
+// 認証情報フォーム
+let credService = $state("");
+let credUsername = $state("");
+let credPassword = $state("");
+let credUrl = $state("");
 
-	// MCP フォーム
-	let mcpName = $state("");
-	let mcpEndpoint = $state("");
-	let mcpAuth = $state("");
-	let mcpConfirm = $state(true);
-	let mcpScope = $state<"user" | "system">("user");
+// MCP フォーム
+let mcpName = $state("");
+let mcpEndpoint = $state("");
+let mcpAuth = $state("");
+let mcpConfirm = $state(true);
+let mcpScope = $state<"user" | "system">("user");
 
-	function reportError(e: unknown) {
-		pushToast(e instanceof ApiError ? e.message : "エラーが発生しました", "error");
+function reportError(e: unknown) {
+	pushToast(
+		e instanceof ApiError ? e.message : "エラーが発生しました",
+		"error",
+	);
+}
+
+// ── オーバービュー取得（旧 fetchIntegratedOverview） ──
+async function loadOverview() {
+	loading = true;
+	try {
+		const data = await integratedApi.overview();
+		bots = data.bots ?? [];
+		mcpServers = data.mcpServers ?? [];
+		credentials = data.credentials ?? [];
+		googleAccounts = data.googleAccounts ?? [];
+		void probeDashboards();
+	} catch (e) {
+		reportError(e);
+	} finally {
+		loading = false;
 	}
+}
 
-	// ── オーバービュー取得（旧 fetchIntegratedOverview） ──
-	async function loadOverview() {
-		loading = true;
-		try {
-			const data = await integratedApi.overview();
-			bots = data.bots ?? [];
-			mcpServers = data.mcpServers ?? [];
-			credentials = data.credentials ?? [];
-			googleAccounts = data.googleAccounts ?? [];
-			void probeDashboards();
-		} catch (e) {
-			reportError(e);
-		} finally {
-			loading = false;
-		}
+// dashboard 提供有無を各 MCP サーバについて判定（旧 fire-and-forget probe）。
+// overview には含まれないため mcpApi.dashboardStatus を個別に叩く。
+async function probeDashboards() {
+	const next: Record<number, boolean> = {};
+	await Promise.all(
+		mcpServers.map(async (s) => {
+			try {
+				const r = await mcpApi.dashboardStatus(s.id);
+				next[s.id] = r.available === true;
+			} catch {
+				next[s.id] = false;
+			}
+		}),
+	);
+	dashAvailable = next;
+}
+
+// 初回・再表示時に取得。
+$effect(() => {
+	void loadOverview();
+});
+
+// ── Bot 起動/停止/再起動（旧 intBotAction） ──
+async function botAction(action: "start" | "stop" | "restart", botId: string) {
+	openMenuId = null;
+	try {
+		if (action === "start") await integratedApi.startBot(botId);
+		else if (action === "stop") await integratedApi.stopBot(botId);
+		else await integratedApi.restartBot(botId);
+	} catch (e) {
+		reportError(e);
 	}
+	// stop は即時反映、start/restart は接続確立を待って少し遅らせて再取得。
+	setTimeout(loadOverview, action === "stop" ? 300 : 1500);
+}
 
-	// dashboard 提供有無を各 MCP サーバについて判定（旧 fire-and-forget probe）。
-	// overview には含まれないため mcpApi.dashboardStatus を個別に叩く。
-	async function probeDashboards() {
-		const next: Record<number, boolean> = {};
-		await Promise.all(
-			mcpServers.map(async (s) => {
-				try {
-					const r = await mcpApi.dashboardStatus(s.id);
-					next[s.id] = r.available === true;
-				} catch {
-					next[s.id] = false;
-				}
-			}),
-		);
-		dashAvailable = next;
-	}
-
-	// 初回・再表示時に取得。
-	$effect(() => {
-		void loadOverview();
+// ── 会話履歴クリア（旧 intClearHistory） ──
+async function clearHistory(botId: string) {
+	openMenuId = null;
+	const ok = await confirmDialog({
+		message:
+			"このBotとの会話履歴をクリアしますか？\n次のメッセージから新しい会話になります（永続ログは保持され、検索・監査では引き続き利用できます）。",
+		danger: true,
+		confirmLabel: "クリア",
 	});
-
-	// ── Bot 起動/停止/再起動（旧 intBotAction） ──
-	async function botAction(action: "start" | "stop" | "restart", botId: string) {
-		openMenuId = null;
-		try {
-			if (action === "start") await integratedApi.startBot(botId);
-			else if (action === "stop") await integratedApi.stopBot(botId);
-			else await integratedApi.restartBot(botId);
-		} catch (e) {
-			reportError(e);
-		}
-		// stop は即時反映、start/restart は接続確立を待って少し遅らせて再取得。
-		setTimeout(loadOverview, action === "stop" ? 300 : 1500);
+	if (!ok) return;
+	try {
+		await integratedApi.clearHistory(botId);
+		pushToast("会話履歴をクリアしました。", "success");
+	} catch (e) {
+		reportError(e);
 	}
+}
 
-	// ── 会話履歴クリア（旧 intClearHistory） ──
-	async function clearHistory(botId: string) {
-		openMenuId = null;
-		const ok = await confirmDialog({
-			message:
-				"このBotとの会話履歴をクリアしますか？\n次のメッセージから新しい会話になります（永続ログは保持され、検索・監査では引き続き利用できます）。",
-			danger: true,
-			confirmLabel: "クリア",
+function toggleMenu(botId: string) {
+	openMenuId = openMenuId === botId ? null : botId;
+}
+
+// ── Bot の状態チップ（旧 renderIntBots のバッジ分岐） ──
+function botChip(b: IntegratedBotView): { status: ChipStatus; label: string } {
+	if (b.suspended) return { status: "stopped", label: "停止中(管理者)" };
+	if (b.connected) return { status: "running", label: "稼働中" };
+	if (b.running) return { status: "pending", label: "接続中…" };
+	if (!b.has_token && !b.is_system_default)
+		return { status: "unset", label: "トークン未設定" };
+	return { status: "unset", label: "停止" };
+}
+
+// ── 許可トグル（credential / mcp） ──
+async function toggleCred(
+	botId: string,
+	serviceName: string,
+	granted: boolean,
+) {
+	try {
+		await integratedApi.grantCredential({ botId, serviceName, granted });
+		await loadOverview();
+	} catch (e) {
+		reportError(e);
+		await loadOverview();
+	}
+}
+async function toggleMcp(botId: string, serverId: number, granted: boolean) {
+	try {
+		await integratedApi.grantMcp({ botId, serverId, granted });
+		await loadOverview();
+	} catch (e) {
+		reportError(e);
+		await loadOverview();
+	}
+}
+
+// 認証情報 service_name → 許可済み botId 集合。
+function credGrantedIds(serviceName: string): Set<string> {
+	return new Set(
+		bots
+			.filter((b) => (b.granted_credentials ?? []).includes(serviceName))
+			.map((b) => b.id),
+	);
+}
+function mcpGrantedIds(serverId: number): Set<string> {
+	return new Set(
+		bots
+			.filter((b) => (b.granted_mcp_ids ?? []).includes(serverId))
+			.map((b) => b.id),
+	);
+}
+
+// ── 認証情報 削除（旧 data-int-cred-del） ──
+async function deleteCredential(serviceName: string) {
+	const ok = await confirmDialog({
+		message: `認証情報「${serviceName}」を削除しますか？`,
+		danger: true,
+		confirmLabel: "削除",
+	});
+	if (!ok) return;
+	try {
+		await credentialApi.delete(serviceName);
+		await loadOverview();
+	} catch (e) {
+		reportError(e);
+	}
+}
+
+// ── 認証情報 登録フォーム（旧 int-cred-form） ──
+async function submitCredential(e: SubmitEvent) {
+	e.preventDefault();
+	try {
+		// サーバは serviceName/username/password/url を読む（credential は無視される）。
+		await credentialApi.register({
+			serviceName: credService.trim(),
+			username: credUsername.trim(),
+			password: credPassword,
+			url: credUrl.trim() || undefined,
+			credential: credPassword,
 		});
-		if (!ok) return;
-		try {
-			await integratedApi.clearHistory(botId);
-			pushToast("会話履歴をクリアしました。", "success");
-		} catch (e) {
-			reportError(e);
-		}
+		pushToast("認証情報を登録しました。", "success");
+		credService = "";
+		credUsername = "";
+		credPassword = "";
+		credUrl = "";
+		await loadOverview();
+	} catch (err) {
+		reportError(err);
 	}
+}
 
-	function toggleMenu(botId: string) {
-		openMenuId = openMenuId === botId ? null : botId;
+// ── MCP 操作（toggle/delete/dashboard） ──
+async function toggleMcpServer(server: IntegratedMcpServerView) {
+	try {
+		await mcpApi.toggle({ id: server.id, enabled: !server.enabled });
+		await loadOverview();
+	} catch (e) {
+		reportError(e);
 	}
+}
+async function deleteMcpServer(server: IntegratedMcpServerView) {
+	const ok = await confirmDialog({
+		message: "このMCPサーバーを削除しますか？",
+		danger: true,
+		confirmLabel: "削除",
+	});
+	if (!ok) return;
+	try {
+		await mcpApi.delete(server.id);
+		await loadOverview();
+	} catch (e) {
+		reportError(e);
+	}
+}
+function openDashboard(server: IntegratedMcpServerView) {
+	dashServer = { id: server.id, name: server.name };
+	dashOpen = true;
+}
 
-	// ── Bot の状態チップ（旧 renderIntBots のバッジ分岐） ──
-	function botChip(b: IntegratedBotView): { status: ChipStatus; label: string } {
-		if (b.suspended) return { status: "stopped", label: "停止中(管理者)" };
-		if (b.connected) return { status: "running", label: "稼働中" };
-		if (b.running) return { status: "pending", label: "接続中…" };
-		if (!b.has_token && !b.is_system_default)
-			return { status: "unset", label: "トークン未設定" };
-		return { status: "unset", label: "停止" };
-	}
-
-	// ── 許可トグル（credential / mcp） ──
-	async function toggleCred(botId: string, serviceName: string, granted: boolean) {
-		try {
-			await integratedApi.grantCredential({ botId, serviceName, granted });
-			await loadOverview();
-		} catch (e) {
-			reportError(e);
-			await loadOverview();
-		}
-	}
-	async function toggleMcp(botId: string, serverId: number, granted: boolean) {
-		try {
-			await integratedApi.grantMcp({ botId, serverId, granted });
-			await loadOverview();
-		} catch (e) {
-			reportError(e);
-			await loadOverview();
-		}
-	}
-
-	// 認証情報 service_name → 許可済み botId 集合。
-	function credGrantedIds(serviceName: string): Set<string> {
-		return new Set(
-			bots
-				.filter((b) => (b.granted_credentials ?? []).includes(serviceName))
-				.map((b) => b.id),
-		);
-	}
-	function mcpGrantedIds(serverId: number): Set<string> {
-		return new Set(
-			bots
-				.filter((b) => (b.granted_mcp_ids ?? []).includes(serverId))
-				.map((b) => b.id),
-		);
-	}
-
-	// ── 認証情報 削除（旧 data-int-cred-del） ──
-	async function deleteCredential(serviceName: string) {
-		const ok = await confirmDialog({
-			message: `認証情報「${serviceName}」を削除しますか？`,
-			danger: true,
-			confirmLabel: "削除",
+// ── MCP 登録フォーム（旧 int-mcp-form） ──
+async function submitMcp(e: SubmitEvent) {
+	e.preventDefault();
+	try {
+		await mcpApi.add({
+			name: mcpName.trim(),
+			endpointUrl: mcpEndpoint.trim(),
+			requiresConfirmation: mcpConfirm,
+			authCredential: mcpAuth || undefined,
+			scope: $isAdmin ? mcpScope : undefined,
 		});
-		if (!ok) return;
-		try {
-			await credentialApi.delete(serviceName);
-			await loadOverview();
-		} catch (e) {
-			reportError(e);
-		}
+		pushToast("MCPサーバーを登録しました。", "success");
+		mcpName = "";
+		mcpEndpoint = "";
+		mcpAuth = "";
+		mcpConfirm = true;
+		mcpScope = "user";
+		await loadOverview();
+	} catch (err) {
+		reportError(err);
 	}
+}
 
-	// ── 認証情報 登録フォーム（旧 int-cred-form） ──
-	async function submitCredential(e: SubmitEvent) {
-		e.preventDefault();
-		try {
-			// サーバは serviceName/username/password/url を読む（credential は無視される）。
-			await credentialApi.register({
-				serviceName: credService.trim(),
-				username: credUsername.trim(),
-				password: credPassword,
-				url: credUrl.trim() || undefined,
-				credential: credPassword,
-			});
-			pushToast("認証情報を登録しました。", "success");
-			credService = "";
-			credUsername = "";
-			credPassword = "";
-			credUrl = "";
-			await loadOverview();
-		} catch (err) {
-			reportError(err);
-		}
+// ── Google: primary / delete / calendars / assign ──
+async function setPrimary(accountId: number) {
+	try {
+		await integratedApi.setPrimaryGoogleAccount(accountId);
+		await loadOverview();
+	} catch (e) {
+		reportError(e);
 	}
+}
+async function deleteGoogle(accountId: number) {
+	const ok = await confirmDialog({
+		message: "このGoogleアカウント連携を解除しますか？",
+		danger: true,
+		confirmLabel: "解除",
+	});
+	if (!ok) return;
+	try {
+		await integratedApi.deleteGoogleAccount(accountId);
+		await loadOverview();
+	} catch (e) {
+		reportError(e);
+	}
+}
+function openCalendars(acct: IntegratedGoogleAccountView) {
+	calAccount = acct;
+	calOpen = true;
+}
+async function saveCalendars(payload: {
+	accountId: number;
+	calendars: string[];
+}) {
+	try {
+		await integratedApi.setGoogleCalendars(payload);
+		calOpen = false;
+		await loadOverview();
+	} catch (e) {
+		reportError(e);
+	}
+}
 
-	// ── MCP 操作（toggle/delete/dashboard） ──
-	async function toggleMcpServer(server: IntegratedMcpServerView) {
-		try {
-			await mcpApi.toggle({ id: server.id, enabled: !server.enabled });
-			await loadOverview();
-		} catch (e) {
-			reportError(e);
-		}
+// Bot 別 使用 Google アカウント割当（primary / none / account）。
+const ownedBots = $derived(bots.filter((b) => !b.is_system_default));
+function assignValue(b: IntegratedBotView): string {
+	const gs = b.google_setting;
+	return gs === "primary" || gs === "none" ? String(gs) : `acct:${gs}`;
+}
+async function onAssignChange(botId: string, value: string) {
+	try {
+		let body:
+			| { botId: string; mode: "primary" }
+			| { botId: string; mode: "none" }
+			| { botId: string; mode: "account"; accountId: number };
+		if (value === "primary") body = { botId, mode: "primary" };
+		else if (value === "none") body = { botId, mode: "none" };
+		else body = { botId, mode: "account", accountId: Number(value.slice(5)) };
+		await integratedApi.grantGoogle(body);
+		await loadOverview();
+	} catch (e) {
+		reportError(e);
 	}
-	async function deleteMcpServer(server: IntegratedMcpServerView) {
-		const ok = await confirmDialog({
-			message: "このMCPサーバーを削除しますか？",
-			danger: true,
-			confirmLabel: "削除",
-		});
-		if (!ok) return;
-		try {
-			await mcpApi.delete(server.id);
-			await loadOverview();
-		} catch (e) {
-			reportError(e);
-		}
-	}
-	function openDashboard(server: IntegratedMcpServerView) {
-		dashServer = { id: server.id, name: server.name };
-		dashOpen = true;
-	}
+}
 
-	// ── MCP 登録フォーム（旧 int-mcp-form） ──
-	async function submitMcp(e: SubmitEvent) {
-		e.preventDefault();
-		try {
-			await mcpApi.add({
-				name: mcpName.trim(),
-				endpointUrl: mcpEndpoint.trim(),
-				requiresConfirmation: mcpConfirm,
-				authCredential: mcpAuth || undefined,
-				scope: $isAdmin ? mcpScope : undefined,
-			});
-			pushToast("MCPサーバーを登録しました。", "success");
-			mcpName = "";
-			mcpEndpoint = "";
-			mcpAuth = "";
-			mcpConfirm = true;
-			mcpScope = "user";
-			await loadOverview();
-		} catch (err) {
-			reportError(err);
-		}
+// Google 連携開始（旧 int-google-connect → OAuth URL へ遷移）。
+async function connectGoogle() {
+	try {
+		const r = await settingsApi.googleOAuthUrl();
+		if (r.url) window.location.href = r.url;
+	} catch (e) {
+		reportError(e);
 	}
-
-	// ── Google: primary / delete / calendars / assign ──
-	async function setPrimary(accountId: number) {
-		try {
-			await integratedApi.setPrimaryGoogleAccount(accountId);
-			await loadOverview();
-		} catch (e) {
-			reportError(e);
-		}
-	}
-	async function deleteGoogle(accountId: number) {
-		const ok = await confirmDialog({
-			message: "このGoogleアカウント連携を解除しますか？",
-			danger: true,
-			confirmLabel: "解除",
-		});
-		if (!ok) return;
-		try {
-			await integratedApi.deleteGoogleAccount(accountId);
-			await loadOverview();
-		} catch (e) {
-			reportError(e);
-		}
-	}
-	function openCalendars(acct: IntegratedGoogleAccountView) {
-		calAccount = acct;
-		calOpen = true;
-	}
-	async function saveCalendars(payload: { accountId: number; calendars: string[] }) {
-		try {
-			await integratedApi.setGoogleCalendars(payload);
-			calOpen = false;
-			await loadOverview();
-		} catch (e) {
-			reportError(e);
-		}
-	}
-
-	// Bot 別 使用 Google アカウント割当（primary / none / account）。
-	const ownedBots = $derived(bots.filter((b) => !b.is_system_default));
-	function assignValue(b: IntegratedBotView): string {
-		const gs = b.google_setting;
-		return gs === "primary" || gs === "none" ? String(gs) : `acct:${gs}`;
-	}
-	async function onAssignChange(botId: string, value: string) {
-		try {
-			let body:
-				| { botId: string; mode: "primary" }
-				| { botId: string; mode: "none" }
-				| { botId: string; mode: "account"; accountId: number };
-			if (value === "primary") body = { botId, mode: "primary" };
-			else if (value === "none") body = { botId, mode: "none" };
-			else body = { botId, mode: "account", accountId: Number(value.slice(5)) };
-			await integratedApi.grantGoogle(body);
-			await loadOverview();
-		} catch (e) {
-			reportError(e);
-		}
-	}
-
-	// Google 連携開始（旧 int-google-connect → OAuth URL へ遷移）。
-	async function connectGoogle() {
-		try {
-			const r = await settingsApi.googleOAuthUrl();
-			if (r.url) window.location.href = r.url;
-		} catch (e) {
-			reportError(e);
-		}
-	}
+}
 </script>
 
 <svelte:window onclick={() => (openMenuId = null)} />

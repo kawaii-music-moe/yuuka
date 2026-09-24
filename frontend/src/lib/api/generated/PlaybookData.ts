@@ -4,4 +4,4 @@ import type { Playbook } from "./Playbook";
 /**
  * 単一 playbook を返すペイロード（save。`{success, playbook}`）。
  */
-export type PlaybookData = { playbook: Playbook, };
+export type PlaybookData = { playbook: Playbook };

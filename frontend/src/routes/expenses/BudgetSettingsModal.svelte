@@ -1,41 +1,47 @@
 <script lang="ts">
-	// カテゴリ別予算上限設定モーダル（旧 index.html #modal-budget-settings
-	// + app.js:4267 renderBudgetSettingsList / budgetLimitForm submit）。
-	// 一覧・追加・削除の API は親が担当（子は API を叩かない）。limits は親から受け取り、
-	// 追加は onadd、削除は ondelete で親へ委譲する。
-	import { Modal, Button } from "$lib/components/ui";
-	import { pushToast } from "$lib/stores/toast";
-	import type { BudgetLimit } from "$lib/api/types";
-	import { EXPENSE_CATEGORIES, yen } from "./expenseUtils";
+// カテゴリ別予算上限設定モーダル（旧 index.html #modal-budget-settings
+// + app.js:4267 renderBudgetSettingsList / budgetLimitForm submit）。
+// 一覧・追加・削除の API は親が担当（子は API を叩かない）。limits は親から受け取り、
+// 追加は onadd、削除は ondelete で親へ委譲する。
 
-	interface Props {
-		open?: boolean;
-		limits: BudgetLimit[];
-		onadd: (payload: { category: string; limitAmount: number }) => void;
-		ondelete: (category: string) => void;
+import type { BudgetLimit } from "$lib/api/types";
+import { Button, Modal } from "$lib/components/ui";
+import { pushToast } from "$lib/stores/toast";
+import { EXPENSE_CATEGORIES, yen } from "./expenseUtils";
+
+interface Props {
+	open?: boolean;
+	limits: BudgetLimit[];
+	onadd: (payload: { category: string; limitAmount: number }) => void;
+	ondelete: (category: string) => void;
+}
+
+let { open = $bindable(false), limits, onadd, ondelete }: Props = $props();
+
+let category = $state<string>(EXPENSE_CATEGORIES[0]);
+let limitAmount = $state<number | null>(null);
+
+$effect(() => {
+	if (!open) return;
+	category = EXPENSE_CATEGORIES[0];
+	limitAmount = null;
+});
+
+function submit(e: SubmitEvent) {
+	e.preventDefault();
+	// 旧: category と有効な上限金額（>0）を検証。
+	if (
+		!category ||
+		limitAmount == null ||
+		Number.isNaN(limitAmount) ||
+		limitAmount <= 0
+	) {
+		pushToast("カテゴリーと有効な上限金額を入力してください。", "error");
+		return;
 	}
-
-	let { open = $bindable(false), limits, onadd, ondelete }: Props = $props();
-
-	let category = $state<string>(EXPENSE_CATEGORIES[0]);
-	let limitAmount = $state<number | null>(null);
-
-	$effect(() => {
-		if (!open) return;
-		category = EXPENSE_CATEGORIES[0];
-		limitAmount = null;
-	});
-
-	function submit(e: SubmitEvent) {
-		e.preventDefault();
-		// 旧: category と有効な上限金額（>0）を検証。
-		if (!category || limitAmount == null || Number.isNaN(limitAmount) || limitAmount <= 0) {
-			pushToast("カテゴリーと有効な上限金額を入力してください。", "error");
-			return;
-		}
-		onadd({ category, limitAmount: Number(limitAmount) });
-		limitAmount = null;
-	}
+	onadd({ category, limitAmount: Number(limitAmount) });
+	limitAmount = null;
+}
 </script>
 
 <Modal bind:open title="カテゴリ別予算上限設定">

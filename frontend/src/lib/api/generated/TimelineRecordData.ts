@@ -4,4 +4,4 @@ import type { TimelineRecord } from "./TimelineRecord";
 /**
  * 単一記録を返すペイロード（add。`{success, record}`）。
  */
-export type TimelineRecordData = { record: TimelineRecord, };
+export type TimelineRecordData = { record: TimelineRecord };

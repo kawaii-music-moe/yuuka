@@ -17,4 +17,13 @@
  * （`Number(b.amount)`）ため残置する。**`type=expense` の expenses 二重登録・`amount` 必須検証・
  * `category` キー処理は deferred（Batch 6 / M-8）**。`type=task_done` の todos.complete 連携も deferred。
  */
-export type NewTimelineRecord = { date: string, type: string, recordedAt: string | null, title: string | null, content: string | null, todoId: bigint | null, amount: number | null, location: string | null, };
+export type NewTimelineRecord = {
+	date: string;
+	type: string;
+	recordedAt: string | null;
+	title: string | null;
+	content: string | null;
+	todoId: bigint | null;
+	amount: number | null;
+	location: string | null;
+};

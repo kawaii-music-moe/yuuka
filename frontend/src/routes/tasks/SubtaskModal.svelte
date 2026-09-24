@@ -1,41 +1,42 @@
 <script lang="ts">
-	// サブタスク追加モーダル（旧 app.js:2684 openSubtaskModal + subtask-form submit）。
-	// parent の下に parentId 付きで /api/tasks/add する。
-	import { Modal, Button } from "$lib/components/ui";
-	import type { TodoWithSubtasks } from "$lib/api/types";
+// サブタスク追加モーダル（旧 app.js:2684 openSubtaskModal + subtask-form submit）。
+// parent の下に parentId 付きで /api/tasks/add する。
 
-	interface Props {
-		open?: boolean;
-		/** 親タスク（サブタスク登録先）。 */
-		parent?: TodoWithSubtasks | null;
-		onsave: (payload: {
-			parentId: number;
-			title: string;
-			startDate: string;
-			dueDate: string;
-		}) => void;
-	}
+import type { TodoWithSubtasks } from "$lib/api/types";
+import { Button, Modal } from "$lib/components/ui";
 
-	let { open = $bindable(false), parent = null, onsave }: Props = $props();
+interface Props {
+	open?: boolean;
+	/** 親タスク（サブタスク登録先）。 */
+	parent?: TodoWithSubtasks | null;
+	onsave: (payload: {
+		parentId: number;
+		title: string;
+		startDate: string;
+		dueDate: string;
+	}) => void;
+}
 
-	let title = $state("");
-	let startDate = $state("");
-	let dueDate = $state("");
+let { open = $bindable(false), parent = null, onsave }: Props = $props();
 
-	// 開くたびに reset（旧 form.reset()）。
-	$effect(() => {
-		if (!open) return;
-		title = "";
-		startDate = "";
-		dueDate = "";
-	});
+let title = $state("");
+let startDate = $state("");
+let dueDate = $state("");
 
-	function submit(e: SubmitEvent) {
-		e.preventDefault();
-		const trimmed = title.trim();
-		if (!trimmed || parent == null) return;
-		onsave({ parentId: parent.id, title: trimmed, startDate, dueDate });
-	}
+// 開くたびに reset（旧 form.reset()）。
+$effect(() => {
+	if (!open) return;
+	title = "";
+	startDate = "";
+	dueDate = "";
+});
+
+function submit(e: SubmitEvent) {
+	e.preventDefault();
+	const trimmed = title.trim();
+	if (!trimmed || parent == null) return;
+	onsave({ parentId: parent.id, title: trimmed, startDate, dueDate });
+}
 </script>
 
 <Modal bind:open title="サブタスクの追加">

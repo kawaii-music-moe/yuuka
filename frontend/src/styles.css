@@ -522,6 +522,9 @@ textarea {
 	.management-overlay-card {
 		width: 100vw;
 		height: 100vh;
+		/* biome-ignore lint/suspicious/noDuplicateProperties: 100vh above is an
+		   intentional fallback for browsers without dvh support; this overrides it
+		   where supported. */
 		height: 100dvh;
 		max-height: 100dvh;
 		border-radius: 0;
@@ -599,12 +602,15 @@ textarea {
 	max-height: 60vh;
 	overflow-y: auto;
 	margin-top: 16px;
-	padding-right: 12px;
 	text-align: left;
 	background-color: var(--surface-1dp);
 	border: 1px solid var(--border-matte);
 	border-radius: 4px;
+	/* padding-right stays smaller than the shorthand to leave room for the
+	   scrollbar from overflow-y: auto above; declare the shorthand first so it
+	   doesn't blow away this longhand override (was previously a no-op). */
 	padding: 20px;
+	padding-right: 12px;
 }
 
 /* Custom Scrollbar for usage content to match the theme */
@@ -2489,8 +2495,13 @@ input[type="checkbox"]:disabled,
 		max-width: 100%;
 		width: 100%;
 		height: 100vh;
+		/* biome-ignore lint/suspicious/noDuplicateProperties: 100vh above is an
+		   intentional fallback for browsers without dvh support; this overrides it
+		   where supported. */
 		height: 100dvh;
 		max-height: 100vh;
+		/* biome-ignore lint/suspicious/noDuplicateProperties: same dvh fallback
+		   pattern as height above. */
 		max-height: 100dvh;
 		padding: 12px;
 		border: 0;
@@ -4525,7 +4536,9 @@ summary.column-header.badge-right > h3 {
 	gap: 12px;
 }
 @media (max-width: 700px) {
-	.tl-body { grid-template-columns: 1fr; }
+	.tl-body {
+		grid-template-columns: 1fr;
+	}
 }
 .tl-col {
 	display: flex;
@@ -4565,10 +4578,18 @@ summary.column-header.badge-right > h3 {
 	gap: 4px;
 	position: relative;
 }
-.tl-plan-card[data-type="transit"] { border-left-color: var(--color-amber, #f59e0b); }
-.tl-plan-card[data-type="task"]    { border-left-color: var(--color-green, #22c55e); }
-.tl-plan-card[data-type="free"]    { border-left-color: var(--color-zinc-muted); }
-.tl-plan-card[data-type="event"]   { border-left-color: var(--color-primary); }
+.tl-plan-card[data-type="transit"] {
+	border-left-color: var(--color-amber, #f59e0b);
+}
+.tl-plan-card[data-type="task"] {
+	border-left-color: var(--color-green, #22c55e);
+}
+.tl-plan-card[data-type="free"] {
+	border-left-color: var(--color-zinc-muted);
+}
+.tl-plan-card[data-type="event"] {
+	border-left-color: var(--color-primary);
+}
 
 .tl-plan-time {
 	font-family: var(--font-family-mono);
@@ -4592,7 +4613,9 @@ summary.column-header.badge-right > h3 {
 	opacity: 0;
 	transition: opacity 0.15s;
 }
-.tl-plan-card:hover .tl-plan-actions { opacity: 1; }
+.tl-plan-card:hover .tl-plan-actions {
+	opacity: 1;
+}
 
 /* 記録カード */
 .tl-record-card {
@@ -4606,10 +4629,18 @@ summary.column-header.badge-right > h3 {
 	gap: 4px;
 	position: relative;
 }
-.tl-record-card[data-type="expense"]   { border-left-color: var(--color-green, #22c55e); }
-.tl-record-card[data-type="task_done"] { border-left-color: var(--color-primary); }
-.tl-record-card[data-type="media"]     { border-left-color: var(--color-amber, #f59e0b); }
-.tl-record-card[data-type="location"]  { border-left-color: var(--color-zinc-muted); }
+.tl-record-card[data-type="expense"] {
+	border-left-color: var(--color-green, #22c55e);
+}
+.tl-record-card[data-type="task_done"] {
+	border-left-color: var(--color-primary);
+}
+.tl-record-card[data-type="media"] {
+	border-left-color: var(--color-amber, #f59e0b);
+}
+.tl-record-card[data-type="location"] {
+	border-left-color: var(--color-zinc-muted);
+}
 
 .tl-record-time {
 	font-family: var(--font-family-mono);
@@ -4639,7 +4670,9 @@ summary.column-header.badge-right > h3 {
 	opacity: 0;
 	transition: opacity 0.15s;
 }
-.tl-record-card:hover .tl-record-actions { opacity: 1; }
+.tl-record-card:hover .tl-record-actions {
+	opacity: 1;
+}
 
 /* タイプ選択ピル */
 .tl-type-pills {
@@ -4662,7 +4695,7 @@ summary.column-header.badge-right > h3 {
 .tl-type-pill:hover {
 	border-color: var(--color-primary);
 	color: var(--color-primary);
-	background: rgba(var(--color-primary-rgb, 99,102,241), 0.08);
+	background: rgba(var(--color-primary-rgb, 99, 102, 241), 0.08);
 }
 
 /* 空状態 */

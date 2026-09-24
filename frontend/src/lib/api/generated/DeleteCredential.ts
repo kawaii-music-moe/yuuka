@@ -3,4 +3,4 @@
 /**
  * `POST /api/credentials/delete` の body（`serviceName`）。
  */
-export type DeleteCredential = { serviceName: string, };
+export type DeleteCredential = { serviceName: string };

@@ -1,173 +1,186 @@
 <script lang="ts">
-	// ─────────────────────────────────────────────────────────────────────────
-	// ペルソナ タブ（旧 app.js persona 系 + index.html #tab-personas を移植）。
-	//   - マイペルソナ一覧（適用中ID をハイライト）: GET /api/personas
-	//   - マーケットプレイス一覧: GET /api/personas/marketplace
-	//   - 全文プレビュー: GET /api/personas/marketplace/:id → プレビューモーダル
-	//   - 作成/編集/削除/適用/公開/インポート
-	// personaApi 使用。list/activate は scope:'bot'（適用は Bot 単位）、他は scope:'user'。
-	// （旧タブにある「汎用モード Bot単位ペルソナ」「共有時の推奨ペルソナ」カードは
-	//   botAttribute/bot API 依存で本グループ範囲外のため含めない。）
-	// ─────────────────────────────────────────────────────────────────────────
-	import { activeBot } from "$lib/stores/activeBot";
-	import { personaApi } from "$lib/api/services";
-	import { ApiError } from "$lib/api/client";
-	import { pushToast } from "$lib/stores/toast";
-	import { confirmDialog } from "$lib/components/ui";
-	import { Button, Icon, Badge, EmptyState } from "$lib/components/ui";
-	import type { PersonaRecord, PublicPersonaView } from "$lib/api/types";
-	import PersonaEditModal from "./personas/PersonaEditModal.svelte";
-	import PersonaPreviewModal from "./personas/PersonaPreviewModal.svelte";
+// ─────────────────────────────────────────────────────────────────────────
+// ペルソナ タブ（旧 app.js persona 系 + index.html #tab-personas を移植）。
+//   - マイペルソナ一覧（適用中ID をハイライト）: GET /api/personas
+//   - マーケットプレイス一覧: GET /api/personas/marketplace
+//   - 全文プレビュー: GET /api/personas/marketplace/:id → プレビューモーダル
+//   - 作成/編集/削除/適用/公開/インポート
+// personaApi 使用。list/activate は scope:'bot'（適用は Bot 単位）、他は scope:'user'。
+// （旧タブにある「汎用モード Bot単位ペルソナ」「共有時の推奨ペルソナ」カードは
+//   botAttribute/bot API 依存で本グループ範囲外のため含めない。）
+// ─────────────────────────────────────────────────────────────────────────
 
-	let personas = $state<PersonaRecord[]>([]);
-	let activePersonaId = $state<number | null>(null);
-	let maxLength = $state(20000);
-	let marketplace = $state<PublicPersonaView[]>([]);
+import { ApiError } from "$lib/api/client";
+import { personaApi } from "$lib/api/services";
+import type { PersonaRecord, PublicPersonaView } from "$lib/api/types";
+import {
+	Badge,
+	Button,
+	confirmDialog,
+	EmptyState,
+	Icon,
+} from "$lib/components/ui";
+import { activeBot } from "$lib/stores/activeBot";
+import { pushToast } from "$lib/stores/toast";
+import PersonaEditModal from "./personas/PersonaEditModal.svelte";
+import PersonaPreviewModal from "./personas/PersonaPreviewModal.svelte";
 
-	// 編集モーダル
-	let editOpen = $state(false);
-	let editingPersona = $state<PersonaRecord | null>(null);
+let personas = $state<PersonaRecord[]>([]);
+let activePersonaId = $state<number | null>(null);
+let maxLength = $state(20000);
+let marketplace = $state<PublicPersonaView[]>([]);
 
-	// プレビューモーダル
-	let previewOpen = $state(false);
-	let previewName = $state("");
-	let previewPrompt = $state("");
-	let previewId = $state<number | null>(null);
+// 編集モーダル
+let editOpen = $state(false);
+let editingPersona = $state<PersonaRecord | null>(null);
 
-	const activeName = $derived(
-		personas.find((p) => p.id === activePersonaId)?.name ?? "デフォルトペルソナ",
+// プレビューモーダル
+let previewOpen = $state(false);
+let previewName = $state("");
+let previewPrompt = $state("");
+let previewId = $state<number | null>(null);
+
+const activeName = $derived(
+	personas.find((p) => p.id === activePersonaId)?.name ?? "デフォルトペルソナ",
+);
+
+function reportError(e: unknown) {
+	pushToast(
+		e instanceof ApiError ? e.message : "エラーが発生しました",
+		"error",
 	);
+}
 
-	function reportError(e: unknown) {
-		pushToast(e instanceof ApiError ? e.message : "エラーが発生しました", "error");
+async function loadPersonas() {
+	try {
+		const res = await personaApi.list();
+		personas = res.personas ?? [];
+		activePersonaId = res.active_persona_id ?? null;
+		maxLength = res.max_length || 20000;
+	} catch (e) {
+		reportError(e);
+		personas = [];
 	}
+}
 
-	async function loadPersonas() {
-		try {
-			const res = await personaApi.list();
-			personas = res.personas ?? [];
-			activePersonaId = res.active_persona_id ?? null;
-			maxLength = res.max_length || 20000;
-		} catch (e) {
-			reportError(e);
-			personas = [];
-		}
+async function loadMarketplace() {
+	try {
+		const res = await personaApi.marketplace();
+		marketplace = res.personas ?? [];
+	} catch (e) {
+		reportError(e);
+		marketplace = [];
 	}
+}
 
-	async function loadMarketplace() {
-		try {
-			const res = await personaApi.marketplace();
-			marketplace = res.personas ?? [];
-		} catch (e) {
-			reportError(e);
-			marketplace = [];
-		}
-	}
+// activeBot（適用中ID が Bot 単位）変更で再取得。
+$effect(() => {
+	void $activeBot?.id;
+	void loadPersonas();
+	void loadMarketplace();
+});
 
-	// activeBot（適用中ID が Bot 単位）変更で再取得。
-	$effect(() => {
-		void $activeBot?.id;
-		void loadPersonas();
-		void loadMarketplace();
-	});
+async function reloadAll() {
+	await loadPersonas();
+	await loadMarketplace();
+}
 
-	async function reloadAll() {
+function openNew() {
+	editingPersona = null;
+	editOpen = true;
+}
+function openEdit(p: PersonaRecord) {
+	editingPersona = p;
+	editOpen = true;
+}
+
+async function savePersona(payload: {
+	id?: number;
+	name: string;
+	prompt: string;
+}) {
+	try {
+		const res = await personaApi.save(payload);
+		pushToast(res.message ?? "保存しました。", "success");
+		editOpen = false;
 		await loadPersonas();
-		await loadMarketplace();
+	} catch (e) {
+		reportError(e);
 	}
+}
 
-	function openNew() {
-		editingPersona = null;
-		editOpen = true;
-	}
-	function openEdit(p: PersonaRecord) {
-		editingPersona = p;
-		editOpen = true;
-	}
-
-	async function savePersona(payload: { id?: number; name: string; prompt: string }) {
-		try {
-			const res = await personaApi.save(payload);
-			pushToast(res.message ?? "保存しました。", "success");
-			editOpen = false;
-			await loadPersonas();
-		} catch (e) {
-			reportError(e);
-		}
-	}
-
-	async function activate(id: number | null) {
-		if (id == null) {
-			const ok = await confirmDialog({
-				message: "デフォルトペルソナに戻しますか？",
-				confirmLabel: "戻す",
-			});
-			if (!ok) return;
-		}
-		try {
-			const res = await personaApi.activate(id);
-			pushToast(res.message ?? "適用しました。", "success");
-			await reloadAll();
-		} catch (e) {
-			reportError(e);
-		}
-	}
-
-	async function togglePublish(p: PersonaRecord) {
-		const willPublish = p.is_public !== 1;
+async function activate(id: number | null) {
+	if (id == null) {
 		const ok = await confirmDialog({
-			message: willPublish
-				? `ペルソナ「${p.name}」をマーケットプレイスに公開しますか？\n全ユーザーが内容を閲覧・インポートできるようになります。`
-				: `ペルソナ「${p.name}」を非公開化しますか？`,
-			confirmLabel: willPublish ? "公開する" : "非公開にする",
+			message: "デフォルトペルソナに戻しますか？",
+			confirmLabel: "戻す",
 		});
 		if (!ok) return;
-		try {
-			const res = await personaApi.publish(p.id, willPublish);
-			pushToast(res.message ?? "更新しました。", "success");
-			await reloadAll();
-		} catch (e) {
-			reportError(e);
-		}
 	}
+	try {
+		const res = await personaApi.activate(id);
+		pushToast(res.message ?? "適用しました。", "success");
+		await reloadAll();
+	} catch (e) {
+		reportError(e);
+	}
+}
 
-	async function deletePersona(p: PersonaRecord) {
-		const ok = await confirmDialog({
-			message: `ペルソナ「${p.name}」を削除しますか？`,
-			danger: true,
-			confirmLabel: "削除",
-		});
-		if (!ok) return;
-		try {
-			await personaApi.delete(p.id);
-			await reloadAll();
-		} catch (e) {
-			reportError(e);
-		}
+async function togglePublish(p: PersonaRecord) {
+	const willPublish = p.is_public !== 1;
+	const ok = await confirmDialog({
+		message: willPublish
+			? `ペルソナ「${p.name}」をマーケットプレイスに公開しますか？\n全ユーザーが内容を閲覧・インポートできるようになります。`
+			: `ペルソナ「${p.name}」を非公開化しますか？`,
+		confirmLabel: willPublish ? "公開する" : "非公開にする",
+	});
+	if (!ok) return;
+	try {
+		const res = await personaApi.publish(p.id, willPublish);
+		pushToast(res.message ?? "更新しました。", "success");
+		await reloadAll();
+	} catch (e) {
+		reportError(e);
 	}
+}
 
-	async function openPreview(m: PublicPersonaView) {
-		try {
-			const res = await personaApi.marketplaceDetail(m.id);
-			previewName = res.persona.name;
-			previewPrompt = res.persona.prompt;
-			previewId = res.persona.id;
-			previewOpen = true;
-		} catch (e) {
-			reportError(e);
-		}
+async function deletePersona(p: PersonaRecord) {
+	const ok = await confirmDialog({
+		message: `ペルソナ「${p.name}」を削除しますか？`,
+		danger: true,
+		confirmLabel: "削除",
+	});
+	if (!ok) return;
+	try {
+		await personaApi.delete(p.id);
+		await reloadAll();
+	} catch (e) {
+		reportError(e);
 	}
+}
 
-	async function importPersona(id: number) {
-		try {
-			const res = await personaApi.import(id);
-			pushToast(res.message ?? "インポートしました。", "success");
-			previewOpen = false;
-			await loadPersonas();
-		} catch (e) {
-			reportError(e);
-		}
+async function openPreview(m: PublicPersonaView) {
+	try {
+		const res = await personaApi.marketplaceDetail(m.id);
+		previewName = res.persona.name;
+		previewPrompt = res.persona.prompt;
+		previewId = res.persona.id;
+		previewOpen = true;
+	} catch (e) {
+		reportError(e);
 	}
+}
+
+async function importPersona(id: number) {
+	try {
+		const res = await personaApi.import(id);
+		pushToast(res.message ?? "インポートしました。", "success");
+		previewOpen = false;
+		await loadPersonas();
+	} catch (e) {
+		reportError(e);
+	}
+}
 </script>
 
 <section class="tab-view">

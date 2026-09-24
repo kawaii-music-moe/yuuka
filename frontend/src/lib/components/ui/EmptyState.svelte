@@ -1,20 +1,19 @@
 <script lang="ts">
-	import type { Snippet } from "svelte";
-	import Icon from "./Icon.svelte";
+import type { Snippet } from "svelte";
+import Icon from "./Icon.svelte";
 
-	// 「…がありません」の共通空状態表示。各 fetchXxx に散在していた文言を集約。
-	interface Props {
-		/** Material Symbols アイコン名 */
-		icon?: string;
-		/** 表示メッセージ（文字列。自動エスケープ） */
-		message: string;
-		class?: string;
-		/** 補足アクション等（任意） */
-		children?: Snippet;
-	}
+// 「…がありません」の共通空状態表示。各 fetchXxx に散在していた文言を集約。
+interface Props {
+	/** Material Symbols アイコン名 */
+	icon?: string;
+	/** 表示メッセージ（文字列。自動エスケープ） */
+	message: string;
+	class?: string;
+	/** 補足アクション等（任意） */
+	children?: Snippet;
+}
 
-	let { icon = "inbox", message, class: klass = "", children }: Props =
-		$props();
+let { icon = "inbox", message, class: klass = "", children }: Props = $props();
 </script>
 
 <div class="empty-state {klass}">

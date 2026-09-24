@@ -4,4 +4,4 @@ import type { Credential } from "./Credential";
 /**
  * `GET /api/credentials` のペイロード（`Envelope<CredentialListData>` = `{success, credentials}`）。
  */
-export type CredentialListData = { credentials: Array<Credential>, };
+export type CredentialListData = { credentials: Array<Credential> };

@@ -39,7 +39,8 @@ export function fmtTaskDate(s: string | null | undefined): string {
  * effective_progress を最優先 → done は100 → それ以外は progress。
  */
 export function displayPercent(task: TodoWithSubtasks): number {
-	if (typeof task.effective_progress === "number") return task.effective_progress;
+	if (typeof task.effective_progress === "number")
+		return task.effective_progress;
 	if (task.status === "done") return 100;
 	return task.progress || 0;
 }

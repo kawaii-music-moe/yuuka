@@ -1,19 +1,19 @@
 <script lang="ts">
-	// 計画ブロックカード（旧 app.js buildPlanCard）。
-	import type { DayPlanBlock } from "$lib/api/types";
-	import { Icon } from "$lib/components/ui";
-	import { planTypeIcon, planTimeRange, transitText } from "./timelineUtils";
+// 計画ブロックカード（旧 app.js buildPlanCard）。
+import type { DayPlanBlock } from "$lib/api/types";
+import { Icon } from "$lib/components/ui";
+import { planTimeRange, planTypeIcon, transitText } from "./timelineUtils";
 
-	interface Props {
-		block: DayPlanBlock;
-		onedit: (block: DayPlanBlock) => void;
-		ondelete: (id: number) => void;
-	}
+interface Props {
+	block: DayPlanBlock;
+	onedit: (block: DayPlanBlock) => void;
+	ondelete: (id: number) => void;
+}
 
-	let { block, onedit, ondelete }: Props = $props();
+let { block, onedit, ondelete }: Props = $props();
 
-	const timeStr = $derived(planTimeRange(block.start_time, block.end_time));
-	const hasTransit = $derived(!!(block.transit_from || block.transit_to));
+const timeStr = $derived(planTimeRange(block.start_time, block.end_time));
+const hasTransit = $derived(!!(block.transit_from || block.transit_to));
 </script>
 
 <div class="tl-plan-card" data-type={block.type}>

@@ -1,59 +1,60 @@
 <script lang="ts">
-	// タスク新規/編集モーダル（旧 app.js:2619 prepareNewTaskModal + :2629 openEditTaskModal
-	//  + :2649 taskForm submit）。editingTask が null なら新規、あれば編集。
-	import { Modal, Button } from "$lib/components/ui";
-	import type { TodoWithSubtasks, TodoPriority } from "$lib/api/types";
+// タスク新規/編集モーダル（旧 app.js:2619 prepareNewTaskModal + :2629 openEditTaskModal
+//  + :2649 taskForm submit）。editingTask が null なら新規、あれば編集。
 
-	interface Props {
-		open?: boolean;
-		/** 編集対象。null なら新規追加。 */
-		editingTask?: TodoWithSubtasks | null;
-		/** 保存ハンドラ。呼び出し側が API を叩き、成功時に open=false にする。 */
-		onsave: (payload: {
-			id: number | null;
-			title: string;
-			description: string;
-			startDate: string;
-			dueDate: string;
-			priority: TodoPriority | null;
-		}) => void;
-	}
+import type { TodoPriority, TodoWithSubtasks } from "$lib/api/types";
+import { Button, Modal } from "$lib/components/ui";
 
-	let { open = $bindable(false), editingTask = null, onsave }: Props = $props();
+interface Props {
+	open?: boolean;
+	/** 編集対象。null なら新規追加。 */
+	editingTask?: TodoWithSubtasks | null;
+	/** 保存ハンドラ。呼び出し側が API を叩き、成功時に open=false にする。 */
+	onsave: (payload: {
+		id: number | null;
+		title: string;
+		description: string;
+		startDate: string;
+		dueDate: string;
+		priority: TodoPriority | null;
+	}) => void;
+}
 
-	let title = $state("");
-	let description = $state("");
-	let startDate = $state("");
-	let dueDate = $state("");
-	let priority = $state<TodoPriority | "">("");
+let { open = $bindable(false), editingTask = null, onsave }: Props = $props();
 
-	const isEdit = $derived(editingTask != null);
+let title = $state("");
+let description = $state("");
+let startDate = $state("");
+let dueDate = $state("");
+let priority = $state<TodoPriority | "">("");
 
-	// モーダルを開くたびにフォームを editingTask で初期化（旧 openEditTaskModal /
-	// prepareNewTaskModal の value 代入・reset を再現）。
-	$effect(() => {
-		if (!open) return;
-		const t = editingTask;
-		title = t?.title ?? "";
-		description = t?.description ?? "";
-		startDate = (t?.start_date ?? "").slice(0, 10);
-		dueDate = (t?.due_date ?? "").slice(0, 10);
-		priority = (t?.priority as TodoPriority | null) ?? "";
+const isEdit = $derived(editingTask != null);
+
+// モーダルを開くたびにフォームを editingTask で初期化（旧 openEditTaskModal /
+// prepareNewTaskModal の value 代入・reset を再現）。
+$effect(() => {
+	if (!open) return;
+	const t = editingTask;
+	title = t?.title ?? "";
+	description = t?.description ?? "";
+	startDate = (t?.start_date ?? "").slice(0, 10);
+	dueDate = (t?.due_date ?? "").slice(0, 10);
+	priority = (t?.priority as TodoPriority | null) ?? "";
+});
+
+function submit(e: SubmitEvent) {
+	e.preventDefault();
+	const trimmed = title.trim();
+	if (!trimmed) return;
+	onsave({
+		id: editingTask?.id ?? null,
+		title: trimmed,
+		description: description.trim(),
+		startDate,
+		dueDate,
+		priority: priority || null,
 	});
-
-	function submit(e: SubmitEvent) {
-		e.preventDefault();
-		const trimmed = title.trim();
-		if (!trimmed) return;
-		onsave({
-			id: editingTask?.id ?? null,
-			title: trimmed,
-			description: description.trim(),
-			startDate,
-			dueDate,
-			priority: priority || null,
-		});
-	}
+}
 </script>
 
 <Modal bind:open title={isEdit ? "タスクを編集" : "新規タスクの追加"}>

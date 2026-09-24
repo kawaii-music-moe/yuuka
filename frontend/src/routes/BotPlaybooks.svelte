@@ -1,219 +1,228 @@
 <script lang="ts">
-	// ─────────────────────────────────────────────────────────────────────────
-	// Playbook タブ（旧 app.js playbook 系 + index.html #tab-playbooks を移植）。
-	//   - Playbook 登録/編集（name が識別子。クリックで編集フォームへ読込）+ 検索
-	//   - 定期実行スケジュール（cron プリセット→式）+ 一覧（有効/無効・削除）
-	//   - 実行履歴
-	// activeBot 変更で3本 fetch（list / schedules / runs）。playbookApi 使用（scope:'bot'）。
-	// ─────────────────────────────────────────────────────────────────────────
-	import { activeBot } from "$lib/stores/activeBot";
-	import { playbookApi } from "$lib/api/services";
-	import { ApiError } from "$lib/api/client";
-	import { pushToast } from "$lib/stores/toast";
-	import { confirmDialog } from "$lib/components/ui";
-	import { Button, Icon, Badge, EmptyState } from "$lib/components/ui";
-	import type {
-		PlaybookRecord,
-		PlaybookScheduleRecord,
-		PlaybookRunRecord,
-	} from "$lib/api/types";
-	import {
-		formatRunDuration,
-		runStatusIcon,
-		runStatusLabel,
-	} from "./playbooks/playbookUtils";
+// ─────────────────────────────────────────────────────────────────────────
+// Playbook タブ（旧 app.js playbook 系 + index.html #tab-playbooks を移植）。
+//   - Playbook 登録/編集（name が識別子。クリックで編集フォームへ読込）+ 検索
+//   - 定期実行スケジュール（cron プリセット→式）+ 一覧（有効/無効・削除）
+//   - 実行履歴
+// activeBot 変更で3本 fetch（list / schedules / runs）。playbookApi 使用（scope:'bot'）。
+// ─────────────────────────────────────────────────────────────────────────
 
-	let playbooks = $state<PlaybookRecord[]>([]);
-	let schedules = $state<PlaybookScheduleRecord[]>([]);
-	let runs = $state<PlaybookRunRecord[]>([]);
+import { ApiError } from "$lib/api/client";
+import { playbookApi } from "$lib/api/services";
+import type {
+	PlaybookRecord,
+	PlaybookRunRecord,
+	PlaybookScheduleRecord,
+} from "$lib/api/types";
+import {
+	Badge,
+	Button,
+	confirmDialog,
+	EmptyState,
+	Icon,
+} from "$lib/components/ui";
+import { activeBot } from "$lib/stores/activeBot";
+import { pushToast } from "$lib/stores/toast";
+import {
+	formatRunDuration,
+	runStatusIcon,
+	runStatusLabel,
+} from "./playbooks/playbookUtils";
 
-	// ── Playbook フォーム ──
-	let pbName = $state("");
-	let pbTitle = $state("");
-	let pbKeywords = $state("");
-	let pbDescription = $state("");
-	let pbSteps = $state("");
-	let searchQuery = $state("");
+let playbooks = $state<PlaybookRecord[]>([]);
+let schedules = $state<PlaybookScheduleRecord[]>([]);
+let runs = $state<PlaybookRunRecord[]>([]);
 
-	// ── スケジュール フォーム ──
-	let schPlaybookName = $state("");
-	let cronPreset = $state("");
-	let cronExpression = $state("");
-	let schDescription = $state("");
-	let schEnabled = $state(true);
+// ── Playbook フォーム ──
+let pbName = $state("");
+let pbTitle = $state("");
+let pbKeywords = $state("");
+let pbDescription = $state("");
+let pbSteps = $state("");
+let searchQuery = $state("");
 
-	const CRON_PRESETS: { value: string; label: string }[] = [
-		{ value: "0 9 * * *", label: "毎朝9時" },
-		{ value: "0 18 * * *", label: "毎夕18時" },
-		{ value: "0 9 * * 1", label: "毎週月曜 9時" },
-		{ value: "0 9 1 * *", label: "毎月1日 9時" },
-		{ value: "*/30 * * * *", label: "30分ごと" },
-		{ value: "0 * * * *", label: "1時間ごと" },
-	];
+// ── スケジュール フォーム ──
+let schPlaybookName = $state("");
+let cronPreset = $state("");
+let cronExpression = $state("");
+let schDescription = $state("");
+let schEnabled = $state(true);
 
-	function reportError(e: unknown) {
-		pushToast(e instanceof ApiError ? e.message : "エラーが発生しました", "error");
+const CRON_PRESETS: { value: string; label: string }[] = [
+	{ value: "0 9 * * *", label: "毎朝9時" },
+	{ value: "0 18 * * *", label: "毎夕18時" },
+	{ value: "0 9 * * 1", label: "毎週月曜 9時" },
+	{ value: "0 9 1 * *", label: "毎月1日 9時" },
+	{ value: "*/30 * * * *", label: "30分ごと" },
+	{ value: "0 * * * *", label: "1時間ごと" },
+];
+
+function reportError(e: unknown) {
+	pushToast(
+		e instanceof ApiError ? e.message : "エラーが発生しました",
+		"error",
+	);
+}
+
+async function loadPlaybooks(query?: string) {
+	try {
+		const res = await playbookApi.list(query ? { query } : undefined);
+		playbooks = res.playbooks ?? [];
+	} catch (e) {
+		reportError(e);
+		playbooks = [];
 	}
+}
 
-	async function loadPlaybooks(query?: string) {
-		try {
-			const res = await playbookApi.list(query ? { query } : undefined);
-			playbooks = res.playbooks ?? [];
-		} catch (e) {
-			reportError(e);
-			playbooks = [];
-		}
+async function loadSchedules() {
+	try {
+		const res = await playbookApi.schedules();
+		schedules = res.schedules ?? [];
+	} catch (e) {
+		reportError(e);
+		schedules = [];
 	}
+}
 
-	async function loadSchedules() {
-		try {
-			const res = await playbookApi.schedules();
-			schedules = res.schedules ?? [];
-		} catch (e) {
-			reportError(e);
-			schedules = [];
-		}
+async function loadRuns() {
+	try {
+		const res = await playbookApi.runs();
+		runs = res.runs ?? [];
+	} catch (e) {
+		reportError(e);
+		runs = [];
 	}
+}
 
-	async function loadRuns() {
-		try {
-			const res = await playbookApi.runs();
-			runs = res.runs ?? [];
-		} catch (e) {
-			reportError(e);
-			runs = [];
-		}
-	}
+$effect(() => {
+	void $activeBot?.id;
+	void loadPlaybooks();
+	void loadSchedules();
+	void loadRuns();
+});
 
-	$effect(() => {
-		void $activeBot?.id;
-		void loadPlaybooks();
-		void loadSchedules();
-		void loadRuns();
-	});
+// cron プリセット選択で式を反映（custom はそのまま手入力）。
+function onCronPreset(e: Event) {
+	const v = (e.currentTarget as HTMLSelectElement).value;
+	cronPreset = v;
+	if (v && v !== "custom") cronExpression = v;
+}
 
-	// cron プリセット選択で式を反映（custom はそのまま手入力）。
-	function onCronPreset(e: Event) {
-		const v = (e.currentTarget as HTMLSelectElement).value;
-		cronPreset = v;
-		if (v && v !== "custom") cronExpression = v;
-	}
+function resetPlaybookForm() {
+	pbName = "";
+	pbTitle = "";
+	pbKeywords = "";
+	pbDescription = "";
+	pbSteps = "";
+}
 
-	function resetPlaybookForm() {
-		pbName = "";
-		pbTitle = "";
-		pbKeywords = "";
-		pbDescription = "";
-		pbSteps = "";
-	}
+function loadIntoForm(p: PlaybookRecord) {
+	pbName = p.name;
+	pbTitle = p.title;
+	pbKeywords = (p.keywords ?? []).join(", ");
+	pbDescription = p.description ?? "";
+	pbSteps = p.steps ?? "";
+}
 
-	function loadIntoForm(p: PlaybookRecord) {
-		pbName = p.name;
-		pbTitle = p.title;
-		pbKeywords = (p.keywords ?? []).join(", ");
-		pbDescription = p.description ?? "";
-		pbSteps = p.steps ?? "";
-	}
-
-	async function savePlaybook(e: SubmitEvent) {
-		e.preventDefault();
-		const name = pbName.trim();
-		const title = pbTitle.trim();
-		const steps = pbSteps.trim();
-		if (!name || !title || !steps) return;
-		const keywords = pbKeywords
-			.split(",")
-			.map((k) => k.trim())
-			.filter((k) => k.length > 0);
-		try {
-			const res = await playbookApi.save({
-				name,
-				title,
-				keywords,
-				description: pbDescription.trim(),
-				steps,
-			});
-			pushToast(res.message ?? "Playbookを保存しました。", "success");
-			resetPlaybookForm();
-			await loadPlaybooks(searchQuery.trim() || undefined);
-			await loadSchedules();
-		} catch (err) {
-			reportError(err);
-		}
-	}
-
-	async function deletePlaybook(p: PlaybookRecord) {
-		const ok = await confirmDialog({
-			message: `本当にこのPlaybook「${p.title}」を削除しますか？`,
-			danger: true,
-			confirmLabel: "削除",
+async function savePlaybook(e: SubmitEvent) {
+	e.preventDefault();
+	const name = pbName.trim();
+	const title = pbTitle.trim();
+	const steps = pbSteps.trim();
+	if (!name || !title || !steps) return;
+	const keywords = pbKeywords
+		.split(",")
+		.map((k) => k.trim())
+		.filter((k) => k.length > 0);
+	try {
+		const res = await playbookApi.save({
+			name,
+			title,
+			keywords,
+			description: pbDescription.trim(),
+			steps,
 		});
-		if (!ok) return;
-		try {
-			await playbookApi.delete(p.name);
-			await loadPlaybooks(searchQuery.trim() || undefined);
-			await loadSchedules();
-		} catch (e) {
-			reportError(e);
-		}
-	}
-
-	async function runSearch() {
+		pushToast(res.message ?? "Playbookを保存しました。", "success");
+		resetPlaybookForm();
 		await loadPlaybooks(searchQuery.trim() || undefined);
+		await loadSchedules();
+	} catch (err) {
+		reportError(err);
 	}
+}
 
-	async function saveSchedule(e: SubmitEvent) {
-		e.preventDefault();
-		const playbookName = schPlaybookName.trim();
-		const cron = cronExpression.trim();
-		if (!playbookName || !cron) {
-			pushToast("Playbookとcron式を入力してください。", "error");
-			return;
-		}
-		try {
-			const res = await playbookApi.saveSchedule({
-				playbookName,
-				cronExpression: cron,
-				description: schDescription.trim(),
-				enabled: schEnabled,
-			});
-			pushToast(res.message ?? "スケジュールを保存しました。", "success");
-			schPlaybookName = "";
-			cronPreset = "";
-			cronExpression = "";
-			schDescription = "";
-			schEnabled = true;
-			await loadSchedules();
-			await loadRuns();
-		} catch (err) {
-			reportError(err);
-		}
+async function deletePlaybook(p: PlaybookRecord) {
+	const ok = await confirmDialog({
+		message: `本当にこのPlaybook「${p.title}」を削除しますか？`,
+		danger: true,
+		confirmLabel: "削除",
+	});
+	if (!ok) return;
+	try {
+		await playbookApi.delete(p.name);
+		await loadPlaybooks(searchQuery.trim() || undefined);
+		await loadSchedules();
+	} catch (e) {
+		reportError(e);
 	}
+}
 
-	async function toggleSchedule(s: PlaybookScheduleRecord) {
-		try {
-			await playbookApi.toggleSchedule({ id: s.id, enabled: !s.enabled });
-			await loadSchedules();
-		} catch (e) {
-			reportError(e);
-		}
+async function runSearch() {
+	await loadPlaybooks(searchQuery.trim() || undefined);
+}
+
+async function saveSchedule(e: SubmitEvent) {
+	e.preventDefault();
+	const playbookName = schPlaybookName.trim();
+	const cron = cronExpression.trim();
+	if (!playbookName || !cron) {
+		pushToast("Playbookとcron式を入力してください。", "error");
+		return;
 	}
-
-	async function deleteSchedule(s: PlaybookScheduleRecord) {
-		const ok = await confirmDialog({
-			message: `スケジュール「${s.playbook_name}」を削除しますか？`,
-			danger: true,
-			confirmLabel: "削除",
+	try {
+		const res = await playbookApi.saveSchedule({
+			playbookName,
+			cronExpression: cron,
+			description: schDescription.trim(),
+			enabled: schEnabled,
 		});
-		if (!ok) return;
-		try {
-			await playbookApi.deleteSchedule(s.id);
-			await loadSchedules();
-			await loadRuns();
-		} catch (e) {
-			reportError(e);
-		}
+		pushToast(res.message ?? "スケジュールを保存しました。", "success");
+		schPlaybookName = "";
+		cronPreset = "";
+		cronExpression = "";
+		schDescription = "";
+		schEnabled = true;
+		await loadSchedules();
+		await loadRuns();
+	} catch (err) {
+		reportError(err);
 	}
+}
+
+async function toggleSchedule(s: PlaybookScheduleRecord) {
+	try {
+		await playbookApi.toggleSchedule({ id: s.id, enabled: !s.enabled });
+		await loadSchedules();
+	} catch (e) {
+		reportError(e);
+	}
+}
+
+async function deleteSchedule(s: PlaybookScheduleRecord) {
+	const ok = await confirmDialog({
+		message: `スケジュール「${s.playbook_name}」を削除しますか？`,
+		danger: true,
+		confirmLabel: "削除",
+	});
+	if (!ok) return;
+	try {
+		await playbookApi.deleteSchedule(s.id);
+		await loadSchedules();
+		await loadRuns();
+	} catch (e) {
+		reportError(e);
+	}
+}
 </script>
 
 <section class="tab-view">

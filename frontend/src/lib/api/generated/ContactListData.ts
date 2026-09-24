@@ -4,4 +4,4 @@ import type { Contact } from "./Contact";
 /**
  * `GET /api/contacts` のペイロード（`Envelope<ContactListData>` = `{success, contacts}`）。
  */
-export type ContactListData = { contacts: Array<Contact>, };
+export type ContactListData = { contacts: Array<Contact> };

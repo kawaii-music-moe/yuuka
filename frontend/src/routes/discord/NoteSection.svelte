@@ -1,78 +1,82 @@
 <script lang="ts">
-	// 共有ノート（ギルドノート）（旧 assistant-note-guild-select + btn-open-assistant-note
-	//   + modal-assistant-note + loadAssistantGuildNote + btn-save-assistant-note）。
-	import { botAttributeApi } from "$lib/api/services";
-	import { ApiError } from "$lib/api/client";
-	import { pushToast } from "$lib/stores/toast";
-	import { Modal, Button } from "$lib/components/ui";
-	import { guildLabel } from "../config/configTypes";
-	import type { AssistantGuild, GuildNoteResp } from "../config/configTypes";
+// 共有ノート（ギルドノート）（旧 assistant-note-guild-select + btn-open-assistant-note
+//   + modal-assistant-note + loadAssistantGuildNote + btn-save-assistant-note）。
 
-	interface Props {
-		botId: string;
-		guilds: AssistantGuild[];
+import { ApiError } from "$lib/api/client";
+import { botAttributeApi } from "$lib/api/services";
+import { Button, Modal } from "$lib/components/ui";
+import { pushToast } from "$lib/stores/toast";
+import type { AssistantGuild, GuildNoteResp } from "../config/configTypes";
+import { guildLabel } from "../config/configTypes";
+
+interface Props {
+	botId: string;
+	guilds: AssistantGuild[];
+}
+let { botId, guilds }: Props = $props();
+
+let selectedGuild = $state("");
+let noteContent = $state("");
+let open = $state(false);
+
+$effect(() => {
+	if (guilds.length === 0) {
+		selectedGuild = "";
+		return;
 	}
-	let { botId, guilds }: Props = $props();
-
-	let selectedGuild = $state("");
-	let noteContent = $state("");
-	let open = $state(false);
-
-	$effect(() => {
-		if (guilds.length === 0) {
-			selectedGuild = "";
-			return;
-		}
-		if (!guilds.some((g) => g.guild_id === selectedGuild)) {
-			selectedGuild = guilds[0].guild_id;
-		}
-	});
-
-	async function loadNote(guildId: string) {
-		if (!guildId) {
-			noteContent = "";
-			return;
-		}
-		try {
-			const res = (await botAttributeApi.getGuildNote(botId, {
-				guildId,
-			})) as GuildNoteResp;
-			noteContent = res.success ? (res.content ?? "") : "";
-		} catch {
-			noteContent = "";
-		}
+	if (!guilds.some((g) => g.guild_id === selectedGuild)) {
+		selectedGuild = guilds[0].guild_id;
 	}
+});
 
-	async function openEditor() {
-		if (!selectedGuild) {
-			pushToast("先に応答許可ギルドを追加してください。", "error");
-			return;
-		}
-		await loadNote(selectedGuild);
-		open = true;
+async function loadNote(guildId: string) {
+	if (!guildId) {
+		noteContent = "";
+		return;
 	}
+	try {
+		const res = (await botAttributeApi.getGuildNote(botId, {
+			guildId,
+		})) as GuildNoteResp;
+		noteContent = res.success ? (res.content ?? "") : "";
+	} catch {
+		noteContent = "";
+	}
+}
 
-	async function save() {
-		if (!selectedGuild) {
-			pushToast("先に応答許可ギルドを追加してください。", "error");
-			return;
-		}
-		try {
-			const res = await botAttributeApi.setGuildNote({
-				botId,
-				guildId: selectedGuild,
-				content: noteContent,
-			});
-			if (res.success) {
-				open = false;
-				pushToast("保存しました。", "success");
-			} else {
-				pushToast(res.message ?? "保存に失敗しました。", "error");
-			}
-		} catch (err) {
-			pushToast(err instanceof ApiError ? err.message : "通信エラーが発生しました。", "error");
-		}
+async function openEditor() {
+	if (!selectedGuild) {
+		pushToast("先に応答許可ギルドを追加してください。", "error");
+		return;
 	}
+	await loadNote(selectedGuild);
+	open = true;
+}
+
+async function save() {
+	if (!selectedGuild) {
+		pushToast("先に応答許可ギルドを追加してください。", "error");
+		return;
+	}
+	try {
+		const res = await botAttributeApi.setGuildNote({
+			botId,
+			guildId: selectedGuild,
+			content: noteContent,
+		});
+		if (res.success) {
+			open = false;
+			pushToast("保存しました。", "success");
+		} else {
+			pushToast(res.message ?? "保存に失敗しました。", "error");
+		}
+	} catch (err) {
+		pushToast(
+			err instanceof ApiError ? err.message : "通信エラーが発生しました。",
+			"error",
+		);
+	}
+}
 </script>
 
 <details class="form-group collapsible-group">

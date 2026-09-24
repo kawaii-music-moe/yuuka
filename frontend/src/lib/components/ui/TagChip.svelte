@@ -1,25 +1,25 @@
 <script lang="ts">
-	import type { Snippet } from "svelte";
-	import Icon from "./Icon.svelte";
+import type { Snippet } from "svelte";
+import Icon from "./Icon.svelte";
 
-	// タグ表示チップ。既存 .tag-chip を再利用。任意で削除ボタン付き。
-	interface Props {
-		/** タグ文字列（children 未指定時に表示。自動エスケープ） */
-		label?: string;
-		/** 削除ボタンを表示し、押下で onremove を呼ぶ */
-		removable?: boolean;
-		onremove?: () => void;
-		class?: string;
-		children?: Snippet;
-	}
+// タグ表示チップ。既存 .tag-chip を再利用。任意で削除ボタン付き。
+interface Props {
+	/** タグ文字列（children 未指定時に表示。自動エスケープ） */
+	label?: string;
+	/** 削除ボタンを表示し、押下で onremove を呼ぶ */
+	removable?: boolean;
+	onremove?: () => void;
+	class?: string;
+	children?: Snippet;
+}
 
-	let {
-		label,
-		removable = false,
-		onremove,
-		class: klass = "",
-		children,
-	}: Props = $props();
+let {
+	label,
+	removable = false,
+	onremove,
+	class: klass = "",
+	children,
+}: Props = $props();
 </script>
 
 <span class="tag-chip {klass}">

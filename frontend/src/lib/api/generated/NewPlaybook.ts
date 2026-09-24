@@ -3,4 +3,10 @@
 /**
  * playbook 保存リクエスト（`POST /api/playbooks/save` の body・upsert）。
  */
-export type NewPlaybook = { name: string, title: string, keywords: Array<string>, description: string, steps: string, };
+export type NewPlaybook = {
+	name: string;
+	title: string;
+	keywords: Array<string>;
+	description: string;
+	steps: string;
+};

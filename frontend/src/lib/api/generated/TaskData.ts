@@ -4,4 +4,4 @@ import type { Todo } from "./Todo";
 /**
  * 単一 todo を返すペイロード（add/complete。`{success, task}`）。
  */
-export type TaskData = { task: Todo, };
+export type TaskData = { task: Todo };

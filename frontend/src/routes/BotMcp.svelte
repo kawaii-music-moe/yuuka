@@ -1,161 +1,170 @@
 <script lang="ts">
-	// ─────────────────────────────────────────────────────────────────────────
-	// MCP タブ（旧 app.js: fetchMcpServersList / renderMcpServers / openMcpDashboard +
-	// index.html #tab-mcp）。登録・削除・Bot別許可は「Bot統合管理」に集約済みのため、
-	// ここは状況確認（＋Tool再取得 / 有効無効 / 削除 / 管理ページ）が中心。
-	//
-	// 書換方針:
-	//   - createElement/innerHTML の手組みカード → {#each} + Button/TagChip。
-	//   - 管理ページは iframe（sandbox="allow-scripts allow-forms"）モーダル。
-	//     iframe は McpDashboardModal 側で bind:this + teardown（onDestroy/close で src 破棄）。
-	//   - confirm/alert → confirmDialog/pushToast。
-	//
-	// ※ P4 で iframe 単独検証要（dev の Vite 前段でダッシュボード iframe が期待どおり動くかは未確定）。
-	// ─────────────────────────────────────────────────────────────────────────
-	import { mcpApi, integratedApi } from "$lib/api/services";
-	import { ApiError } from "$lib/api/client";
-	import { pushToast } from "$lib/stores/toast";
-	import { confirmDialog } from "$lib/components/ui";
-	import { Button, Icon, TagChip, EmptyState } from "$lib/components/ui";
-	import { activeBot } from "$lib/stores/activeBot";
-	import type { McpServerView } from "$lib/api/types";
-	import type {
-		BotMcpGrantServer,
-		BotMcpOwnServer,
-	} from "$lib/api/services/integratedApi";
+// ─────────────────────────────────────────────────────────────────────────
+// MCP タブ（旧 app.js: fetchMcpServersList / renderMcpServers / openMcpDashboard +
+// index.html #tab-mcp）。登録・削除・Bot別許可は「Bot統合管理」に集約済みのため、
+// ここは状況確認（＋Tool再取得 / 有効無効 / 削除 / 管理ページ）が中心。
+//
+// 書換方針:
+//   - createElement/innerHTML の手組みカード → {#each} + Button/TagChip。
+//   - 管理ページは iframe（sandbox="allow-scripts allow-forms"）モーダル。
+//     iframe は McpDashboardModal 側で bind:this + teardown（onDestroy/close で src 破棄）。
+//   - confirm/alert → confirmDialog/pushToast。
+//
+// ※ P4 で iframe 単独検証要（dev の Vite 前段でダッシュボード iframe が期待どおり動くかは未確定）。
+// ─────────────────────────────────────────────────────────────────────────
 
-	import McpDashboardModal from "./mcp/McpDashboardModal.svelte";
+import { ApiError } from "$lib/api/client";
+import { integratedApi, mcpApi } from "$lib/api/services";
+import type {
+	BotMcpGrantServer,
+	BotMcpOwnServer,
+} from "$lib/api/services/integratedApi";
+import type { McpServerView } from "$lib/api/types";
+import {
+	Button,
+	confirmDialog,
+	EmptyState,
+	Icon,
+	TagChip,
+} from "$lib/components/ui";
+import { activeBot } from "$lib/stores/activeBot";
+import { pushToast } from "$lib/stores/toast";
 
-	let servers = $state<McpServerView[]>([]);
-	let dashAvailable = $state<Record<number, boolean>>({});
-	let loading = $state(false);
+import McpDashboardModal from "./mcp/McpDashboardModal.svelte";
 
-	// 共有Bot（system_default 以外の実Bot）が利用する MCP（bot-canonical・共同編集）。
-	let botServers = $state<BotMcpGrantServer[]>([]);
-	let ownGrantable = $state<BotMcpOwnServer[]>([]);
-	let grantsLoading = $state(false);
-	const isRealBot = $derived(!!$activeBot && $activeBot.id !== "system_default");
+let servers = $state<McpServerView[]>([]);
+let dashAvailable = $state<Record<number, boolean>>({});
+let loading = $state(false);
 
-	let dashOpen = $state(false);
-	let dashServer = $state<{ id: number; name: string } | null>(null);
+// 共有Bot（system_default 以外の実Bot）が利用する MCP（bot-canonical・共同編集）。
+let botServers = $state<BotMcpGrantServer[]>([]);
+let ownGrantable = $state<BotMcpOwnServer[]>([]);
+let grantsLoading = $state(false);
+const isRealBot = $derived(!!$activeBot && $activeBot.id !== "system_default");
 
-	// 現在の Bot 表示ラベル（旧 mcp-current-bot-label）。
-	const currentBotLabel = $derived(
-		$activeBot && $activeBot.id !== "system_default" && $activeBot.name
-			? `現在のBot: ${$activeBot.name}`
-			: "現在のBot: 既定の秘書（早瀬ユウカ）",
+let dashOpen = $state(false);
+let dashServer = $state<{ id: number; name: string } | null>(null);
+
+// 現在の Bot 表示ラベル（旧 mcp-current-bot-label）。
+const currentBotLabel = $derived(
+	$activeBot && $activeBot.id !== "system_default" && $activeBot.name
+		? `現在のBot: ${$activeBot.name}`
+		: "現在のBot: 既定の秘書（早瀬ユウカ）",
+);
+
+function reportError(e: unknown) {
+	pushToast(
+		e instanceof ApiError ? e.message : "エラーが発生しました",
+		"error",
 	);
+}
 
-	function reportError(e: unknown) {
-		pushToast(e instanceof ApiError ? e.message : "エラーが発生しました", "error");
+async function load() {
+	loading = true;
+	try {
+		const res = await mcpApi.list();
+		servers = res.servers ?? [];
+		void probeDashboards();
+	} catch (e) {
+		reportError(e);
+		servers = [];
+	} finally {
+		loading = false;
 	}
+}
 
-	async function load() {
-		loading = true;
-		try {
-			const res = await mcpApi.list();
-			servers = res.servers ?? [];
-			void probeDashboards();
-		} catch (e) {
-			reportError(e);
-			servers = [];
-		} finally {
-			loading = false;
-		}
+async function probeDashboards() {
+	const next: Record<number, boolean> = {};
+	await Promise.all(
+		servers.map(async (s) => {
+			try {
+				const r = await mcpApi.dashboardStatus(s.id);
+				next[s.id] = r.available === true;
+			} catch {
+				next[s.id] = false;
+			}
+		}),
+	);
+	dashAvailable = next;
+}
+
+// 共有Bot が利用する MCP（bot-canonical）と、付与できる自分の未付与サーバーを取得する。
+async function loadBotGrants() {
+	if (!isRealBot) {
+		botServers = [];
+		ownGrantable = [];
+		return;
 	}
-
-	async function probeDashboards() {
-		const next: Record<number, boolean> = {};
-		await Promise.all(
-			servers.map(async (s) => {
-				try {
-					const r = await mcpApi.dashboardStatus(s.id);
-					next[s.id] = r.available === true;
-				} catch {
-					next[s.id] = false;
-				}
-			}),
-		);
-		dashAvailable = next;
+	grantsLoading = true;
+	try {
+		const res = await integratedApi.botMcpGrants();
+		// Bot 切替の競合防止: 応答が現在選択中の Bot のものでなければ破棄（stale 応答で上書きしない）。
+		if (res.bot_id !== $activeBot?.id) return;
+		botServers = res.servers ?? [];
+		ownGrantable = res.own_servers ?? [];
+	} catch (e) {
+		reportError(e);
+		botServers = [];
+		ownGrantable = [];
+	} finally {
+		grantsLoading = false;
 	}
+}
 
-	// 共有Bot が利用する MCP（bot-canonical）と、付与できる自分の未付与サーバーを取得する。
-	async function loadBotGrants() {
-		if (!isRealBot) {
-			botServers = [];
-			ownGrantable = [];
-			return;
-		}
-		grantsLoading = true;
-		try {
-			const res = await integratedApi.botMcpGrants();
-			// Bot 切替の競合防止: 応答が現在選択中の Bot のものでなければ破棄（stale 応答で上書きしない）。
-			if (res.bot_id !== $activeBot?.id) return;
-			botServers = res.servers ?? [];
-			ownGrantable = res.own_servers ?? [];
-		} catch (e) {
-			reportError(e);
-			botServers = [];
-			ownGrantable = [];
-		} finally {
-			grantsLoading = false;
-		}
+// このBotへ MCP サーバーを付与/解除する（共有相手も可・付与は自分のサーバーのみ）。
+async function setGrant(serverId: number, granted: boolean) {
+	const botId = $activeBot?.id;
+	if (!botId) return;
+	try {
+		await integratedApi.grantMcp({ botId, serverId, granted });
+		await loadBotGrants();
+	} catch (e) {
+		reportError(e);
 	}
+}
 
-	// このBotへ MCP サーバーを付与/解除する（共有相手も可・付与は自分のサーバーのみ）。
-	async function setGrant(serverId: number, granted: boolean) {
-		const botId = $activeBot?.id;
-		if (!botId) return;
-		try {
-			await integratedApi.grantMcp({ botId, serverId, granted });
-			await loadBotGrants();
-		} catch (e) {
-			reportError(e);
-		}
+// MCP サーバはユーザースコープだが、UI は Bot 画面内なので activeBot 切替でも再取得しておく。
+$effect(() => {
+	void $activeBot?.id;
+	void load();
+	void loadBotGrants();
+});
+
+async function refresh(s: McpServerView) {
+	try {
+		const res = await mcpApi.refresh(s.id);
+		pushToast(res.message || "更新しました。", "success");
+		await load();
+	} catch (e) {
+		reportError(e);
 	}
-
-	// MCP サーバはユーザースコープだが、UI は Bot 画面内なので activeBot 切替でも再取得しておく。
-	$effect(() => {
-		void $activeBot?.id;
-		void load();
-		void loadBotGrants();
+}
+async function toggle(s: McpServerView) {
+	try {
+		await mcpApi.toggle({ id: s.id, enabled: !s.enabled });
+		await load();
+	} catch (e) {
+		reportError(e);
+	}
+}
+async function remove(s: McpServerView) {
+	const ok = await confirmDialog({
+		message: `MCPサーバー「${s.name}」を削除しますか？`,
+		danger: true,
+		confirmLabel: "削除",
 	});
-
-	async function refresh(s: McpServerView) {
-		try {
-			const res = await mcpApi.refresh(s.id);
-			pushToast(res.message || "更新しました。", "success");
-			await load();
-		} catch (e) {
-			reportError(e);
-		}
+	if (!ok) return;
+	try {
+		await mcpApi.delete(s.id);
+		await load();
+	} catch (e) {
+		reportError(e);
 	}
-	async function toggle(s: McpServerView) {
-		try {
-			await mcpApi.toggle({ id: s.id, enabled: !s.enabled });
-			await load();
-		} catch (e) {
-			reportError(e);
-		}
-	}
-	async function remove(s: McpServerView) {
-		const ok = await confirmDialog({
-			message: `MCPサーバー「${s.name}」を削除しますか？`,
-			danger: true,
-			confirmLabel: "削除",
-		});
-		if (!ok) return;
-		try {
-			await mcpApi.delete(s.id);
-			await load();
-		} catch (e) {
-			reportError(e);
-		}
-	}
-	function openDashboard(s: McpServerView) {
-		dashServer = { id: s.id, name: s.name };
-		dashOpen = true;
-	}
+}
+function openDashboard(s: McpServerView) {
+	dashServer = { id: s.id, name: s.name };
+	dashOpen = true;
+}
 </script>
 
 <section class="tab-view">

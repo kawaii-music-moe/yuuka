@@ -1,5 +1,5 @@
 // 家計簿タブの純関数（DOM 非依存）。旧 app.js の集計・整形ロジックを切り出したもの。
-import type { CategoryTotal, BudgetLimit, ExpenseRecord } from "$lib/api/types";
+import type { BudgetLimit, CategoryTotal, ExpenseRecord } from "$lib/api/types";
 
 /** 家計簿カテゴリ選択肢（旧 index.html の <select> と共通）。 */
 export const EXPENSE_CATEGORIES = [
@@ -61,7 +61,13 @@ export function buildBudgetBars(
 				: pct > 60
 					? "#fbbf24"
 					: "var(--color-primary)";
-		return { category: lim.category, spent, limit: lim.limit_amount, pct, color };
+		return {
+			category: lim.category,
+			spent,
+			limit: lim.limit_amount,
+			pct,
+			color,
+		};
 	});
 }
 
@@ -80,8 +86,13 @@ export function expenseSource(exp: ExpenseRecord): {
 				? "plan"
 				: "manual";
 	const icon =
-		key === "receipt" ? "photo_camera" : key === "plan" ? "event_available" : "web";
-	const label = key === "receipt" ? "レシートAI" : key === "plan" ? "支払い予定" : "手動";
+		key === "receipt"
+			? "photo_camera"
+			: key === "plan"
+				? "event_available"
+				: "web";
+	const label =
+		key === "receipt" ? "レシートAI" : key === "plan" ? "支払い予定" : "手動";
 	return { key, icon, label };
 }
 

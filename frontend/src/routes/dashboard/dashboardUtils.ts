@@ -1,7 +1,7 @@
 // ダッシュボードの非チャート系純関数（吹き出し文言・緊急リスト整形）。
 import type { ScheduleRecord, TodoWithSubtasks } from "$lib/api/types";
+import { formatMonthDay, yen } from "./dashboardCharts";
 import type { UsageSeriesPoint, UsageTotals } from "./dashboardTypes";
-import { yen, formatMonthDay } from "./dashboardCharts";
 
 /** 秘書モードの吹き出し文言（旧 updateYuukaSpeechBubble）。 */
 export function secretaryBubble(
@@ -74,7 +74,9 @@ export function buildUrgentItems(
 }
 
 /** 最大単発支出。 */
-export function highestExpense(expenses: { amount: number }[] | undefined): number {
+export function highestExpense(
+	expenses: { amount: number }[] | undefined,
+): number {
 	if (!expenses || expenses.length === 0) return 0;
 	return Math.max(...expenses.map((e) => e.amount));
 }

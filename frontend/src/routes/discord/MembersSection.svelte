@@ -1,122 +1,134 @@
 <script lang="ts">
-	// 利用メンバー（旧 renderAssistantMembers + loadGuildOptions("member") + btn-add-assistant-member）。
-	import { botAttributeApi } from "$lib/api/services";
-	import { ApiError } from "$lib/api/client";
-	import { pushToast } from "$lib/stores/toast";
-	import { confirmDialog, Button } from "$lib/components/ui";
-	import { guildLabel } from "../config/configTypes";
-	import type {
-		AssistantGuild,
-		AssistantMember,
-		GuildOptionItem,
-		GuildOptionsResp,
-	} from "../config/configTypes";
+// 利用メンバー（旧 renderAssistantMembers + loadGuildOptions("member") + btn-add-assistant-member）。
 
-	interface Props {
-		botId: string;
-		guilds: AssistantGuild[];
-		members: AssistantMember[];
-		onchanged: () => void;
+import { ApiError } from "$lib/api/client";
+import { botAttributeApi } from "$lib/api/services";
+import { Button, confirmDialog } from "$lib/components/ui";
+import { pushToast } from "$lib/stores/toast";
+import type {
+	AssistantGuild,
+	AssistantMember,
+	GuildOptionItem,
+	GuildOptionsResp,
+} from "../config/configTypes";
+import { guildLabel } from "../config/configTypes";
+
+interface Props {
+	botId: string;
+	guilds: AssistantGuild[];
+	members: AssistantMember[];
+	onchanged: () => void;
+}
+let { botId, guilds, members, onchanged }: Props = $props();
+
+let selectedGuild = $state("");
+let selectedMember = $state("");
+let memberInput = $state("");
+let memberOptions = $state<GuildOptionItem[]>([]);
+let available = $state(true);
+
+// guilds が来たら既定の選択ギルドを合わせ、候補を読み込む。
+$effect(() => {
+	if (guilds.length === 0) {
+		selectedGuild = "";
+		return;
 	}
-	let { botId, guilds, members, onchanged }: Props = $props();
+	if (!guilds.some((g) => g.guild_id === selectedGuild)) {
+		selectedGuild = guilds[0].guild_id;
+	}
+});
 
-	let selectedGuild = $state("");
-	let selectedMember = $state("");
-	let memberInput = $state("");
-	let memberOptions = $state<GuildOptionItem[]>([]);
-	let available = $state(true);
+// 選択ギルド変更でメンバー候補を取得（bot 未起動時は手入力に誘導）。
+$effect(() => {
+	const gid = selectedGuild;
+	if (!gid) {
+		memberOptions = [];
+		return;
+	}
+	void loadOptions(gid);
+});
 
-	// guilds が来たら既定の選択ギルドを合わせ、候補を読み込む。
-	$effect(() => {
-		if (guilds.length === 0) {
-			selectedGuild = "";
-			return;
-		}
-		if (!guilds.some((g) => g.guild_id === selectedGuild)) {
-			selectedGuild = guilds[0].guild_id;
-		}
-	});
-
-	// 選択ギルド変更でメンバー候補を取得（bot 未起動時は手入力に誘導）。
-	$effect(() => {
-		const gid = selectedGuild;
-		if (!gid) {
-			memberOptions = [];
-			return;
-		}
-		void loadOptions(gid);
-	});
-
-	async function loadOptions(guildId: string) {
-		try {
-			const res = (await botAttributeApi.guildOptions(botId, {
-				guildId,
-			})) as GuildOptionsResp;
-			if (!res.success) {
-				memberOptions = [];
-				available = false;
-				return;
-			}
-			available = res.available ?? true;
-			memberOptions = res.members ?? [];
-			selectedMember = "";
-		} catch {
+async function loadOptions(guildId: string) {
+	try {
+		const res = (await botAttributeApi.guildOptions(botId, {
+			guildId,
+		})) as GuildOptionsResp;
+		if (!res.success) {
 			memberOptions = [];
 			available = false;
-		}
-	}
-
-	async function add() {
-		const guildId = selectedGuild;
-		const userId = (selectedMember || memberInput.trim()).trim();
-		if (!guildId) {
-			pushToast("先に応答許可ギルドを追加してください。", "error");
 			return;
 		}
-		if (!/^\d{5,25}$/.test(userId)) {
-			pushToast("メンバーをプルダウンから選ぶか、ユーザーID（数字）を入力してください。", "error");
-			return;
-		}
-		try {
-			const res = await botAttributeApi.setMembers({
-				botId,
-				guildId,
-				userId,
-				action: "add",
-			});
-			if (res.success) {
-				memberInput = "";
-				selectedMember = "";
-				onchanged();
-			} else pushToast(res.message ?? "操作に失敗しました。", "error");
-		} catch (err) {
-			pushToast(err instanceof ApiError ? err.message : "通信エラーが発生しました。", "error");
-		}
+		available = res.available ?? true;
+		memberOptions = res.members ?? [];
+		selectedMember = "";
+	} catch {
+		memberOptions = [];
+		available = false;
 	}
+}
 
-	async function remove(m: AssistantMember, shift: boolean) {
-		if (!shift) {
-			const label = m.member_name ? `${m.member_name}（${m.user_id}）` : `ユーザー ${m.user_id}`;
-			const ok = await confirmDialog({
-				message: `${label} を利用メンバーから削除しますか？`,
-				danger: true,
-				confirmLabel: "削除",
-			});
-			if (!ok) return;
-		}
-		try {
-			const res = await botAttributeApi.setMembers({
-				botId,
-				guildId: m.guild_id,
-				userId: m.user_id,
-				action: "remove",
-			});
-			if (res.success) onchanged();
-			else pushToast(res.message ?? "操作に失敗しました。", "error");
-		} catch (err) {
-			pushToast(err instanceof ApiError ? err.message : "通信エラーが発生しました。", "error");
-		}
+async function add() {
+	const guildId = selectedGuild;
+	const userId = (selectedMember || memberInput.trim()).trim();
+	if (!guildId) {
+		pushToast("先に応答許可ギルドを追加してください。", "error");
+		return;
 	}
+	if (!/^\d{5,25}$/.test(userId)) {
+		pushToast(
+			"メンバーをプルダウンから選ぶか、ユーザーID（数字）を入力してください。",
+			"error",
+		);
+		return;
+	}
+	try {
+		const res = await botAttributeApi.setMembers({
+			botId,
+			guildId,
+			userId,
+			action: "add",
+		});
+		if (res.success) {
+			memberInput = "";
+			selectedMember = "";
+			onchanged();
+		} else pushToast(res.message ?? "操作に失敗しました。", "error");
+	} catch (err) {
+		pushToast(
+			err instanceof ApiError ? err.message : "通信エラーが発生しました。",
+			"error",
+		);
+	}
+}
+
+async function remove(m: AssistantMember, shift: boolean) {
+	if (!shift) {
+		const label = m.member_name
+			? `${m.member_name}（${m.user_id}）`
+			: `ユーザー ${m.user_id}`;
+		const ok = await confirmDialog({
+			message: `${label} を利用メンバーから削除しますか？`,
+			danger: true,
+			confirmLabel: "削除",
+		});
+		if (!ok) return;
+	}
+	try {
+		const res = await botAttributeApi.setMembers({
+			botId,
+			guildId: m.guild_id,
+			userId: m.user_id,
+			action: "remove",
+		});
+		if (res.success) onchanged();
+		else pushToast(res.message ?? "操作に失敗しました。", "error");
+	} catch (err) {
+		pushToast(
+			err instanceof ApiError ? err.message : "通信エラーが発生しました。",
+			"error",
+		);
+	}
+}
 </script>
 
 <details class="form-group collapsible-group">

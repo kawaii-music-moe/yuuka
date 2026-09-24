@@ -1,25 +1,25 @@
 <script lang="ts" module>
-	// 連携(int) 状態などの status → ラベル/トーンマップ。
-	// tone は既存 .admin-status-badge の修飾クラス名に写像する:
-	//   status-active(緑) / status-suspended(赤) / status-default(青) / 素(グレー)
-	export type ChipStatus =
-		| "running" // 稼働中
-		| "connected" // 接続中
-		| "stopped" // 停止中
-		| "unset" // 未設定
-		| "error" // エラー
-		| "pending"; // 保留
+// 連携(int) 状態などの status → ラベル/トーンマップ。
+// tone は既存 .admin-status-badge の修飾クラス名に写像する:
+//   status-active(緑) / status-suspended(赤) / status-default(青) / 素(グレー)
+export type ChipStatus =
+	| "running" // 稼働中
+	| "connected" // 接続中
+	| "stopped" // 停止中
+	| "unset" // 未設定
+	| "error" // エラー
+	| "pending"; // 保留
 
-	type ChipDef = { label: string; tone: string };
+type ChipDef = { label: string; tone: string };
 
-	const STATUS_MAP: Record<ChipStatus, ChipDef> = {
-		running: { label: "稼働中", tone: "status-active" },
-		connected: { label: "接続中", tone: "status-active" },
-		stopped: { label: "停止中", tone: "status-suspended" },
-		error: { label: "エラー", tone: "status-suspended" },
-		unset: { label: "未設定", tone: "" },
-		pending: { label: "保留", tone: "status-default" },
-	};
+const STATUS_MAP: Record<ChipStatus, ChipDef> = {
+	running: { label: "稼働中", tone: "status-active" },
+	connected: { label: "接続中", tone: "status-active" },
+	stopped: { label: "停止中", tone: "status-suspended" },
+	error: { label: "エラー", tone: "status-suspended" },
+	unset: { label: "未設定", tone: "" },
+	pending: { label: "保留", tone: "status-default" },
+};
 </script>
 
 <script lang="ts">

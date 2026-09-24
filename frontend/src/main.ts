@@ -1,5 +1,5 @@
-import { mount } from "svelte";
 import { registerSW } from "virtual:pwa-register";
+import { mount } from "svelte";
 import App from "./App.svelte";
 import "./styles.css";
 

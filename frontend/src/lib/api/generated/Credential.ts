@@ -6,4 +6,9 @@
  * パスワード関連列（`encrypted_password` / `iv` / `auth_tag`）は**フィールドに存在しない**。
  * Node `listCredentials` の `SELECT service_name, username, url, updated_at` と一致。
  */
-export type Credential = { service_name: string, username: string, url: string | null, updated_at: string, };
+export type Credential = {
+	service_name: string;
+	username: string;
+	url: string | null;
+	updated_at: string;
+};

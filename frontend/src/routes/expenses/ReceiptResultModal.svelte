@@ -1,14 +1,14 @@
 <script lang="ts">
-	// AI解析結果の報告モーダル（旧 index.html #modal-receipt-result）。
-	// Gemini のテキスト応答を表示（{@html} 不使用・文字列補間で自動エスケープ）。
-	import { Modal, Button } from "$lib/components/ui";
+// AI解析結果の報告モーダル（旧 index.html #modal-receipt-result）。
+// Gemini のテキスト応答を表示（{@html} 不使用・文字列補間で自動エスケープ）。
+import { Button, Modal } from "$lib/components/ui";
 
-	interface Props {
-		open?: boolean;
-		response?: string;
-	}
+interface Props {
+	open?: boolean;
+	response?: string;
+}
 
-	let { open = $bindable(false), response = "" }: Props = $props();
+let { open = $bindable(false), response = "" }: Props = $props();
 </script>
 
 <Modal bind:open wide title="AI解析結果の報告">

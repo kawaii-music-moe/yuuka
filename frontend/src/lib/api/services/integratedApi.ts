@@ -7,9 +7,9 @@
 // ★フィールド名はハンドラの ctx.body.* 読み取りに厳密一致させる（granted / serviceName / mode）。
 import { api } from "../client";
 import type {
-	IntegratedOverviewResponse,
-	GoogleCalendarsResponse,
 	ApiResponse,
+	GoogleCalendarsResponse,
+	IntegratedOverviewResponse,
 } from "../types";
 
 const USER = { scope: "user" } as const;
@@ -47,7 +47,8 @@ export type BotMcpGrantsResponse = {
 
 export const integratedApi = {
 	/** GET /api/integrated/overview — 全 Bot 横断の統合ビュー */
-	overview: () => api.get<IntegratedOverviewResponse>("/api/integrated/overview", USER),
+	overview: () =>
+		api.get<IntegratedOverviewResponse>("/api/integrated/overview", USER),
 
 	/**
 	 * GET /api/integrated/bots/mcp?botId= — 共有Botが使うMCP（bot-canonical）と
@@ -68,7 +69,11 @@ export const integratedApi = {
 		api.post<ApiResponse>("/api/integrated/bots/restart", { botId }, USER),
 	/** POST /api/integrated/bots/clear-history */
 	clearHistory: (botId: string) =>
-		api.post<ApiResponse>("/api/integrated/bots/clear-history", { botId }, USER),
+		api.post<ApiResponse>(
+			"/api/integrated/bots/clear-history",
+			{ botId },
+			USER,
+		),
 
 	// ── 許可付与（grants）。ハンドラは ctx.body.granted / serviceName を読む ──
 	/** POST /api/integrated/grants/mcp */
@@ -90,13 +95,25 @@ export const integratedApi = {
 	// ── Google アカウント管理 ──
 	/** POST /api/integrated/google/accounts/primary */
 	setPrimaryGoogleAccount: (accountId: number) =>
-		api.post<ApiResponse>("/api/integrated/google/accounts/primary", { accountId }, USER),
+		api.post<ApiResponse>(
+			"/api/integrated/google/accounts/primary",
+			{ accountId },
+			USER,
+		),
 	/** POST /api/integrated/google/accounts/delete */
 	deleteGoogleAccount: (accountId: number) =>
-		api.post<ApiResponse>("/api/integrated/google/accounts/delete", { accountId }, USER),
+		api.post<ApiResponse>(
+			"/api/integrated/google/accounts/delete",
+			{ accountId },
+			USER,
+		),
 	/** POST /api/integrated/google/accounts/calendars — 同期カレンダー設定 */
 	setGoogleCalendars: (body: { accountId: number; calendars: string[] }) =>
-		api.post<ApiResponse>("/api/integrated/google/accounts/calendars", body, USER),
+		api.post<ApiResponse>(
+			"/api/integrated/google/accounts/calendars",
+			body,
+			USER,
+		),
 	/** GET /api/integrated/google/accounts/:id/calendars — カレンダー一覧取得 */
 	googleAccountCalendars: (accountId: number) =>
 		api.get<GoogleCalendarsResponse>(

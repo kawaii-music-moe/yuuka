@@ -7,12 +7,28 @@
  * （`user_id`/`bot_id`/`linked_payment_id`/`due_reminded`）は持たない（Node は生 row で漏らすが
  * Rust は構造的フェイルクローズ＝安全側の意図的差分）。`subtasks` は ORDER_CLAUSE 順で入れ子。
  */
-export type TodoWithSubtasks = { id: bigint, title: string, description: string | null, due_date: string | null, start_date: string | null, priority: string | null, tags: Array<string>, status: string, progress: bigint, parent_id: bigint | null, repeat_rule: string | null, repeat_until: string | null, repeat_count: bigint | null, created_at: string, updated_at: string, 
-/**
- * 子タスク（再帰・深さ無制限）。
- */
-subtasks: Array<TodoWithSubtasks>, 
-/**
- * 算出進捗 0-100（葉の完了率をボトムアップ集計。子なしは `done?100:progress`）。
- */
-effective_progress: bigint, };
+export type TodoWithSubtasks = {
+	id: bigint;
+	title: string;
+	description: string | null;
+	due_date: string | null;
+	start_date: string | null;
+	priority: string | null;
+	tags: Array<string>;
+	status: string;
+	progress: bigint;
+	parent_id: bigint | null;
+	repeat_rule: string | null;
+	repeat_until: string | null;
+	repeat_count: bigint | null;
+	created_at: string;
+	updated_at: string;
+	/**
+	 * 子タスク（再帰・深さ無制限）。
+	 */
+	subtasks: Array<TodoWithSubtasks>;
+	/**
+	 * 算出進捗 0-100（葉の完了率をボトムアップ集計。子なしは `done?100:progress`）。
+	 */
+	effective_progress: bigint;
+};

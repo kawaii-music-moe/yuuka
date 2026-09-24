@@ -1,19 +1,20 @@
 <script lang="ts">
-	// 支払い予定テーブル（旧 app.js:4024 renderExpensePlans）。
-	// pending 行のみ「支払う」「キャンセル」ボタン。期日超過は赤ハイライト。
-	import { Icon } from "$lib/components/ui";
-	import type { PlannedPayment } from "$lib/api/types";
-	import { todayIso, yen } from "./expenseUtils";
+// 支払い予定テーブル（旧 app.js:4024 renderExpensePlans）。
+// pending 行のみ「支払う」「キャンセル」ボタン。期日超過は赤ハイライト。
 
-	interface Props {
-		plans: PlannedPayment[];
-		onPay: (plan: PlannedPayment) => void;
-		onCancel: (plan: PlannedPayment) => void;
-	}
+import type { PlannedPayment } from "$lib/api/types";
+import { Icon } from "$lib/components/ui";
+import { todayIso, yen } from "./expenseUtils";
 
-	let { plans, onPay, onCancel }: Props = $props();
+interface Props {
+	plans: PlannedPayment[];
+	onPay: (plan: PlannedPayment) => void;
+	onCancel: (plan: PlannedPayment) => void;
+}
 
-	const today = todayIso();
+let { plans, onPay, onCancel }: Props = $props();
+
+const today = todayIso();
 </script>
 
 <div class="table-responsive">

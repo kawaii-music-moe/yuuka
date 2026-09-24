@@ -6,4 +6,4 @@ import type { TodoWithSubtasks } from "./TodoWithSubtasks";
  *
  * Node `listTodoTree` と一致し、**親タスクのみ**を `subtasks` ネスト付きで返す。
  */
-export type TaskListData = { tasks: Array<TodoWithSubtasks>, };
+export type TaskListData = { tasks: Array<TodoWithSubtasks> };
