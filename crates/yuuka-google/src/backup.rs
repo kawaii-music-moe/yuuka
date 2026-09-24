@@ -44,33 +44,45 @@ const FILES_ENDPOINT: &str = "https://www.googleapis.com/drive/v3/files";
 /// トークンリフレッシュエンドポイント（`GoogleHttpClient` と同一）。
 const TOKEN_ENDPOINT: &str = "https://oauth2.googleapis.com/token";
 
-/// `user_id` 列でユーザーデータが分離されているテーブル群（Node `USER_SCOPED_TABLES`・backupService.ts:29-49）。
+/// ユーザーデータが分離されているテーブル群（Node `USER_SCOPED_TABLES`・backupService.ts:29-49）。
 ///
-/// **Node からそのまま写した 18 テーブル**（順序も一致）。列は `SELECT *` で保持順にコピーする。
-const USER_SCOPED_TABLES: &[&str] = &[
-    "personas",
-    "bot_active_personas",
-    "message_logs",
-    "todos",
-    "schedules",
-    "reminders",
-    "expenses",
-    "budget_limits",
-    "planned_payments",
-    "playbooks",
-    "playbook_schedules",
-    "playbook_runs",
-    "clipboard_entries",
-    "contacts",
-    "credentials",
-    "webhook_endpoints",
-    "webhook_deliveries",
-    "report_configs",
-    "mcp_servers",
+/// 各要素は `(テーブル名, 絞り込み列名)`。**Node からそのまま写した 18 テーブル**（順序も一致）。列は
+/// `SELECT *` で保持順にコピーする。
+///
+/// 絞り込み列はほとんどが `user_id` だが、`personas`（`crates/yuuka-db/migrations/V17__baseline.sql`）
+/// のみ実スキーマの列名が `owner_id`。以前は一律 `user_id` 決め打ちだったため `personas` の
+/// `prepare` が常に `no such column: user_id` で失敗し、`copy_rows` のテーブル不在 skip 経路に
+/// 巻き込まれて**無条件でスキップ**されていた＝バックアップに一度も persona データが含まれていな
+/// かった（#50 の FK 修正を調査中に発覚した別バグ）。他の全テーブルは `crates/yuuka-db/migrations/
+/// *.sql` 全体に対して列名を確認済み（`user_id` で一致）。
+const USER_SCOPED_TABLES: &[(&str, &str)] = &[
+    ("personas", "owner_id"),
+    ("bot_active_personas", "user_id"),
+    ("message_logs", "user_id"),
+    ("todos", "user_id"),
+    ("schedules", "user_id"),
+    ("reminders", "user_id"),
+    ("expenses", "user_id"),
+    ("budget_limits", "user_id"),
+    ("planned_payments", "user_id"),
+    ("playbooks", "user_id"),
+    ("playbook_schedules", "user_id"),
+    ("playbook_runs", "user_id"),
+    ("clipboard_entries", "user_id"),
+    ("contacts", "user_id"),
+    ("credentials", "user_id"),
+    ("webhook_endpoints", "user_id"),
+    ("webhook_deliveries", "user_id"),
+    ("report_configs", "user_id"),
+    ("mcp_servers", "user_id"),
 ];
 
 /// `user_id` が主キーの単一行テーブル（Node `USER_KEYED_TABLES`・backupService.ts:52）。
-const USER_KEYED_TABLES: &[&str] = &["context_notes", "briefing_configs"];
+/// 要素は [`USER_SCOPED_TABLES`] と同じく `(テーブル名, 絞り込み列名)`。
+const USER_KEYED_TABLES: &[(&str, &str)] = &[
+    ("context_notes", "user_id"),
+    ("briefing_configs", "user_id"),
+];
 
 /// Drive ファイルの最小ビュー（Node `listBackupFiles` の返り値要素）。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -362,11 +374,13 @@ impl GoogleBackupClient {
 /// データベーススキーマ + 当該ユーザーのデータのみを送り先 SQLite へエクスポートする（Node `exportUserData`）。
 ///
 /// スキーマ: `sqlite_master` の table/index 定義（FTS5 仮想テーブル・内部シャドウ・`sqlite_%` は除外）。
-/// データ: `users WHERE discord_id`、[`USER_SCOPED_TABLES`] + [`USER_KEYED_TABLES`] を `WHERE user_id`、
-/// `bots WHERE user_id`。テーブル不在は skip（Node try/catch）。`SELECT *` の列順を保って INSERT する。
+/// データ: `users WHERE discord_id`、[`USER_SCOPED_TABLES`] + [`USER_KEYED_TABLES`]（各テーブルごとの
+/// 絞り込み列で `WHERE`）、`bots WHERE user_id`。テーブル不在は skip（Node try/catch）。`SELECT *` の
+/// 列順を保って INSERT する。
 ///
 /// # Errors
-/// スキーマ/データコピーの SQL 失敗時 [`rusqlite::Error`]（テーブル不在の skip は含まない）。
+/// スキーマ/データコピーの SQL 失敗時 [`rusqlite::Error`]（テーブル不在の skip は含まない。列名不一致
+/// 等のテーブル不在以外の `prepare` 失敗は [`copy_rows`] が伝播する）。
 fn export_user_data(src: &Connection, dest: &Connection, user_id: &str) -> rusqlite::Result<()> {
     // 1) スキーマ（table/index 定義）をコピー。個々の失敗は skip（Node の per-statement try/catch）。
     let schema: Vec<String> = {
@@ -386,18 +400,32 @@ fn export_user_data(src: &Connection, dest: &Connection, user_id: &str) -> rusql
 
     // 2) 本人分の行を INSERT（`SELECT *` の列順を保つ）。
     copy_rows(src, dest, "users", "discord_id", user_id)?;
-    for table in USER_SCOPED_TABLES.iter().chain(USER_KEYED_TABLES) {
-        copy_rows(src, dest, table, "user_id", user_id)?;
+    for (table, where_col) in USER_SCOPED_TABLES.iter().chain(USER_KEYED_TABLES) {
+        copy_rows(src, dest, table, where_col, user_id)?;
     }
     copy_rows(src, dest, "bots", "user_id", user_id)?;
     Ok(())
+}
+
+/// `prepare` 失敗が「対象テーブルが存在しない」ことによるものか判定する。
+///
+/// [`copy_rows`] はテーブル不在（古いスキーマ等）だけを意図的に skip する。それ以外の `prepare` 失敗
+/// （列名の不一致など）は実装上のバグの可能性が高く、握り潰すと `personas`/`owner_id`（#50 の FK 修正
+/// を調査中に発覚）のように**エラーにもならず静かにデータが欠落**するため、区別して伝播させる。
+/// SQLite のエラーメッセージ文言（`"no such table: <name>"`）で判定する（`rusqlite::Error` の
+/// variant はテーブル不在は [`rusqlite::Error::SqliteFailure`]、列名不一致は
+/// [`rusqlite::Error::SqlInputError`] と実際には分かれるが、文言の方が SQLite 側の安定した契約のため
+/// こちらに依る）。
+fn is_missing_table(err: &rusqlite::Error) -> bool {
+    err.to_string().starts_with("no such table:")
 }
 
 /// `SELECT * FROM {table} WHERE {where_col} = ?` の全行を送り先へコピーする（Node `copyRows`）。
 /// テーブル不在（prepare 失敗）は skip（Node の try/catch return）。列名は `SELECT *` の順を保つ。
 ///
 /// # Errors
-/// INSERT の SQL 失敗時 [`rusqlite::Error`]（prepare 失敗＝テーブル不在は `Ok(())` へ握る）。
+/// INSERT の SQL 失敗時、およびテーブル不在以外の `prepare` 失敗（列名不一致等のスキーマ不整合）
+/// 時に [`rusqlite::Error`]（テーブル不在の `prepare` 失敗のみ `Ok(())` へ握る）。
 fn copy_rows(
     src: &Connection,
     dest: &Connection,
@@ -406,9 +434,18 @@ fn copy_rows(
     user_id: &str,
 ) -> rusqlite::Result<()> {
     let select = format!("SELECT * FROM {table} WHERE {where_col} = ?1");
-    // テーブル不在は prepare で失敗 → skip（Node の catch return）。
-    let Ok(mut stmt) = src.prepare(&select) else {
-        return Ok(());
+    let mut stmt = match src.prepare(&select) {
+        Ok(stmt) => stmt,
+        // テーブル不在は skip（Node の catch return）。
+        Err(e) if is_missing_table(&e) => return Ok(()),
+        // それ以外（列名不一致など）は握り潰さず、警告ログの上で伝播させる（データ欠落を隠さない）。
+        Err(e) => {
+            tracing::warn!(
+                table = %table, where_col = %where_col, error = %e,
+                "⚠️ [Backup] テーブルのエクスポートに失敗（スキーマ不整合の可能性）"
+            );
+            return Err(e);
+        }
     };
     let columns: Vec<String> = stmt
         .column_names()
@@ -630,18 +667,23 @@ mod tests {
 
     use super::{
         backup_file_name, build_multipart_body, copy_rows, drive_metadata_json, export_user_data,
-        parse_backup_files, parse_web_view_link, stale_files, zip_single_file, DriveFile,
-        BACKUP_PREFIX,
+        is_missing_table, parse_backup_files, parse_web_view_link, stale_files, zip_single_file,
+        DriveFile, BACKUP_PREFIX,
     };
 
     /// 最小スキーマ（users / todos / message_logs / message_logs_fts / bots / personas）を持つソース DB を作る。
+    ///
+    /// `personas` は実スキーマ（`crates/yuuka-db/migrations/V17__baseline.sql`）と同じく `owner_id` 列
+    /// でユーザーへ紐づく（他テーブルは `user_id`）。#50 の調査で発覚した「`personas` だけ列名が違う
+    /// ため一律 `user_id` 決め打ちだと無条件でスキップされる」を再現・回帰防止するため、この不一致を
+    /// そのままフィクスチャにも反映している。
     fn source_db() -> Connection {
         let conn = Connection::open_in_memory().expect("mem db");
         conn.execute_batch(
             "CREATE TABLE users (discord_id TEXT PRIMARY KEY, username TEXT);\
              CREATE TABLE todos (id INTEGER PRIMARY KEY, user_id TEXT, title TEXT);\
              CREATE TABLE message_logs (id INTEGER PRIMARY KEY, user_id TEXT, content TEXT);\
-             CREATE TABLE personas (id INTEGER PRIMARY KEY, user_id TEXT, name TEXT);\
+             CREATE TABLE personas (id INTEGER PRIMARY KEY, owner_id TEXT, name TEXT);\
              CREATE TABLE bots (id TEXT PRIMARY KEY, user_id TEXT, name TEXT);\
              CREATE INDEX idx_todos_user ON todos(user_id);\
              CREATE VIRTUAL TABLE message_logs_fts USING fts5(content);",
@@ -652,7 +694,7 @@ mod tests {
             "INSERT INTO users (discord_id, username) VALUES ('alice','A'),('bob','B');\
              INSERT INTO todos (user_id, title) VALUES ('alice','買い物'),('alice','掃除'),('bob','他人');\
              INSERT INTO message_logs (user_id, content) VALUES ('alice','hi'),('bob','bye');\
-             INSERT INTO personas (user_id, name) VALUES ('alice','秘書');\
+             INSERT INTO personas (owner_id, name) VALUES ('alice','秘書'),('bob','執事');\
              INSERT INTO bots (id, user_id, name) VALUES ('b1','alice','MyBot'),('b2','bob','Other');\
              INSERT INTO message_logs_fts (content) VALUES ('hi');",
         )
@@ -693,6 +735,57 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM bots", [], |r| r.get(0))
             .unwrap();
         assert_eq!(bots, 1);
+
+        // personas: owner_id で alice の 1 件のみ（#50 の調査で発覚した別バグの回帰確認）。
+        let personas: i64 = dest
+            .query_row("SELECT COUNT(*) FROM personas", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(personas, 1);
+        let persona_name: String = dest
+            .query_row("SELECT name FROM personas", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(persona_name, "秘書");
+    }
+
+    #[test]
+    fn export_includes_personas_scoped_by_owner_id() {
+        // #50 の FK 修正を調査中に発覚した別バグ: USER_SCOPED_TABLES が一律 `user_id` 決め打ちだと
+        // 実スキーマで `owner_id` 列の `personas` は `prepare` が「no such column: user_id」で失敗し、
+        // テーブル不在と同じ skip 経路に巻き込まれて常に無条件でスキップされていた（エラーにならず
+        // 静かに 0 件）。`USER_SCOPED_TABLES` に `personas` 専用の絞り込み列（`owner_id`）を持たせた
+        // ことで正しくコピーされることを検証する。
+        let src = source_db();
+        let dest = Connection::open_in_memory().expect("dest");
+        export_user_data(&src, &dest, "alice").expect("export");
+
+        let names: Vec<String> = {
+            let mut stmt = dest
+                .prepare("SELECT name FROM personas ORDER BY id")
+                .unwrap();
+            stmt.query_map([], |r| r.get::<_, String>(0))
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap()
+        };
+        // alice のペルソナのみ（bob の「執事」は含まれない）。
+        assert_eq!(names, vec!["秘書".to_owned()]);
+    }
+
+    #[test]
+    fn copy_rows_propagates_non_missing_table_errors() {
+        // テーブルは存在するが絞り込み列が無い（列名の取り違え等）場合は、テーブル不在の skip と
+        // 区別して呼び出し側へエラーを伝播させる（#50 の調査で発覚した「エラーにもならず静かに
+        // データが欠落する」問題の再発防止）。
+        let src = source_db();
+        let dest = Connection::open_in_memory().expect("dest");
+        // personas の実列は owner_id。存在しない列名を渡すと「no such column」で失敗するはずで、
+        // これは「no such table」ではないため Ok(()) へ握り潰されてはならない。
+        let err = copy_rows(&src, &dest, "personas", "nonexistent_column", "alice")
+            .expect_err("column mismatch must propagate, not be swallowed");
+        assert!(
+            !is_missing_table(&err),
+            "must not be classified as missing table"
+        );
     }
 
     #[test]
