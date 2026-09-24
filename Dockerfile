@@ -81,4 +81,7 @@ COPY --from=frontend-builder /app/dist/public ./dist/public
 RUN mkdir -p /app/data && chown -R yuuka:yuuka /app
 USER yuuka
 EXPOSE 7854
+# curl/wget 非同梱のため、バイナリ自身の自己診断サブコマンドで判定する（#54・main.rs run_healthcheck）。
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD ["./yuuka", "--healthcheck"]
 CMD ["./yuuka"]

@@ -43,8 +43,16 @@ services:
       - "${CONFIG_FILE:?set CONFIG_FILE in instance.env}:/app/config.yaml:ro"
     ports:
       - "${BIND_ADDR:-127.0.0.1}:${HOST_PORT:?set HOST_PORT in instance.env}:7854"
+    healthcheck:
+      # runtime イメージに curl/wget が無いため、バイナリ自身の自己診断を使う（#54）。
+      test: ["CMD", "./yuuka", "--healthcheck"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
     depends_on:
-      - redis
+      redis:
+        condition: service_healthy
     logging:
       driver: json-file
       options:
@@ -56,6 +64,12 @@ services:
     restart: unless-stopped
     # キャッシュ専用途のため永続化しない（再作成時は SQLite から再構築される）
     command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      start_period: 5s
+      retries: 5
     logging:
       driver: json-file
       options:

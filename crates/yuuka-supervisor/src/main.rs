@@ -37,6 +37,13 @@ const DIST_DIR: &str = "dist/public";
 
 #[tokio::main]
 async fn main() -> ExitCode {
+    // Docker HEALTHCHECK 用の自己診断（`yuuka --healthcheck`・#54）。ランタイムイメージ
+    // （debian-slim）には curl/wget を同梱していないため、バイナリ自身に最小限の HTTP
+    // クライアントを持たせる。telemetry 初期化や DB/Redis 接続など通常起動の重い処理は
+    // 一切行わず、ループバックへの軽量 GET のみで即座に終了する。
+    if std::env::args().nth(1).as_deref() == Some("--healthcheck") {
+        return run_healthcheck().await;
+    }
     init_telemetry();
     match run().await {
         Ok(()) => ExitCode::SUCCESS,
@@ -45,6 +52,31 @@ async fn main() -> ExitCode {
             tracing::error!(error = %e, "起動に失敗しました");
             ExitCode::FAILURE
         }
+    }
+}
+
+/// `yuuka --healthcheck` の実処理。稼働中プロセスと同じ `config.yaml` からポートだけを読み
+/// （読めなければコンテナの既定 7854 にフォールバック）、`127.0.0.1` へ GET `/` を投げて
+/// 2xx/3xx なら成功とする。判定基準は `deploy/instance.sh` の `health_check()` と同じ
+/// （SPA fallback が 200 を返す＝web サービスが応答可能）。
+async fn run_healthcheck() -> ExitCode {
+    const DEFAULT_PORT: u16 = 7854;
+    let port = Config::load_and_validate(Path::new(CONFIG_PATH))
+        .map(|c| c.port)
+        .unwrap_or(DEFAULT_PORT);
+    let url = format!("http://127.0.0.1:{port}/");
+    let client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(3))
+        .build()
+    {
+        Ok(c) => c,
+        Err(_) => return ExitCode::FAILURE,
+    };
+    match client.get(&url).send().await {
+        Ok(resp) if resp.status().is_success() || resp.status().is_redirection() => {
+            ExitCode::SUCCESS
+        }
+        _ => ExitCode::FAILURE,
     }
 }
 
