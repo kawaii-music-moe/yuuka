@@ -78,8 +78,12 @@ health_check() {
   echo "── 直近ログ ──"
   dc logs --tail 20 app 2>&1 | sed 's/^/   /' || true
   local logins errs
-  logins="$(dc logs app 2>&1 | grep -c 'としてログインしました' || true)"
-  errs="$(dc logs app 2>&1 | grep -ciE '復号|decrypt|UnhandledPromiseRejection|FATAL' || true)"
+  # Rust 版の実際のログ文言・レベル書式で判定する（#53・Node 版の文言は撤去済みで常に 0 件になっていた）。
+  # tracing のログ行は `<timestamp> <LEVEL> <target>: ...` 形式（LEVEL は5桁固定幅で ERROR は左右パディング無し）
+  # なので ' ERROR ' で狙い撃つ。telemetry 初期化（crates/yuuka-core/src/telemetry.rs）が
+  # 非 TTY では ANSI を無効化するため、docker logs 越しでも色コードで grep が壊れることはない。
+  logins="$(dc logs app 2>&1 | grep -c 'Discord ログイン成功' || true)"
+  errs="$(dc logs app 2>&1 | grep -c ' ERROR ' || true)"
   echo "── 判定 ──"
   echo "   HTTP: $code / Botログイン: ${logins}件 / エラー疑い: ${errs}件"
   if [ "$code" = "200" ]; then

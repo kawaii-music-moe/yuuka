@@ -17,6 +17,7 @@ use async_trait::async_trait;
 use axum::Router;
 use yuuka_auth::{AuthRuntime, CompositeAuth, SessionStore};
 use yuuka_core::secrets::ExposeSecret;
+use yuuka_core::telemetry::init_telemetry;
 use yuuka_core::{Config, DbError};
 use yuuka_crypto::{rotate_secret_key, SystemCrypto, LEGACY_FALLBACK_SECRET};
 use yuuka_discord::{rate_limit_message, DiscordManager, ManagerPorts, Prepared, RateLimiter};
@@ -729,14 +730,6 @@ impl SupervisedService for WebService {
         tracing::info!("yuuka web stopped");
         Ok(())
     }
-}
-
-/// telemetry（tracing）初期化。`RUST_LOG` で制御、既定は info。
-fn init_telemetry() {
-    use tracing_subscriber::{fmt, EnvFilter};
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
-    // 二重初期化（テスト等）でも panic させない。
-    let _ = fmt().with_env_filter(filter).try_init();
 }
 
 /// Ctrl-C または SIGTERM を待つ（graceful shutdown のトリガ）。
