@@ -16,7 +16,7 @@
 	import { ApiError } from "$lib/api/client";
 	import { bootstrapSession } from "$lib/stores/session";
 	import { selectBot } from "$lib/stores/activeBot";
-	import { navigateTo } from "$lib/router";
+	import { isAllowedReturnPath, navigateTo, withBasePath } from "$lib/router";
 
 	type Mode = "login" | "register" | "setup" | "bot-setup";
 
@@ -53,6 +53,17 @@
 		errorMsg = e instanceof ApiError ? e.message : "サーバー接続に失敗しました。";
 	}
 
+	// ログイン後の戻り先（#34 症状4: returnTo が見られておらず、PWA 等から来たユーザーが
+	// 元の画面に戻れない）。`?returnTo=` はオープンリダイレクト対策として
+	// isAllowedReturnPath で検証し、通らなければアプリのホーム（"/"）へ。
+	// navigateTo はアプリ相対パスを受け取るので、ここではアプリ相対のまま返す
+	// （navigateTo 側で BASE_PATH 付与が行われる）。
+	function getReturnTo(): string {
+		if (typeof window === "undefined") return "/";
+		const returnTo = new URLSearchParams(window.location.search).get("returnTo");
+		return isAllowedReturnPath(returnTo) ? (returnTo as string) : "/";
+	}
+
 	// 起動時に setup 要否をプローブ（旧 checkSetupStatus）。needSetup なら setup 表示。
 	onMount(async () => {
 		try {
@@ -82,7 +93,7 @@
 			});
 			// セッション再取得 → App 側が isAuthed を検知して Bot 選択へ遷移。
 			await bootstrapSession();
-			navigateTo("/");
+			navigateTo(getReturnTo());
 		} catch (e) {
 			reportError(e);
 		}
@@ -237,7 +248,11 @@
 		<div class="login-card">
 			<div class="login-header">
 				<div class="logo-icon-container">
-					<img src="/materials/yuka.webp" alt="早瀬ユウカ" class="login-avatar-img" />
+					<img
+						src="{import.meta.env.BASE_URL}materials/yuka.webp"
+						alt="早瀬ユウカ"
+						class="login-avatar-img"
+					/>
 				</div>
 				<h1>Yuuka</h1>
 				<p>AIアシスタントと連携したパーソナル管理システム</p>
@@ -474,13 +489,13 @@
 			<div
 				style="margin-top: 24px; text-align: center; border-top: 1px solid var(--border-divider); padding-top: 16px; display: flex; justify-content: center; gap: 16px; flex-wrap: wrap;"
 			>
-				<a href="/usage" class="login-footer-link">
+				<a href={withBasePath("/usage")} class="login-footer-link">
 					<span class="material-symbols-outlined" style="font-size: 18px;">help</span> 使い方ガイドを読む
 				</a>
-				<a href="/terms" class="login-footer-link">
+				<a href={withBasePath("/terms")} class="login-footer-link">
 					<span class="material-symbols-outlined" style="font-size: 18px;">gavel</span> 利用規約
 				</a>
-				<a href="/privacy" class="login-footer-link">
+				<a href={withBasePath("/privacy")} class="login-footer-link">
 					<span class="material-symbols-outlined" style="font-size: 18px;">policy</span> プライバシーポリシー
 				</a>
 			</div>

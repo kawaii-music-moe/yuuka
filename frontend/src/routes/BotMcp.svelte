@@ -18,6 +18,7 @@
 	import { confirmDialog } from "$lib/components/ui";
 	import { Button, Icon, TagChip, EmptyState } from "$lib/components/ui";
 	import { activeBot } from "$lib/stores/activeBot";
+	import { withBasePath } from "$lib/router";
 	import type { McpServerView } from "$lib/api/types";
 	import type {
 		BotMcpGrantServer,
@@ -165,7 +166,7 @@
 		<span class="field-sub"
 			>MCPサーバーの登録・削除は「Bot統合管理」ページ、Bot別の利用許可は下の「このBotが利用するMCPサーバー」で管理できます。</span
 		>
-		<a href="/integrated" class="btn btn-secondary btn-sm">Bot統合管理へ</a>
+		<a href={withBasePath("/integrated")} class="btn btn-secondary btn-sm">Bot統合管理へ</a>
 	</div>
 
 	{#if isRealBot}

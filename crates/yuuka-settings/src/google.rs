@@ -12,9 +12,18 @@ use axum::response::{IntoResponse, Response};
 use axum::{Extension, Json};
 use serde::Deserialize;
 use serde_json::{json, Value};
-use yuuka_web::{ApiError, AppState, AuthenticatedUser, OptionalUser};
+use yuuka_web::{ApiError, AppState, AuthenticatedUser, OptionalUser, ADMIN_PREFIX};
 
 use crate::SettingsRuntime;
+
+/// OAuth コールバック完了後にフロントへ結果を伝える着地先（#34）。
+///
+/// 旧 Node 版は PWA 分離前提で `/?oauth=...`（ドキュメントルート）へ戻していたが、管理画面 SPA が
+/// `ADMIN_PREFIX`（`/admin`）配下に閉じたため、そのままではルートに何も無く連携結果が表示されない
+/// （issue #34 症状5）。連携操作の起点である「Bot統合管理」（`IntegratedOverlay.svelte`）へ戻す。
+fn oauth_landing(query: &str) -> String {
+    format!("{ADMIN_PREFIX}/integrated?{query}")
+}
 
 /// OAuth の redirect_uri を構築する（Node `buildOAuthRedirectUri`）。base_url があればそれを使い、無ければ
 /// localhost/127.0.0.1 のときのみ Host から構築する（攻撃者操作可能な Host での偽装を防ぐ）。不能なら `None`。
@@ -98,33 +107,33 @@ pub(crate) async fn oauth_callback(
 ) -> Response {
     // コールバック時点のセッション確認（auth:none だが手動検証）。
     let Some(session) = maybe_user.0 else {
-        return redirect("/?oauth=error&msg=unauthorized");
+        return redirect(&oauth_landing("oauth=error&msg=unauthorized"));
     };
     let user_id = session.discord_id;
 
     if !rt.oauth.is_configured() {
-        return redirect("/?oauth=error&msg=missing_config");
+        return redirect(&oauth_landing("oauth=error&msg=missing_config"));
     }
 
     // CSRF 対策: state を消費し、フロー開始時のセッションユーザーと一致するか確認する。
     let state_param = q.state.unwrap_or_default();
     match rt.oauth_state.consume(&state_param) {
         Some(uid) if uid == user_id => {}
-        _ => return redirect("/?oauth=error&msg=invalid_state"),
+        _ => return redirect(&oauth_landing("oauth=error&msg=invalid_state")),
     }
 
     let Some(code) = q.code.filter(|c| !c.is_empty()) else {
-        return redirect("/?oauth=error&msg=missing_code");
+        return redirect(&oauth_landing("oauth=error&msg=missing_code"));
     };
     let Some(redirect_uri) =
         build_redirect_uri(state.config.base_url.as_deref(), host_header(&headers))
     else {
-        return redirect("/?oauth=error&msg=token_exchange_failed");
+        return redirect(&oauth_landing("oauth=error&msg=token_exchange_failed"));
     };
 
     let tokens = match rt.oauth.exchange_code(&redirect_uri, &code).await {
         Ok(t) => t,
-        Err(_) => return redirect("/?oauth=error&msg=token_exchange_failed"),
+        Err(_) => return redirect(&oauth_landing("oauth=error&msg=token_exchange_failed")),
     };
 
     // email 取得は非致命（失敗は None・Node は握り潰す）。
@@ -135,15 +144,15 @@ pub(crate) async fn oauth_callback(
 
     let Some(refresh_token) = tokens.refresh_token else {
         // refresh_token が来ない（再同意なし）→ 明示エラー（URL 生成側で prompt=consent 済み）。
-        return redirect("/?oauth=error&msg=no_refresh_token");
+        return redirect(&oauth_landing("oauth=error&msg=no_refresh_token"));
     };
 
     // リフレッシュトークンをシステム鍵で暗号化して保存する。
     let Some(crypto) = rt.crypto.as_ref() else {
-        return redirect("/?oauth=error&msg=token_exchange_failed");
+        return redirect(&oauth_landing("oauth=error&msg=token_exchange_failed"));
     };
     let Ok(enc) = crypto.encrypt_text(&refresh_token) else {
-        return redirect("/?oauth=error&msg=token_exchange_failed");
+        return redirect(&oauth_landing("oauth=error&msg=token_exchange_failed"));
     };
     let account_id = match yuuka_google::repo::add_or_update_account(
         &state.db,
@@ -157,7 +166,7 @@ pub(crate) async fn oauth_callback(
     .await
     {
         Ok(id) => id,
-        Err(_) => return redirect("/?oauth=error&msg=token_exchange_failed"),
+        Err(_) => return redirect(&oauth_landing("oauth=error&msg=token_exchange_failed")),
     };
     rt.calendar.invalidate_account(account_id);
     yuuka_auth::audit::add_audit_log(
@@ -168,7 +177,7 @@ pub(crate) async fn oauth_callback(
         None,
     )
     .await;
-    redirect("/?oauth=success")
+    redirect(&oauth_landing("oauth=success"))
 }
 
 // ─── POST /api/settings/calendars ────────────────────────────────────────────
@@ -246,7 +255,22 @@ pub(crate) async fn backup_trigger(
 
 #[cfg(test)]
 mod tests {
-    use super::build_redirect_uri;
+    use super::{build_redirect_uri, oauth_landing};
+
+    #[test]
+    fn oauth_landing_stays_under_admin_prefix() {
+        // #34: ルート "/" は PWA 用に予約されたため、コールバック結果は管理画面 SPA
+        // （Bot 統合管理タブ）へ着地させる。ADMIN_PREFIX とズレたら resolveRoute が拾えず
+        // 症状5（連携結果が表示されない）が再発するため固定文字列で凍結する。
+        assert_eq!(
+            oauth_landing("oauth=success"),
+            "/admin/integrated?oauth=success"
+        );
+        assert_eq!(
+            oauth_landing("oauth=error&msg=invalid_state"),
+            "/admin/integrated?oauth=error&msg=invalid_state"
+        );
+    }
 
     #[test]
     fn redirect_uri_parity() {
