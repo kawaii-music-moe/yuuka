@@ -29,7 +29,7 @@ import { pushToast } from "$lib/stores/toast";
 
 import BudgetBars from "./expenses/BudgetBars.svelte";
 import BudgetSettingsModal from "./expenses/BudgetSettingsModal.svelte";
-import type ExpenseForm from "./expenses/ExpenseForm.svelte";
+import ExpenseForm from "./expenses/ExpenseForm.svelte";
 import ExpenseLedgerTable from "./expenses/ExpenseLedgerTable.svelte";
 import ExpensePlanModal from "./expenses/ExpensePlanModal.svelte";
 import ExpensePlansTable from "./expenses/ExpensePlansTable.svelte";

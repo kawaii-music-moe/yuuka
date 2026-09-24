@@ -522,6 +522,9 @@ textarea {
 	.management-overlay-card {
 		width: 100vw;
 		height: 100vh;
+		/* biome-ignore lint/suspicious/noDuplicateProperties: 100vh above is an
+		   intentional fallback for browsers without dvh support; this overrides it
+		   where supported. */
 		height: 100dvh;
 		max-height: 100dvh;
 		border-radius: 0;
@@ -599,12 +602,15 @@ textarea {
 	max-height: 60vh;
 	overflow-y: auto;
 	margin-top: 16px;
-	padding-right: 12px;
 	text-align: left;
 	background-color: var(--surface-1dp);
 	border: 1px solid var(--border-matte);
 	border-radius: 4px;
+	/* padding-right stays smaller than the shorthand to leave room for the
+	   scrollbar from overflow-y: auto above; declare the shorthand first so it
+	   doesn't blow away this longhand override (was previously a no-op). */
 	padding: 20px;
+	padding-right: 12px;
 }
 
 /* Custom Scrollbar for usage content to match the theme */
@@ -2489,8 +2495,13 @@ input[type="checkbox"]:disabled,
 		max-width: 100%;
 		width: 100%;
 		height: 100vh;
+		/* biome-ignore lint/suspicious/noDuplicateProperties: 100vh above is an
+		   intentional fallback for browsers without dvh support; this overrides it
+		   where supported. */
 		height: 100dvh;
 		max-height: 100vh;
+		/* biome-ignore lint/suspicious/noDuplicateProperties: same dvh fallback
+		   pattern as height above. */
 		max-height: 100dvh;
 		padding: 12px;
 		border: 0;

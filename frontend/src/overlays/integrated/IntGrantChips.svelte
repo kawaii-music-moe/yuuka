@@ -3,7 +3,6 @@
 // 許可済み Bot は「× で解除できるチップ」、未許可 Bot は <select> から選んで追加する。
 // 手動 innerHTML/intEsc は不要（Svelte 自動エスケープ）。トグルは親の ontoggle に委譲。
 import type { IntegratedBotView } from "$lib/api/types";
-import Icon from "$lib/components/ui/Icon.svelte";
 
 interface Props {
 	/** 全 Bot 一覧（overview.bots） */
