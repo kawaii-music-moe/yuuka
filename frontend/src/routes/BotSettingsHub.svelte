@@ -1,19 +1,20 @@
 <script lang="ts">
-	// ─────────────────────────────────────────────────────────────────────────
-	// BotSettingsHub — 設定ハブ（/bot/settings）。
-	//
-	// サイドバー2階層化に伴い、低頻度の設定系タブ（ペルソナ/Playbook/MCP/
-	// 配信/Webhook/Discord/Bot基本設定/接続端末）の入口をカード一覧に集約する。
-	// 各カードは既存の /bot/<tab> へ遷移するだけで、遷移先ページ自体は不変。
-	// カード定義・プリセット別表示条件は $lib/botTabs が単一情報源
-	// （BotShell のパンくず/アクティブ判定も同じ集合を参照する）。
-	// ─────────────────────────────────────────────────────────────────────────
-	import { navigateTo } from "$lib/router";
-	import { activeBot } from "$lib/stores/activeBot";
-	import { botPreset, filterHubItems } from "$lib/botTabs";
-	import { Icon } from "$lib/components/ui";
+// ─────────────────────────────────────────────────────────────────────────
+// BotSettingsHub — 設定ハブ（/bot/settings）。
+//
+// サイドバー2階層化に伴い、低頻度の設定系タブ（ペルソナ/Playbook/MCP/
+// 配信/Webhook/Discord/Bot基本設定/接続端末）の入口をカード一覧に集約する。
+// 各カードは既存の /bot/<tab> へ遷移するだけで、遷移先ページ自体は不変。
+// カード定義・プリセット別表示条件は $lib/botTabs が単一情報源
+// （BotShell のパンくず/アクティブ判定も同じ集合を参照する）。
+// ─────────────────────────────────────────────────────────────────────────
 
-	const items = $derived(filterHubItems(botPreset($activeBot)));
+import { botPreset, filterHubItems } from "$lib/botTabs";
+import { Icon } from "$lib/components/ui";
+import { navigateTo } from "$lib/router";
+import { activeBot } from "$lib/stores/activeBot";
+
+const items = $derived(filterHubItems(botPreset($activeBot)));
 </script>
 
 <section class="tab-view">

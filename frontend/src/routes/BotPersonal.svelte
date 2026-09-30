@@ -1,148 +1,157 @@
 <script lang="ts">
-	// ─────────────────────────────────────────────────────────────────────────
-	// パーソナル タブ（旧 app.js の context-note / clipboard / contacts + index.html
-	// #tab-personal を移植）。activeBot 変更で3本 fetch（fetchContextNote /
-	// fetchClipboardList / fetchContactsList）。personalApi 使用（scope:'bot'）。
-	// ─────────────────────────────────────────────────────────────────────────
-	import { activeBot } from "$lib/stores/activeBot";
-	import { personalApi } from "$lib/api/services";
-	import { ApiError } from "$lib/api/client";
-	import { pushToast } from "$lib/stores/toast";
-	import { confirmDialog } from "$lib/components/ui";
-	import { Button, Icon, CharCounter, TagChip } from "$lib/components/ui";
-	import type { ContactView, ClipboardEntry } from "$lib/api/types";
-	import ContactModal from "./personal/ContactModal.svelte";
+// ─────────────────────────────────────────────────────────────────────────
+// パーソナル タブ（旧 app.js の context-note / clipboard / contacts + index.html
+// #tab-personal を移植）。activeBot 変更で3本 fetch（fetchContextNote /
+// fetchClipboardList / fetchContactsList）。personalApi 使用（scope:'bot'）。
+// ─────────────────────────────────────────────────────────────────────────
 
-	// ── コンテキストノート ──
-	let noteContent = $state("");
-	let noteMaxLength = $state(10000);
+import { ApiError } from "$lib/api/client";
+import { personalApi } from "$lib/api/services";
+import type { ClipboardEntry, ContactView } from "$lib/api/types";
+import {
+	Button,
+	CharCounter,
+	confirmDialog,
+	Icon,
+	TagChip,
+} from "$lib/components/ui";
+import { activeBot } from "$lib/stores/activeBot";
+import { pushToast } from "$lib/stores/toast";
+import ContactModal from "./personal/ContactModal.svelte";
 
-	// ── クリップボード ──
-	let clipboard = $state<ClipboardEntry[]>([]);
+// ── コンテキストノート ──
+let noteContent = $state("");
+let noteMaxLength = $state(10000);
 
-	// ── 連絡先 ──
-	let contacts = $state<ContactView[]>([]);
+// ── クリップボード ──
+let clipboard = $state<ClipboardEntry[]>([]);
 
-	// ── 連絡先モーダル ──
-	let contactOpen = $state(false);
-	let editingContact = $state<ContactView | null>(null);
+// ── 連絡先 ──
+let contacts = $state<ContactView[]>([]);
 
-	function reportError(e: unknown) {
-		pushToast(e instanceof ApiError ? e.message : "エラーが発生しました", "error");
+// ── 連絡先モーダル ──
+let contactOpen = $state(false);
+let editingContact = $state<ContactView | null>(null);
+
+function reportError(e: unknown) {
+	pushToast(
+		e instanceof ApiError ? e.message : "エラーが発生しました",
+		"error",
+	);
+}
+
+async function loadContextNote() {
+	try {
+		const res = await personalApi.getContextNote();
+		noteMaxLength = res.max_length || 10000;
+		noteContent = res.content ?? "";
+	} catch (e) {
+		reportError(e);
 	}
+}
 
-	async function loadContextNote() {
-		try {
-			const res = await personalApi.getContextNote();
-			noteMaxLength = res.max_length || 10000;
-			noteContent = res.content ?? "";
-		} catch (e) {
-			reportError(e);
-		}
+async function loadClipboard() {
+	try {
+		const res = await personalApi.clipboard();
+		clipboard = res.entries ?? [];
+	} catch (e) {
+		reportError(e);
+		clipboard = [];
 	}
+}
 
-	async function loadClipboard() {
-		try {
-			const res = await personalApi.clipboard();
-			clipboard = res.entries ?? [];
-		} catch (e) {
-			reportError(e);
-			clipboard = [];
-		}
+async function loadContacts() {
+	try {
+		const res = await personalApi.contacts();
+		contacts = res.contacts ?? [];
+	} catch (e) {
+		reportError(e);
+		contacts = [];
 	}
+}
 
-	async function loadContacts() {
-		try {
-			const res = await personalApi.contacts();
-			contacts = res.contacts ?? [];
-		} catch (e) {
-			reportError(e);
-			contacts = [];
-		}
+// activeBot（bot-scoped）変更で3本再取得。
+$effect(() => {
+	void $activeBot?.id;
+	void loadContextNote();
+	void loadClipboard();
+	void loadContacts();
+});
+
+async function saveNote(e: SubmitEvent) {
+	e.preventDefault();
+	if (noteContent.length > noteMaxLength) {
+		pushToast(
+			`コンテキストノートは最大 ${noteMaxLength.toLocaleString()} 文字までです。`,
+			"error",
+		);
+		return;
 	}
+	try {
+		const res = await personalApi.saveContextNote(noteContent);
+		pushToast(res.message ?? "保存しました。", "success");
+	} catch (e) {
+		reportError(e);
+	}
+}
 
-	// activeBot（bot-scoped）変更で3本再取得。
-	$effect(() => {
-		void $activeBot?.id;
-		void loadContextNote();
-		void loadClipboard();
-		void loadContacts();
+async function deleteClip(id: number) {
+	const ok = await confirmDialog({
+		message: "このメモを削除しますか？",
+		danger: true,
+		confirmLabel: "削除",
 	});
+	if (!ok) return;
+	try {
+		await personalApi.deleteClipboard(id);
+		await loadClipboard();
+	} catch (e) {
+		reportError(e);
+	}
+}
 
-	async function saveNote(e: SubmitEvent) {
-		e.preventDefault();
-		if (noteContent.length > noteMaxLength) {
-			pushToast(
-				`コンテキストノートは最大 ${noteMaxLength.toLocaleString()} 文字までです。`,
-				"error",
-			);
-			return;
-		}
-		try {
-			const res = await personalApi.saveContextNote(noteContent);
-			pushToast(res.message ?? "保存しました。", "success");
-		} catch (e) {
-			reportError(e);
-		}
-	}
+function openNewContact() {
+	editingContact = null;
+	contactOpen = true;
+}
+function openEditContact(c: ContactView) {
+	editingContact = c;
+	contactOpen = true;
+}
 
-	async function deleteClip(id: number) {
-		const ok = await confirmDialog({
-			message: "このメモを削除しますか？",
-			danger: true,
-			confirmLabel: "削除",
-		});
-		if (!ok) return;
-		try {
-			await personalApi.deleteClipboard(id);
-			await loadClipboard();
-		} catch (e) {
-			reportError(e);
-		}
+async function saveContact(payload: {
+	id?: number;
+	name: string;
+	birthday: string;
+	relationship: string;
+	contactInfo: string;
+	notes: string;
+	tags: string[];
+}) {
+	try {
+		const res = await personalApi.saveContact(payload);
+		pushToast(res.message ?? "保存しました。", "success");
+		contactOpen = false;
+		await loadContacts();
+	} catch (e) {
+		reportError(e);
 	}
+}
 
-	function openNewContact() {
-		editingContact = null;
-		contactOpen = true;
+async function deleteContactRow(c: ContactView) {
+	const ok = await confirmDialog({
+		message: `連絡先「${c.name}」を削除しますか？`,
+		danger: true,
+		confirmLabel: "削除",
+	});
+	if (!ok) return;
+	try {
+		await personalApi.deleteContact(c.id);
+		await loadContacts();
+	} catch (e) {
+		reportError(e);
 	}
-	function openEditContact(c: ContactView) {
-		editingContact = c;
-		contactOpen = true;
-	}
-
-	async function saveContact(payload: {
-		id?: number;
-		name: string;
-		birthday: string;
-		relationship: string;
-		contactInfo: string;
-		notes: string;
-		tags: string[];
-	}) {
-		try {
-			const res = await personalApi.saveContact(payload);
-			pushToast(res.message ?? "保存しました。", "success");
-			contactOpen = false;
-			await loadContacts();
-		} catch (e) {
-			reportError(e);
-		}
-	}
-
-	async function deleteContactRow(c: ContactView) {
-		const ok = await confirmDialog({
-			message: `連絡先「${c.name}」を削除しますか？`,
-			danger: true,
-			confirmLabel: "削除",
-		});
-		if (!ok) return;
-		try {
-			await personalApi.deleteContact(c.id);
-			await loadContacts();
-		} catch (e) {
-			reportError(e);
-		}
-	}
+}
 </script>
 
 <section class="tab-view">

@@ -6,4 +6,4 @@ import type { Persona } from "./Persona";
  *
  * 適用中ペルソナ ID（`bot_active_personas`）はコア CRUD 外のため deferred。
  */
-export type PersonaListData = { personas: Array<Persona>, max_length: bigint, };
+export type PersonaListData = { personas: Array<Persona>; max_length: bigint };

@@ -5,7 +5,7 @@
 //   （§10.1。stale な botId を混ぜない）。OAuth トークンポーリング（pollToken）は
 //   エンベロープ外の専用実装（../device.ts）を再輸出する。
 import { api } from "../client";
-import { requestDeviceCode, pollToken } from "../device";
+import { pollToken, requestDeviceCode } from "../device";
 import type { ApiResponse } from "../types";
 
 const USER = { scope: "user" } as const;
@@ -19,7 +19,9 @@ export interface DesktopDevice {
 	last_used_at?: string | null;
 	current?: boolean;
 }
-export type DesktopDevicesResponse = ApiResponse & { devices?: DesktopDevice[] };
+export type DesktopDevicesResponse = ApiResponse & {
+	devices?: DesktopDevice[];
+};
 
 /** GET /api/desktop/info の応答（配布バイナリのメタ情報）。 */
 export type DesktopInfoResponse = ApiResponse & {

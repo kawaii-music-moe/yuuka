@@ -7,4 +7,4 @@ import type { Expense } from "./Expense";
  * Node は同エンドポイントで total/incomeTotal/breakdown/trend も返すが、
  * 集計系は deferred（コア CRUD 縦スライスに限定）。
  */
-export type ExpenseListData = { expenses: Array<Expense>, };
+export type ExpenseListData = { expenses: Array<Expense> };

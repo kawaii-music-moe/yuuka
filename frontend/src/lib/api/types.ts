@@ -10,7 +10,10 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** 共通エンベロープ。ペイロードはトップレベル直置き（`data` ラッパ不在）。 */
-export type ApiResponse<T = unknown> = { success: boolean; message?: string } & T;
+export type ApiResponse<T = unknown> = {
+	success: boolean;
+	message?: string;
+} & T;
 
 // ─── auth / session ──────────────────────────────────────────────────────────
 
@@ -139,7 +142,10 @@ export interface TagCount {
 	count: number;
 }
 
-export type TasksResponse = ApiResponse<{ tasks: TodoWithSubtasks[]; tags?: TagCount[] }>;
+export type TasksResponse = ApiResponse<{
+	tasks: TodoWithSubtasks[];
+	tags?: TagCount[];
+}>;
 export type TaskDetailResponse = ApiResponse<{
 	task: TodoWithSubtasks;
 	progressLogs?: TaskProgressLogRecord[];
@@ -250,7 +256,12 @@ export type RemindersResponse = ApiResponse<{ reminders: ReminderRecord[] }>;
 // ─── timeline（timelineRepo） ────────────────────────────────────────────────
 
 export type PlanBlockType = "task" | "transit" | "event" | "free";
-export type RecordType = "memo" | "expense" | "task_done" | "media" | "location";
+export type RecordType =
+	| "memo"
+	| "expense"
+	| "task_done"
+	| "media"
+	| "location";
 
 export interface DayPlanBlock {
 	id: number;
@@ -353,7 +364,9 @@ export type PersonasResponse = ApiResponse<{
 	active_persona_id: number | null;
 	max_length: number;
 }>;
-export type PersonaMarketplaceResponse = ApiResponse<{ personas: PublicPersonaView[] }>;
+export type PersonaMarketplaceResponse = ApiResponse<{
+	personas: PublicPersonaView[];
+}>;
 /** GET /api/personas/marketplace/:id — 公開ペルソナの全文（インポート判断用）。 */
 export type PersonaMarketplaceDetailResponse = ApiResponse<{
 	persona: { id: number; name: string; prompt: string };
@@ -388,7 +401,9 @@ export interface PlaybookRunRecord {
 	finished_at: string | null;
 }
 export type PlaybooksResponse = ApiResponse<{ playbooks: PlaybookRecord[] }>;
-export type PlaybookSchedulesResponse = ApiResponse<{ schedules: PlaybookScheduleRecord[] }>;
+export type PlaybookSchedulesResponse = ApiResponse<{
+	schedules: PlaybookScheduleRecord[];
+}>;
 export type PlaybookRunsResponse = ApiResponse<{ runs: PlaybookRunRecord[] }>;
 
 // ─── webhooks（webhookRepo） ─────────────────────────────────────────────────
@@ -418,9 +433,15 @@ export interface WebhookDeliveryRecord {
 	created_at: string;
 }
 /** GET /api/webhooks — サーバは `endpoints` キーで返す。 */
-export type WebhooksResponse = ApiResponse<{ endpoints: WebhookEndpointView[] }>;
-export type WebhookCreateResponse = ApiResponse<{ endpoint: WebhookEndpointView }>;
-export type WebhookDeliveriesResponse = ApiResponse<{ deliveries: WebhookDeliveryRecord[] }>;
+export type WebhooksResponse = ApiResponse<{
+	endpoints: WebhookEndpointView[];
+}>;
+export type WebhookCreateResponse = ApiResponse<{
+	endpoint: WebhookEndpointView;
+}>;
+export type WebhookDeliveriesResponse = ApiResponse<{
+	deliveries: WebhookDeliveryRecord[];
+}>;
 
 // ─── mcp（mcpRepo） ──────────────────────────────────────────────────────────
 
@@ -454,7 +475,9 @@ export interface CredentialView {
 	type?: string;
 	created_at: string;
 }
-export type CredentialsResponse = ApiResponse<{ credentials: CredentialView[] }>;
+export type CredentialsResponse = ApiResponse<{
+	credentials: CredentialView[];
+}>;
 
 // ─── delivery（briefingConfig / reportConfig） ───────────────────────────────
 

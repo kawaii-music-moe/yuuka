@@ -3,4 +3,12 @@
 /**
  * クライアントへ返す予定（クリーンビュー・snake_case）。
  */
-export type Schedule = { id: bigint, title: string, description: string | null, start_at: string, end_at: string | null, remind_before_minutes: bigint, created_at: string, };
+export type Schedule = {
+	id: bigint;
+	title: string;
+	description: string | null;
+	start_at: string;
+	end_at: string | null;
+	remind_before_minutes: bigint;
+	created_at: string;
+};

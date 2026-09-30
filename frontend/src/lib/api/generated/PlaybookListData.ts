@@ -4,4 +4,4 @@ import type { Playbook } from "./Playbook";
 /**
  * `GET /api/playbooks` のペイロード（`Envelope<PlaybookListData>` = `{success, playbooks}`）。
  */
-export type PlaybookListData = { playbooks: Array<Playbook>, };
+export type PlaybookListData = { playbooks: Array<Playbook> };

@@ -6,12 +6,13 @@
  * ts-rs では flatten されたジェネリック `T` は交差型 `{ success, message? } & T` として
  * 生成される（既存 `types.ts` の `ApiResponse<T>` と一致）。
  */
-export type Envelope<T> = { 
-/**
- * 成否フラグ。
- */
-success: boolean, 
-/**
- * 任意メッセージ（エラー時等）。
- */
-message?: string, } & T;
+export type Envelope<T> = {
+	/**
+	 * 成否フラグ。
+	 */
+	success: boolean;
+	/**
+	 * 任意メッセージ（エラー時等）。
+	 */
+	message?: string;
+} & T;

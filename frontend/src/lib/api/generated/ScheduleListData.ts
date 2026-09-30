@@ -4,4 +4,4 @@ import type { Schedule } from "./Schedule";
 /**
  * `GET /api/schedules` のペイロード（`Envelope<ScheduleListData>` = `{success, schedules}`）。
  */
-export type ScheduleListData = { schedules: Array<Schedule>, };
+export type ScheduleListData = { schedules: Array<Schedule> };

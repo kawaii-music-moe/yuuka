@@ -4,4 +4,4 @@ import type { Persona } from "./Persona";
 /**
  * 単一ペルソナを返すペイロード（save。`{success, persona}`）。
  */
-export type PersonaData = { persona: Persona, };
+export type PersonaData = { persona: Persona };

@@ -1,84 +1,90 @@
 <script lang="ts">
-	// 汎用モード（MCPアシスタント）設定カード（旧 loadAssistantConfig の Gemini/MCP/usage 部分）。
-	// mcp_assistant プリセットの owner にのみ親が描画する。
-	import { botAttributeApi } from "$lib/api/services";
-	import { ApiError } from "$lib/api/client";
-	import { pushToast } from "$lib/stores/toast";
-	import { confirmDialog, Button } from "$lib/components/ui";
-	import type { AssistantConfigResp } from "./configTypes";
+// 汎用モード（MCPアシスタント）設定カード（旧 loadAssistantConfig の Gemini/MCP/usage 部分）。
+// mcp_assistant プリセットの owner にのみ親が描画する。
 
-	interface Props {
-		botId: string;
-	}
-	let { botId }: Props = $props();
+import { ApiError } from "$lib/api/client";
+import { botAttributeApi } from "$lib/api/services";
+import { Button, confirmDialog } from "$lib/components/ui";
+import { pushToast } from "$lib/stores/toast";
+import type { AssistantConfigResp } from "./configTypes";
 
-	let data = $state<AssistantConfigResp | null>(null);
-	let geminiKey = $state("");
+interface Props {
+	botId: string;
+}
+let { botId }: Props = $props();
 
-	$effect(() => {
-		void botId;
-		void load();
-	});
+let data = $state<AssistantConfigResp | null>(null);
+let geminiKey = $state("");
 
-	async function load() {
-		try {
-			const res = (await botAttributeApi.assistantConfig(
-				botId,
-			)) as AssistantConfigResp;
-			if (!res.success) {
-				data = null;
-				return;
-			}
-			data = res;
-			geminiKey = res.has_gemini_key ? "••••••••••••" : "";
-		} catch {
+$effect(() => {
+	void botId;
+	void load();
+});
+
+async function load() {
+	try {
+		const res = (await botAttributeApi.assistantConfig(
+			botId,
+		)) as AssistantConfigResp;
+		if (!res.success) {
 			data = null;
+			return;
 		}
+		data = res;
+		geminiKey = res.has_gemini_key ? "••••••••••••" : "";
+	} catch {
+		data = null;
 	}
+}
 
-	const warnings = $derived.by(() => {
-		if (!data) return [] as string[];
-		const w: string[] = [];
-		if (!data.has_gemini_key)
-			w.push(
-				"⚠️ Bot専用のGemini APIキーが未設定です。設定されるまでこのBotは応答しません。",
-			);
-		if (!data.has_discord_token)
-			w.push(
-				"⚠️ 独自のDiscord Botトークンが未設定です。汎用モードは専用のDiscordクライアントとして動作するため、「Discord連携」ページの「Discord 独自Bot設定」から設定してください。",
-			);
-		if ((data.guilds ?? []).length === 0)
-			w.push("⚠️ 応答許可ギルドが未設定です。許可したギルドでのみ応答します。");
-		return w;
-	});
+const warnings = $derived.by(() => {
+	if (!data) return [] as string[];
+	const w: string[] = [];
+	if (!data.has_gemini_key)
+		w.push(
+			"⚠️ Bot専用のGemini APIキーが未設定です。設定されるまでこのBotは応答しません。",
+		);
+	if (!data.has_discord_token)
+		w.push(
+			"⚠️ 独自のDiscord Botトークンが未設定です。汎用モードは専用のDiscordクライアントとして動作するため、「Discord連携」ページの「Discord 独自Bot設定」から設定してください。",
+		);
+	if ((data.guilds ?? []).length === 0)
+		w.push("⚠️ 応答許可ギルドが未設定です。許可したギルドでのみ応答します。");
+	return w;
+});
 
-	const rateText = $derived.by(() => {
-		const rl = data?.rate_limits;
-		if (!rl) return "";
-		return `レート制限: ユーザー ${rl.userPerMinute}回/分・${rl.userPerDay}回/日、ギルド ${rl.guildPerDay}回/日（Admin設定で変更可）`;
-	});
+const rateText = $derived.by(() => {
+	const rl = data?.rate_limits;
+	if (!rl) return "";
+	return `レート制限: ユーザー ${rl.userPerMinute}回/分・${rl.userPerDay}回/日、ギルド ${rl.guildPerDay}回/日（Admin設定で変更可）`;
+});
 
-	async function saveKey() {
-		if (!geminiKey.trim()) {
-			const ok = await confirmDialog({
-				message:
-					"APIキーを削除しますか？ 削除するとこのBotは応答を停止します。",
-				danger: true,
-				confirmLabel: "削除する",
-			});
-			if (!ok) return;
-		}
-		try {
-			const res = await botAttributeApi.setGeminiKey({ botId, apiKey: geminiKey });
-			pushToast(res.message ?? "保存しました。", res.success ? "success" : "error");
-			await load();
-		} catch (err) {
-			pushToast(
-				err instanceof ApiError ? err.message : "通信エラーが発生しました。",
-				"error",
-			);
-		}
+async function saveKey() {
+	if (!geminiKey.trim()) {
+		const ok = await confirmDialog({
+			message: "APIキーを削除しますか？ 削除するとこのBotは応答を停止します。",
+			danger: true,
+			confirmLabel: "削除する",
+		});
+		if (!ok) return;
 	}
+	try {
+		const res = await botAttributeApi.setGeminiKey({
+			botId,
+			apiKey: geminiKey,
+		});
+		pushToast(
+			res.message ?? "保存しました。",
+			res.success ? "success" : "error",
+		);
+		await load();
+	} catch (err) {
+		pushToast(
+			err instanceof ApiError ? err.message : "通信エラーが発生しました。",
+			"error",
+		);
+	}
+}
 </script>
 
 <details class="config-card card">

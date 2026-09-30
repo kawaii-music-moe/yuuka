@@ -5,4 +5,4 @@
  *
  * `id` が指定され実在すれば更新、無ければ新規作成（Node `personas/save` 準拠）。
  */
-export type SavePersona = { id: bigint | null, name: string, prompt: string, };
+export type SavePersona = { id: bigint | null; name: string; prompt: string };

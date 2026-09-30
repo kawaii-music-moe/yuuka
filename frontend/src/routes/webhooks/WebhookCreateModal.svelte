@@ -1,61 +1,61 @@
 <script lang="ts">
-	// Webhook エンドポイント作成モーダル（旧 index.html #modal-webhook + webhook-form）。
-	// 作成のみ（旧仕様どおり）。保存は親の onsave へ委譲。
-	import { Modal, Button } from "$lib/components/ui";
+// Webhook エンドポイント作成モーダル（旧 index.html #modal-webhook + webhook-form）。
+// 作成のみ（旧仕様どおり）。保存は親の onsave へ委譲。
+import { Button, Modal } from "$lib/components/ui";
 
-	interface Props {
-		open?: boolean;
-		onsave: (payload: {
-			name: string;
-			secret: string;
-			notifyTargetType: "dm" | "channel";
-			notifyTargetId: string;
-			template: string;
-			filterKeyword: string;
-			createTodo: boolean;
-			createReminder: boolean;
-		}) => void;
-	}
+interface Props {
+	open?: boolean;
+	onsave: (payload: {
+		name: string;
+		secret: string;
+		notifyTargetType: "dm" | "channel";
+		notifyTargetId: string;
+		template: string;
+		filterKeyword: string;
+		createTodo: boolean;
+		createReminder: boolean;
+	}) => void;
+}
 
-	let { open = $bindable(false), onsave }: Props = $props();
+let { open = $bindable(false), onsave }: Props = $props();
 
-	let name = $state("");
-	let secret = $state("");
-	let notifyType = $state<"dm" | "channel">("dm");
-	let notifyId = $state("");
-	let template = $state("");
-	let filter = $state("");
-	let createTodo = $state(false);
-	let createReminder = $state(false);
+let name = $state("");
+let secret = $state("");
+let notifyType = $state<"dm" | "channel">("dm");
+let notifyId = $state("");
+let template = $state("");
+let filter = $state("");
+let createTodo = $state(false);
+let createReminder = $state(false);
 
-	// 開くたびに初期化。
-	$effect(() => {
-		if (!open) return;
-		name = "";
-		secret = "";
-		notifyType = "dm";
-		notifyId = "";
-		template = "";
-		filter = "";
-		createTodo = false;
-		createReminder = false;
+// 開くたびに初期化。
+$effect(() => {
+	if (!open) return;
+	name = "";
+	secret = "";
+	notifyType = "dm";
+	notifyId = "";
+	template = "";
+	filter = "";
+	createTodo = false;
+	createReminder = false;
+});
+
+function submit(e: SubmitEvent) {
+	e.preventDefault();
+	const trimmed = name.trim();
+	if (!trimmed) return;
+	onsave({
+		name: trimmed,
+		secret: secret.trim(),
+		notifyTargetType: notifyType,
+		notifyTargetId: notifyId.trim(),
+		template: template.trim(),
+		filterKeyword: filter.trim(),
+		createTodo,
+		createReminder,
 	});
-
-	function submit(e: SubmitEvent) {
-		e.preventDefault();
-		const trimmed = name.trim();
-		if (!trimmed) return;
-		onsave({
-			name: trimmed,
-			secret: secret.trim(),
-			notifyTargetType: notifyType,
-			notifyTargetId: notifyId.trim(),
-			template: template.trim(),
-			filterKeyword: filter.trim(),
-			createTodo,
-			createReminder,
-		});
-	}
+}
 </script>
 
 <Modal bind:open title="Webhookエンドポイントの作成">

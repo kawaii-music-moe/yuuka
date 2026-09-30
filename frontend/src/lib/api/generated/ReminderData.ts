@@ -4,4 +4,4 @@ import type { Reminder } from "./Reminder";
 /**
  * 単一リマインドを返すペイロード（add/cancel。`{success, reminder}`）。
  */
-export type ReminderData = { reminder: Reminder, };
+export type ReminderData = { reminder: Reminder };

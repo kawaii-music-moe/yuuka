@@ -1,6 +1,6 @@
 // scheduleApi — bot-scoped（scope:'bot'）。src/server/routes/scheduleRoutes.ts に対応。
 import { api } from "../client";
-import type { SchedulesResponse, ApiResponse } from "../types";
+import type { ApiResponse, SchedulesResponse } from "../types";
 
 const BOT = { scope: "bot" } as const;
 
@@ -23,5 +23,6 @@ export const scheduleApi = {
 	}) => api.post<ApiResponse>("/api/schedules/add", body, BOT),
 
 	/** POST /api/schedules/delete */
-	delete: (id: number) => api.post<ApiResponse>("/api/schedules/delete", { id }, BOT),
+	delete: (id: number) =>
+		api.post<ApiResponse>("/api/schedules/delete", { id }, BOT),
 };

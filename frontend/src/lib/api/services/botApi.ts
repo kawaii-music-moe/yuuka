@@ -5,12 +5,12 @@
 //   → 全メソッド scope:'user'。botId が必要なものは呼び出し側が明示 query/body で渡す。
 import { api } from "../client";
 import type {
+	ApiResponse,
 	BotListResponse,
 	BotResponse,
-	PresetsResponse,
 	BotSharesResponse,
 	BotUsageResponse,
-	ApiResponse,
+	PresetsResponse,
 } from "../types";
 
 const USER = { scope: "user" } as const;
@@ -20,11 +20,16 @@ export const botApi = {
 	list: () => api.get<BotListResponse>("/api/bots", USER),
 
 	/** POST /api/bots — Bot 作成 */
-	create: (body: { name: string; preset: string; token?: string; geminiApiKey?: string }) =>
-		api.post<BotResponse>("/api/bots", body, USER),
+	create: (body: {
+		name: string;
+		preset: string;
+		token?: string;
+		geminiApiKey?: string;
+	}) => api.post<BotResponse>("/api/bots", body, USER),
 
 	/** DELETE /api/bots — Bot 削除（対象 botId は body/query で明示） */
-	remove: (botId: string) => api.del<ApiResponse>("/api/bots", { ...USER, query: { botId } }),
+	remove: (botId: string) =>
+		api.del<ApiResponse>("/api/bots", { ...USER, query: { botId } }),
 
 	/** POST /api/bots/sync-discord — Discord プロフィール同期 */
 	syncDiscord: (botId: string) =>
@@ -47,7 +52,10 @@ export const botApi = {
 	// ── 共有（shares） ──
 	/** GET /api/bots/shares */
 	shares: (botId: string) =>
-		api.get<BotSharesResponse>("/api/bots/shares", { ...USER, query: { botId } }),
+		api.get<BotSharesResponse>("/api/bots/shares", {
+			...USER,
+			query: { botId },
+		}),
 	/** POST /api/bots/shares/invite */
 	inviteShare: (body: { botId: string; granteeUsername: string }) =>
 		api.post<ApiResponse>("/api/bots/shares/invite", body, USER),
@@ -60,10 +68,14 @@ export const botApi = {
 	requestMembership: (body: { botId: string; message?: string }) =>
 		api.post<ApiResponse>("/api/bots/member-requests", body, USER),
 	/** GET /api/bots/member-requests/mine — 自分の申請一覧 */
-	myMemberRequests: () => api.get<ApiResponse>("/api/bots/member-requests/mine", USER),
+	myMemberRequests: () =>
+		api.get<ApiResponse>("/api/bots/member-requests/mine", USER),
 	/** GET /api/bots/member-requests?botId= — 受信した申請一覧（オーナー向け） */
 	memberRequests: (botId: string) =>
-		api.get<ApiResponse>("/api/bots/member-requests", { ...USER, query: { botId } }),
+		api.get<ApiResponse>("/api/bots/member-requests", {
+			...USER,
+			query: { botId },
+		}),
 	/** POST /api/bots/member-requests/:id/decide */
 	decideMemberRequest: (id: number, body: { approve: boolean }) =>
 		api.post<ApiResponse>(`/api/bots/member-requests/${id}/decide`, body, USER),

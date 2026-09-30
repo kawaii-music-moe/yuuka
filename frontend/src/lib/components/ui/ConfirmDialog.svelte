@@ -1,49 +1,49 @@
 <script lang="ts" module>
-	import { writable } from "svelte/store";
+import { writable } from "svelte/store";
 
-	// confirm() 置換用のストア駆動確認ダイアログ。
-	// 使い方:
-	//   1) App のルート付近に <ConfirmDialog /> を一度だけ設置。
-	//   2) 任意箇所で `const ok = await confirmDialog({ message: "削除しますか？" })`。
-	//   → Promise<boolean> を返す（OK=true / キャンセル=false）。
-	export interface ConfirmOptions {
-		message: string;
-		title?: string;
-		/** OK ボタン文言 */
-		confirmLabel?: string;
-		/** キャンセルボタン文言 */
-		cancelLabel?: string;
-		/** OK を破壊的操作として赤ボタンにする */
-		danger?: boolean;
-	}
+// confirm() 置換用のストア駆動確認ダイアログ。
+// 使い方:
+//   1) App のルート付近に <ConfirmDialog /> を一度だけ設置。
+//   2) 任意箇所で `const ok = await confirmDialog({ message: "削除しますか？" })`。
+//   → Promise<boolean> を返す（OK=true / キャンセル=false）。
+export interface ConfirmOptions {
+	message: string;
+	title?: string;
+	/** OK ボタン文言 */
+	confirmLabel?: string;
+	/** キャンセルボタン文言 */
+	cancelLabel?: string;
+	/** OK を破壊的操作として赤ボタンにする */
+	danger?: boolean;
+}
 
-	interface ConfirmState extends ConfirmOptions {
-		open: boolean;
-		resolve: ((v: boolean) => void) | null;
-	}
+interface ConfirmState extends ConfirmOptions {
+	open: boolean;
+	resolve: ((v: boolean) => void) | null;
+}
 
-	const confirmStore = writable<ConfirmState>({
-		open: false,
-		message: "",
-		resolve: null,
+const confirmStore = writable<ConfirmState>({
+	open: false,
+	message: "",
+	resolve: null,
+});
+
+/** confirm() 相当。await で boolean を得る。 */
+export function confirmDialog(opts: ConfirmOptions): Promise<boolean> {
+	return new Promise<boolean>((resolve) => {
+		confirmStore.set({ ...opts, open: true, resolve });
 	});
+}
 
-	/** confirm() 相当。await で boolean を得る。 */
-	export function confirmDialog(opts: ConfirmOptions): Promise<boolean> {
-		return new Promise<boolean>((resolve) => {
-			confirmStore.set({ ...opts, open: true, resolve });
-		});
-	}
+function settle(result: boolean) {
+	confirmStore.update((s) => {
+		s.resolve?.(result);
+		return { ...s, open: false, resolve: null };
+	});
+}
 
-	function settle(result: boolean) {
-		confirmStore.update((s) => {
-			s.resolve?.(result);
-			return { ...s, open: false, resolve: null };
-		});
-	}
-
-	export const _confirmState = confirmStore;
-	export const _settle = settle;
+export const _confirmState = confirmStore;
+export const _settle = settle;
 </script>
 
 <script lang="ts">

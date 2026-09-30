@@ -3,16 +3,20 @@
 /**
  * 収支作成リクエスト（`POST /api/expenses/add` の body）。
  */
-export type NewExpense = { 
-/**
- * 円単位（整数・必須）。
- */
-amount: bigint, category: string, 
-/**
- * Node body の `description`（DB では `memo` 列）。
- */
-description: string | null, date: string | null, time: string | null, 
-/**
- * `"income" | "expense"`（未指定は `expense`）。
- */
-type: string | null, };
+export type NewExpense = {
+	/**
+	 * 円単位（整数・必須）。
+	 */
+	amount: bigint;
+	category: string;
+	/**
+	 * Node body の `description`（DB では `memo` 列）。
+	 */
+	description: string | null;
+	date: string | null;
+	time: string | null;
+	/**
+	 * `"income" | "expense"`（未指定は `expense`）。
+	 */
+	type: string | null;
+};

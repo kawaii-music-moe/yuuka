@@ -5,10 +5,10 @@
 // モンキーパッチで botId を付与していた挙動と一致）。
 import { api } from "../client";
 import type {
-	ContextNoteResponse,
+	ApiResponse,
 	ClipboardResponse,
 	ContactsResponse,
-	ApiResponse,
+	ContextNoteResponse,
 } from "../types";
 
 const BOT = { scope: "bot" } as const;

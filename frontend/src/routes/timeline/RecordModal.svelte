@@ -1,98 +1,104 @@
 <script lang="ts">
-	// 記録 追加モーダル（旧 app.js timeline-record-form + btn-add-record の初期化）。
-	// タイプ（memo/expense/task_done/media/location）に応じてフィールドを出し分け。
-	// 保存は onsave コールバックで親へ委譲（media は File を渡し、親が base64 化して送信）。
-	import type { RecordType } from "$lib/api/types";
-	import { Modal, Button } from "$lib/components/ui";
-	import { RECORD_TYPE_LABEL } from "./timelineUtils";
+// 記録 追加モーダル（旧 app.js timeline-record-form + btn-add-record の初期化）。
+// タイプ（memo/expense/task_done/media/location）に応じてフィールドを出し分け。
+// 保存は onsave コールバックで親へ委譲（media は File を渡し、親が base64 化して送信）。
+import type { RecordType } from "$lib/api/types";
+import { Button, Modal } from "$lib/components/ui";
+import { RECORD_TYPE_LABEL } from "./timelineUtils";
 
-	export type RecordFormPayload =
-		| {
-				kind: "record";
-				type: Exclude<RecordType, "media">;
-				title: string;
-				content: string;
-				location: string;
-				amount: number;
-				category: string;
-		  }
-		| {
-				kind: "media";
-				file: File;
-				title: string;
-				location: string;
-		  };
+export type RecordFormPayload =
+	| {
+			kind: "record";
+			type: Exclude<RecordType, "media">;
+			title: string;
+			content: string;
+			location: string;
+			amount: number;
+			category: string;
+	  }
+	| {
+			kind: "media";
+			file: File;
+			title: string;
+			location: string;
+	  };
 
-	interface Props {
-		open?: boolean;
-		onsave: (payload: RecordFormPayload) => void;
-	}
+interface Props {
+	open?: boolean;
+	onsave: (payload: RecordFormPayload) => void;
+}
 
-	let { open = $bindable(false), onsave }: Props = $props();
+let { open = $bindable(false), onsave }: Props = $props();
 
-	const TYPES: RecordType[] = ["memo", "expense", "task_done", "media", "location"];
-	const CATEGORIES = [
-		"食費",
-		"交通費",
-		"日用品",
-		"娯楽",
-		"医療費",
-		"衣服",
-		"通信費",
-		"光熱費",
-		"その他",
-	];
+const TYPES: RecordType[] = [
+	"memo",
+	"expense",
+	"task_done",
+	"media",
+	"location",
+];
+const CATEGORIES = [
+	"食費",
+	"交通費",
+	"日用品",
+	"娯楽",
+	"医療費",
+	"衣服",
+	"通信費",
+	"光熱費",
+	"その他",
+];
 
-	let type = $state<RecordType>("memo");
-	let title = $state("");
-	let content = $state("");
-	let location = $state("");
-	let amount = $state<number | null>(null);
-	let category = $state("食費");
-	let mediaFile = $state<File | null>(null);
-	let fileInput = $state<HTMLInputElement | null>(null);
+let type = $state<RecordType>("memo");
+let title = $state("");
+let content = $state("");
+let location = $state("");
+let amount = $state<number | null>(null);
+let category = $state("食費");
+let mediaFile = $state<File | null>(null);
+let fileInput = $state<HTMLInputElement | null>(null);
 
-	// 開くたびに初期化（旧 btn-add-record ハンドラのリセット）。
-	$effect(() => {
-		if (!open) return;
-		type = "memo";
-		title = "";
-		content = "";
-		location = "";
-		amount = null;
-		category = "食費";
-		mediaFile = null;
-		if (fileInput) fileInput.value = "";
-	});
+// 開くたびに初期化（旧 btn-add-record ハンドラのリセット）。
+$effect(() => {
+	if (!open) return;
+	type = "memo";
+	title = "";
+	content = "";
+	location = "";
+	amount = null;
+	category = "食費";
+	mediaFile = null;
+	if (fileInput) fileInput.value = "";
+});
 
-	function onFileChange(e: Event) {
-		const input = e.currentTarget as HTMLInputElement;
-		mediaFile = input.files?.[0] ?? null;
-	}
+function onFileChange(e: Event) {
+	const input = e.currentTarget as HTMLInputElement;
+	mediaFile = input.files?.[0] ?? null;
+}
 
-	function onSubmit(e: SubmitEvent) {
-		e.preventDefault();
-		if (type === "media") {
-			if (!mediaFile) return;
-			onsave({
-				kind: "media",
-				file: mediaFile,
-				title: title.trim(),
-				location: location.trim(),
-			});
-			return;
-		}
-		if (type === "expense" && (amount == null || amount <= 0)) return;
+function onSubmit(e: SubmitEvent) {
+	e.preventDefault();
+	if (type === "media") {
+		if (!mediaFile) return;
 		onsave({
-			kind: "record",
-			type,
+			kind: "media",
+			file: mediaFile,
 			title: title.trim(),
-			content: content.trim(),
 			location: location.trim(),
-			amount: amount ?? 0,
-			category,
 		});
+		return;
 	}
+	if (type === "expense" && (amount == null || amount <= 0)) return;
+	onsave({
+		kind: "record",
+		type,
+		title: title.trim(),
+		content: content.trim(),
+		location: location.trim(),
+		amount: amount ?? 0,
+		category,
+	});
+}
 </script>
 
 <Modal bind:open title="記録を追加">

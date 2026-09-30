@@ -1,25 +1,26 @@
 <script lang="ts">
-	// サブタスク行（旧 app.js:2307 buildSubtaskRow）。
-	// <svelte:self> による再帰で無制限ネストを描画する。
-	// 完了チェックボックスは「子を持ち算出進捗<100%」で無効化（旧仕様）。
-	import { Icon, Checkbox } from "$lib/components/ui";
-	import type { TodoWithSubtasks } from "$lib/api/types";
-	import { fmtTaskDate, completionDisabled } from "./taskUtils";
-	import Self from "./SubtaskRow.svelte";
+// サブタスク行（旧 app.js:2307 buildSubtaskRow）。
+// <svelte:self> による再帰で無制限ネストを描画する。
+// 完了チェックボックスは「子を持ち算出進捗<100%」で無効化（旧仕様）。
 
-	interface Props {
-		sub: TodoWithSubtasks;
-		depth?: number;
-		onToggle: (id: number, checked: boolean) => void;
-		onEdit: (task: TodoWithSubtasks) => void;
-		onAddSub: (parent: TodoWithSubtasks) => void;
-		onDelete: (id: number) => void;
-	}
+import type { TodoWithSubtasks } from "$lib/api/types";
+import { Checkbox, Icon } from "$lib/components/ui";
+import Self from "./SubtaskRow.svelte";
+import { completionDisabled, fmtTaskDate } from "./taskUtils";
 
-	let { sub, depth = 0, onToggle, onEdit, onAddSub, onDelete }: Props = $props();
+interface Props {
+	sub: TodoWithSubtasks;
+	depth?: number;
+	onToggle: (id: number, checked: boolean) => void;
+	onEdit: (task: TodoWithSubtasks) => void;
+	onAddSub: (parent: TodoWithSubtasks) => void;
+	onDelete: (id: number) => void;
+}
 
-	const children = $derived(sub.subtasks || []);
-	const disabled = $derived(completionDisabled(sub));
+let { sub, depth = 0, onToggle, onEdit, onAddSub, onDelete }: Props = $props();
+
+const children = $derived(sub.subtasks || []);
+const disabled = $derived(completionDisabled(sub));
 </script>
 
 <div class="subtask-group">

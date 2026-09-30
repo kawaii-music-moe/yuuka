@@ -4,4 +4,4 @@ import type { Contact } from "./Contact";
 /**
  * 単一連絡先を返すペイロード（save 新規。`{success, contact}`）。
  */
-export type ContactData = { contact: Contact, };
+export type ContactData = { contact: Contact };

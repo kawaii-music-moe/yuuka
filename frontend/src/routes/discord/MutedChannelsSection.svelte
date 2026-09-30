@@ -1,85 +1,99 @@
 <script lang="ts">
-	// 発言禁止チャンネル（メンション/返信があっても応答しない・Rust 新機能）。
-	// 有効化チャンネル（ChannelsSection）の逆で、登録チャンネルでは Bot がメンションされても一切応答しない。
-	// 応答許可ギルドを選び、そのギルド内のチャンネルID（数字）を登録する。
-	import { botAttributeApi } from "$lib/api/services";
-	import { ApiError } from "$lib/api/client";
-	import { pushToast } from "$lib/stores/toast";
-	import { confirmDialog, Button } from "$lib/components/ui";
-	import { guildLabel } from "../config/configTypes";
-	import type { AssistantGuild, AssistantChannel } from "../config/configTypes";
+// 発言禁止チャンネル（メンション/返信があっても応答しない・Rust 新機能）。
+// 有効化チャンネル（ChannelsSection）の逆で、登録チャンネルでは Bot がメンションされても一切応答しない。
+// 応答許可ギルドを選び、そのギルド内のチャンネルID（数字）を登録する。
 
-	interface Props {
-		botId: string;
-		guilds: AssistantGuild[];
-		mutedChannels: AssistantChannel[];
-		/** 追加/削除の成功後に親へ再取得を要求 */
-		onchanged: () => void;
+import { ApiError } from "$lib/api/client";
+import { botAttributeApi } from "$lib/api/services";
+import { Button, confirmDialog } from "$lib/components/ui";
+import { pushToast } from "$lib/stores/toast";
+import type { AssistantChannel, AssistantGuild } from "../config/configTypes";
+import { guildLabel } from "../config/configTypes";
+
+interface Props {
+	botId: string;
+	guilds: AssistantGuild[];
+	mutedChannels: AssistantChannel[];
+	/** 追加/削除の成功後に親へ再取得を要求 */
+	onchanged: () => void;
+}
+let { botId, guilds, mutedChannels, onchanged }: Props = $props();
+
+let selectedGuild = $state("");
+let channelInput = $state("");
+
+// ギルド一覧が変わったら選択を先頭へ補正（ChannelsSection と同じ挙動）。
+$effect(() => {
+	if (guilds.length === 0) {
+		selectedGuild = "";
+		return;
 	}
-	let { botId, guilds, mutedChannels, onchanged }: Props = $props();
-
-	let selectedGuild = $state("");
-	let channelInput = $state("");
-
-	// ギルド一覧が変わったら選択を先頭へ補正（ChannelsSection と同じ挙動）。
-	$effect(() => {
-		if (guilds.length === 0) {
-			selectedGuild = "";
-			return;
-		}
-		if (!guilds.some((g) => g.guild_id === selectedGuild)) {
-			selectedGuild = guilds[0].guild_id;
-		}
-	});
-
-	async function add() {
-		const guildId = selectedGuild;
-		const channelId = channelInput.trim();
-		if (!guildId) {
-			pushToast("先に応答許可ギルドを追加してください。", "error");
-			return;
-		}
-		if (!/^\d{5,25}$/.test(channelId)) {
-			pushToast(
-				"チャンネルID（数字）を入力してください。Discordの開発者モードでチャンネルを右クリック →「IDをコピー」で取得できます。",
-				"error",
-			);
-			return;
-		}
-		try {
-			const res = await botAttributeApi.setMutedChannels({ botId, guildId, channelId, action: "add" });
-			if (res.success) {
-				channelInput = "";
-				onchanged();
-			} else pushToast(res.message ?? "操作に失敗しました。", "error");
-		} catch (err) {
-			pushToast(err instanceof ApiError ? err.message : "通信エラーが発生しました。", "error");
-		}
+	if (!guilds.some((g) => g.guild_id === selectedGuild)) {
+		selectedGuild = guilds[0].guild_id;
 	}
+});
 
-	async function remove(ch: AssistantChannel, shift: boolean) {
-		if (!shift) {
-			const label = ch.channel_name ? `#${ch.channel_name}` : `チャンネル ${ch.channel_id}`;
-			const ok = await confirmDialog({
-				message: `${label} を発言禁止リストから削除しますか？`,
-				danger: true,
-				confirmLabel: "削除",
-			});
-			if (!ok) return;
-		}
-		try {
-			const res = await botAttributeApi.setMutedChannels({
-				botId,
-				guildId: ch.guild_id,
-				channelId: ch.channel_id,
-				action: "remove",
-			});
-			if (res.success) onchanged();
-			else pushToast(res.message ?? "操作に失敗しました。", "error");
-		} catch (err) {
-			pushToast(err instanceof ApiError ? err.message : "通信エラーが発生しました。", "error");
-		}
+async function add() {
+	const guildId = selectedGuild;
+	const channelId = channelInput.trim();
+	if (!guildId) {
+		pushToast("先に応答許可ギルドを追加してください。", "error");
+		return;
 	}
+	if (!/^\d{5,25}$/.test(channelId)) {
+		pushToast(
+			"チャンネルID（数字）を入力してください。Discordの開発者モードでチャンネルを右クリック →「IDをコピー」で取得できます。",
+			"error",
+		);
+		return;
+	}
+	try {
+		const res = await botAttributeApi.setMutedChannels({
+			botId,
+			guildId,
+			channelId,
+			action: "add",
+		});
+		if (res.success) {
+			channelInput = "";
+			onchanged();
+		} else pushToast(res.message ?? "操作に失敗しました。", "error");
+	} catch (err) {
+		pushToast(
+			err instanceof ApiError ? err.message : "通信エラーが発生しました。",
+			"error",
+		);
+	}
+}
+
+async function remove(ch: AssistantChannel, shift: boolean) {
+	if (!shift) {
+		const label = ch.channel_name
+			? `#${ch.channel_name}`
+			: `チャンネル ${ch.channel_id}`;
+		const ok = await confirmDialog({
+			message: `${label} を発言禁止リストから削除しますか？`,
+			danger: true,
+			confirmLabel: "削除",
+		});
+		if (!ok) return;
+	}
+	try {
+		const res = await botAttributeApi.setMutedChannels({
+			botId,
+			guildId: ch.guild_id,
+			channelId: ch.channel_id,
+			action: "remove",
+		});
+		if (res.success) onchanged();
+		else pushToast(res.message ?? "操作に失敗しました。", "error");
+	} catch (err) {
+		pushToast(
+			err instanceof ApiError ? err.message : "通信エラーが発生しました。",
+			"error",
+		);
+	}
+}
 </script>
 
 <details class="form-group collapsible-group">

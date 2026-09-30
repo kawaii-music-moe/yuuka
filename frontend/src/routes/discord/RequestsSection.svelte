@@ -1,53 +1,57 @@
 <script lang="ts">
-	// 利用申請（承認待ち）（旧 renderAssistantRequests + decideMemberRequest）。
-	import { botAttributeApi } from "$lib/api/services";
-	import { ApiError } from "$lib/api/client";
-	import { pushToast } from "$lib/stores/toast";
-	import { Button } from "$lib/components/ui";
-	import type { MemberRequest, MemberRequestsResp } from "../config/configTypes";
+// 利用申請（承認待ち）（旧 renderAssistantRequests + decideMemberRequest）。
 
-	interface Props {
-		botId: string;
-		/** リロード同期用（親が assistant-config を引き直すたび ++ される nonce） */
-		reloadKey: number;
-		/** 承認/却下後に親の設定全体を再取得させる */
-		onchanged: () => void;
+import { ApiError } from "$lib/api/client";
+import { botAttributeApi } from "$lib/api/services";
+import { Button } from "$lib/components/ui";
+import { pushToast } from "$lib/stores/toast";
+import type { MemberRequest, MemberRequestsResp } from "../config/configTypes";
+
+interface Props {
+	botId: string;
+	/** リロード同期用（親が assistant-config を引き直すたび ++ される nonce） */
+	reloadKey: number;
+	/** 承認/却下後に親の設定全体を再取得させる */
+	onchanged: () => void;
+}
+let { botId, reloadKey, onchanged }: Props = $props();
+
+let requests = $state<MemberRequest[]>([]);
+let loading = $state(true);
+
+$effect(() => {
+	void botId;
+	void reloadKey;
+	void load();
+});
+
+async function load() {
+	loading = true;
+	try {
+		const res = (await botAttributeApi.memberRequests(
+			botId,
+			"pending",
+		)) as MemberRequestsResp;
+		requests = res.requests ?? [];
+	} catch {
+		requests = [];
+	} finally {
+		loading = false;
 	}
-	let { botId, reloadKey, onchanged }: Props = $props();
+}
 
-	let requests = $state<MemberRequest[]>([]);
-	let loading = $state(true);
-
-	$effect(() => {
-		void botId;
-		void reloadKey;
-		void load();
-	});
-
-	async function load() {
-		loading = true;
-		try {
-			const res = (await botAttributeApi.memberRequests(
-				botId,
-				"pending",
-			)) as MemberRequestsResp;
-			requests = res.requests ?? [];
-		} catch {
-			requests = [];
-		} finally {
-			loading = false;
-		}
+async function decide(id: number, decision: "approved" | "rejected") {
+	try {
+		const res = await botAttributeApi.decideMemberRequest(id, decision);
+		if (!res.success) pushToast(res.message ?? "操作に失敗しました。", "error");
+	} catch (err) {
+		pushToast(
+			err instanceof ApiError ? err.message : "通信エラーが発生しました。",
+			"error",
+		);
 	}
-
-	async function decide(id: number, decision: "approved" | "rejected") {
-		try {
-			const res = await botAttributeApi.decideMemberRequest(id, decision);
-			if (!res.success) pushToast(res.message ?? "操作に失敗しました。", "error");
-		} catch (err) {
-			pushToast(err instanceof ApiError ? err.message : "通信エラーが発生しました。", "error");
-		}
-		onchanged();
-	}
+	onchanged();
+}
 </script>
 
 <details class="form-group collapsible-group">

@@ -1,21 +1,22 @@
 <script lang="ts">
-	// 記録カード（旧 app.js buildRecordCard）。
-	import type { TimelineRecord } from "$lib/api/types";
-	import { Icon } from "$lib/components/ui";
-	import { timelineApi } from "$lib/api/services";
-	import { recordTypeIcon, recordTypeLabel, recordTime } from "./timelineUtils";
+// 記録カード（旧 app.js buildRecordCard）。
 
-	interface Props {
-		record: TimelineRecord;
-		ondelete: (id: number) => void;
-	}
+import { timelineApi } from "$lib/api/services";
+import type { TimelineRecord } from "$lib/api/types";
+import { Icon } from "$lib/components/ui";
+import { recordTime, recordTypeIcon, recordTypeLabel } from "./timelineUtils";
 
-	let { record, ondelete }: Props = $props();
+interface Props {
+	record: TimelineRecord;
+	ondelete: (id: number) => void;
+}
 
-	const timeStr = $derived(recordTime(record.recorded_at));
-	const label = $derived(recordTypeLabel(record.type));
-	const metaText = $derived(timeStr ? `${timeStr} · ${label}` : label);
-	const isVideo = $derived(record.media_type === "video");
+let { record, ondelete }: Props = $props();
+
+const timeStr = $derived(recordTime(record.recorded_at));
+const label = $derived(recordTypeLabel(record.type));
+const metaText = $derived(timeStr ? `${timeStr} · ${label}` : label);
+const isVideo = $derived(record.media_type === "video");
 </script>
 
 <div class="tl-record-card" data-type={record.type}>
