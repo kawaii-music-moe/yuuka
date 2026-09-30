@@ -24,8 +24,14 @@ function adminDevelopmentRedirectPlugin(): Plugin {
         // ため、この Client 自身の dev server 越しに透過プロキシすると HMR/モジュール
         // 解決がこの Client 側のモジュールグラフと衝突して壊れる。ブラウザ自体を
         // frontend の dev server オリジンへ移すことで、そちら側で正しく解決させる。
+        //
+        // 管理画面 SPA は `base: '/admin/'` 配下でしか配信されない（本番の Rust も同じ）。
+        // 旧共有ログインのパス `/login` は本番の `GET /login` → `/admin/login` 互換
+        // リダイレクトと同様に `/admin/login` へ写す（そのまま渡すと frontend dev server の
+        // base 外＝404 になる）。クエリ（`returnTo` 等）は保持する。
+        const target = isLogin ? `/admin${request.url}` : request.url
         response.statusCode = 302
-        response.setHeader('Location', `${adminDevServer}${request.url}`)
+        response.setHeader('Location', `${adminDevServer}${target}`)
         response.end()
       })
     },

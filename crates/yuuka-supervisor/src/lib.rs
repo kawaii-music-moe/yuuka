@@ -420,6 +420,47 @@ mod tests {
             .unwrap();
         assert!(String::from_utf8_lossy(&admin_body).contains("ADMIN-SHELL"));
 
+        // 共有ログインは管理画面 SPA 内の `/admin/login`（deep link フォールバックで index を返す）。
+        let admin_login = combined_get(
+            admin_dir.path(),
+            pwa_dir.path(),
+            "/admin/login?returnTo=%2Ftodo",
+        )
+        .await;
+        assert_eq!(admin_login.status(), StatusCode::OK);
+        let admin_login_body = axum::body::to_bytes(admin_login.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert!(String::from_utf8_lossy(&admin_login_body).contains("ADMIN-SHELL"));
+
+        // 旧共有ログイン `/login`（旧ビルドの PWA・ブックマーク）→ `/admin/login` へ互換リダイレクト。
+        // `returnTo` は保持され、PWA 側のシェルルート（`/todo`）は PWA が配信し続ける（横取りしない）。
+        let legacy_login = combined_get(
+            admin_dir.path(),
+            pwa_dir.path(),
+            "/login?returnTo=%2Ftodo%3Ffrom%3Dchat",
+        )
+        .await;
+        assert_eq!(legacy_login.status(), StatusCode::TEMPORARY_REDIRECT);
+        assert_eq!(
+            legacy_login
+                .headers()
+                .get("location")
+                .and_then(|v| v.to_str().ok()),
+            Some("/admin/login?returnTo=%2Ftodo%3Ffrom%3Dchat")
+        );
+        for shell in ["/todo", "/chat", "/settings"] {
+            let resp = combined_get(admin_dir.path(), pwa_dir.path(), shell).await;
+            assert_eq!(resp.status(), StatusCode::OK, "uri={shell}");
+            let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            assert!(
+                String::from_utf8_lossy(&body).contains("PWA-SHELL"),
+                "uri={shell}"
+            );
+        }
+
         // PWA のハッシュ資産 → immutable。
         let pwa_asset =
             combined_get(admin_dir.path(), pwa_dir.path(), "/assets/app-BIDAdKj3.js").await;

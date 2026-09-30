@@ -28,7 +28,13 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { get } from "svelte/store";
-import { currentRoute, goto, isPublicPath, page } from "$lib/router";
+import {
+	currentRoute,
+	goto,
+	isPublicPath,
+	page,
+	withBasePath,
+} from "$lib/router";
 import { activeBot } from "$lib/stores/activeBot";
 import { currentUser } from "$lib/stores/session";
 
@@ -115,10 +121,12 @@ async function request<T>(
 		if (!opts.isBootstrap && !isPublicPath(here)) {
 			// #34 症状4: returnTo を付けてログイン後に元の画面へ戻れるようにする
 			// （currentRoute はアプリ相対パス・query/hash は page ストアの URL から補う）。
+			// returnTo は物理パス（`/admin/...`）で渡す。PWA 等の別アプリから来る returnTo（`/todo`）と
+			// 同じ規約にそろえ、ログイン側（resolveReturnTarget）が SPA 内/外を一意に判別できるようにする。
 			const dest =
 				here === "/login"
 					? "/login"
-					: `/login?returnTo=${encodeURIComponent(here + get(page).search + get(page).hash)}`;
+					: `/login?returnTo=${encodeURIComponent(withBasePath(here) + get(page).search + get(page).hash)}`;
 			goto(dest);
 		}
 		throw new ApiError(401, "認証が必要です");

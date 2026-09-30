@@ -9,7 +9,8 @@
     "build": "vue-tsc --noEmit && vite build",
     "preview": "vite preview",
     "mock": "tsx mock/server.ts",
-    "check": "vue-tsc --noEmit"
+    "check": "vue-tsc --noEmit",
+    "test": "tsx --test \"src/**/*.test.ts\""
   },
   "dependencies": {
     "dompurify": "^3.4.13",

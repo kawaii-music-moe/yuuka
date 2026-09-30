@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { getCurrentUser, type SessionUser } from './api/auth'
+import { buildLoginUrl, currentReturnTo } from './api/loginRedirect'
 import AppShell from './components/AppShell.vue'
 import UiButton from './components/UiButton.vue'
 
@@ -24,8 +25,8 @@ async function checkSession() {
   }
   authenticated.value = Boolean(user.value)
   if (!authenticated.value) {
-    const returnTo = `${window.location.pathname}${window.location.search}${window.location.hash}`
-    window.location.replace(`/login?returnTo=${encodeURIComponent(returnTo)}`)
+    // 共有ログインは管理画面 SPA（`/admin/login`）。ログイン後は returnTo（この PWA 上の現在位置）へ戻る。
+    window.location.replace(buildLoginUrl(currentReturnTo(window.location)))
     return
   }
   checkingSession.value = false

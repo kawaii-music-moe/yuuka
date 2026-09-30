@@ -8,6 +8,7 @@
 // - page:         writable<URL>（/device の ?code= 用に searchParams へアクセス可能。実URL＝BASE_PATH を含む）
 // - isPublicPath(path): §8 PUBLIC_PATHS（/usage,/terms,/privacy,/tasks/guide）を true
 // - isAllowedReturnPath(path): returnTo として安全に使えるか判定（オープンリダイレクト対策・#34）
+// - resolveReturnTarget(returnTo): ログイン後の戻り先を「SPA 内遷移」か「別アプリ（PWA）へのフルページ遷移」に解決
 // - goto(path):  api client の 401 ハンドラ・各コンポーネントの遷移で使う（= navigateTo）
 // - resolveRoute(url): §8 全パス → {view, tab?, params?} を解決
 //
@@ -163,7 +164,7 @@ export function isPublicPath(path: string): boolean {
 }
 
 /**
- * returnTo として安全に使えるアプリ相対パスかを判定する（オープンリダイレクト対策・#34 症状4）。
+ * returnTo として安全に使えるパス（同一オリジンの物理パス）かを判定する（オープンリダイレクト対策・#34 症状4）。
  *
  * 許可条件は「同一オリジンの絶対パス」のみ:
  *   - `/` で始まる（相対パス・スキーム付き URL は拒否）
@@ -177,6 +178,10 @@ export function isPublicPath(path: string): boolean {
  * 現行構成では「管理画面 SPA 内のどのビューを見せるか」は App.svelte の認可ゲート
  * （`effectiveView` の admin 判定等）が別途担うため、本関数はオープンリダイレクト防止のみに
  * 専念する（ロールは見ない）。
+ *
+ * 「同一オリジンの絶対パス」であれば `/admin/...`（この SPA）に限らず許可する。PWA（`/`・`/todo`・
+ * `/chat` 等・`client/pwa`）も同一オリジンで配信され、共有ログイン（`/admin/login`）へ送り出した
+ * PWA へ戻すために必要（実際の遷移先の解釈は [`resolveReturnTarget`]）。
  */
 export function isAllowedReturnPath(path: string | null | undefined): boolean {
 	if (!path) return false;
@@ -189,6 +194,45 @@ export function isAllowedReturnPath(path: string | null | undefined): boolean {
 		return false;
 	}
 	return true;
+}
+
+/**
+ * ログイン後の遷移先。`app` は SPA 内遷移（アプリ相対パス・`navigateTo` に渡す）、`external` は
+ * この SPA の外（同一オリジンの PWA 等）へのフルページ遷移（物理パス・`location.assign` に渡す）。
+ */
+export type ReturnTarget =
+	| { kind: "app"; path: string }
+	| { kind: "external"; href: string };
+
+/**
+ * `?returnTo=` を解釈する。returnTo は常に**物理パス**（クエリ・ハッシュ付き可）として扱う:
+ *   - 不正・未指定（[`isAllowedReturnPath`] 不合格）→ アプリのホーム
+ *   - `BASE_PATH`（`/admin`）配下 → BASE_PATH を剥がしたアプリ相対パスで SPA 内遷移
+ *     （`/admin/bot/dashboard` → `/bot/dashboard`。`/admin/admin` → `/admin`＝AdminOverlay）
+ *   - それ以外（PWA の `/todo` 等）→ フルページ遷移。PWA は別バンドルのため SPA 内遷移では
+ *     戻れず、`/admin/todo` として未知ルート（Bot 選択）に化けていた
+ *
+ * パスは WHATWG URL で正規化した値（`/admin/../todo` → `/todo`）を使うので、判定と実遷移先がずれない。
+ */
+export function resolveReturnTarget(
+	returnTo: string | null | undefined,
+): ReturnTarget {
+	if (!isAllowedReturnPath(returnTo)) return { kind: "app", path: "/" };
+	const url = new URL(returnTo as string, "http://localhost");
+	const withinBase =
+		!BASE_PATH ||
+		url.pathname === BASE_PATH ||
+		url.pathname.startsWith(`${BASE_PATH}/`);
+	if (withinBase) {
+		return {
+			kind: "app",
+			path: `${stripBasePath(url.pathname)}${url.search}${url.hash}`,
+		};
+	}
+	return {
+		kind: "external",
+		href: `${url.pathname}${url.search}${url.hash}`,
+	};
 }
 
 // ── ストア ────────────────────────────────────────────────────────────────

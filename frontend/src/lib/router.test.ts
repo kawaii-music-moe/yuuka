@@ -4,7 +4,7 @@
 // cleanPath/isPublicPath/isAllowedReturnPath は BASE_PATH（import.meta.env.BASE_URL）に
 // 依存しないため、通常の静的 import で検証する。
 //
-// withBasePath/resolveRoute は BASE_PATH（"/admin"）に依存するが、Vitest は（vite build/dev と
+// withBasePath/resolveRoute/resolveReturnTarget は BASE_PATH（"/admin"）に依存するが、Vitest は（vite build/dev と
 // 異なり）frontend/vite.config.ts の `base` を `import.meta.env.BASE_URL` へ自動反映しない
 // （実測: 素の import では常に "/" になる）。そのため該当 describe だけ `vi.stubEnv` で
 // `BASE_URL` を本番と同じ "/admin/" に固定し、`vi.resetModules()` でモジュールキャッシュを
@@ -61,6 +61,24 @@ describe("isAllowedReturnPath (open-redirect 対策・#34 症状4)", () => {
 		expect(isAllowedReturnPath("/device?code=WDJB-MJHT")).toBe(true);
 	});
 
+	it("allows same-origin PWA paths (PWA からの共有ログイン往復)", () => {
+		// PWA（client/pwa）は `/admin/login?returnTo=<現在位置>` へ送り出す。戻り先はこれらの
+		// 同一オリジン絶対パス（管理画面 `/admin` 配下に限らない）。
+		for (const p of [
+			"/",
+			"/chat",
+			"/todo",
+			"/calendar",
+			"/finance",
+			"/notes",
+			"/settings",
+			"/chat?from=chat",
+			"/calendar?month=2026-08#d15",
+		]) {
+			expect(isAllowedReturnPath(p), p).toBe(true);
+		}
+	});
+
 	it("rejects empty/missing input", () => {
 		expect(isAllowedReturnPath(null)).toBe(false);
 		expect(isAllowedReturnPath(undefined)).toBe(false);
@@ -110,6 +128,9 @@ describe("with BASE_PATH=/admin (frontend/vite.config.ts の base と一致)", (
 		tab?: string;
 		params?: Record<string, string>;
 	};
+	let resolveReturnTarget: (
+		returnTo: string | null | undefined,
+	) => { kind: "app"; path: string } | { kind: "external"; href: string };
 
 	beforeAll(async () => {
 		vi.resetModules();
@@ -120,6 +141,7 @@ describe("with BASE_PATH=/admin (frontend/vite.config.ts の base と一致)", (
 		const mod = await import("./router");
 		withBasePath = mod.withBasePath;
 		resolveRoute = mod.resolveRoute;
+		resolveReturnTarget = mod.resolveReturnTarget;
 	});
 
 	describe("withBasePath", () => {
@@ -181,6 +203,90 @@ describe("with BASE_PATH=/admin (frontend/vite.config.ts の base と一致)", (
 
 		it("falls back to notfound for unknown paths under the admin prefix", () => {
 			expect(resolveRoute(toUrl("/admin/nope")).view).toBe("notfound");
+		});
+	});
+	describe("resolveReturnTarget (returnTo は常に物理パス)", () => {
+		it("sends PWA paths to a full-page navigation, not into the admin SPA", () => {
+			// これまで `/todo` は navigateTo で `/admin/todo`（管理画面の未知ルート→Bot 選択）に化けていた。
+			expect(resolveReturnTarget("/")).toEqual({
+				kind: "external",
+				href: "/",
+			});
+			expect(resolveReturnTarget("/todo")).toEqual({
+				kind: "external",
+				href: "/todo",
+			});
+			expect(resolveReturnTarget("/chat?from=chat#latest")).toEqual({
+				kind: "external",
+				href: "/chat?from=chat#latest",
+			});
+			expect(resolveReturnTarget("/settings")).toEqual({
+				kind: "external",
+				href: "/settings",
+			});
+		});
+
+		it("keeps admin-prefixed physical paths inside the SPA (app-relative)", () => {
+			expect(resolveReturnTarget("/admin/bot/dashboard")).toEqual({
+				kind: "app",
+				path: "/bot/dashboard",
+			});
+			expect(resolveReturnTarget("/admin")).toEqual({ kind: "app", path: "/" });
+			expect(resolveReturnTarget("/admin/")).toEqual({
+				kind: "app",
+				path: "/",
+			});
+			// 物理 `/admin/admin` は AdminOverlay（アプリ相対 `/admin`）。BASE_PATH と衝突しない。
+			expect(resolveReturnTarget("/admin/admin")).toEqual({
+				kind: "app",
+				path: "/admin",
+			});
+			expect(resolveReturnTarget("/admin/device?code=WDJB-MJHT#x")).toEqual({
+				kind: "app",
+				path: "/device?code=WDJB-MJHT#x",
+			});
+		});
+
+		it("does not treat look-alike prefixes as the admin SPA", () => {
+			expect(resolveReturnTarget("/administrator")).toEqual({
+				kind: "external",
+				href: "/administrator",
+			});
+			expect(resolveReturnTarget("/admin-tools/x")).toEqual({
+				kind: "external",
+				href: "/admin-tools/x",
+			});
+		});
+
+		it("normalises dot segments so the check and the real destination agree", () => {
+			expect(resolveReturnTarget("/admin/../todo")).toEqual({
+				kind: "external",
+				href: "/todo",
+			});
+			expect(resolveReturnTarget("/todo/../admin/bot/tasks")).toEqual({
+				kind: "app",
+				path: "/bot/tasks",
+			});
+		});
+
+		it("falls back to the app home for missing or unsafe returnTo (no open redirect)", () => {
+			const home = { kind: "app", path: "/" };
+			for (const bad of [
+				null,
+				undefined,
+				"",
+				"todo",
+				"//evil.example",
+				"//evil.example/todo",
+				"///evil.example",
+				"/\\evil.example",
+				"\\\\evil.example",
+				"/\t/evil.example",
+				"https://evil.example/todo",
+				"javascript:alert(1)",
+			]) {
+				expect(resolveReturnTarget(bad), String(bad)).toEqual(home);
+			}
 		});
 	});
 });
