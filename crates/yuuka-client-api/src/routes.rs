@@ -833,14 +833,19 @@ struct PwaTurnJob {
 /// （成功・失敗・タイムアウトいずれか）までは同一ユーザーの新規送信が 409 で弾かれる。この関数を
 /// 抜けると（return 経路によらず）`job` ごと drop され、同時に in-flight から解放される。
 ///
-/// 成功時は `engine.secretary_turn_pwa` が内部でユーザー発言/アシスタント応答の両方を
-/// （embeds/files 込みで）永続化するため、ここでの追加の保存は不要（そのまま return）。
+/// **終端状態の保証**: どの結果でも、返る前に「`since_id` より後のアシスタント行」が履歴に存在する状態にする
+/// （[`chat_history`] をポーリングするクライアントが必ず有限時間で完了/エラーを受け取れるように）。
 ///
-/// 失敗/タイムアウト時は [`message_log::has_pwa_assistant_reply_after`] で「`since_id` より後に
-/// 既に何か応答が保存されていないか」を確認してから（タイムアウトで `timeout()` がキャンセルした
-/// future が、キャンセルされる直前にぎりぎり保存を終えていた場合の二重保存を避けるため）、無ければ
-/// フォールバックのアシスタント応答を保存して終端状態にする。これにより [`chat_history`] を
-/// ポーリングするクライアントは必ず（成功でも失敗でも）有限時間で応答を受け取れる。
+/// - 通常の成功: `engine.secretary_turn_pwa` が内部でユーザー発言/アシスタント応答を（embeds/files 込みで）
+///   永続化済みのため、追加の保存はしない。
+/// - ⚠️ 定型応答（レート制限・サーバー混雑・鍵未設定）やペルソナ入りエラー報告: エンジンは `Ok(reply)` を
+///   返すが**履歴には保存しない**（LLM 文脈を汚染しないための既存の不変条件）。そのままではクライアントが
+///   永遠に待つため、`reply.text` を通知行（[`message_log::add_pwa_notice`]・LLM コンテキストからは除外）
+///   として保存する。
+/// - 失敗（`Err`）・タイムアウト: フォールバック文言を同じく通知行として保存する。
+///
+/// 保存前に [`message_log::has_pwa_assistant_reply_after`] で既存の応答が無いことを確認する（タイムアウトで
+/// `timeout()` がキャンセルした future が、キャンセル直前にぎりぎり保存を終えていた場合の二重保存を避ける）。
 async fn run_pwa_turn_in_background(job: PwaTurnJob) {
     let PwaTurnJob {
         guard: _guard,
@@ -861,51 +866,45 @@ async fn run_pwa_turn_in_background(job: PwaTurnJob) {
     )
     .await;
 
-    let fallback_text: &'static str = match outcome {
-        Ok(Ok(_reply)) => return,
+    let (uid, bid) = (user_id.as_str(), bot_id.as_str());
+    // 履歴に応答が無かった場合に通知行として保存する文言。
+    let notice_text: String = match outcome {
+        Ok(Ok(reply)) if !reply.text.trim().is_empty() => reply.text,
+        Ok(Ok(_)) => FALLBACK_ERROR_TEXT.to_owned(),
         Ok(Err(e)) => {
             tracing::warn!(
                 error = %e,
-                user_id = user_id.as_str(),
+                user_id = uid,
                 "client-api: チャット送信ターンが失敗（バックグラウンド）"
             );
-            FALLBACK_ERROR_TEXT
+            FALLBACK_ERROR_TEXT.to_owned()
         }
         Err(_) => {
             tracing::warn!(
                 timeout = ?turn_timeout,
-                user_id = user_id.as_str(),
+                user_id = uid,
                 "client-api: チャット送信がタイムアウト（バックグラウンド）"
             );
-            FALLBACK_TIMEOUT_TEXT
+            FALLBACK_TIMEOUT_TEXT.to_owned()
         }
     };
 
-    let (uid, bid) = (user_id.as_str(), bot_id.as_str());
     match message_log::has_pwa_assistant_reply_after(&db, uid, bid, since_id).await {
-        Ok(true) => {
-            // キャンセルされる直前に保存が完了していた（レア・タイムアウト境界）。二重保存を避ける。
-        }
-        Ok(false) => {
-            if let Err(e) =
-                message_log::add_pwa_assistant_reply(&db, uid, bid, fallback_text, None, &[]).await
-            {
-                tracing::error!(
-                    error = %e,
-                    user_id = uid,
-                    "client-api: フォールバック応答の保存にも失敗（クライアントはポーリングを継続する）"
-                );
-            }
-        }
-        Err(e) => {
-            tracing::warn!(
-                error = %e,
-                user_id = uid,
-                "client-api: 応答存在確認に失敗（フォールバック保存を試みる）"
-            );
-            let _ =
-                message_log::add_pwa_assistant_reply(&db, uid, bid, fallback_text, None, &[]).await;
-        }
+        // 通常の成功、またはキャンセル直前に保存が完了していた（レアなタイムアウト境界）。
+        Ok(true) => return,
+        Ok(false) => {}
+        Err(e) => tracing::warn!(
+            error = %e,
+            user_id = uid,
+            "client-api: 応答存在確認に失敗（通知行の保存を試みる）"
+        ),
+    }
+    if let Err(e) = message_log::add_pwa_notice(&db, uid, bid, &notice_text).await {
+        tracing::error!(
+            error = %e,
+            user_id = uid,
+            "client-api: 通知行の保存に失敗（クライアントは最大待機時間までポーリングを続ける）"
+        );
     }
 }
 

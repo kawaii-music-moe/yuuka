@@ -136,6 +136,7 @@ mod tests {
              DROP INDEX idx_message_attachments_message_log_id; \
              DROP TABLE message_attachments; \
              ALTER TABLE message_logs DROP COLUMN rich_content; \
+             ALTER TABLE message_logs DROP COLUMN is_notice; \
              DROP INDEX idx_message_logs_guild_channel; \
              ALTER TABLE message_logs DROP COLUMN channel_id; \
              DROP INDEX idx_message_logs_user_bot_source; \
@@ -219,6 +220,14 @@ mod tests {
             )
             .unwrap();
         assert_eq!(attachments_table, 1, "V22: message_attachments 再作成");
+        let notice_col: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('message_logs') WHERE name='is_notice'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(notice_col, 1, "V22: message_logs.is_notice 再追加");
     }
 
     #[tokio::test]

@@ -314,7 +314,7 @@ async fn recent_context_with_floor(
                     "SELECT role, content FROM ( \
                        SELECT id, role, content FROM message_logs \
                        WHERE user_id = ?1 AND bot_id = ?2 AND id > ?3 AND guild_id IS NULL \
-                         AND source = ?5 \
+                         AND source = ?5 AND is_notice = 0 \
                        ORDER BY id DESC LIMIT ?4 \
                      ) ORDER BY id ASC",
                 )
@@ -475,6 +475,35 @@ pub async fn add_pwa_assistant_reply(
                 .map_err(map_sqlite)?;
             }
             Ok(message_log_id)
+        })
+        .await
+}
+
+/// PWA のシステム通知（⚠️ の定型応答・失敗/タイムアウトのフォールバック）をアシスタント行として保存する
+/// （issue #41 PR #75 レビュー・P1）。非同期配信ではターン確定の印として履歴にアシスタント行が
+/// 現れる必要があるため保存するが、`is_notice=1` で LLM コンテキスト（[`recent_pwa_context`] 等）からは
+/// 除外する（「⚠️ 定型応答で以後の文脈を汚染しない」不変条件の維持）。履歴一覧（[`list_pwa_messages`]）
+/// には通常のアシスタント応答として現れる。
+///
+/// # Errors
+/// 書き込み失敗時 [`DbError`]。
+pub async fn add_pwa_notice(
+    db: &Db,
+    user_id: &str,
+    bot_id: &str,
+    content: &str,
+) -> Result<i64, DbError> {
+    let (user_id, bot_id, content) = (user_id.to_owned(), bot_id.to_owned(), content.to_owned());
+    db.writer
+        .transaction(move |tx| {
+            tx.execute(
+                "INSERT INTO message_logs \
+                   (user_id, bot_id, discord_msg_id, role, content, reply_to_msg_id, source, is_notice) \
+                 VALUES (?1, ?2, NULL, 'assistant', ?3, NULL, 'pwa', 1)",
+                params![user_id, bot_id, content],
+            )
+            .map_err(map_sqlite)?;
+            Ok(tx.last_insert_rowid())
         })
         .await
 }
@@ -988,8 +1017,8 @@ mod tests {
     // ─── issue #41 PR #75 レビュー: リッチ返信永続化（P2）・非同期配信の補助クエリ（P1） ───
 
     use super::{
-        add_pwa_assistant_reply, get_pwa_attachment_for_user, has_pwa_assistant_reply_after,
-        max_pwa_message_id, PwaAttachmentInput,
+        add_pwa_assistant_reply, add_pwa_notice, get_pwa_attachment_for_user,
+        has_pwa_assistant_reply_after, max_pwa_message_id, PwaAttachmentInput,
     };
 
     #[tokio::test]
@@ -1124,5 +1153,35 @@ mod tests {
                 .await
                 .unwrap()
         );
+    }
+
+    #[tokio::test]
+    async fn pwa_notice_is_in_history_but_excluded_from_llm_context() {
+        let (db, path) = seed_db();
+        seed_user(&path, "u");
+
+        add_pwa_message_log(&db, "u", "b1", "user", "こんにちは")
+            .await
+            .unwrap();
+        let since_id = max_pwa_message_id(&db, "u", "b1").await.unwrap();
+        add_pwa_notice(&db, "u", "b1", "⚠️ 利用制限に達しています")
+            .await
+            .unwrap();
+
+        // ポーリングの終端条件（since_id より後のアシスタント行）を満たす。
+        assert!(has_pwa_assistant_reply_after(&db, "u", "b1", since_id)
+            .await
+            .unwrap());
+        // 履歴一覧には通常のアシスタント応答として現れる。
+        let history = list_pwa_messages(&db, "u", "b1", 50).await.unwrap();
+        assert_eq!(history.len(), 2);
+        assert_eq!(history[1].role, "assistant");
+        assert_eq!(history[1].content, "⚠️ 利用制限に達しています");
+        // LLM コンテキストには入らない（⚠️ 定型応答で以後の文脈を汚染しない）。
+        let ctx = recent_pwa_context(&db, "u", "b1", CONTEXT_LIMIT)
+            .await
+            .unwrap();
+        assert_eq!(ctx.len(), 1);
+        assert_eq!(ctx[0].content, "こんにちは");
     }
 }

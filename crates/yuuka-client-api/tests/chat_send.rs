@@ -695,3 +695,70 @@ async fn attachments_are_listed_and_served_only_to_their_owner() {
     // u2 の履歴には u1 の添付は現れない。
     assert!(get_history(&app, "u2").await.is_empty());
 }
+
+/// 常に上流 429（レート制限）で失敗する fake backend。エンジンはこれを分類済みの ⚠️ 定型応答
+/// （`Ok(reply)`・**履歴には保存しない**）へ畳む。
+struct RateLimitedBackend;
+
+#[async_trait]
+impl GenerateBackend for RateLimitedBackend {
+    async fn generate(
+        &self,
+        _system_instruction: Option<&str>,
+        _declarations: &[FunctionDeclaration],
+        _contents: &[Content],
+        _tool_config: Option<ToolConfig>,
+    ) -> Result<GenerateContentResponse, GeminiError> {
+        Err(GeminiError::RateLimited { retry_after: None })
+    }
+}
+
+struct RateLimitedFactory;
+
+impl GeminiFactory for RateLimitedFactory {
+    fn build(
+        &self,
+        _model: &str,
+        _api_key: SecretString,
+    ) -> Result<Arc<dyn GenerateBackend>, GeminiError> {
+        Ok(Arc::new(RateLimitedBackend))
+    }
+}
+
+#[tokio::test]
+async fn unsaved_warning_reply_is_persisted_as_a_notice_so_polling_terminates() {
+    let (db, path) = fresh_db();
+    let crypto = Arc::new(
+        SystemCrypto::new(SecretString::from("chat-send-test-secret".to_owned())).unwrap(),
+    );
+    seed_user_with_key(&path, &crypto, "u1");
+    // エンジンは 429 を ⚠️ 定型応答（Ok）に畳み、履歴へは保存しない（LLM 文脈を汚染しない不変条件）。
+    // 非同期配信ではこのままだとクライアントが永遠に待つため、バックグラウンド側が通知行として保存する。
+    let engine = engine_with_factory(db.clone(), Some(crypto), Arc::new(RateLimitedFactory));
+    let app = app(engine, db.clone());
+
+    let (status, body) = post_chat(&app, Some("u1"), "こんにちは").await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    let since_id: i64 = body["sinceId"].as_str().unwrap().parse().unwrap();
+
+    let reply = poll_for_reply_after(&app, "u1", since_id, 200).await;
+    assert_eq!(reply["role"], "agent");
+    assert!(
+        reply["content"].as_str().unwrap().contains("利用制限"),
+        "reply={reply:?}"
+    );
+
+    // 通知行は履歴には出るが、次ターンの LLM コンテキストには入らない。
+    let context =
+        yuuka_orchestrator::message_log::recent_pwa_context(&db, "u1", "system_default", 15)
+            .await
+            .unwrap();
+    assert_eq!(context.len(), 1, "context={context:?}");
+    assert_eq!(context[0].role, "user");
+    let agent_rows = get_history(&app, "u1")
+        .await
+        .iter()
+        .filter(|m| m["role"] == "agent")
+        .count();
+    assert_eq!(agent_rows, 1, "通知行はちょうど 1 件");
+}

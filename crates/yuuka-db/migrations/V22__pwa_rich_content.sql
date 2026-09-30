@@ -9,6 +9,13 @@
 -- message_attachments へ分離）。既存行は NULL（プレーンテキストのみ・後方互換）。
 ALTER TABLE message_logs ADD COLUMN rich_content TEXT;
 
+-- message_logs.is_notice: システム通知（⚠️ レート制限・サーバー混雑・内部エラー・タイムアウト等の定型応答）。
+-- PWA の非同期配信（202 + 履歴ポーリング）では、ターンが確定した印として**必ず**アシスタント行が
+-- 履歴に現れる必要がある（そうしないとクライアントが応答待ちのまま止まる）。一方エンジンは
+-- 「⚠️ 定型応答は履歴に保存しない＝以後の LLM 文脈を汚染しない」不変条件を持つため、通知行は履歴
+-- 表示には出すが LLM コンテキストの再構築（recent_context 系）からは除外する。既存行は全て 0。
+ALTER TABLE message_logs ADD COLUMN is_notice INTEGER NOT NULL DEFAULT 0;
+
 -- message_attachments: アシスタント応答のファイル添付（グラフ PNG 等・`FileAttachment`）の実バイト列。
 -- `message_logs` 1 行（1 ターンのアシスタント応答）に対し 0..N 件。所有者スコープの認可
 -- （`GET /api/client/chat/attachments/:id`）は `message_logs.user_id` を経由して行う。
