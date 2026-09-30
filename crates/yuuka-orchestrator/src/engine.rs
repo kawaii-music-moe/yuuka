@@ -488,6 +488,16 @@ impl ChatEngine {
         } else {
             reply_text
         };
+
+        // embeds/files はここで確定させ、保存（次段）と戻り値（TurnReply）の両方へ同じ値を使う
+        // （issue #41 PR #75 レビュー・P2: 従来は保存の**後**に組み立てていたため、PWA 経由の保存が
+        // `reply.text` のみで embeds/files を握りつぶしていた。Discord は twilight へ直接渡すだけで
+        // 保存自体は不要だが、PWA は message_logs.rich_content/message_attachments へ永続化し、
+        // GET 履歴・ポーリング応答の両方でリッチ返信を再現できるようにする）。
+        let mut embeds = rich_parts_to_embeds(&result.rich_parts);
+        embeds.extend(recovered);
+        let files = rich_parts_to_files(&result.rich_parts);
+
         match source {
             MessageSource::Discord => {
                 message_log::add_message_log(
@@ -503,9 +513,28 @@ impl ChatEngine {
                 .map_err(db_fail)?;
             }
             MessageSource::Pwa => {
-                message_log::add_pwa_message_log(&self.db, uid, bid, "assistant", &reply_text)
-                    .await
-                    .map_err(db_fail)?;
+                let embeds_json = (!embeds.is_empty())
+                    .then(|| serde_json::to_string(&embeds))
+                    .transpose()
+                    .map_err(|e| db_fail(DbError::Operation(format!("embeds json: {e}"))))?;
+                let attachment_inputs: Vec<message_log::PwaAttachmentInput> = files
+                    .iter()
+                    .map(|f| message_log::PwaAttachmentInput {
+                        name: f.name.clone(),
+                        mime_type: mime_for_filename(&f.name).to_owned(),
+                        bytes: f.bytes.clone(),
+                    })
+                    .collect();
+                message_log::add_pwa_assistant_reply(
+                    &self.db,
+                    uid,
+                    bid,
+                    &reply_text,
+                    embeds_json.as_deref(),
+                    &attachment_inputs,
+                )
+                .await
+                .map_err(db_fail)?;
             }
         }
 
@@ -521,12 +550,10 @@ impl ChatEngine {
             &log_text,
         );
 
-        let mut embeds = rich_parts_to_embeds(&result.rich_parts);
-        embeds.extend(recovered);
         Ok(TurnReply {
             text: reply_text,
             embeds,
-            files: rich_parts_to_files(&result.rich_parts),
+            files,
             ..TurnReply::default()
         })
     }
@@ -1141,6 +1168,18 @@ fn rich_parts_to_embeds(parts: &[ResponsePart]) -> Vec<RichEmbed> {
             _ => None,
         })
         .collect()
+}
+
+/// [`FileAttachment::name`] の拡張子から MIME タイプを推定する（issue #41 PR #75 レビュー・P2）。
+/// `rich_parts_to_files` が付ける拡張子（png/jpg/bin）の逆写像で、PWA 永続化（`message_attachments`）
+/// 用に `Content-Type` を復元する。`FileAttachment` 自体は MIME を保持しないため名前から推定する。
+fn mime_for_filename(name: &str) -> &'static str {
+    let ext = name.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+    match ext.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        _ => "application/octet-stream",
+    }
 }
 
 /// ツール生成メディア（`rich_parts`）を [`FileAttachment`] へ写像する（base64 デコード）。

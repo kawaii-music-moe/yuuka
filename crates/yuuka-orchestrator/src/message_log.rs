@@ -343,11 +343,24 @@ pub struct PwaMessageRow {
     pub content: String,
     /// `'YYYY-MM-DD HH:MM:SS'`（SQLite localtime）。
     pub created_at: String,
+    /// `RichEmbed` 配列の JSON（issue #41 PR #75 レビュー・P2）。埋め込みが無ければ `None`。
+    pub rich_content: Option<String>,
+    /// このアシスタント応答に付随するファイル添付（メタデータのみ・バイト列は
+    /// [`get_pwa_attachment_for_user`] で個別に取得する）。
+    pub attachments: Vec<PwaAttachmentRow>,
+}
+
+/// [`PwaMessageRow::attachments`] の 1 件（バイト列は含まない・一覧表示用）。
+#[derive(Debug, Clone)]
+pub struct PwaAttachmentRow {
+    pub id: i64,
+    pub name: String,
+    pub mime_type: String,
 }
 
 /// PWA チャット履歴を古い順に返す（Node `listPwaMessages`・`source='pwa'` のみ・floor 非依存＝
 /// リセット後も永続ログ自体は表示する、Node と同じ「履歴一覧は全件、LLM コンテキストだけ floor で
-/// 絞る」設計）。
+/// 絞る」設計）。issue #41 PR #75 レビュー（P2）で `rich_content`/添付メタデータも合わせて返すよう拡張。
 ///
 /// # Errors
 /// 読み取り失敗時 [`DbError`]。
@@ -363,26 +376,196 @@ pub async fn list_pwa_messages(
         .read(move |conn| {
             let mut stmt = conn
                 .prepare(
-                    "SELECT id, role, content, created_at FROM ( \
-                       SELECT id, role, content, created_at FROM message_logs \
+                    "SELECT id, role, content, created_at, rich_content FROM ( \
+                       SELECT id, role, content, created_at, rich_content FROM message_logs \
                        WHERE user_id = ?1 AND bot_id = ?2 AND source = 'pwa' \
                        ORDER BY id DESC LIMIT ?3 \
                      ) ORDER BY id ASC",
                 )
                 .map_err(map_sqlite)?;
-            let rows = stmt
+            let mut rows = stmt
                 .query_map(params![user_id, bot_id, limit], |r| {
                     Ok(PwaMessageRow {
                         id: r.get::<_, i64>(0)?,
                         role: r.get::<_, String>(1)?,
                         content: r.get::<_, String>(2)?,
                         created_at: r.get::<_, String>(3)?,
+                        rich_content: r.get::<_, Option<String>>(4)?,
+                        attachments: Vec::new(),
                     })
                 })
                 .map_err(map_sqlite)?
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(map_sqlite)?;
+
+            // 添付は行ごとの小さな別クエリで補完する（PWA 履歴は高々 200 件・N+1 でも実害の無い
+            // 規模。read プールの同一コネクション内で完結させ、追加の往復コストを増やさない）。
+            let mut att_stmt = conn
+                .prepare(
+                    "SELECT id, name, mime_type FROM message_attachments \
+                     WHERE message_log_id = ?1 ORDER BY id ASC",
+                )
+                .map_err(map_sqlite)?;
+            for row in &mut rows {
+                if row.role != "assistant" {
+                    continue;
+                }
+                row.attachments = att_stmt
+                    .query_map(params![row.id], |r| {
+                        Ok(PwaAttachmentRow {
+                            id: r.get::<_, i64>(0)?,
+                            name: r.get::<_, String>(1)?,
+                            mime_type: r.get::<_, String>(2)?,
+                        })
+                    })
+                    .map_err(map_sqlite)?
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(map_sqlite)?;
+            }
             Ok(rows)
+        })
+        .await
+}
+
+/// [`add_pwa_assistant_reply`] の添付入力 1 件（呼び出し側が `TurnReply::files` から変換する）。
+#[derive(Debug, Clone)]
+pub struct PwaAttachmentInput {
+    pub name: String,
+    pub mime_type: String,
+    pub bytes: Vec<u8>,
+}
+
+/// PWA アシスタント応答をリッチコンテンツ（embeds JSON・添付ファイル）付きで保存する（issue #41
+/// PR #75 レビュー・P2: `secretary_turn_pwa` の戻り値が持つ `embeds`/`files` が [`add_pwa_message_log`]
+/// では握り潰され `reply.text` しか保存されていなかった問題の解消）。
+///
+/// `embeds_json`（[`yuuka_discord::RichEmbed`] 配列の JSON・埋め込みが無ければ `None`）と `files`
+/// （バイナリ添付・`message_attachments` へ別テーブル保存）を message_logs 行 1 件とアトミックに
+/// 書き込み、挿入した `message_logs.id` を返す（添付の外部キー・GET 応答の attachment URL 組み立てに使う）。
+///
+/// # Errors
+/// 書き込み失敗時 [`DbError`]。
+pub async fn add_pwa_assistant_reply(
+    db: &Db,
+    user_id: &str,
+    bot_id: &str,
+    content: &str,
+    embeds_json: Option<&str>,
+    files: &[PwaAttachmentInput],
+) -> Result<i64, DbError> {
+    let (user_id, bot_id, content) = (user_id.to_owned(), bot_id.to_owned(), content.to_owned());
+    let embeds_json = embeds_json.map(str::to_owned);
+    let files = files.to_vec();
+    db.writer
+        .transaction(move |tx| {
+            tx.execute(
+                "INSERT INTO message_logs \
+                   (user_id, bot_id, discord_msg_id, role, content, reply_to_msg_id, source, rich_content) \
+                 VALUES (?1, ?2, NULL, 'assistant', ?3, NULL, 'pwa', ?4)",
+                params![user_id, bot_id, content, embeds_json],
+            )
+            .map_err(map_sqlite)?;
+            let message_log_id = tx.last_insert_rowid();
+            for file in &files {
+                tx.execute(
+                    "INSERT INTO message_attachments (message_log_id, name, mime_type, bytes) \
+                     VALUES (?1, ?2, ?3, ?4)",
+                    params![message_log_id, file.name, file.mime_type, file.bytes],
+                )
+                .map_err(map_sqlite)?;
+            }
+            Ok(message_log_id)
+        })
+        .await
+}
+
+/// 添付ファイル本体（バイト列を含む・issue #41 PR #75 レビュー・P2）。
+#[derive(Debug, Clone)]
+pub struct PwaAttachmentBlob {
+    pub name: String,
+    pub mime_type: String,
+    pub bytes: Vec<u8>,
+}
+
+/// 添付ファイル本体を所有者スコープで取得する（`GET /api/client/chat/attachments/:id` 用）。
+/// `message_logs.user_id` が `user_id` と一致し、かつ `source='pwa'` の行に紐づく添付のみ返す
+/// （他ユーザーの添付・Discord 由来の行に紐づく添付は `None`＝呼び出し側で 404 に写像する）。
+///
+/// # Errors
+/// 読み取り失敗時 [`DbError`]。
+pub async fn get_pwa_attachment_for_user(
+    db: &Db,
+    attachment_id: i64,
+    user_id: &str,
+) -> Result<Option<PwaAttachmentBlob>, DbError> {
+    let user_id = user_id.to_owned();
+    db.read
+        .read(move |conn| {
+            conn.query_row(
+                "SELECT a.name, a.mime_type, a.bytes \
+                 FROM message_attachments a \
+                 JOIN message_logs m ON m.id = a.message_log_id \
+                 WHERE a.id = ?1 AND m.user_id = ?2 AND m.source = 'pwa'",
+                params![attachment_id, user_id],
+                |r| {
+                    Ok(PwaAttachmentBlob {
+                        name: r.get::<_, String>(0)?,
+                        mime_type: r.get::<_, String>(1)?,
+                        bytes: r.get::<_, Vec<u8>>(2)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(map_sqlite)
+        })
+        .await
+}
+
+/// `source='pwa'` 会話の直近 `message_logs.id`（無ければ 0）。チャット送信（issue #41 PR #75・
+/// 非同期配信レビュー）が `202` 応答へ含める `sinceId`（クライアントのポーリング起点）に使う。
+///
+/// # Errors
+/// 読み取り失敗時 [`DbError`]。
+pub async fn max_pwa_message_id(db: &Db, user_id: &str, bot_id: &str) -> Result<i64, DbError> {
+    let (user_id, bot_id) = (user_id.to_owned(), bot_id.to_owned());
+    db.read
+        .read(move |conn| {
+            conn.query_row(
+                "SELECT COALESCE(MAX(id), 0) FROM message_logs \
+                 WHERE user_id = ?1 AND bot_id = ?2 AND source = 'pwa'",
+                params![user_id, bot_id],
+                |r| r.get::<_, i64>(0),
+            )
+            .map_err(map_sqlite)
+        })
+        .await
+}
+
+/// `since_id` より後に `source='pwa'` のアシスタント応答が既に 1 件でも存在するか。バックグラウンド
+/// のチャット送信ターン（issue #41 PR #75 レビュー・非同期配信）が失敗/タイムアウトした際、
+/// フォールバック（終端状態）応答を二重に保存しないための確認に使う。
+///
+/// # Errors
+/// 読み取り失敗時 [`DbError`]。
+pub async fn has_pwa_assistant_reply_after(
+    db: &Db,
+    user_id: &str,
+    bot_id: &str,
+    since_id: i64,
+) -> Result<bool, DbError> {
+    let (user_id, bot_id) = (user_id.to_owned(), bot_id.to_owned());
+    db.read
+        .read(move |conn| {
+            conn.query_row(
+                "SELECT EXISTS( \
+                   SELECT 1 FROM message_logs \
+                   WHERE user_id = ?1 AND bot_id = ?2 AND source = 'pwa' \
+                     AND role = 'assistant' AND id > ?3 \
+                 )",
+                params![user_id, bot_id, since_id],
+                |r| r.get::<_, bool>(0),
+            )
+            .map_err(map_sqlite)
         })
         .await
 }
@@ -800,5 +983,146 @@ mod tests {
         assert_eq!(history.len(), 2, "discord のログは含まず pwa のみ");
         assert_eq!(history[0].content, "pwa-1", "古い順");
         assert_eq!(history[1].content, "pwa-2");
+    }
+
+    // ─── issue #41 PR #75 レビュー: リッチ返信永続化（P2）・非同期配信の補助クエリ（P1） ───
+
+    use super::{
+        add_pwa_assistant_reply, get_pwa_attachment_for_user, has_pwa_assistant_reply_after,
+        max_pwa_message_id, PwaAttachmentInput,
+    };
+
+    #[tokio::test]
+    async fn add_pwa_assistant_reply_persists_embeds_json_and_is_readable_via_history() {
+        let (db, path) = seed_db();
+        seed_user(&path, "u");
+
+        let embeds_json =
+            r#"[{"title":"天気","description":null,"color":46068,"fields":[],"footer":null}]"#;
+        let id = add_pwa_assistant_reply(&db, "u", "b1", "今日は晴れです", Some(embeds_json), &[])
+            .await
+            .unwrap();
+        assert!(id > 0);
+
+        let history = list_pwa_messages(&db, "u", "b1", 50).await.unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].role, "assistant");
+        assert_eq!(history[0].content, "今日は晴れです");
+        assert_eq!(history[0].rich_content.as_deref(), Some(embeds_json));
+        assert!(history[0].attachments.is_empty(), "embeds のみ・添付は無し");
+    }
+
+    #[tokio::test]
+    async fn add_pwa_assistant_reply_without_embeds_leaves_rich_content_null() {
+        let (db, path) = seed_db();
+        seed_user(&path, "u");
+
+        add_pwa_assistant_reply(&db, "u", "b1", "プレーンな返信", None, &[])
+            .await
+            .unwrap();
+
+        let history = list_pwa_messages(&db, "u", "b1", 50).await.unwrap();
+        assert_eq!(history.len(), 1);
+        assert!(
+            history[0].rich_content.is_none(),
+            "embeds が無ければ rich_content は NULL のまま（後方互換）"
+        );
+    }
+
+    #[tokio::test]
+    async fn add_pwa_assistant_reply_persists_attachments_and_lists_metadata_in_history() {
+        let (db, path) = seed_db();
+        seed_user(&path, "u");
+
+        let files = vec![PwaAttachmentInput {
+            name: "attachment.png".to_owned(),
+            mime_type: "image/png".to_owned(),
+            bytes: vec![1, 2, 3, 4],
+        }];
+        let message_log_id = add_pwa_assistant_reply(&db, "u", "b1", "グラフです", None, &files)
+            .await
+            .unwrap();
+
+        let history = list_pwa_messages(&db, "u", "b1", 50).await.unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(
+            history[0].attachments.len(),
+            1,
+            "添付メタデータが一覧に載る"
+        );
+        let att = &history[0].attachments[0];
+        assert_eq!(att.name, "attachment.png");
+        assert_eq!(att.mime_type, "image/png");
+
+        // 添付本体（バイト列）は所有者スコープの専用クエリで別途取得する。
+        let blob = get_pwa_attachment_for_user(&db, att.id, "u")
+            .await
+            .unwrap()
+            .expect("owner can fetch the blob");
+        assert_eq!(blob.name, "attachment.png");
+        assert_eq!(blob.mime_type, "image/png");
+        assert_eq!(blob.bytes, vec![1, 2, 3, 4]);
+
+        // 他ユーザーからは取得できない（issue #41 PR #75 レビュー: 所有者スコープの認可）。
+        seed_user(&path, "attacker");
+        let forbidden = get_pwa_attachment_for_user(&db, att.id, "attacker")
+            .await
+            .unwrap();
+        assert!(
+            forbidden.is_none(),
+            "他ユーザーの添付は取得できない（404 相当）"
+        );
+
+        // 未知の attachment id も None（存在しない message_log_id の外部キーを潜り抜けない）。
+        let unknown = get_pwa_attachment_for_user(&db, message_log_id + 999, "u")
+            .await
+            .unwrap();
+        assert!(unknown.is_none());
+    }
+
+    #[tokio::test]
+    async fn max_pwa_message_id_and_has_reply_after_track_the_polling_watermark() {
+        let (db, path) = seed_db();
+        seed_user(&path, "u");
+
+        // メッセージが無ければ 0（ポーリングの起点として安全に使える）。
+        assert_eq!(max_pwa_message_id(&db, "u", "b1").await.unwrap(), 0);
+        assert!(
+            !has_pwa_assistant_reply_after(&db, "u", "b1", 0)
+                .await
+                .unwrap(),
+            "まだ何も無い"
+        );
+
+        add_pwa_message_log(&db, "u", "b1", "user", "こんにちは")
+            .await
+            .unwrap();
+        let since_id = max_pwa_message_id(&db, "u", "b1").await.unwrap();
+        assert!(since_id > 0, "ユーザー発言の直後は since_id がその id 以上");
+        assert!(
+            !has_pwa_assistant_reply_after(&db, "u", "b1", since_id)
+                .await
+                .unwrap(),
+            "ユーザー発言だけではまだアシスタント応答は無い（バックグラウンドターン未完了）"
+        );
+
+        // バックグラウンドターンが完了してアシスタント応答を保存すると、以後は since_id 以降に
+        // 応答があると判定できる（クライアントはこれでポーリングを止める）。
+        add_pwa_assistant_reply(&db, "u", "b1", "こんにちは！", None, &[])
+            .await
+            .unwrap();
+        assert!(
+            has_pwa_assistant_reply_after(&db, "u", "b1", since_id)
+                .await
+                .unwrap(),
+            "アシスタント応答が since_id より後に存在する"
+        );
+
+        // 別 bot_id/別ユーザーの応答は since_id 判定に混ざらない。
+        assert!(
+            !has_pwa_assistant_reply_after(&db, "u", "other-bot", since_id)
+                .await
+                .unwrap()
+        );
     }
 }

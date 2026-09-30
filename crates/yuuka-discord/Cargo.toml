@@ -19,6 +19,8 @@ twilight-model = { workspace = true }
 twilight-util = { workspace = true, features = ["builder"] }
 tokio = { workspace = true }
 secrecy = { workspace = true }
+# RichEmbed/EmbedField の Serialize/Deserialize（PWA チャット送信の rich_content 永続化・issue #41 PR #75）。
+serde = { workspace = true }
 # 添付（画像/音声）を URL 取得 → base64 化して Gemini マルチモーダルへ渡す（§8.1.5）。
 reqwest = { workspace = true }
 base64 = { workspace = true }
