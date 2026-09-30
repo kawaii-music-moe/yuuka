@@ -58,8 +58,9 @@ async fn run() -> Result<(), String> {
     //      at-rest 秘密（Gemini/Discord/OAuth トークン）に依存する機能が静かに壊れる Rust 固有の退行になる。
     require_encryption_secret(&cfg)?;
 
-    // 2) 既存 SQLite（Node 作成済み前提）を read pool + 単一 writer actor で開く
-    //    （writer 起動時に migrations が適用される）。
+    // 2) SQLite を read pool + 単一 writer actor で開く（writer 起動時に migrations が適用
+    //    される）。既定は DB ファイルが事前に用意されていることが前提（無ければ起動失敗）。
+    //    新規インスタンスは `YUUKA_INIT_DB=1` で無ければ新規作成させる（issue #55）。
     let db = Db::open(&cfg.db_path).map_err(|e| format!("open db {:?}: {e}", cfg.db_path))?;
 
     // 2.5) 鍵ローテーション（P1-5・Node `rotateSecretKey` パリティ）。`YUUKA_ENCRYPTION_SECRET_NEW`

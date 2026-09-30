@@ -202,6 +202,65 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn spawn_bootstrapping_creates_new_db_and_applies_migrations() {
+        // issue #55: YUUKA_INIT_DB オプトイン経路（WriterHandle::spawn_bootstrapping）は、
+        // 存在しない DB ファイルでも新規作成し、baseline からの migrations を適用して
+        // 実際にスキーマが使える状態にする（通常の spawn は CREATE を付けず即エラー）。
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("nested").join("fresh.sqlite");
+        assert!(!path.exists(), "precondition: db file must not exist yet");
+        assert!(
+            WriterHandle::spawn(path.clone()).is_err(),
+            "normal spawn must still fail fast on a missing db (C-2 unchanged)"
+        );
+
+        let writer = WriterHandle::spawn_bootstrapping(path.clone())
+            .expect("bootstrapping spawn should create the db file and run migrations");
+        assert!(path.exists(), "db file must be created by bootstrapping");
+
+        // schema_version が刻印されている（baseline が正しく適用された証跡）。
+        let pool = ReadPool::open(&path).unwrap();
+        let version: String = pool
+            .read(|c| {
+                c.query_row(
+                    "SELECT value FROM system_settings WHERE key='schema_version'",
+                    [],
+                    |r| r.get(0),
+                )
+                .map_err(map_sqlite)
+            })
+            .await
+            .unwrap();
+        assert_eq!(version, "17");
+
+        // 実 baseline テーブル（users）に書き込み・読み出しできる＝スキーマが使える状態。
+        writer
+            .transaction(|tx| {
+                tx.execute(
+                    "INSERT INTO users(discord_id, username, password_hash, salt) \
+                     VALUES ('u1', 'alice', 'hash', 'salt')",
+                    [],
+                )
+                .map_err(map_sqlite)?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+        let username: String = pool
+            .read(|c| {
+                c.query_row(
+                    "SELECT username FROM users WHERE discord_id='u1'",
+                    [],
+                    |r| r.get(0),
+                )
+                .map_err(map_sqlite)
+            })
+            .await
+            .unwrap();
+        assert_eq!(username, "alice");
+    }
+
+    #[tokio::test]
     // panic-isolation を検証するテストは意図的に panic! を使う（clippy::panic はテスト例外
     // 設定が無いため関数単位で許可する。supervisor.rs のテストと同方針）。
     #[allow(clippy::panic)]

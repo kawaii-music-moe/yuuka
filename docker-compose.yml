@@ -30,6 +30,10 @@ services:
       # ホスト環境変数（instance.env の YUUKA_RUST_DISCORD）から pass-through。未設定なら渡さない
       # ＝Rust ゲート既定 off（Node が gateway 所有）。prod カットオーバーで 1 にする。
       - YUUKA_RUST_DISCORD
+      # 新規インスタンス用の DB ブートストラップ opt-in（1=有効）。DATA_DIR/yuuka.db が無ければ
+      # 新規作成して migrations を適用する。既存 DB があれば無害（issue #55）。通常は未設定のまま
+      # にし、初回起動時のみ instance.env に一時的に追記する。
+      - YUUKA_INIT_DB
       # ログレベル（tracing EnvFilter）。未設定なら既定 info。障害調査時に一時的に上げる。
       - RUST_LOG
     volumes:
