@@ -323,8 +323,11 @@ mod tests {
         std::fs::write(dir.path().join("index.html"), "<html>ADMIN-SHELL</html>").expect("index");
         std::fs::write(dir.path().join("404.html"), "<html>NOT-FOUND</html>").expect("404");
         std::fs::create_dir_all(dir.path().join("assets")).expect("assets dir");
-        std::fs::write(dir.path().join("assets/admin-CAFEBEEF.js"), "console.log(2)")
-            .expect("hashed");
+        std::fs::write(
+            dir.path().join("assets/admin-CAFEBEEF.js"),
+            "console.log(2)",
+        )
+        .expect("hashed");
         dir
     }
 
