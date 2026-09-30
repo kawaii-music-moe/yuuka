@@ -18,6 +18,10 @@ pub struct StatusView {
 }
 
 /// `GET`/`PUT /api/client/settings`（`AgentSettings`）。
+///
+/// 全フィールドが永続化された値を反映する（issue #39: Node 版が返していた固定値の
+/// `maxTokens`/`temperature` は保存先が無く UI 上の偽装だったため、オーナー判断で API・UI から
+/// 削除した）。
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SettingsView {
@@ -25,22 +29,20 @@ pub struct SettingsView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub google_account: Option<String>,
     pub model: String,
-    pub max_tokens: i64,
-    pub temperature: f64,
     pub persona: String,
 }
 
 /// `PUT /api/client/settings` の body。
+///
+/// 旧 PWA（キャッシュ済みの古い bundle）は `maxTokens`/`temperature` を含む `AgentSettings` 全体を
+/// PUT する。ここには対応フィールドを持たず、`#[serde(deny_unknown_fields)]` も付けないため、
+/// それらのキーは黙って無視される（400 にはならない＝旧クライアントの保存を壊さない）。
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct SettingsUpdate {
     #[serde(default)]
     pub model: Option<String>,
     #[serde(default)]
     pub persona: Option<String>,
-    #[serde(default)]
-    pub max_tokens: Option<serde_json::Value>,
-    #[serde(default)]
-    pub temperature: Option<serde_json::Value>,
 }
 
 /// `GET`/`PUT /api/client/shared-note`（`SharedNote`）。
