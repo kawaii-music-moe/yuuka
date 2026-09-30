@@ -495,17 +495,153 @@ pub async fn add_pwa_notice(
 ) -> Result<i64, DbError> {
     let (user_id, bot_id, content) = (user_id.to_owned(), bot_id.to_owned(), content.to_owned());
     db.writer
+        .transaction(move |tx| insert_pwa_notice(tx, &user_id, &bot_id, &content))
+        .await
+}
+
+/// [`add_pwa_notice`] と [`fail_orphaned_pwa_turns`] が共有する通知行の INSERT（`is_notice=1` の
+/// アシスタント行・`source='pwa'`）。通知行の形を 1 か所に固定する。
+fn insert_pwa_notice(
+    tx: &rusqlite::Transaction,
+    user_id: &str,
+    bot_id: &str,
+    content: &str,
+) -> Result<i64, DbError> {
+    tx.execute(
+        "INSERT INTO message_logs \
+           (user_id, bot_id, discord_msg_id, role, content, reply_to_msg_id, source, is_notice) \
+         VALUES (?1, ?2, NULL, 'assistant', ?3, NULL, 'pwa', 1)",
+        params![user_id, bot_id, content],
+    )
+    .map_err(map_sqlite)?;
+    Ok(tx.last_insert_rowid())
+}
+
+/// [`accept_pwa_user_message`] の結果（永続化済みの PWA ユーザー発言）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AcceptedPwaMessage {
+    /// 保存したユーザー発言の `message_logs.id`。
+    pub message_id: i64,
+    /// このユーザー発言を保存する**直前**の、`source='pwa'` 会話の最大 `message_logs.id`（無ければ 0）。
+    /// `202` 応答の `sinceId`（クライアントのポーリング起点）として使う。
+    pub since_id: i64,
+}
+
+/// PWA のユーザー発言を `202 Accepted` を返す**前に**永続化する（issue #77）。
+///
+/// 従来はユーザー発言の保存がバックグラウンドターン（`ChatEngine::secretary_turn_pwa`）の先頭にあった
+/// ため、`202` の後・保存前にプロセスが落ちると受理済みの送信そのものが履歴から消えた。ここで先に
+/// 保存しておくことで、「受理した発言は必ず履歴に残る」ことを `202` の前提にする。以後にターンが
+/// 失われても、履歴は「未回答のユーザー発言」で終わる状態になり、起動時の回復スイープ
+/// （[`fail_orphaned_pwa_turns`]）が終端の通知行を書ける。
+///
+/// `sinceId` の読み出しと保存を 1 トランザクションで行う（間に別の行が挟まらない）。エンジン側の
+/// PWA ターンはユーザー発言を**保存しない**（呼び出し側がこの関数で保存済みである前提・
+/// `ChatEngine::secretary_turn_pwa` 参照）。`content` は呼び出し側が trim 済みの非空文字列を渡す。
+///
+/// # Errors
+/// 書き込み失敗時 [`DbError`]。
+pub async fn accept_pwa_user_message(
+    db: &Db,
+    user_id: &str,
+    bot_id: &str,
+    content: &str,
+) -> Result<AcceptedPwaMessage, DbError> {
+    let (user_id, bot_id, content) = (user_id.to_owned(), bot_id.to_owned(), content.to_owned());
+    db.writer
         .transaction(move |tx| {
+            let since_id = tx
+                .query_row(
+                    "SELECT COALESCE(MAX(id), 0) FROM message_logs \
+                     WHERE user_id = ?1 AND bot_id = ?2 AND source = 'pwa'",
+                    params![user_id, bot_id],
+                    |r| r.get::<_, i64>(0),
+                )
+                .map_err(map_sqlite)?;
             tx.execute(
                 "INSERT INTO message_logs \
-                   (user_id, bot_id, discord_msg_id, role, content, reply_to_msg_id, source, is_notice) \
-                 VALUES (?1, ?2, NULL, 'assistant', ?3, NULL, 'pwa', 1)",
+                   (user_id, bot_id, discord_msg_id, role, content, reply_to_msg_id, source) \
+                 VALUES (?1, ?2, NULL, 'user', ?3, NULL, 'pwa')",
                 params![user_id, bot_id, content],
             )
             .map_err(map_sqlite)?;
-            Ok(tx.last_insert_rowid())
+            Ok(AcceptedPwaMessage {
+                message_id: tx.last_insert_rowid(),
+                since_id,
+            })
         })
         .await
+}
+
+/// [`fail_orphaned_pwa_turns`] が 1 トランザクションで処理する会話数の上限（書き込みの占有時間を
+/// 抑えるための分割単位。全件処理されるまで呼び出し側でループする）。
+const ORPHAN_SWEEP_BATCH: i64 = 500;
+
+/// 起動時の回復スイープ: 応答待ちのまま取り残された PWA 会話に終端の通知行を書く（issue #77）。
+///
+/// `202` で受理したターンはプロセス内の `tokio::spawn` で動くため、再起動・異常終了で消える
+/// （in-flight 集合も同時に消え、通知行を書く後始末も走らない）。ターンの再開は行わず（Gemini の
+/// ツール呼び出しは副作用を持ちうるため二重実行の恐れがある・fail-closed）、**「`source='pwa'` の
+/// 最新行が `role='user'` のままの会話」= 取り残された会話**として、`content` を持つ通知行
+/// （[`add_pwa_notice`] と同じ `is_notice=1` のアシスタント行）を 1 件ずつ追加する。クライアントの
+/// ポーリングは `sinceId` より後のアシスタント行で終了するため、これで有限時間で終端し文言が表示される。
+/// 通知行は LLM コンテキストからは除外される（[`recent_pwa_context`] は `is_notice = 0` のみ）。
+///
+/// **呼び出し条件**: プロセス起動直後、HTTP を受け付ける**前**に 1 度だけ呼ぶこと（新しいプロセスは
+/// in-flight ターンを 1 件も持たないので、該当会話は全て取り残しと断定できる）。稼働中に呼ぶと、
+/// 進行中のターンの会話（最新行がユーザー発言）まで失敗扱いにしてしまう。
+///
+/// **冪等・低コスト**: 通知行を書いた会話は最新行がアシスタントになり再度は対象にならない（2 回目以降
+/// は 0 件）。走査は `idx_message_logs_user_bot_source (user_id, bot_id, source, id)` のカバリング
+/// インデックスのみで会話ごとの最新 `id` を求め、最新行の `role` を主キー検索で判定する（本文は
+/// 読まない・100 万行で ~0.1 秒）。書き込みは [`ORPHAN_SWEEP_BATCH`] 会話ごとに別トランザクション。
+///
+/// 戻り値は通知行を書いた会話の数。
+///
+/// # Errors
+/// 読み書き失敗時 [`DbError`]（それまでに commit 済みのバッチは残る）。
+pub async fn fail_orphaned_pwa_turns(db: &Db, content: &str) -> Result<usize, DbError> {
+    let mut total = 0_usize;
+    loop {
+        let content = content.to_owned();
+        let written = db
+            .writer
+            .transaction(move |tx| {
+                let orphans = {
+                    let mut stmt = tx
+                        .prepare(
+                            "SELECT t.user_id, t.bot_id \
+                             FROM ( \
+                               SELECT user_id, bot_id, MAX(id) AS last_id FROM message_logs \
+                               WHERE source = 'pwa' GROUP BY user_id, bot_id \
+                             ) t \
+                             JOIN message_logs m ON m.id = t.last_id \
+                             WHERE m.role = 'user' \
+                             LIMIT ?1",
+                        )
+                        .map_err(map_sqlite)?;
+                    let rows = stmt
+                        .query_map(params![ORPHAN_SWEEP_BATCH], |r| {
+                            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+                        })
+                        .map_err(map_sqlite)?
+                        .collect::<Result<Vec<_>, _>>()
+                        .map_err(map_sqlite)?;
+                    rows
+                };
+                for (user_id, bot_id) in &orphans {
+                    insert_pwa_notice(tx, user_id, bot_id, &content)?;
+                }
+                Ok(orphans.len())
+            })
+            .await?;
+        total += written;
+        // バッチが満杯でなければ全件処理済み（満杯なら残りがあるかもしれないので再走査する。処理済みの
+        // 会話は最新行がアシスタントになっているため、各パスで対象は必ず減り、ループは有限回で終わる）。
+        if i64::try_from(written).unwrap_or(i64::MAX) < ORPHAN_SWEEP_BATCH {
+            return Ok(total);
+        }
+    }
 }
 
 /// 添付ファイル本体（バイト列を含む・issue #41 PR #75 レビュー・P2）。
@@ -1183,5 +1319,219 @@ mod tests {
             .unwrap();
         assert_eq!(ctx.len(), 1);
         assert_eq!(ctx[0].content, "こんにちは");
+    }
+
+    // ─── issue #77: 受理の永続化と再起動後の回復スイープ ───
+
+    use super::{accept_pwa_user_message, fail_orphaned_pwa_turns, ORPHAN_SWEEP_BATCH};
+
+    /// 回復スイープの通知文言（テスト用の任意値）。
+    const SWEEP_NOTICE: &str = "⚠️ サーバー再起動のため応答を生成できませんでした。";
+
+    fn count_pwa_rows(path: &std::path::Path, user_id: &str, bot_id: &str, filter: &str) -> i64 {
+        let conn = rusqlite::Connection::open(path).expect("open");
+        conn.query_row(
+            &format!(
+                "SELECT COUNT(*) FROM message_logs \
+                 WHERE user_id = ?1 AND bot_id = ?2 AND source = 'pwa' AND {filter}"
+            ),
+            rusqlite::params![user_id, bot_id],
+            |r| r.get(0),
+        )
+        .expect("count")
+    }
+
+    #[tokio::test]
+    async fn accept_pwa_user_message_persists_as_pwa_user_row_and_returns_the_watermark() {
+        let (db, path) = seed_db();
+        seed_user(&path, "u");
+
+        // 何も無ければ since_id は 0。
+        let first = accept_pwa_user_message(&db, "u", "b1", "こんにちは")
+            .await
+            .unwrap();
+        assert_eq!(first.since_id, 0);
+        assert!(first.message_id > 0);
+
+        // 保存済みの発言は source='pwa'・role='user'・履歴/PWA コンテキストに 1 件だけ現れる。
+        let history = list_pwa_messages(&db, "u", "b1", 50).await.unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].id, first.message_id);
+        assert_eq!(history[0].role, "user");
+        assert_eq!(history[0].content, "こんにちは");
+        let ctx = recent_pwa_context(&db, "u", "b1", CONTEXT_LIMIT)
+            .await
+            .unwrap();
+        assert_eq!(ctx.len(), 1);
+        // Discord 側の文脈には漏れない。
+        assert!(recent_context(&db, "u", "b1", CONTEXT_LIMIT)
+            .await
+            .unwrap()
+            .is_empty());
+
+        // 2 回目の since_id は 1 回目の保存直後の最大 id（＝1 回目の message_id）。
+        let second = accept_pwa_user_message(&db, "u", "b1", "もう一度")
+            .await
+            .unwrap();
+        assert_eq!(second.since_id, first.message_id);
+        assert!(second.message_id > second.since_id);
+    }
+
+    #[tokio::test]
+    async fn fail_orphaned_pwa_turns_writes_exactly_one_notice_per_orphaned_thread() {
+        let (db, path) = seed_db();
+        // 取り残し: 最新行がユーザー発言。
+        accept_pwa_user_message(&db, "orphan", "b1", "返事はまだ？")
+            .await
+            .unwrap();
+        // 完了済み: 最新行がアシスタント応答。
+        add_pwa_message_log(&db, "done", "b1", "user", "こんにちは")
+            .await
+            .unwrap();
+        add_pwa_assistant_reply(&db, "done", "b1", "こんにちは！", None, &[])
+            .await
+            .unwrap();
+        // 終端済み: 最新行が通知行（失敗/タイムアウトのフォールバック等）。
+        add_pwa_message_log(&db, "noticed", "b1", "user", "エラーになる質問")
+            .await
+            .unwrap();
+        add_pwa_notice(
+            &db,
+            "noticed",
+            "b1",
+            "⚠️ 応答の生成中にエラーが発生しました",
+        )
+        .await
+        .unwrap();
+        // Discord 由来の未回答ユーザー発言は PWA の対象外（source が違う）。
+        add_message_log(&db, "discord-only", "b1", "user", "discord発言", None, None)
+            .await
+            .unwrap();
+        // PWA の最新行がユーザー発言でも、後から Discord のアシスタント行があっても PWA 会話は別軸で
+        // 取り残しのまま（PWA 会話の最新行だけを見る）。
+        accept_pwa_user_message(&db, "mixed", "b1", "PWAの発言")
+            .await
+            .unwrap();
+        add_message_log(&db, "mixed", "b1", "assistant", "Discordの返信", None, None)
+            .await
+            .unwrap();
+        // 同じユーザーでも bot_id が違えば別会話（b2 側だけが取り残し）。
+        accept_pwa_user_message(&db, "orphan", "b2", "別Botへの発言")
+            .await
+            .unwrap();
+        add_pwa_message_log(&db, "orphan", "b3", "user", "b3の発言")
+            .await
+            .unwrap();
+        add_pwa_assistant_reply(&db, "orphan", "b3", "b3の返信", None, &[])
+            .await
+            .unwrap();
+
+        let swept = fail_orphaned_pwa_turns(&db, SWEEP_NOTICE).await.unwrap();
+        assert_eq!(swept, 3, "orphan/b1・mixed/b1・orphan/b2 のみ");
+
+        // 取り残し会話には通知行がちょうど 1 件（`is_notice=1` のアシスタント行）。
+        for (uid, bid) in [("orphan", "b1"), ("mixed", "b1"), ("orphan", "b2")] {
+            assert_eq!(
+                count_pwa_rows(&path, uid, bid, "role = 'assistant' AND is_notice = 1"),
+                1,
+                "{uid}/{bid}"
+            );
+        }
+        // 完了済み・終端済み・Discord のみの会話には何も足されない。
+        assert_eq!(
+            count_pwa_rows(&path, "done", "b1", "is_notice = 1"),
+            0,
+            "完了済みの会話には通知行を足さない"
+        );
+        assert_eq!(
+            count_pwa_rows(&path, "noticed", "b1", "is_notice = 1"),
+            1,
+            "既に通知行で終端済みの会話に二重に足さない（元の 1 件のまま）"
+        );
+        assert_eq!(count_pwa_rows(&path, "discord-only", "b1", "1 = 1"), 0);
+        assert_eq!(count_pwa_rows(&path, "orphan", "b3", "is_notice = 1"), 0);
+
+        // ポーリングの終端条件を満たす: since_id より後にアシスタント行が現れ、履歴の最後は通知行。
+        let history = list_pwa_messages(&db, "orphan", "b1", 50).await.unwrap();
+        assert_eq!(history.len(), 2);
+        assert_eq!(history[0].role, "user");
+        assert_eq!(history[1].role, "assistant");
+        assert_eq!(history[1].content, SWEEP_NOTICE);
+        assert!(
+            has_pwa_assistant_reply_after(&db, "orphan", "b1", history[0].id - 1)
+                .await
+                .unwrap()
+        );
+
+        // 通知行は LLM コンテキストから除外される（次ターンの文脈を汚染しない）。
+        let ctx = recent_pwa_context(&db, "orphan", "b1", CONTEXT_LIMIT)
+            .await
+            .unwrap();
+        assert_eq!(ctx.len(), 1, "ctx={ctx:?}");
+        assert_eq!(ctx[0].role, "user");
+        assert_eq!(ctx[0].content, "返事はまだ？");
+    }
+
+    #[tokio::test]
+    async fn fail_orphaned_pwa_turns_is_idempotent() {
+        let (db, path) = seed_db();
+        accept_pwa_user_message(&db, "u1", "b1", "a").await.unwrap();
+        accept_pwa_user_message(&db, "u2", "b1", "b").await.unwrap();
+
+        assert_eq!(fail_orphaned_pwa_turns(&db, SWEEP_NOTICE).await.unwrap(), 2);
+        let rows_after_first: i64 = rusqlite::Connection::open(&path)
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM message_logs", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(rows_after_first, 4, "ユーザー 2 + 通知 2");
+
+        // 2 回目・3 回目は何も書かない。
+        assert_eq!(fail_orphaned_pwa_turns(&db, SWEEP_NOTICE).await.unwrap(), 0);
+        assert_eq!(fail_orphaned_pwa_turns(&db, SWEEP_NOTICE).await.unwrap(), 0);
+        let rows_after_more: i64 = rusqlite::Connection::open(&path)
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM message_logs", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(rows_after_more, rows_after_first);
+
+        // 通知後に新しく送られたメッセージが未回答なら、それは（次回起動時に）再び対象になる。
+        accept_pwa_user_message(&db, "u1", "b1", "c").await.unwrap();
+        assert_eq!(fail_orphaned_pwa_turns(&db, SWEEP_NOTICE).await.unwrap(), 1);
+        assert_eq!(fail_orphaned_pwa_turns(&db, SWEEP_NOTICE).await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn fail_orphaned_pwa_turns_covers_more_threads_than_one_batch() {
+        let (db, path) = seed_db();
+        // バッチ上限（`ORPHAN_SWEEP_BATCH`）を超える数の取り残し会話でも全件処理される。
+        let total = usize::try_from(ORPHAN_SWEEP_BATCH).unwrap() + 37;
+        {
+            let mut conn = rusqlite::Connection::open(&path).unwrap();
+            let tx = conn.transaction().unwrap();
+            for i in 0..total {
+                tx.execute(
+                    "INSERT INTO message_logs (user_id, bot_id, role, content, source) \
+                     VALUES (?1, 'b1', 'user', 'q', 'pwa')",
+                    rusqlite::params![format!("user-{i}")],
+                )
+                .unwrap();
+            }
+            tx.commit().unwrap();
+        }
+
+        assert_eq!(
+            fail_orphaned_pwa_turns(&db, SWEEP_NOTICE).await.unwrap(),
+            total
+        );
+        let notices: i64 = rusqlite::Connection::open(&path)
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM message_logs WHERE is_notice = 1 AND source = 'pwa'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(notices, i64::try_from(total).unwrap());
+        assert_eq!(fail_orphaned_pwa_turns(&db, SWEEP_NOTICE).await.unwrap(), 0);
     }
 }
