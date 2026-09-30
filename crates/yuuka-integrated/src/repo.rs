@@ -440,11 +440,7 @@ pub async fn revoke_mcp_from_bot(
 ///
 /// # Errors
 /// 書き込み失敗時 [`DbError`]。
-pub async fn revoke_mcp_from_bot_any(
-    db: &Db,
-    bot_id: &str,
-    server_id: i64,
-) -> Result<(), DbError> {
+pub async fn revoke_mcp_from_bot_any(db: &Db, bot_id: &str, server_id: i64) -> Result<(), DbError> {
     let bot_id = bot_id.to_owned();
     db.writer
         .transaction(move |tx| {
@@ -466,10 +462,7 @@ pub async fn revoke_mcp_from_bot_any(
 ///
 /// # Errors
 /// 読み取り失敗時 [`DbError`]。
-pub async fn list_bot_grant_views(
-    db: &Db,
-    bot_id: &str,
-) -> Result<Vec<BotGrantView>, DbError> {
+pub async fn list_bot_grant_views(db: &Db, bot_id: &str) -> Result<Vec<BotGrantView>, DbError> {
     let bot_id = bot_id.to_owned();
     db.read
         .read(move |conn| {
@@ -748,9 +741,10 @@ mod tests {
 
     use super::{
         bot_dm_context_floor_key, clear_context_floor, context_floor_key, credential_exists,
-        grant_credential_to_bot, grant_mcp_to_bot, is_guild_assistant, js_int, list_bot_grant_views,
-        list_credential_names_for_bot, list_server_ids_for_bot, parse_capabilities, preset_id_for,
-        revoke_credential_from_bot, revoke_mcp_from_bot, revoke_mcp_from_bot_any, set_bot_stopped,
+        grant_credential_to_bot, grant_mcp_to_bot, is_guild_assistant, js_int,
+        list_bot_grant_views, list_credential_names_for_bot, list_server_ids_for_bot,
+        parse_capabilities, preset_id_for, revoke_credential_from_bot, revoke_mcp_from_bot,
+        revoke_mcp_from_bot_any, set_bot_stopped,
     };
     use yuuka_web::Db;
 

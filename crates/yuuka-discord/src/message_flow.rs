@@ -22,7 +22,6 @@ use twilight_model::id::Id;
 use yuuka_core::{BotId, DiscordError, GuildId, UserId};
 
 use crate::idempotent::MessageDedup;
-use crate::turn_gate::TurnGate;
 use crate::ports::{
     rate_limit_message, BotDirectory, BotRecord, BotStatus, DeliverTarget, IncomingChat,
     InlineMedia, Notifier, RateLimiter, Speaker, StatusSink, TurnDelivery, TurnError,
@@ -33,6 +32,7 @@ use crate::reply::{send_channel_reply, send_channel_text};
 use crate::text::{
     is_supported_audio, strip_all_mentions, strip_self_mention, NON_MEMBER_GUIDANCE,
 };
+use crate::turn_gate::TurnGate;
 
 // ─── 定型文（現行文言 1:1） ────────────────────────────────────────────────────
 

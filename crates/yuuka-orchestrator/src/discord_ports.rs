@@ -158,12 +158,7 @@ impl BotDirectory for DbBotDirectory {
         )
     }
 
-    async fn is_channel_muted(
-        &self,
-        bot_id: &BotId,
-        guild_id: &GuildId,
-        channel_id: &str,
-    ) -> bool {
+    async fn is_channel_muted(&self, bot_id: &BotId, guild_id: &GuildId, channel_id: &str) -> bool {
         or_default(
             bot_repo::is_channel_muted(&self.db, bot_id.as_str(), guild_id.as_str(), channel_id)
                 .await,
