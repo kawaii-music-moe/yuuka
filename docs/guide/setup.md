@@ -23,7 +23,7 @@ pnpm install
 
 フロントエンド（Svelte/Vite）の依存関係のみをインストールします。バックエンド（Rust）の依存は `cargo build`/`cargo run` 時に取得されます。
 
-> PWA クライアント（`client/pwa/`）は別管理です。ビルド方法は [client/pwa/README.md](../../client/pwa/README.md) を参照してください（既知の問題: #45）。
+> PWA クライアント（`client/pwa/`）は npm で別管理です。`pnpm build:pwa` は依存が無ければ `npm ci` でインストールしてからビルドします。開発時の起動方法は [client/pwa/README.md](../../client/pwa/README.md) を参照してください。
 
 ## 2. 設定ファイルの作成
 
