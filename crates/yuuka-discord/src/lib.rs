@@ -35,13 +35,13 @@ pub use live::{
     fetch_channel_name, fetch_guild_name, fetch_guild_options, fetch_member_display,
     GuildLiveEntry, GuildLiveOptions,
 };
-pub use turn_gate::TurnGate;
 pub use manager::{DiscordManager, DiscordMessenger, ManagerPorts, Prepared, TenantRunner};
 pub use presence::build_presence;
 pub use tenant::{default_intents, run_tenant, GatewayBotUser, TenantConfig, TenantStatus};
+pub use turn_gate::TurnGate;
 // supervisor（twilight 非依存）が REST クライアントを型名で扱えるよう再エクスポート。
-pub use twilight_http::Client as HttpClient;
 pub use text::{split_message, to_discord_markdown};
+pub use twilight_http::Client as HttpClient;
 
 // よく使う契約を crate ルートへ再エクスポート（実装側の import を短くする）。
 pub use ports::{

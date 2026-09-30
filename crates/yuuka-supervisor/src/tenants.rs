@@ -422,12 +422,7 @@ impl yuuka_orchestrator::DiscordLive for RegistryDiscordLive {
         name
     }
 
-    async fn member_display(
-        &self,
-        bot_id: &str,
-        guild_id: &str,
-        user_id: &str,
-    ) -> Option<String> {
+    async fn member_display(&self, bot_id: &str, guild_id: &str, user_id: &str) -> Option<String> {
         let key = format!("m:{guild_id}:{user_id}");
         if let Some(cached) = self.cache_get(&key) {
             return cached;
