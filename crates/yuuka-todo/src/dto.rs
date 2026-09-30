@@ -29,6 +29,15 @@ pub struct Todo {
     pub repeat_count: Option<i64>,
     pub created_at: String,
     pub updated_at: String,
+    /// リスト分け（PWA の「個人 / 仕事」・issue #47・既定 `"個人"`）。既存フロントは未使用のため
+    /// 無視して構わないが、破壊的変更を避けるため必須フィールドとして追加する。
+    #[serde(default = "default_list")]
+    pub list: String,
+}
+
+/// [`Todo::list`]/[`NewTodo::list`] の既定値（PWA の選択肢の一方）。
+fn default_list() -> String {
+    "個人".to_owned()
 }
 
 /// todo 作成リクエスト（`POST /api/tasks/add` の body）。
@@ -66,6 +75,9 @@ pub struct NewTodo {
     /// ルーチン実行回数（初回含む）。`repeat_rule` がある時のみ有効。
     #[serde(default)]
     pub repeat_count: Option<i64>,
+    /// リスト分け（PWA の「個人 / 仕事」・issue #47）。未指定・空文字は [`default_list`]。
+    #[serde(default)]
+    pub list: Option<String>,
 }
 
 /// `priority` を Node `normalizePriority`（todoRoutes.ts）と同一規則で正規化する。

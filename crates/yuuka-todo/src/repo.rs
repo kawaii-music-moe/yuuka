@@ -16,14 +16,14 @@ use crate::dto::{NewTodo, PriorityUpdate, TaskProgressLog, Todo, TodoUpdate, Tod
 
 /// 返却列（クリーンビュー・内部列 user_id/bot_id 等は含めない）。
 const TODO_COLUMNS: &str = "id, title, description, due_date, start_date, priority, tags, status, \
-     progress, parent_id, repeat_rule, repeat_until, repeat_count, created_at, updated_at";
+     progress, parent_id, repeat_rule, repeat_until, repeat_count, created_at, updated_at, list";
 
 /// [`TODO_COLUMNS`] を `todos.` 修飾したもの（`tree` CTE との JOIN で `id` が曖昧にならないよう）。
 /// 出力列名は修飾を外した `id`/`title`… になるため [`row_to_todo`] はそのまま使える。
 const TODO_COLUMNS_QUALIFIED: &str =
     "todos.id, todos.title, todos.description, todos.due_date, todos.start_date, todos.priority, \
      todos.tags, todos.status, todos.progress, todos.parent_id, todos.repeat_rule, \
-     todos.repeat_until, todos.repeat_count, todos.created_at, todos.updated_at";
+     todos.repeat_until, todos.repeat_count, todos.created_at, todos.updated_at, todos.list";
 
 /// 一覧共通の並び順（Node `ORDER_CLAUSE`）: 優先度（high→medium→low→未設定）→ 期限近い順
 /// （期限なしは後ろ）→ 作成日時降順。
@@ -126,6 +126,32 @@ impl<'a> TodoRepo<'a> {
                     "SELECT {TODO_COLUMNS} FROM todos \
                      WHERE user_id = ?1 AND bot_id = ?2 AND status = 'open'{ORDER_CLAUSE}"
                 );
+                let mut stmt = conn.prepare(&sql).map_err(map_sqlite)?;
+                let rows = stmt
+                    .query_map(params![uid, bid], row_to_todo)
+                    .map_err(map_sqlite)?;
+                let mut out = Vec::new();
+                for row in rows {
+                    out.push(row.map_err(map_sqlite)?);
+                }
+                Ok(out)
+            })
+            .await
+    }
+
+    /// **全** ToDo（open/done 問わず）を**平坦**に全件返す（PWA `GET /api/client/todos`・issue #33）。
+    ///
+    /// [`Self::list_open_flat`] と違い status で絞らない（Node `listTodos({status:"all"})` パリティ）。
+    /// ネスト・進捗算出は不要なので素の行を [`ORDER_CLAUSE`] 順で返す。
+    ///
+    /// # Errors
+    /// クエリ失敗時 [`DbError`]。
+    pub async fn list_all_flat(&self, scope: &UserScope) -> Result<Vec<Todo>, DbError> {
+        let (uid, bid) = scope_keys(scope);
+        self.read
+            .read(move |conn| {
+                let sql =
+                    format!("SELECT {TODO_COLUMNS} FROM todos WHERE user_id = ?1 AND bot_id = ?2{ORDER_CLAUSE}");
                 let mut stmt = conn.prepare(&sql).map_err(map_sqlite)?;
                 let rows = stmt
                     .query_map(params![uid, bid], row_to_todo)
@@ -298,12 +324,22 @@ impl<'a> TodoRepo<'a> {
                     ),
                     _ => (None, None, None),
                 };
+                // list: 未指定・空文字（trim 後）は既定「個人」（Node は入力を保存せず常に
+                // "Personal" 固定を返すバグだった・issue #47。ここでは PWA が送った値をそのまま
+                // 使う）。
+                let list = input
+                    .list
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or("個人");
                 tx.execute(
                     "INSERT INTO todos \
                        (user_id, bot_id, title, description, due_date, start_date, priority, tags, \
-                        parent_id, repeat_rule, repeat_until, repeat_count, created_at, updated_at) \
+                        parent_id, repeat_rule, repeat_until, repeat_count, created_at, updated_at, \
+                        list) \
                      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, \
-                             datetime('now', 'localtime'), datetime('now', 'localtime'))",
+                             datetime('now', 'localtime'), datetime('now', 'localtime'), ?13)",
                     params![
                         uid,
                         bid,
@@ -317,6 +353,7 @@ impl<'a> TodoRepo<'a> {
                         repeat_rule,
                         repeat_until,
                         repeat_count,
+                        list,
                     ],
                 )
                 .map_err(map_sqlite)?;
@@ -883,5 +920,6 @@ fn row_to_todo(row: &Row) -> rusqlite::Result<Todo> {
         repeat_count: row.get("repeat_count")?,
         created_at: row.get("created_at")?,
         updated_at: row.get("updated_at")?,
+        list: row.get("list")?,
     })
 }
