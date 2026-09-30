@@ -15,7 +15,7 @@ use yuuka_discord::{BotStatus, IncomingChat, StatusSink};
 use yuuka_gemini::{
     Content, FunctionDeclaration, GenerateBackend, GenerateContentResponse, ToolConfig,
 };
-use yuuka_orchestrator::{ChatEngine, GeminiFactory};
+use yuuka_orchestrator::{message_log, ChatEngine, GeminiFactory};
 use yuuka_tools::ToolRegistry;
 use yuuka_web::Db;
 
@@ -366,7 +366,16 @@ async fn secretary_turn_pwa_persists_under_pwa_source() {
     let crypto =
         Arc::new(SystemCrypto::new(SecretString::from("orch-test-secret".to_owned())).unwrap());
     seed_user_with_key(&path, &crypto, "u6");
-    let engine = engine_with(db, Some(crypto), "PWAからのご用件ですね、承知しました。");
+    let engine = engine_with(
+        db.clone(),
+        Some(crypto),
+        "PWAからのご用件ですね、承知しました。",
+    );
+
+    // #77: PWA のユーザー発言は呼び出し側（`chat_send`）が `202` の前に保存する。ターンは保存しない。
+    message_log::accept_pwa_user_message(&db, "u6", "system_default", "PWAから送信")
+        .await
+        .expect("accept");
 
     let reply = engine
         .secretary_turn_pwa(
@@ -385,7 +394,7 @@ async fn secretary_turn_pwa_persists_under_pwa_source() {
     assert_eq!(
         count_logs_by_source(&path, "u6", "user", "pwa"),
         1,
-        "PWA のユーザー発言が source='pwa' で保存される"
+        "PWA のユーザー発言が source='pwa' で（受理時に 1 度だけ）保存される・ターンは再保存しない"
     );
     assert_eq!(
         count_logs_by_source(&path, "u6", "assistant", "pwa"),
@@ -407,7 +416,7 @@ async fn secretary_turn_pwa_context_is_isolated_from_discord() {
     let crypto =
         Arc::new(SystemCrypto::new(SecretString::from("orch-test-secret".to_owned())).unwrap());
     seed_user_with_key(&path, &crypto, "u7");
-    let engine = engine_with(db, Some(crypto), "了解しました。");
+    let engine = engine_with(db.clone(), Some(crypto), "了解しました。");
 
     // Discord 経路で 1 ターン。
     engine
@@ -423,7 +432,10 @@ async fn secretary_turn_pwa_context_is_isolated_from_discord() {
         .await
         .expect("discord turn");
 
-    // PWA 経路で 1 ターン（同じ user_id/bot_id）。
+    // PWA 経路で 1 ターン（同じ user_id/bot_id）。発言は受理時に保存済み（#77）。
+    message_log::accept_pwa_user_message(&db, "u7", "system_default", "pwa発言")
+        .await
+        .expect("accept");
     engine
         .secretary_turn_pwa(
             &BotId::system_default(),
@@ -441,4 +453,186 @@ async fn secretary_turn_pwa_context_is_isolated_from_discord() {
     assert_eq!(count_logs_by_source(&path, "u7", "user", "discord"), 1);
     assert_eq!(count_logs_by_source(&path, "u7", "user", "pwa"), 1);
     assert_eq!(count_logs(&path, "u7", "user"), 2, "合計は両方の和");
+}
+
+/// `generate()` 呼び出しごとの `contents`（role と結合テキストの列）の記録。
+type SeenContents = Arc<Mutex<Vec<Vec<(String, String)>>>>;
+
+/// `generate()` へ渡された `contents`（role と結合テキスト）を記録し、固定テキストを返す backend。
+struct RecordingBackend {
+    seen: SeenContents,
+    text: String,
+}
+
+#[async_trait]
+impl GenerateBackend for RecordingBackend {
+    async fn generate(
+        &self,
+        _system_instruction: Option<&str>,
+        _declarations: &[FunctionDeclaration],
+        contents: &[Content],
+        _tool_config: Option<ToolConfig>,
+    ) -> Result<GenerateContentResponse, GeminiError> {
+        let rendered = contents
+            .iter()
+            .map(|c| {
+                let role = serde_json::to_value(c.role)
+                    .ok()
+                    .and_then(|v| v.as_str().map(str::to_owned))
+                    .unwrap_or_default();
+                let text = c
+                    .parts
+                    .iter()
+                    .filter_map(|p| p.text.clone())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                (role, text)
+            })
+            .collect();
+        self.seen.lock().unwrap().push(rendered);
+        Ok(serde_json::from_value(json!({
+            "candidates": [ { "content": { "role": "model", "parts": [ { "text": self.text } ] } } ]
+        }))
+        .expect("valid response"))
+    }
+}
+
+struct RecordingFactory {
+    seen: SeenContents,
+    text: String,
+}
+
+impl GeminiFactory for RecordingFactory {
+    fn build(
+        &self,
+        _model: &str,
+        _api_key: SecretString,
+    ) -> Result<Arc<dyn GenerateBackend>, GeminiError> {
+        Ok(Arc::new(RecordingBackend {
+            seen: self.seen.clone(),
+            text: self.text.clone(),
+        }))
+    }
+}
+
+/// issue #77: PWA のユーザー発言は受理時に永続化され、ターンは再保存しない（履歴に二重に入らない）。
+/// 保存済みの発言は LLM への `contents` にちょうど 1 回だけ現れる（persist-before-load は維持）。
+#[tokio::test]
+async fn secretary_turn_pwa_does_not_resave_the_accepted_user_message() {
+    let (db, path) = fresh_db();
+    let crypto =
+        Arc::new(SystemCrypto::new(SecretString::from("orch-test-secret".to_owned())).unwrap());
+    seed_user_with_key(&path, &crypto, "u10");
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let engine = ChatEngine::new(
+        db.clone(),
+        Some(crypto),
+        ToolRegistry::new(),
+        Arc::new(RecordingFactory {
+            seen: seen.clone(),
+            text: "承知しました。".to_owned(),
+        }),
+        None,
+        Arc::new(yuuka_mcp::NullMcpClient),
+        None,
+    );
+
+    let accepted =
+        message_log::accept_pwa_user_message(&db, "u10", "system_default", "受理済みの発言")
+            .await
+            .expect("accept");
+    assert_eq!(count_logs_by_source(&path, "u10", "user", "pwa"), 1);
+
+    engine
+        .secretary_turn_pwa(
+            &BotId::system_default(),
+            &UserId::new("u10"),
+            IncomingChat {
+                text: "受理済みの発言".to_owned(),
+                ..IncomingChat::default()
+            },
+            &null_sink(),
+        )
+        .await
+        .expect("pwa turn ok");
+
+    assert_eq!(
+        count_logs_by_source(&path, "u10", "user", "pwa"),
+        1,
+        "ターン完了後もユーザー発言は 1 件のまま（二重保存しない）"
+    );
+    assert_eq!(count_logs_by_source(&path, "u10", "assistant", "pwa"), 1);
+    // 履歴上の順序は user → assistant（受理時の id が先頭のまま）。
+    let history = message_log::list_pwa_messages(&db, "u10", "system_default", 50)
+        .await
+        .unwrap();
+    assert_eq!(history.len(), 2);
+    assert_eq!(history[0].id, accepted.message_id);
+    assert_eq!(history[0].role, "user");
+    assert_eq!(history[1].role, "assistant");
+
+    // LLM へは、受理時に保存した発言が user ターンとして 1 回だけ渡る。
+    let calls = seen.lock().unwrap();
+    assert_eq!(calls.len(), 1);
+    let user_turns: Vec<&(String, String)> =
+        calls[0].iter().filter(|(role, _)| role == "user").collect();
+    assert_eq!(user_turns.len(), 1, "contents={:?}", calls[0]);
+    assert_eq!(user_turns[0].1, "受理済みの発言");
+}
+
+/// issue #77 の回帰防止: Discord/WS の秘書ターン（`secretary_turn`）は従来どおり、ユーザー発言を
+/// ターン内で **ちょうど 1 度**保存する（PWA 側の保存移動の影響を受けない）。
+#[tokio::test]
+async fn secretary_turn_discord_saves_the_user_message_exactly_once() {
+    let (db, path) = fresh_db();
+    let crypto =
+        Arc::new(SystemCrypto::new(SecretString::from("orch-test-secret".to_owned())).unwrap());
+    seed_user_with_key(&path, &crypto, "u11");
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let engine = ChatEngine::new(
+        db,
+        Some(crypto),
+        ToolRegistry::new(),
+        Arc::new(RecordingFactory {
+            seen: seen.clone(),
+            text: "了解です。".to_owned(),
+        }),
+        None,
+        Arc::new(yuuka_mcp::NullMcpClient),
+        None,
+    );
+
+    engine
+        .secretary_turn(
+            &BotId::system_default(),
+            &UserId::new("u11"),
+            IncomingChat {
+                text: "discordからの発言".to_owned(),
+                ..IncomingChat::default()
+            },
+            &null_sink(),
+        )
+        .await
+        .expect("discord turn ok");
+
+    assert_eq!(
+        count_logs_by_source(&path, "u11", "user", "discord"),
+        1,
+        "Discord/WS のユーザー発言はターン内で 1 度だけ保存される"
+    );
+    assert_eq!(count_logs_by_source(&path, "u11", "user", "pwa"), 0);
+    assert_eq!(
+        count_logs_by_source(&path, "u11", "assistant", "discord"),
+        1
+    );
+    assert_eq!(
+        log_contents(&path, "u11", "user"),
+        vec!["discordからの発言".to_owned()]
+    );
+    // LLM へも当該発言が user ターンとして 1 回だけ渡る。
+    let calls = seen.lock().unwrap();
+    let user_turns: Vec<&(String, String)> =
+        calls[0].iter().filter(|(role, _)| role == "user").collect();
+    assert_eq!(user_turns.len(), 1, "contents={:?}", calls[0]);
+    assert_eq!(user_turns[0].1, "discordからの発言");
 }

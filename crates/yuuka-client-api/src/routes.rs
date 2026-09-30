@@ -722,7 +722,7 @@ fn parse_stored_embeds(raw: Option<&str>) -> Vec<ChatEmbedView> {
 ///    `bot_id × user_id` のみで消費されるため、Discord/WS で使い切った分は PWA でも消費済みのまま。
 ///
 /// # 非同期配信（issue #41 PR #75 レビュー・P1）
-/// 上記の同期チェックを通過すると、ターン本体（[`ChatEngine::secretary_turn_pwa`]・`source='pwa'`）を
+/// 上記の同期チェックを通過すると、ユーザー発言を**永続化してから**（issue #77）、ターン本体（[`ChatEngine::secretary_turn_pwa`]・`source='pwa'`）を
 /// `tokio::spawn` でバックグラウンド実行し（[`run_pwa_turn_in_background`]）、**待たずに** `202
 /// Accepted` + [`ChatSendAccepted`]（`sinceId`）を返す。同期 `fetch` で最大 180 秒待つ旧設計は、
 /// リバースプロキシ（issue #41 が言及する Cloudflare Tunnel 等）のタイムアウトが 180 秒より短いと
@@ -735,6 +735,13 @@ fn parse_stored_embeds(raw: Option<&str>) -> Vec<ChatEmbedView> {
 /// を止める（新しい GET エンドポイントを増やさず、既存の履歴取得だけで完結する設計）。バックグラウンド
 /// ターンが失敗/タイムアウトしても [`run_pwa_turn_in_background`] が必ず終端状態（フォールバックの
 /// エラー応答）を保存するため、クライアントは有限時間でポーリングを終えられる。
+///
+/// ## 再起動（fail-closed・issue #77）
+/// `202` の後にサーバーが再起動/異常終了すると、バックグラウンドターンと `InFlightTurns`（メモリ内）は
+/// 失われ、上記の終端保存も走らない。ターンは**再開しない**（ツール呼び出しの副作用が二重実行されうる
+/// ため）。代わりに (1) 発言は `202` の前に永続化済みで失われず、(2) 次回起動時の回復スイープ
+/// （[`crate::recover_orphaned_chat_turns`]）が「最新行がユーザー発言のまま」の会話へ通知行を書き、
+/// クライアントのポーリングを終端させる。クライアントの契約（`202` + `sinceId` + ポーリング）は不変。
 async fn chat_send(
     user: AuthenticatedUser,
     Extension(engine): Extension<Arc<ChatEngine>>,
@@ -785,9 +792,13 @@ async fn chat_send(
         });
     }
 
-    // ポーリング起点（このターンより前の直近 message_logs.id）。バックグラウンドターンが実際に
-    // ユーザー発言を保存する**前**に読むため、以後 id > since_id の行はすべてこのターンに属する。
-    let since_id = message_log::max_pwa_message_id(&db, uid, BOT_ID).await?;
+    // 受理の永続化（issue #77）: `202` を返す**前**にユーザー発言を保存する。以後にプロセスが落ちても
+    // 受理済みの送信は履歴に残り、起動時の回復スイープ（[`crate::recovery`]）が終端の通知行を書ける
+    // （エンジンのターンはユーザー発言を保存しない・[`ChatEngine::secretary_turn_pwa`] の前提）。
+    // `since_id` は保存の直前の直近 `message_logs.id`（同一トランザクションで読む）なので、以後
+    // id > since_id の行はすべてこのターンに属する。
+    let accepted = message_log::accept_pwa_user_message(&db, uid, BOT_ID, &content).await?;
+    let since_id = accepted.since_id;
 
     let incoming = IncomingChat {
         text: content,
@@ -836,8 +847,8 @@ struct PwaTurnJob {
 /// **終端状態の保証**: どの結果でも、返る前に「`since_id` より後のアシスタント行」が履歴に存在する状態にする
 /// （[`chat_history`] をポーリングするクライアントが必ず有限時間で完了/エラーを受け取れるように）。
 ///
-/// - 通常の成功: `engine.secretary_turn_pwa` が内部でユーザー発言/アシスタント応答を（embeds/files 込みで）
-///   永続化済みのため、追加の保存はしない。
+/// - 通常の成功: `engine.secretary_turn_pwa` が内部でアシスタント応答を（embeds/files 込みで）永続化済み
+///   （ユーザー発言は [`chat_send`] が `202` の前に保存済み）のため、追加の保存はしない。
 /// - ⚠️ 定型応答（レート制限・サーバー混雑・鍵未設定）やペルソナ入りエラー報告: エンジンは `Ok(reply)` を
 ///   返すが**履歴には保存しない**（LLM 文脈を汚染しないための既存の不変条件）。そのままではクライアントが
 ///   永遠に待つため、`reply.text` を通知行（[`message_log::add_pwa_notice`]・LLM コンテキストからは除外）
@@ -1077,9 +1088,11 @@ mod tests {
             text: "hello".to_owned(),
             ..IncomingChat::default()
         };
-        let since_id = message_log::max_pwa_message_id(&db, "u1", BOT_ID)
+        // `chat_send` と同じく、ターンの前にユーザー発言を受理（永続化）しておく（issue #77）。
+        let since_id = message_log::accept_pwa_user_message(&db, "u1", BOT_ID, "hello")
             .await
-            .unwrap();
+            .unwrap()
+            .since_id;
 
         // 実 CHAT_TURN_TIMEOUT（180 秒）は現実的な時間で HTTP 経由で再現できないため、この
         // ユニットテストだけ短いタイムアウトを直接注入する。
@@ -1108,6 +1121,12 @@ mod tests {
         let last = history.last().expect("history is not empty");
         assert_eq!(last.role, "assistant");
         assert_eq!(last.content, FALLBACK_TIMEOUT_TEXT);
+        // 受理済みのユーザー発言はターンに再保存されず 1 件のまま（issue #77）。
+        assert_eq!(
+            history.iter().filter(|m| m.role == "user").count(),
+            1,
+            "history={history:?}"
+        );
 
         // 関数を抜けた時点で guard は解放されている（新規ターンを開始できる）。
         assert!(

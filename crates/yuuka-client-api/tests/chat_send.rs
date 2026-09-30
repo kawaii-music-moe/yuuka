@@ -762,3 +762,68 @@ async fn unsaved_warning_reply_is_persisted_as_a_notice_so_polling_terminates() 
         .count();
     assert_eq!(agent_rows, 1, "通知行はちょうど 1 件");
 }
+
+// ─── 受理の永続化と再起動後の回復（issue #77） ─────────────────────────────────────────────
+
+fn count_pwa_rows(path: &std::path::Path, user_id: &str, filter: &str) -> i64 {
+    rusqlite::Connection::open(path)
+        .unwrap()
+        .query_row(
+            &format!(
+                "SELECT COUNT(*) FROM message_logs \
+                 WHERE user_id = ?1 AND source = 'pwa' AND {filter}"
+            ),
+            rusqlite::params![user_id],
+            |r| r.get(0),
+        )
+        .unwrap()
+}
+
+#[tokio::test]
+async fn accepted_user_message_is_persisted_before_202_and_not_duplicated_by_the_turn() {
+    let (db, path) = fresh_db();
+    let crypto = Arc::new(
+        SystemCrypto::new(SecretString::from("chat-send-test-secret".to_owned())).unwrap(),
+    );
+    seed_user_with_key(&path, &crypto, "u1");
+    // release されるまでターンは進まない＝この間に見える履歴は「`202` の時点で保存済みのもの」だけ。
+    let release = Arc::new(Semaphore::new(0));
+    let engine = engine_with_factory(
+        db.clone(),
+        Some(crypto),
+        Arc::new(GatedFactory {
+            release: release.clone(),
+            text: "お待たせしました".to_owned(),
+        }),
+    );
+    let app = app(engine, db);
+
+    let (status, body) = post_chat(&app, Some("u1"), "  受理された発言  ").await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    let since_id: i64 = body["sinceId"].as_str().unwrap().parse().unwrap();
+
+    // ターン（生成）は未完了のまま、ユーザー発言は既に永続化されている（trim 済み・source='pwa'）。
+    assert_eq!(count_pwa_rows(&path, "u1", "role = 'assistant'"), 0);
+    assert_eq!(
+        count_pwa_rows(&path, "u1", "role = 'user' AND content = '受理された発言'"),
+        1,
+        "202 の時点でユーザー発言が保存済み"
+    );
+    let history = get_history(&app, "u1").await;
+    assert_eq!(history.len(), 1, "history={history:?}");
+    assert_eq!(history[0]["role"], "user");
+    assert_eq!(history[0]["content"], "受理された発言");
+    let user_id: i64 = history[0]["id"].as_str().unwrap().parse().unwrap();
+    assert!(user_id > since_id, "sinceId はユーザー発言より前の起点");
+
+    // ターン完了後もユーザー発言は 1 件のまま（エンジンが再保存しない）・履歴は user → agent の 2 件。
+    release.add_permits(1);
+    let reply = poll_for_reply_after(&app, "u1", since_id, 200).await;
+    assert_eq!(reply["content"], "お待たせしました");
+    assert_eq!(count_pwa_rows(&path, "u1", "role = 'user'"), 1);
+    assert_eq!(count_pwa_rows(&path, "u1", "role = 'assistant'"), 1);
+    let history = get_history(&app, "u1").await;
+    assert_eq!(history.len(), 2, "history={history:?}");
+    assert_eq!(history[0]["role"], "user");
+    assert_eq!(history[1]["role"], "agent");
+}
