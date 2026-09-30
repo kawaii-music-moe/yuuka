@@ -2,7 +2,9 @@
 
 『Yuuka』の対話機能（画像 / 音声 / テキスト入力 → 返答）を、Discord 以外の経路から使えるようにする**新クライアント開発**の第一弾。手始めに **Windows デスクトップ**向けの、常駐オーバーレイ型チャットクライアントを **Rust（最軽量志向）**で実装する。
 
-> ⚠️ **本資料は `docs/design/` 配下の「提案 / 未実装」段階の設計方針書である**（[../../index.md](../../index.md) の権威順序参照）。現行コードへの拘束力はまだ持たない。実装着手時に必要部分を `docs/architecture/` の実装規範へ昇格させる。
+> ⚠️ **本資料は `docs/design/` 配下の設計方針書である**（[../../index.md](../../index.md) の参照優先順位を参照）。現行コードへの拘束力は持たない。実装済みの範囲（バックエンドの Phase 0 認証・Phase 1 WS チャット）と食い違う場合は**現行コードが正**。
+>
+> ⚠️ **旧 Node 実装時点の記述を含みます:** 本資料（と `architecture.md` / `backend_api.md` / `client_design.md`）が参照する `src/gemini.ts`・`src/server.ts`・`src/bot.ts` 等は Node 実装（[#68](https://github.com/kawaii-music-moe/yuuka/pull/68) で撤去済み）のファイルで、現行リポジトリには存在しません（リンク切れを含む）。撤去前のソースは `git show 390df39^:<path>` で参照できます。現行の実装は、バックエンド = `crates/yuuka-supervisor/src/ws.rs`（`/ws/chat`）・`crates/yuuka-auth`（デバイス認証）・`crates/yuuka-orchestrator`（会話エンジン）、クライアント = `clients/desktop/`（Rust / egui）。`architecture_v2.md` への言及は履歴資料（旧 Node 実装の規範）を指す。
 
 ---
 

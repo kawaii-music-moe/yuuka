@@ -5,6 +5,8 @@
 - 作成日: 2026-06-30
 - 関連: `src/functions/moduleCatalog.ts`, `src/functions/index.ts`, `src/services/botModules.ts`, `src/services/botCapabilities.ts`, `src/server/routes/botAttributeRoutes.ts`
 
+> **⚠️ 旧 Node 実装時点の記述です:** 上記の `src/*.ts` は Node 実装（[#68](https://github.com/kawaii-music-moe/yuuka/pull/68) で撤去済み）のファイルで、現行リポジトリには存在しません（撤去前のソースは `git show 390df39^:<path>` で参照可）。現行の Rust 実装では、モジュールのカタログと `GET/POST /api/bots/modules` は `crates/yuuka-orchestrator`（`module_catalog.rs`・`bot_attr_routes.rs`）、ユーザー×Bot 上書き層は `bot_user_modules` テーブル（`crates/yuuka-db/migrations/V17__baseline.sql`）にあります。**LLM へ渡すツール宣言を有効モジュールで絞り込む処理は現状未移植**です（`crates/yuuka-tools/src/native.rs` の注記参照）。本文の実装規範への言及（architecture_v2 §14 等）は履歴資料を指し、現行の規範ではありません。矛盾する場合は現行コードが正です。
+
 ## 1. 背景と目的
 
 Function が18ファイル・約6,400行まで増え、多機能で便利になった一方、肥大化している。
