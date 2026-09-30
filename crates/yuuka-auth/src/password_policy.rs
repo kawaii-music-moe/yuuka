@@ -3,8 +3,9 @@
 //! 規則（先勝ち・最初の失敗で確定）:
 //! 1. 長さ **8 文字以上**（Node `password.length` ＝ UTF-16 コード単位。`encode_utf16().count()` で一致）。
 //! 2. 大文字 / 小文字 / 数字 / 記号（`[^A-Za-z0-9]`）の **2 種類以上**。
-//! 3. よく使われるパスワード（`common-passwords-10k.txt` top-10k）で**ない**こと（**fail-open**：
-//!    ファイルが見つからなければチェックをスキップし登録を妨げない・Node と同一）。
+//! 3. よく使われるパスワード（`common-passwords-10k.txt` top-10k）で**ない**こと。デニーリストは
+//!    `include_str!` でビルド時にバイナリへ埋め込む（実行時のファイル欠落による fail-open は起き得ない。
+//!    [#52](https://github.com/kawaii-music-moe/yuuka/issues/52)）。
 //!
 //! 失敗メッセージは Node の日本語文言とバイト単位で一致させる（フロントが文言依存のため）。
 
@@ -46,7 +47,7 @@ pub fn validate_password(password: &str) -> Result<(), &'static str> {
         return Err(MSG_TOO_FEW_KINDS);
     }
 
-    // 3) 一般的パスワード denylist（fail-open）。Node は `password.toLowerCase()` で照合。
+    // 3) 一般的パスワード denylist（ビルド時にバイナリへ埋め込み済み）。Node は `password.toLowerCase()` で照合。
     if common_passwords().contains(&password.to_lowercase()) {
         return Err(MSG_COMMON);
     }
@@ -54,45 +55,24 @@ pub fn validate_password(password: &str) -> Result<(), &'static str> {
     Ok(())
 }
 
-/// top-10k デニーリスト（遅延ロード・**fail-open**）。ファイルが無ければ空集合＝チェックをスキップ。
+/// top-10k デニーリスト（`include_str!` でビルド時にバイナリへ埋め込み・パースは遅延で 1 回だけ）。
 ///
-/// Node と同じ候補パス（cwd 相対）を順に試し、最初に存在したものを採用する。読み込みは 1 回だけ。
+/// 実行時にファイルを読みに行かないため、デプロイ先にファイルが欠けていてチェックが黙って
+/// スキップされる（fail-open）ことはない（[#52](https://github.com/kawaii-music-moe/yuuka/issues/52)）。
 fn common_passwords() -> &'static HashSet<String> {
     static CACHE: OnceLock<HashSet<String>> = OnceLock::new();
     CACHE.get_or_init(|| {
-        const CANDIDATES: [&str; 2] = [
-            "src/assets/common-passwords-10k.txt",
-            "dist/assets/common-passwords-10k.txt",
-        ];
-        for candidate in CANDIDATES {
-            match std::fs::read_to_string(candidate) {
-                Ok(raw) => {
-                    let set: HashSet<String> = raw
-                        .lines()
-                        .map(|l| l.trim().to_lowercase())
-                        .filter(|l| !l.is_empty())
-                        .collect();
-                    tracing::info!(
-                        count = set.len(),
-                        file = candidate,
-                        "一般的パスワードリストを読み込み"
-                    );
-                    return set;
-                }
-                Err(_) => continue,
-            }
-        }
-        // fail-open: 見つからなければチェックをスキップ（Node と同一・登録を妨げない）。
-        tracing::warn!(
-            "common-passwords-10k.txt が見つかりません。一般的パスワードチェックをスキップします"
-        );
-        HashSet::new()
+        const RAW: &str = include_str!("../assets/common-passwords-10k.txt");
+        RAW.lines()
+            .map(|l| l.trim().to_lowercase())
+            .filter(|l| !l.is_empty())
+            .collect()
     })
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{validate_password, MSG_TOO_FEW_KINDS, MSG_TOO_SHORT};
+    use super::{validate_password, MSG_COMMON, MSG_TOO_FEW_KINDS, MSG_TOO_SHORT};
 
     #[test]
     fn rejects_short_password() {
@@ -126,5 +106,15 @@ mod tests {
         // ここでは長さ判定のみを検証: 8 コード単位なので TOO_SHORT にはならない。
         let emojis = "😀😀😀😀"; // 4 chars, 8 utf16 units
         assert_ne!(validate_password(emojis), Err(MSG_TOO_SHORT));
+    }
+
+    #[test]
+    fn rejects_common_password_without_runtime_file() {
+        // デニーリストは `include_str!` でビルド時にバイナリへ埋め込まれているため、
+        // 実行時のカレントディレクトリに `common-passwords-10k.txt` が無くても検出できる
+        // （リグレッション防止: #52 の fail-open バグ）。
+        assert_eq!(validate_password("Password1"), Err(MSG_COMMON));
+        // 大文字/小文字を問わず denylist と照合する（Node `toLowerCase()` パリティ）。
+        assert_eq!(validate_password("PASSWORD1"), Err(MSG_COMMON));
     }
 }

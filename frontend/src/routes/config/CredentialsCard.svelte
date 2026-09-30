@@ -2,6 +2,7 @@
 	// 利用可能なAI認証情報カード（読み取り専用。旧 fetchCredentialsSettings）。
 	// 登録・管理は「Bot統合管理」ページ（他グループ）へ誘導するのみ。
 	import { credentialApi } from "$lib/api/services";
+	import { withBasePath } from "$lib/router";
 	import type { CredentialRow, CredentialsResp } from "./configTypes";
 
 	interface Props {
@@ -76,7 +77,7 @@
 
 	<div class="cred-footer">
 		<span class="field-sub">認証情報の登録・管理は「Bot統合管理」で行います。</span>
-		<a href="/integrated" class="btn btn-secondary btn-sm">Bot統合管理へ</a>
+		<a href={withBasePath("/integrated")} class="btn btn-secondary btn-sm">Bot統合管理へ</a>
 	</div>
 </details>
 

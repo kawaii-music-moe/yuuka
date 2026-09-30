@@ -3,8 +3,15 @@
 //!
 //! 最終テキストから **Embed 形の** フェンス JSON ブロックだけを抽出して実 [`RichEmbed`] に変換し、
 //! 該当ブロックを本文から取り除く。Embed 形でない JSON（ユーザーが提示を頼んだデータ等）は温存する。
+//!
+//! `showRichContent`（[`yuuka_richcontent`]）はツール引数を上限まで切り詰めるが、ここで復元する
+//! Embed はモデルが直接書いた生 JSON でノーチェックのため、同じ上限を共有して適用する（#37）。
+//! 空文字の name/value を持つフィールドは Discord が拒否するため除外する。
 
 use yuuka_discord::{EmbedField, RichEmbed};
+use yuuka_richcontent::{
+    clip_chars, DESCRIPTION_MAX, FIELDS_MAX, FIELD_NAME_MAX, FIELD_VALUE_MAX, FOOTER_MAX, TITLE_MAX,
+};
 
 /// 本文から Embed 形の JSON コードブロックを取り除き、抽出した [`RichEmbed`] 群を返す。
 ///
@@ -33,10 +40,13 @@ pub fn recover_embeds_from_text(text: &str) -> (String, Vec<RichEmbed>) {
                 embeds.extend(found);
             }
             _ => {
-                // Embed 形でない → ブロックを原文のまま温存。
+                // Embed 形でない → ブロックを原文のまま温存。`next_fenced_block` は言語行の直後の
+                // '\n' を `body` から読み飛ばしている（body_start = line_end + 1）ため、書き戻し時に
+                // 明示的に戻す（#35: 戻さないと言語行と本文が連結し、Discord 側でブロックが壊れる）。
                 out.push_str(before);
                 out.push_str("```");
                 out.push_str(lang);
+                out.push('\n');
                 out.push_str(body);
                 out.push_str("```");
             }
@@ -110,18 +120,26 @@ fn embed_from_object(v: &serde_json::Value) -> Option<RichEmbed> {
         return None;
     }
 
+    // #37: showRichContent と同じ上限（フィールド数 25・name/value/description/footer 文字数）を
+    // 適用する。モデルが直接書いた生 JSON はノーチェックのため、上限超過で Discord への送信自体が
+    // 失敗しうる（本文ごと届かなくなる）。
     let fields = obj
         .get("fields")
         .and_then(|x| x.as_array())
-        .map(|arr| arr.iter().filter_map(field_from_object).collect())
+        .map(|arr| {
+            arr.iter()
+                .take(FIELDS_MAX)
+                .filter_map(field_from_object)
+                .collect()
+        })
         .unwrap_or_default();
 
     Some(RichEmbed {
-        title: Some(title.to_owned()),
-        description: description.map(str::to_owned),
+        title: Some(clip_chars(title, TITLE_MAX)),
+        description: description.map(|d| clip_chars(d, DESCRIPTION_MAX)),
         color: obj.get("color").and_then(parse_color),
         fields,
-        footer: footer_text(obj.get("footer")),
+        footer: footer_text(obj.get("footer")).map(|f| clip_chars(&f, FOOTER_MAX)),
     })
 }
 
@@ -132,10 +150,17 @@ fn field_from_object(v: &serde_json::Value) -> Option<EmbedField> {
         .get("value")
         .and_then(|x| x.as_str())
         .or_else(|| obj.get("text").and_then(|x| x.as_str()))?;
+    // #37: 空文字の name/value は Discord Embed フィールドとして無効（送信拒否の原因）なので除外する。
+    if name.is_empty() || value.is_empty() {
+        return None;
+    }
     Some(EmbedField {
-        name: name.to_owned(),
-        value: value.to_owned(),
-        inline: obj.get("inline").and_then(serde_json::Value::as_bool).unwrap_or(false),
+        name: clip_chars(name, FIELD_NAME_MAX),
+        value: clip_chars(value, FIELD_VALUE_MAX),
+        inline: obj
+            .get("inline")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false),
     })
 }
 
@@ -143,10 +168,9 @@ fn field_from_object(v: &serde_json::Value) -> Option<EmbedField> {
 fn footer_text(v: Option<&serde_json::Value>) -> Option<String> {
     match v {
         Some(serde_json::Value::String(s)) => Some(s.clone()),
-        Some(serde_json::Value::Object(o)) => o
-            .get("text")
-            .and_then(|x| x.as_str())
-            .map(str::to_owned),
+        Some(serde_json::Value::Object(o)) => {
+            o.get("text").and_then(|x| x.as_str()).map(str::to_owned)
+        }
         _ => None,
     }
 }
@@ -157,7 +181,9 @@ fn parse_color(v: &serde_json::Value) -> Option<u32> {
         serde_json::Value::Number(n) => n.as_u64().and_then(|u| u32::try_from(u).ok()),
         serde_json::Value::String(s) => {
             let hex = s.trim().trim_start_matches('#');
-            u32::from_str_radix(hex, 16).ok().filter(|c| *c <= 0xFF_FFFF)
+            u32::from_str_radix(hex, 16)
+                .ok()
+                .filter(|c| *c <= 0xFF_FFFF)
         }
         _ => None,
     }
@@ -236,11 +262,81 @@ mod tests {
         assert_eq!(out, text);
     }
 
+    /// #35: Embed ブロックと非 Embed ブロックが混在する場合、非 Embed ブロックの言語行の
+    /// 改行が落ちて本文が崩れてはならない（言語なし ``` ``` ブロックも含む）。
+    #[test]
+    fn preserves_newline_after_lang_when_mixed_with_embed_block() {
+        let text = "まとめ:\n```json\n{\"title\":\"天気\",\"description\":\"晴れ\"}\n```\n```\nls -la\n```\n```python\nprint(1)\n```";
+        let (out, embeds) = recover_embeds_from_text(text);
+        assert_eq!(embeds.len(), 1, "json ブロックのみ Embed として抽出");
+        assert!(
+            out.contains("```\nls -la\n```"),
+            "言語なしブロックの改行を保持: {out}"
+        );
+        assert!(
+            out.contains("```python\nprint(1)\n```"),
+            "python ブロックの言語行改行を保持: {out}"
+        );
+        assert!(
+            !out.contains("pythonprint"),
+            "言語行と本文が連結してはならない: {out}"
+        );
+    }
+
     #[test]
     fn no_block_is_unchanged() {
         let text = "ただのテキストです。";
         let (out, embeds) = recover_embeds_from_text(text);
         assert!(embeds.is_empty());
         assert_eq!(out, text);
+    }
+
+    /// #37: 復元した Embed は showRichContent と同じ上限で切り詰められる
+    /// （title 256・description 4000・fields 25・field name 256 / value 1024・footer 2048）。
+    #[test]
+    fn recovered_embed_is_clipped_like_show_rich_content() {
+        let long_title = "あ".repeat(300);
+        let long_desc = "い".repeat(5000);
+        let long_footer = "う".repeat(3000);
+        let fields: String = (0..30)
+            .map(|i| format!("{{\"name\":\"n{i}\",\"value\":\"v{i}\"}}"))
+            .collect::<Vec<_>>()
+            .join(",");
+        let text = format!(
+            "```json\n{{\"title\":\"{long_title}\",\"description\":\"{long_desc}\",\"footer\":\"{long_footer}\",\"fields\":[{fields}]}}\n```"
+        );
+        let (_out, embeds) = recover_embeds_from_text(&text);
+        assert_eq!(embeds.len(), 1);
+        let e = &embeds[0];
+        assert_eq!(
+            e.title.as_deref().map(str::chars).map(Iterator::count),
+            Some(TITLE_MAX)
+        );
+        assert_eq!(
+            e.description
+                .as_deref()
+                .map(str::chars)
+                .map(Iterator::count),
+            Some(DESCRIPTION_MAX)
+        );
+        assert_eq!(
+            e.footer.as_deref().map(str::chars).map(Iterator::count),
+            Some(FOOTER_MAX)
+        );
+        assert_eq!(e.fields.len(), FIELDS_MAX, "フィールドは 25 件で打ち切り");
+    }
+
+    /// #37: 空文字の name/value を持つフィールドは Discord が拒否するため除外する。
+    #[test]
+    fn drops_fields_with_empty_name_or_value() {
+        let text = "```json\n{\"title\":\"t\",\"description\":\"d\",\"fields\":[{\"name\":\"\",\"value\":\"v\"},{\"name\":\"n\",\"value\":\"\"},{\"name\":\"ok\",\"value\":\"ok\"}]}\n```";
+        let (_out, embeds) = recover_embeds_from_text(text);
+        assert_eq!(embeds.len(), 1);
+        assert_eq!(
+            embeds[0].fields.len(),
+            1,
+            "空 name/value のフィールドは除外"
+        );
+        assert_eq!(embeds[0].fields[0].name, "ok");
     }
 }

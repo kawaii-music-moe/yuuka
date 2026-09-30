@@ -478,12 +478,12 @@ export const settingsRoutes: RouteDef[] = [
 			let tag: string | null;
 
 			if (apiKey && !apiKey.startsWith("****")) {
-				// キー形式の検証（誤った値の保存を防ぐ。Gemini APIキーは "AIza" で始まる）
+				// キー形式の検証（誤った値の保存を防ぐ）
 				if (!isLikelyGeminiKey(apiKey.trim())) {
 					return sendJson(ctx.res, 400, {
 						success: false,
 						message:
-							"Gemini APIキーの形式が正しくありません。「AIza」で始まるキーを入力してください（Google AI Studio で取得）。",
+							"Gemini APIキーの形式が正しくありません。Google AI Studio で取得したキーをそのまま入力してください。",
 					});
 				}
 				const enc = encryptText(apiKey.trim());

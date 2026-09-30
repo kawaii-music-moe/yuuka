@@ -4044,6 +4044,7 @@ dependencies = [
  "yuuka-gemini",
  "yuuka-google",
  "yuuka-mcp",
+ "yuuka-richcontent",
  "yuuka-synapse",
  "yuuka-tools",
  "yuuka-types",

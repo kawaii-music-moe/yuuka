@@ -209,6 +209,52 @@ async fn process_guild_persists_prefixed_and_replies() {
     assert!(logged.starts_with("[たろう]: "), "content={logged}");
 }
 
+/// #36: 汎用モード（ギルド）でも Embed のみの返信が復元後に空文字化してはならない。
+#[tokio::test]
+async fn embed_only_guild_reply_does_not_persist_empty_string() {
+    let (db, path) = fresh_db();
+    let crypto = Arc::new(SystemCrypto::new(SecretString::from("gen-secret".to_owned())).unwrap());
+    seed_guild_bot(&path, &crypto, "botG", "owner1", true);
+    let engine = engine_with(
+        db,
+        crypto,
+        "```json\n{\"title\":\"天気\",\"description\":\"晴れ\"}\n```",
+    );
+
+    let reply = engine
+        .process_guild(
+            &BotId::new("botG"),
+            &GuildId::new("g1"),
+            speaker("mem1", "たろう"),
+            IncomingChat {
+                text: "天気教えて".to_owned(),
+                ..IncomingChat::default()
+            },
+            null_sink(),
+            Arc::new(NoopDelivery),
+        )
+        .await
+        .expect("guild turn");
+
+    assert_eq!(reply.embeds.len(), 1, "Embed は復元される");
+    assert!(
+        !reply.text.trim().is_empty(),
+        "reply.text が空文字: {:?}",
+        reply.text
+    );
+    let logged: String = conn(&path)
+        .query_row(
+            "SELECT content FROM message_logs WHERE bot_id = 'botG' AND guild_id = 'g1' AND role = 'assistant'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(
+        !logged.trim().is_empty(),
+        "会話ログに空文字が保存されてはいけない: {logged:?}"
+    );
+}
+
 #[tokio::test]
 async fn process_bot_dm_uses_separate_context() {
     let (db, path) = fresh_db();
