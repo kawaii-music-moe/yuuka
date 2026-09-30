@@ -14,13 +14,14 @@
 //! index.html への google-site-verification meta 注入は後続増分（deferred・機能非依存）。
 
 use std::convert::Infallible;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use axum::body::Body;
 use axum::extract::Request;
 use axum::http::header::{HeaderValue, CACHE_CONTROL, CONTENT_TYPE};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
+use axum::routing::get;
 use axum::Router;
 use tower::{service_fn, ServiceExt};
 use tower_http::services::ServeDir;
@@ -147,6 +148,137 @@ fn is_hashed_asset(path: &str) -> bool {
         && hash
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+}
+
+/// PWA（`client/pwa`）のクライアントサイドルート（Node `CLIENT_ROUTES`・`src/server.ts`）。
+const PWA_SHELL_ROUTES: [&str; 7] = [
+    "/",
+    "/chat",
+    "/todo",
+    "/calendar",
+    "/finance",
+    "/notes",
+    "/settings",
+];
+
+/// PWA（`client/pwa`）の SPA を、Node `serveStaticFile` の PWA 分岐と同じ URL 面に登録する
+/// （issue #33: Rust に `/api/client/*` は移植したが、PWA 自体を配信するルートが無いと
+/// ブラウザから開けない）。
+///
+/// Node が明示許可する面だけを再現し、それ以外（`/admin`・`/login`・未登録の `/api/*` 等）には
+/// 一切踏み込まない:
+/// - **シェルルート**（[`PWA_SHELL_ROUTES`]・Vue Router のクライアントサイドルート）→
+///   `index.html`（`no-cache, no-store, must-revalidate`）
+/// - **固定静的パス**: `/manifest.webmanifest`・`/sw.js`・`/icons/app-icon.svg`（いずれも
+///   `no-cache`。`sw.js` は Service Worker の更新検知のため特に必須・PR #67 の
+///   ネットワーク優先 SW と整合）
+/// - **ハッシュ資産**: `/assets/*` → [`is_hashed_asset`] 判定で `immutable` 長期キャッシュ、
+///   それ以外・未存在は `no-cache`/404
+///
+/// 本関数は**明示 `route`/`nest_service` のみ**を積み、[`mount_static`]（admin SPA・
+/// `fallback_service` ベース）とは独立に同一ルータへ組み合わせられる: axum は明示ルートを
+/// `fallback_service` より必ず優先するため、登録順に関わらず PWA が上記の固定パス群だけを
+/// 横取りし、`/admin` を含む残りは admin 側の fallback へ従来どおり落ちる。
+pub fn mount_pwa<S>(router: Router<S>, pwa_dist: &Path) -> Router<S>
+where
+    S: Clone + Send + Sync + 'static,
+{
+    let dist = pwa_dist.to_path_buf();
+
+    let mut router = router;
+    for path in PWA_SHELL_ROUTES {
+        let shell_dist = dist.clone();
+        router = router.route(path, get(move || pwa_index(shell_dist.clone())));
+    }
+
+    let manifest_dist = dist.clone();
+    let sw_dist = dist.clone();
+    let icon_dist = dist.clone();
+    // `nest_service("/assets", ..)` はプレフィックスを剥がして渡す（例: `/assets/app-x.js` →
+    // `/app-x.js`）ため、配信ルートは `dist` 直下ではなく `dist/assets` にする必要がある。
+    let assets_dist = dist.join("assets");
+    router
+        .route(
+            "/manifest.webmanifest",
+            get(move || {
+                pwa_file(
+                    manifest_dist.clone(),
+                    "manifest.webmanifest",
+                    "application/manifest+json; charset=utf-8",
+                )
+            }),
+        )
+        .route(
+            "/sw.js",
+            get(move || {
+                pwa_file(
+                    sw_dist.clone(),
+                    "sw.js",
+                    "application/javascript; charset=utf-8",
+                )
+            }),
+        )
+        .route(
+            "/icons/app-icon.svg",
+            get(move || pwa_file(icon_dist.clone(), "icons/app-icon.svg", "image/svg+xml")),
+        )
+        .nest_service(
+            "/assets",
+            service_fn(move |req: Request| {
+                let dist = assets_dist.clone();
+                async move { Ok::<Response, Infallible>(serve_pwa_assets(&dist, req).await) }
+            }),
+        )
+}
+
+/// PWA シェル（`index.html`）を返す。SPA シェルは常に最新を取得させるため `no-cache` 固定。
+async fn pwa_index(dist: PathBuf) -> Response {
+    let mut resp = file_response(&dist.join("index.html"), StatusCode::OK, "").await;
+    resp.headers_mut()
+        .insert(CACHE_CONTROL, HeaderValue::from_static(NO_CACHE));
+    resp
+}
+
+/// PWA の固定静的ファイル（manifest/sw.js/icon）を `no-cache` で返す。読めなければ 404。
+async fn pwa_file(dist: PathBuf, rel: &'static str, content_type: &'static str) -> Response {
+    match tokio::fs::read(dist.join(rel)).await {
+        Ok(bytes) => {
+            let mut resp = Response::new(Body::from(bytes));
+            *resp.status_mut() = StatusCode::OK;
+            resp.headers_mut()
+                .insert(CONTENT_TYPE, HeaderValue::from_static(content_type));
+            resp.headers_mut()
+                .insert(CACHE_CONTROL, HeaderValue::from_static(NO_CACHE));
+            resp
+        }
+        Err(_) => {
+            let mut resp = Response::new(Body::from("404 Not Found"));
+            *resp.status_mut() = StatusCode::NOT_FOUND;
+            resp
+        }
+    }
+}
+
+/// PWA 側の `/assets/*` を配信する（[`is_hashed_asset`] 判定でハッシュ資産のみ immutable）。
+///
+/// `nest_service("/assets", ..)` はプレフィックスを剥がして渡すため、判定用に `/assets` を
+/// 付け直してから [`is_hashed_asset`] へ渡す。
+async fn serve_pwa_assets(dist: &Path, req: Request) -> Response {
+    let full_path = format!("/assets{}", req.uri().path());
+    let serve = ServeDir::new(dist).precompressed_br().precompressed_gzip();
+    let served = match serve.oneshot(req).await {
+        Ok(resp) => resp.into_response(),
+        Err(never) => match never {},
+    };
+    let mut resp = served;
+    let cache = if resp.status() == StatusCode::OK && is_hashed_asset(&full_path) {
+        IMMUTABLE
+    } else {
+        NO_CACHE
+    };
+    resp.headers_mut()
+        .insert(CACHE_CONTROL, HeaderValue::from_static(cache));
+    resp
 }
 
 #[cfg(test)]
@@ -311,5 +443,158 @@ mod tests {
             !text.contains("SPA-SHELL"),
             "API 404 が index を返している: {text}"
         );
+    }
+}
+
+#[cfg(test)]
+mod pwa_tests {
+    use super::{mount_pwa, mount_static};
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use axum::routing::get;
+    use axum::Router;
+    use std::fs;
+    use tower::ServiceExt;
+
+    /// PWA dist（index.html + manifest + sw.js + icon + assets）。
+    fn pwa_dist() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().expect("tmp");
+        fs::write(dir.path().join("index.html"), "<html>PWA-SHELL</html>").expect("index");
+        fs::write(dir.path().join("manifest.webmanifest"), "{}").expect("manifest");
+        fs::write(dir.path().join("sw.js"), "// sw").expect("sw");
+        fs::create_dir_all(dir.path().join("icons")).expect("icons dir");
+        fs::write(dir.path().join("icons/app-icon.svg"), "<svg/>").expect("icon");
+        fs::create_dir_all(dir.path().join("assets")).expect("assets dir");
+        fs::write(dir.path().join("assets/app-BIDAdKj3.js"), "console.log(1)").expect("hashed");
+        dir
+    }
+
+    /// admin dist（`mount_static` の fallback 用・PWA と共存できることを確認するため）。
+    fn admin_dist() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().expect("tmp");
+        fs::write(dir.path().join("index.html"), "<html>ADMIN-SHELL</html>").expect("index");
+        fs::write(dir.path().join("404.html"), "<html>NOT-FOUND</html>").expect("404");
+        dir
+    }
+
+    fn cache_control(resp: &axum::response::Response) -> Option<String> {
+        resp.headers()
+            .get("cache-control")
+            .map(|v| String::from_utf8_lossy(v.as_bytes()).into_owned())
+    }
+
+    async fn body_text(resp: axum::response::Response) -> String {
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        String::from_utf8_lossy(&bytes).into_owned()
+    }
+
+    /// PWA + admin fallback + 明示 API ルートを同一ルータへ組み合わせたアプリ（実運用の配線を模す）。
+    fn app(pwa_dir: &std::path::Path, admin_dir: &std::path::Path) -> Router {
+        let router = Router::new().route("/api/me", get(|| async { "me" }));
+        let router = mount_pwa(router, pwa_dir);
+        mount_static(router, admin_dir)
+    }
+
+    async fn get_resp(
+        pwa_dir: &std::path::Path,
+        admin_dir: &std::path::Path,
+        uri: &str,
+    ) -> axum::response::Response {
+        app(pwa_dir, admin_dir)
+            .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn shell_routes_serve_pwa_index_no_cache() {
+        let pwa = pwa_dist();
+        let admin = admin_dist();
+        for uri in [
+            "/",
+            "/chat",
+            "/todo",
+            "/calendar",
+            "/finance",
+            "/notes",
+            "/settings",
+        ] {
+            let resp = get_resp(pwa.path(), admin.path(), uri).await;
+            assert_eq!(resp.status(), StatusCode::OK, "uri={uri}");
+            assert_eq!(
+                cache_control(&resp).as_deref(),
+                Some("no-cache, no-store, must-revalidate"),
+                "uri={uri}"
+            );
+            let text = body_text(resp).await;
+            assert!(text.contains("PWA-SHELL"), "uri={uri} body={text}");
+        }
+    }
+
+    #[tokio::test]
+    async fn manifest_and_sw_are_no_cache_with_correct_content_type() {
+        let pwa = pwa_dist();
+        let admin = admin_dist();
+
+        let manifest = get_resp(pwa.path(), admin.path(), "/manifest.webmanifest").await;
+        assert_eq!(manifest.status(), StatusCode::OK);
+        assert_eq!(
+            manifest
+                .headers()
+                .get("content-type")
+                .and_then(|v| v.to_str().ok()),
+            Some("application/manifest+json; charset=utf-8")
+        );
+        assert_eq!(
+            cache_control(&manifest).as_deref(),
+            Some("no-cache, no-store, must-revalidate")
+        );
+
+        let sw = get_resp(pwa.path(), admin.path(), "/sw.js").await;
+        assert_eq!(sw.status(), StatusCode::OK);
+        assert_eq!(
+            cache_control(&sw).as_deref(),
+            Some("no-cache, no-store, must-revalidate"),
+            "sw.js は必ず no-cache（更新検知を壊さない）"
+        );
+    }
+
+    #[tokio::test]
+    async fn pwa_assets_hashed_file_is_immutable() {
+        let pwa = pwa_dist();
+        let admin = admin_dist();
+        let resp = get_resp(pwa.path(), admin.path(), "/assets/app-BIDAdKj3.js").await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(
+            cache_control(&resp).as_deref(),
+            Some("public, max-age=31536000, immutable")
+        );
+    }
+
+    #[tokio::test]
+    async fn admin_and_api_routes_are_not_shadowed_by_pwa() {
+        // /admin* は PWA のシェルルートに含まれないため、従来どおり admin 側の fallback（index.html）
+        // へ落ちる。/api/me も明示ルートとして生き続ける（PWA が横取りしない）。
+        let pwa = pwa_dist();
+        let admin = admin_dist();
+
+        let admin_resp = get_resp(pwa.path(), admin.path(), "/admin").await;
+        assert_eq!(admin_resp.status(), StatusCode::OK);
+        let admin_text = body_text(admin_resp).await;
+        assert!(admin_text.contains("ADMIN-SHELL"), "body={admin_text}");
+
+        let api_resp = get_resp(pwa.path(), admin.path(), "/api/me").await;
+        assert_eq!(api_resp.status(), StatusCode::OK);
+        assert_eq!(body_text(api_resp).await, "me");
+    }
+
+    #[tokio::test]
+    async fn missing_pwa_file_is_404() {
+        let pwa = tempfile::tempdir().expect("tmp"); // 空dist（未ビルド想定）。
+        let admin = admin_dist();
+        let resp = get_resp(pwa.path(), admin.path(), "/manifest.webmanifest").await;
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 }
