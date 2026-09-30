@@ -1,0 +1,60 @@
+# ==============================================================================
+# dev フロント: Vite dev server（HMR）— docker compose テンプレート（issue #57）
+#
+#   ブラウザ / トンネル(yuuka-dev.kawaii-music.moe) ─→ 127.0.0.1:7855 (Vite・HMR)
+#                                                        └─ /api・/ws/chat を dev API へ proxy
+#                                                           = 127.0.0.1:7856（instance.env の HOST_PORT）
+#
+#   dev API コンテナ（deploy/instance.sh dev …）とは別 compose プロジェクト（yuuka-dev-vite）。
+#   API 側の操作に影響しない／されない。
+#
+#   使い方:
+#     cp deploy/dev/.env.example deploy/dev/.env      # 必要に応じて編集（既定値のままでも動く）
+#     docker compose -f deploy/dev/vite.compose.yml up -d
+#   ※ `.env`（compose が本ファイルと同じディレクトリから自動読込）は .gitignore 済。
+#     変数の意味と既定値は deploy/dev/.env.example を参照。運用手順は deploy/README.md。
+#
+#   - image: node:24-bookworm — Dockerfile の frontend-builder・CI と同じ Node。
+#   - pnpm は Dockerfile と同じ 9.15.0 に固定（11 系は pnpm.overrides を読まず lockfile 不一致になる）。
+#   - network_mode: host — Vite から dev API の 127.0.0.1:${HOST_PORT} へ届かせ、
+#     トンネル（cloudflared 等）からも 127.0.0.1:VITE_PORT で受けられるようにするため。
+#   - ソースは bind マウント。node_modules も同じディレクトリ（ホスト側 pnpm と共有）に作られる。
+# ==============================================================================
+name: yuuka-dev-vite
+
+services:
+  vite:
+    image: node:24-bookworm
+    # ソースツリー（node_modules 含む）の所有者に合わせる。root で書くとホスト側が root 所有になる。
+    user: "${VITE_UID:-1000}:${VITE_GID:-1000}"
+    network_mode: host
+    working_dir: /src
+    volumes:
+      # 既定 ../.. = 本ファイルから見たリポジトリルート。別 worktree を使う場合は VITE_SRC_DIR で上書き。
+      - "${VITE_SRC_DIR:-../..}:/src"
+    environment:
+      # 非 root ユーザーの書込先（corepack のキャッシュ用）。
+      HOME: /tmp
+      # pnpm の対話プロンプト（node_modules 再構築の確認等）を抑止する。
+      CI: "true"
+      # proxy 先 dev API（instance.env の HOST_PORT に合わせる）。
+      VITE_API_TARGET: "${VITE_API_TARGET:-http://127.0.0.1:7856}"
+      # Vite の Host ヘッダ検証（DNS rebinding 対策）を、トンネル経由の公開ホスト名に対して通す。
+      # カンマ区切りで複数指定可。`VITE_ALLOWED_HOST=`（空で明示）にすると localhost 系のみ許可
+      # （`-` 形式の既定値は「未設定」のときだけ効く。`:-` だと空でも既定に戻ってしまう）。
+      __VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS: "${VITE_ALLOWED_HOST-yuuka-dev.kawaii-music.moe}"
+    command:
+      - sh
+      - -c
+      # 起動（再起動）のたびに install --frozen-lockfile を実行する。lockfile が変わっていなければ
+      # 数秒で終わる no-op で、依存更新後は `restart vite` だけで node_modules が追従する。
+      - >-
+        corepack pnpm@9.15.0 install --frozen-lockfile &&
+        exec corepack pnpm@9.15.0 exec vite --config frontend/vite.config.ts
+        --host ${VITE_BIND_ADDR:-127.0.0.1} --port ${VITE_PORT:-7855} --strictPort
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
