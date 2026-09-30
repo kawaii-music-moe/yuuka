@@ -171,40 +171,65 @@ async fn settings_get(
 ) -> Result<Json<SettingsView>, ClientApiError> {
     let uid = user.0.discord_id.as_str();
     let current = users::get_agent_settings(&db, uid).await?;
+    Ok(Json(settings_view(&db, uid, current).await?))
+}
+
+/// 永続化済みの状態から [`SettingsView`] を組み立てる（GET/PUT 共通・issue #39）。
+///
+/// PUT の応答も書き込み後に DB を読み直してここで組み立てるため、応答が「保存されていない値」を
+/// 報告することはない。`gemini_model` が NULL/空の行は既定モデル（`DEFAULT_MODEL`）として表示する。
+/// 行が無い場合（GET のみ）は既定値・未連携として返す。
+async fn settings_view(
+    db: &Db,
+    uid: &str,
+    current: Option<users::UserAgentSettings>,
+) -> Result<SettingsView, ClientApiError> {
     let model = current
         .as_ref()
         .and_then(|c| c.model.clone())
         .filter(|m| !m.is_empty())
         .unwrap_or_else(|| yuuka_gemini::DEFAULT_MODEL.to_owned());
     let google_connected = current.map(|c| c.google_connected).unwrap_or(false);
-    let persona = active_persona_prompt(&db, uid).await?;
-    Ok(Json(SettingsView {
+    let persona = active_persona_prompt(db, uid).await?;
+    Ok(SettingsView {
         google_connected,
         // issue #47: Node はここに生の calendarId を返していた。人間可読な代替（連携先の表示名）が
         // 無いため、内部 ID を漏らすくらいなら省略する（クライアントは未設定時の案内文にフォール
         // バックする・`client/pwa/src/pages/SettingsPage.vue`）。
         google_account: None,
         model,
-        max_tokens: 2048,
-        temperature: 0.7,
         persona,
-    }))
+    })
 }
 
+/// `users` 行が無いユーザーの設定更新を拒否するエラー（issue #39）。
+///
+/// `users` 行は認証（`yuuka-auth`）が `password_hash`/`salt` 付きで作る唯一の正で、PWA 設定の
+/// 書き込みが仮の認証情報で行を作ることはしない。行が無いまま黙ってスキップして「保存した」と
+/// 応答するのは不正確なので、明示的に 404 を返す。
+fn user_settings_not_found() -> ClientApiError {
+    ClientApiError::not_found("user settings not found")
+}
+
+/// `PUT /api/client/settings`。
+///
+/// `model`（許可リスト検証・issue #39）と `persona` のみを受け付ける。旧クライアントが送る
+/// `maxTokens`/`temperature` は [`SettingsUpdate`] に対応フィールドが無く、無視される。
+/// 検証（400）→ 行の存在確認（404）→ 書き込み → DB 再読込の応答、の順で、いずれかで失敗した場合に
+/// 部分更新（モデルだけ保存・persona だけ失敗等）や未保存値の報告が起きない。
 async fn settings_put(
     user: AuthenticatedUser,
     State(db): State<Db>,
     Json(body): Json<SettingsUpdate>,
 ) -> Result<Json<SettingsView>, ClientApiError> {
     let uid = user.0.discord_id.clone();
-    let current = users::get_agent_settings(&db, &uid).await?;
 
-    let requested = body
+    let requested_model = match body
         .model
         .as_deref()
         .map(str::trim)
-        .filter(|s| !s.is_empty());
-    let model = match requested {
+        .filter(|s| !s.is_empty())
+    {
         Some(m) => {
             // issue #39: Gemini 以外のモデル名を無検証で保存すると、以後そのユーザーの
             // Discord を含む全会話が Gemini 呼び出し失敗で壊れる。唯一の正の許可リスト
@@ -215,13 +240,9 @@ async fn settings_put(
                     ALLOWED_MODELS.join(", ")
                 )));
             }
-            m.to_owned()
+            Some(m.to_owned())
         }
-        None => current
-            .as_ref()
-            .and_then(|c| c.model.clone())
-            .filter(|m| !m.is_empty())
-            .unwrap_or_else(|| yuuka_gemini::DEFAULT_MODEL.to_owned()),
+        None => None,
     };
 
     // persona は先に検証だけ済ませる。モデルを書いた後に persona 側で失敗すると
@@ -235,37 +256,27 @@ async fn settings_put(
         }
     }
 
-    if current.is_some() {
-        users::set_gemini_model(&db, &uid, &model).await?;
+    // `users` 行が無ければ何も書かずに 404（モデル更新を黙ってスキップして変更後の値を返す
+    // Node 版の挙動は、保存されていない値を報告するため廃止・issue #39）。
+    if users::get_agent_settings(&db, &uid).await?.is_none() {
+        return Err(user_settings_not_found());
+    }
+
+    if let Some(model) = &requested_model {
+        // 存在確認と UPDATE の間で行が消えた場合（`false`）も未保存扱いにしない。
+        if !users::set_gemini_model(&db, &uid, model).await? {
+            return Err(user_settings_not_found());
+        }
     }
     if let Some(persona_text) = &body.persona {
         save_active_persona_prompt(&db, &uid, persona_text).await?;
     }
 
-    let google_connected = current.map(|c| c.google_connected).unwrap_or(false);
-    let persona = active_persona_prompt(&db, &uid).await?;
-    Ok(Json(SettingsView {
-        google_connected,
-        google_account: None,
-        model,
-        // Node と同じく永続化しない（入力のエコーのみ・再読み込みで既定値へ戻る)。
-        max_tokens: js_number_or(body.max_tokens.as_ref(), 2048.0) as i64,
-        temperature: js_number_or(body.temperature.as_ref(), 0.7),
-        persona,
-    }))
-}
-
-/// `Number(x) || default`（JS の falsy フォールバック）を近似する。
-fn js_number_or(value: Option<&serde_json::Value>, default: f64) -> f64 {
-    let n = match value {
-        Some(serde_json::Value::Number(n)) => n.as_f64(),
-        Some(serde_json::Value::String(s)) => s.trim().parse::<f64>().ok(),
-        _ => None,
-    };
-    match n {
-        Some(v) if v != 0.0 && v.is_finite() => v,
-        _ => default,
-    }
+    // 応答は入力のエコーではなく、書き込み後の永続状態から組み立てる。
+    let after = users::get_agent_settings(&db, &uid)
+        .await?
+        .ok_or_else(user_settings_not_found)?;
+    Ok(Json(settings_view(&db, &uid, Some(after)).await?))
 }
 
 /// 秘書 Bot の適用中ペルソナ本文（未設定は空文字・Node `getPersonaPrompt`）。

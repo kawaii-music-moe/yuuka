@@ -1,8 +1,9 @@
 import { createServer } from 'node:http'
 import { deflateSync } from 'node:zlib'
 import type { ChatMessage } from '../src/api/contracts'
+import { DEFAULT_GEMINI_MODEL, GEMINI_MODELS } from '../src/api/models'
 
-let settings = { googleConnected: true, googleAccount: 'agent@example.com', model: 'GPT-4o', maxTokens: 2048, temperature: 0.7, persona: '簡潔で、先回りして支援するパーソナルエージェント。' }
+let settings = { googleConnected: true, googleAccount: 'agent@example.com', model: DEFAULT_GEMINI_MODEL as string, persona: '簡潔で、先回りして支援するパーソナルエージェント。' }
 let note = { id: 'shared-note', title: '共有ノート', body: '# 今週の方針\n\n- 平日の予定は朝に確認する\n- 支出は当日中に記録する', updatedAt: new Date().toISOString() }
 let todos = [
   { id: '1', title: '今週の買い物リストを整理', dueDate: '2026-08-14', completed: false, list: '個人' },
@@ -109,7 +110,17 @@ createServer(async (req, res) => {
   const apiPath = url.pathname.replace(/^\/api\/(?:pwa|client)(?=\/|$)/, '/api')
   if (req.method === 'GET' && apiPath === '/api/status') return json(res, { status: 'ok', service: 'agent-mock', checkedAt: new Date().toISOString() })
   if (req.method === 'GET' && url.pathname === '/api/settings/google/oauth/url') return json(res, { success: true, url: 'https://example.com/google-authorize' })
-  if (apiPath === '/api/settings') { if (req.method === 'PUT') settings = await read(req); return json(res, settings) }
+  if (apiPath === '/api/settings') {
+    if (req.method === 'PUT') {
+      // 本番（PUT /api/client/settings）と同じ契約: model は許可リスト外なら 400、persona のみ更新でき、
+      // それ以外のキー（旧クライアントが送る maxTokens / temperature、googleConnected 等）は無視する。
+      const body = await read(req)
+      const requested = typeof body.model === 'string' ? body.model.trim() : ''
+      if (requested && !(GEMINI_MODELS as readonly string[]).includes(requested)) return json(res, { message: `model must be one of: ${GEMINI_MODELS.join(', ')}` }, 400)
+      settings = { ...settings, model: requested || settings.model, persona: typeof body.persona === 'string' ? body.persona : settings.persona }
+    }
+    return json(res, settings)
+  }
   if (req.method === 'POST' && apiPath === '/api/integrations/google/authorize') return json(res, { authorizationUrl: 'https://example.com/google-authorize' })
   if (apiPath === '/api/shared-note') { if (req.method === 'PUT') note = { ...note, ...await read(req), updatedAt: new Date().toISOString() }; return json(res, note) }
   if (apiPath === '/api/todos') { if (req.method === 'POST') { const todo = { ...await read(req), id: crypto.randomUUID(), completed: false }; todos.unshift(todo); return json(res, todo, 201) }; return json(res, todos) }

@@ -3,8 +3,6 @@ export type AgentSettings = {
   googleConnected: boolean
   googleAccount?: string
   model: string
-  maxTokens: number
-  temperature: number
   persona: string
 }
 export type SharedNote = { id: string; title: string; body: string; updatedAt: string }
