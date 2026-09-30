@@ -30,7 +30,7 @@
 import { get } from "svelte/store";
 import { activeBot } from "$lib/stores/activeBot";
 import { currentUser } from "$lib/stores/session";
-import { goto, isPublicPath, currentRoute } from "$lib/router";
+import { goto, isPublicPath, currentRoute, page } from "$lib/router";
 
 /** scope:'bot' は botId 注入必須、'user' は絶対に注入しない。 */
 export type Scope = "bot" | "user";
@@ -109,8 +109,12 @@ async function request<T>(
 	// 集中型 401: bootstrap プローブ・公開ルート上では遷移しない（匿名として扱う）
 	if (res.status === 401) {
 		currentUser.set(null);
-		if (!opts.isBootstrap && !isPublicPath(get(currentRoute))) {
-			goto("/login");
+		const here = get(currentRoute);
+		if (!opts.isBootstrap && !isPublicPath(here)) {
+			// #34 症状4: returnTo を付けてログイン後に元の画面へ戻れるようにする
+			// （currentRoute はアプリ相対パス・query/hash は page ストアの URL から補う）。
+			const dest = here === "/login" ? "/login" : `/login?returnTo=${encodeURIComponent(here + get(page).search + get(page).hash)}`;
+			goto(dest);
 		}
 		throw new ApiError(401, "認証が必要です");
 	}

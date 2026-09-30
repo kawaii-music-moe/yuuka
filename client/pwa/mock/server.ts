@@ -33,6 +33,9 @@ createServer(async (req, res) => {
     return json(res, { success: true }, 200, { 'Set-Cookie': 'yuuka-mock-session=admin; Path=/; SameSite=Lax' })
   }
   if (req.method === 'POST' && url.pathname === '/api/logout') return json(res, { success: true }, 200, { 'Set-Cookie': 'yuuka-mock-session=; Path=/; Max-Age=0' })
+  // 共有ログイン画面（frontend/src/overlays/Login.svelte）が起動時にプローブする。
+  // 初期セットアップ不要な状態を返し、通常のログインフォームを表示させる。
+  if (req.method === 'GET' && url.pathname === '/api/setup/status') return json(res, { needSetup: false })
   if (req.method === 'GET' && url.pathname === '/api/me') {
     if (!hasSession) return json(res, { message: 'Unauthorized' }, 401)
     // Keep this response compatible with the production authentication API.
