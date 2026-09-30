@@ -291,3 +291,100 @@ async fn non_llm_error_without_key_falls_back_to_fixed_error() {
         "生成不能時は Err で固定文経路へ: {result:?}"
     );
 }
+
+// ─── issue #41: PWA チャット送信（`secretary_turn_pwa`）の source 分離 ───
+
+fn count_logs_by_source(path: &std::path::Path, user_id: &str, role: &str, source: &str) -> i64 {
+    let conn = rusqlite::Connection::open(path).expect("open");
+    conn.query_row(
+        "SELECT COUNT(*) FROM message_logs WHERE user_id = ?1 AND role = ?2 AND source = ?3",
+        rusqlite::params![user_id, role, source],
+        |r| r.get(0),
+    )
+    .expect("count")
+}
+
+/// `secretary_turn_pwa` は `secretary_turn`（Discord）と同じ応答生成経路を通りつつ、
+/// 会話ログを `source='pwa'` として永続化する（issue #41）。
+#[tokio::test]
+async fn secretary_turn_pwa_persists_under_pwa_source() {
+    let (db, path) = fresh_db();
+    let crypto =
+        Arc::new(SystemCrypto::new(SecretString::from("orch-test-secret".to_owned())).unwrap());
+    seed_user_with_key(&path, &crypto, "u6");
+    let engine = engine_with(db, Some(crypto), "PWAからのご用件ですね、承知しました。");
+
+    let reply = engine
+        .secretary_turn_pwa(
+            &BotId::system_default(),
+            &UserId::new("u6"),
+            IncomingChat {
+                text: "PWAから送信".to_owned(),
+                ..IncomingChat::default()
+            },
+            &null_sink(),
+        )
+        .await
+        .expect("pwa turn ok");
+
+    assert_eq!(reply.text, "PWAからのご用件ですね、承知しました。");
+    assert_eq!(
+        count_logs_by_source(&path, "u6", "user", "pwa"),
+        1,
+        "PWA のユーザー発言が source='pwa' で保存される"
+    );
+    assert_eq!(
+        count_logs_by_source(&path, "u6", "assistant", "pwa"),
+        1,
+        "PWA のアシスタント応答が source='pwa' で保存される"
+    );
+    assert_eq!(
+        count_logs(&path, "u6", "user"),
+        1,
+        "Discord 側（既定 source）には漏れない"
+    );
+}
+
+/// `secretary_turn`（Discord）と `secretary_turn_pwa` は同じ `(bot_id, user_id)` でも
+/// 互いのコンテキストを読まない（#38 と同種のキー不一致の再発防止・issue #41）。
+#[tokio::test]
+async fn secretary_turn_pwa_context_is_isolated_from_discord() {
+    let (db, path) = fresh_db();
+    let crypto =
+        Arc::new(SystemCrypto::new(SecretString::from("orch-test-secret".to_owned())).unwrap());
+    seed_user_with_key(&path, &crypto, "u7");
+    let engine = engine_with(db, Some(crypto), "了解しました。");
+
+    // Discord 経路で 1 ターン。
+    engine
+        .secretary_turn(
+            &BotId::system_default(),
+            &UserId::new("u7"),
+            IncomingChat {
+                text: "discord発言".to_owned(),
+                ..IncomingChat::default()
+            },
+            &null_sink(),
+        )
+        .await
+        .expect("discord turn");
+
+    // PWA 経路で 1 ターン（同じ user_id/bot_id）。
+    engine
+        .secretary_turn_pwa(
+            &BotId::system_default(),
+            &UserId::new("u7"),
+            IncomingChat {
+                text: "pwa発言".to_owned(),
+                ..IncomingChat::default()
+            },
+            &null_sink(),
+        )
+        .await
+        .expect("pwa turn");
+
+    // 双方 1 件ずつ、互いの source には漏れない。
+    assert_eq!(count_logs_by_source(&path, "u7", "user", "discord"), 1);
+    assert_eq!(count_logs_by_source(&path, "u7", "user", "pwa"), 1);
+    assert_eq!(count_logs(&path, "u7", "user"), 2, "合計は両方の和");
+}
