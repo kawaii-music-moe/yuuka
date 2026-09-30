@@ -17,13 +17,30 @@ use crate::map_sqlite;
 /// 既定の読み取り並行数（= 開くコネクション上限）。
 const DEFAULT_READ_POOL_SIZE: usize = 4;
 
+/// DB 新規作成を明示オプトインする環境変数名（既定 off）。
+///
+/// Node 実装の撤去により「一度 Node で起動して DB を生成してから Rust に切り替える」運用が
+/// 使えなくなったため導入（issue #55）。値は `1`/`true`/`yes`（大小無視）で有効。無効時は
+/// [`open_conn`] が従来どおり `CREATE` を付けずに即エラーで起動失敗するため、`DATA_DIR` の
+/// パス誤設定で意図せず空 DB を作ってしまう事故を防げる（C-2 を維持）。
+pub const INIT_DB_ENV: &str = "YUUKA_INIT_DB";
+
+/// [`INIT_DB_ENV`] が有効か判定する（`YUUKA_RUST_CRON`/`YUUKA_RUST_DISCORD` と同じ判定規則）。
+#[must_use]
+pub fn init_db_enabled() -> bool {
+    std::env::var(INIT_DB_ENV)
+        .ok()
+        .is_some_and(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+}
+
 /// PRAGMA を明示設定して SQLite コネクションを開く（§11.4）。
 ///
 /// `read_only=true` は **`SQLITE_OPEN_READ_ONLY` + `query_only`** で開き、read クロージャ内の
 /// 誤った書き込みを SQLite 層で拒否する（＝writer actor を通らない第二 writer 経路を機械排除・R-2）。
 /// `read_only=false`（writer 専用）は `SQLITE_OPEN_READ_WRITE` で開くが **`CREATE` は付けない**:
-/// 移行期は Node が唯一の schema 所有者で DB は既存前提のため、パス誤設定時に空 DB を新規作成せず
-/// 即 open エラーにする（C-2）。
+/// DB は既存前提とし、パス誤設定時に空 DB を新規作成せず即 open エラーにする（C-2）。新規
+/// インスタンスのブートストラップ（無ければ作る）は [`create_conn`] を明示オプトイン
+/// （[`INIT_DB_ENV`]）経由でのみ使う。
 ///
 /// PRAGMA:
 /// - writer: `journal_mode=WAL` / `foreign_keys=ON` / `busy_timeout=5000` / `synchronous=NORMAL`
@@ -41,6 +58,29 @@ pub fn open_conn(path: &Path, read_only: bool) -> Result<Connection, DbError> {
     let flags = mode_flag | OpenFlags::SQLITE_OPEN_URI | OpenFlags::SQLITE_OPEN_NO_MUTEX;
     let conn = Connection::open_with_flags(path, flags).map_err(map_sqlite)?;
     apply_pragmas(&conn, read_only)?;
+    Ok(conn)
+}
+
+/// `SQLITE_OPEN_CREATE` 付きで DB を開く（無ければ新規作成、既存ならそのまま開く）。
+///
+/// 既存ファイルは上書き・再作成しない（CREATE は「無ければ作る」のみ）ため、既に schema が
+/// 入った DB に対して呼んでもデータは失われない。親ディレクトリ（`DATA_DIR` 自体）が無ければ
+/// 併せて作成する。呼び出し側が [`init_db_enabled`] 等で明示オプトインした場合にのみ使うこと
+/// （通常経路は [`open_conn`] を使い `CREATE` を付けない）。
+///
+/// # Errors
+/// 親ディレクトリ作成・open・PRAGMA 設定のいずれかに失敗した場合 [`DbError`]。
+pub fn create_conn(path: &Path) -> Result<Connection, DbError> {
+    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| DbError::Operation(format!("create data dir {parent:?}: {e}")))?;
+    }
+    let flags = OpenFlags::SQLITE_OPEN_READ_WRITE
+        | OpenFlags::SQLITE_OPEN_CREATE
+        | OpenFlags::SQLITE_OPEN_URI
+        | OpenFlags::SQLITE_OPEN_NO_MUTEX;
+    let conn = Connection::open_with_flags(path, flags).map_err(map_sqlite)?;
+    apply_pragmas(&conn, false)?;
     Ok(conn)
 }
 

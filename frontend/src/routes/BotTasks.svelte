@@ -16,6 +16,7 @@ import { ApiError } from "$lib/api/client";
 import { taskApi } from "$lib/api/services";
 import type { TodoPriority, TodoWithSubtasks } from "$lib/api/types";
 import { Button, confirmDialog, EmptyState, Icon } from "$lib/components/ui";
+import { withBasePath } from "$lib/router";
 import { activeBot } from "$lib/stores/activeBot";
 import { pushToast } from "$lib/stores/toast";
 import GanttChart from "./tasks/GanttChart.svelte";
@@ -233,7 +234,7 @@ async function saveProgress(payload: {
 		</div>
 		<div class="tasks-actions-right">
 			<a
-				href="/tasks/guide"
+				href={withBasePath("/tasks/guide")}
 				class="btn btn-secondary tasks-guide-link"
 			>
 				<Icon name="help" size={18} /> 使い方

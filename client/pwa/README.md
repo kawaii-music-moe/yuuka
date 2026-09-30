@@ -5,20 +5,22 @@
 From the repository root:
 
 ```bash
-pnpm dev:frontend
+pnpm dev:client:mock
 ```
 
-Starts the Vue Client at `http://localhost:5173` and the mock API at
-`http://localhost:8787`. The Vite proxy is automatically configured for the
-mock API.
+Starts the Vue Client at `http://localhost:5173`, the mock API at
+`http://localhost:8787`, and the shared-login admin dev server (`frontend`)
+at `http://localhost:5174` pointed at the same mock API. The Vite proxy is
+automatically configured for the mock API, and `/login`/`/admin` redirect to
+the admin dev server.
 
 ```bash
-pnpm dev:admin
+pnpm dev
 ```
 
-Starts Yuuka's application server for the administration UI at `/admin/` and
-the built Client routes at `/`. Run `pnpm build:pwa` after Client source
-changes when using this mode.
+Starts just the shared-login/admin Svelte dev server (`frontend`) on its own,
+at `http://localhost:5173` (see `frontend/vite.config.ts`). Use this when you
+only need the admin UI and don't need the Client mock stack above.
 
 Discord エージェント基盤向けの Web コントロールパネルです。Vue 3 + TypeScript + Vite を使用し、PWA としてインストールできます。
 

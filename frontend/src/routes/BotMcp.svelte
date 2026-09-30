@@ -27,6 +27,7 @@ import {
 	Icon,
 	TagChip,
 } from "$lib/components/ui";
+import { withBasePath } from "$lib/router";
 import { activeBot } from "$lib/stores/activeBot";
 import { pushToast } from "$lib/stores/toast";
 
@@ -174,7 +175,7 @@ function openDashboard(s: McpServerView) {
 		<span class="field-sub"
 			>MCPサーバーの登録・削除は「Bot統合管理」ページ、Bot別の利用許可は下の「このBotが利用するMCPサーバー」で管理できます。</span
 		>
-		<a href="/integrated" class="btn btn-secondary btn-sm">Bot統合管理へ</a>
+		<a href={withBasePath("/integrated")} class="btn btn-secondary btn-sm">Bot統合管理へ</a>
 	</div>
 
 	{#if isRealBot}
