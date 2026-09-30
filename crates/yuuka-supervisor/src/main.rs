@@ -33,6 +33,11 @@ use yuuka_web::{AppState, Db, WebConfig};
 const CONFIG_PATH: &str = "config.yaml";
 /// ビルド済み SPA の配信元（vite `outDir` = `dist/public`）。
 const DIST_DIR: &str = "dist/public";
+/// PWA（`client/pwa`）のビルド出力（issue #33・Node `PWA_PUBLIC_DIR` 一致: `dist/public/pwa` 優先）。
+const PWA_DIST_DIR: &str = "dist/public/pwa";
+/// PWA ビルド出力が無いときのフォールバック（Node と同じくコミット済みの事前ビルド成果物）。
+/// issue #46（この成果物自体の削除）とは別スコープのため、本 PR では削除しない。
+const PWA_FALLBACK_DIST_DIR: &str = "src/public/pwa";
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -343,6 +348,24 @@ async fn run() -> Result<(), String> {
         );
     }
 
+    // 5.5) PWA（issue #33）配信元。Node `PWA_PUBLIC_DIR` と同じ優先順位: ビルド出力
+    //      （`dist/public/pwa`）があればそれを、無ければコミット済みの事前ビルド成果物
+    //      （`src/public/pwa`）へフォールバックする。両方無ければ PWA 配信は無効化（API のみ）。
+    let pwa_dist = PathBuf::from(PWA_DIST_DIR);
+    let pwa_dist_dir = if pwa_dist.is_dir() {
+        Some(pwa_dist)
+    } else {
+        let fallback = PathBuf::from(PWA_FALLBACK_DIST_DIR);
+        fallback.is_dir().then_some(fallback)
+    };
+    if pwa_dist_dir.is_none() {
+        tracing::warn!(
+            dir = PWA_DIST_DIR,
+            fallback = PWA_FALLBACK_DIST_DIR,
+            "PWA ディレクトリが無いため PWA 静的配信を無効化（/api/client/* は引き続き動作）"
+        );
+    }
+
     // 6) web を supervised task として登録し、JoinSet 監督ループを駆動する。
     //    ここから先は「落ちない」— web の panic/一過性障害は隔離＋指数バックオフ再起動される。
     let addr = SocketAddr::new(cfg.host, cfg.port);
@@ -362,6 +385,7 @@ async fn run() -> Result<(), String> {
         bot_management_routes,
         addr,
         dist_dir,
+        pwa_dist_dir,
     });
     let mut supervisor = Supervisor::new().service(web);
 
@@ -688,6 +712,8 @@ struct WebService {
     bot_management_routes: Router<AppState>,
     addr: SocketAddr,
     dist_dir: Option<PathBuf>,
+    /// PWA（issue #33）配信元。`None` なら PWA 静的配信を無効化（`/api/client/*` のみ動作）。
+    pwa_dist_dir: Option<PathBuf>,
 }
 
 #[async_trait]
@@ -712,6 +738,7 @@ impl SupervisedService for WebService {
             self.finance_routes.clone(),
             self.bot_management_routes.clone(),
             self.dist_dir.as_deref(),
+            self.pwa_dist_dir.as_deref(),
         );
         let listener = tokio::net::TcpListener::bind(self.addr)
             .await

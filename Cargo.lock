@@ -3793,6 +3793,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "yuuka-client-api"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "chrono",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tower",
+ "tracing",
+ "yuuka-auth",
+ "yuuka-core",
+ "yuuka-db",
+ "yuuka-finance",
+ "yuuka-gemini",
+ "yuuka-orchestrator",
+ "yuuka-persona",
+ "yuuka-schedule",
+ "yuuka-todo",
+ "yuuka-types",
+ "yuuka-web",
+]
+
+[[package]]
 name = "yuuka-conversation"
 version = "0.1.0"
 dependencies = [
@@ -4202,6 +4229,7 @@ dependencies = [
  "yuuka-briefing",
  "yuuka-browser",
  "yuuka-chart",
+ "yuuka-client-api",
  "yuuka-conversation",
  "yuuka-core",
  "yuuka-credential",

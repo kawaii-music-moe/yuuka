@@ -9,7 +9,7 @@
 use std::path::Path;
 
 use axum::Router;
-use yuuka_web::{apply_common_layers, framework_routes, mount_static, AppState};
+use yuuka_web::{apply_common_layers, framework_routes, mount_pwa, mount_static, AppState};
 
 pub mod desktop_dist;
 pub mod discord;
@@ -37,9 +37,14 @@ pub use ws::ws_routes;
 /// 組んだものを clone して渡す（`Router` は安価に clone 可能）。`dist_dir` を渡すと SPA
 /// （`dist/public`）を `fallback_service` として載せる（未指定は API のみ）。
 ///
-/// 引数は state + dist_dir と、`Extension` で依存を内包済みの pre-built ルータ群（auth/admin/settings/
-/// webhook/bot-attribute/ws）。crypto/runtime を State へ入れると全 `AppState` 構築へ波及するため、
-/// これらは main 側で組んで渡す配線関数（引数数の lint は本質的な配線都合として許容）。
+/// 引数は state + dist_dir/pwa_dist_dir と、`Extension` で依存を内包済みの pre-built ルータ群
+/// （auth/admin/settings/webhook/bot-attribute/ws）。crypto/runtime を State へ入れると全
+/// `AppState` 構築へ波及するため、これらは main 側で組んで渡す配線関数（引数数の lint は本質的な
+/// 配線都合として許容）。
+///
+/// `pwa_dist_dir` を渡すと PWA（issue #33・`client/pwa`）を [`mount_pwa`] で明示ルート群として
+/// 載せる。`dist_dir`（admin SPA・`fallback_service`）とは独立に効くため、両方 `Some` でも
+/// 互いを横取りしない（[`yuuka_web::mount_pwa`] のドキュメント参照）。
 #[allow(clippy::too_many_arguments)]
 pub fn build_app(
     state: AppState,
@@ -56,6 +61,7 @@ pub fn build_app(
     finance_routes: Router<AppState>,
     bot_management_routes: Router<AppState>,
     dist_dir: Option<&Path>,
+    pwa_dist_dir: Option<&Path>,
 ) -> Router {
     let routes = framework_routes()
         .merge(auth_routes)
@@ -80,8 +86,13 @@ pub fn build_app(
         .merge(yuuka_auth::device_routes())
         .merge(yuuka_orchestrator::member_request_routes())
         .merge(yuuka_orchestrator::bot_share_routes())
+        .merge(yuuka_client_api::routes())
         .merge(bot_management_routes)
         .merge(desktop_dist::routes());
+    let routes = match pwa_dist_dir {
+        Some(dir) => mount_pwa(routes, dir),
+        None => routes,
+    };
     let routes = match dist_dir {
         Some(dir) => mount_static(routes, dir),
         None => routes,
@@ -217,6 +228,7 @@ mod tests {
             yuuka_finance::routes(),
             // Bot 管理ルータ（既定 NullBotViewRuntime・crypto なし）を merge して検証する。
             yuuka_orchestrator::bot_management_routes(),
+            None,
             None,
         )
     }
