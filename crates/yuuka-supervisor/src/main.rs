@@ -201,13 +201,21 @@ async fn run() -> Result<(), String> {
     );
     let chat_ws_routes = ws_routes(chat_engine.clone(), cfg.desktop_max_upload_mb);
 
-    // PWA チャット送信（issue #41）。WS/Discord と同じ `RateLimiter` シーム（`InMemoryRateLimiter`）を
-    // PWA 専用インスタンスで消費する（guildId スロット="pwa"・finance の ReceiptParserAdapter の
-    // "web" と同型・レート上限自体は system_settings を共有するため Discord 側の調整がそのまま効く）。
-    let client_api_routes = yuuka_client_api::routes_with(
-        chat_engine.clone(),
-        Arc::new(InMemoryRateLimiter::new(db.clone())),
-    );
+    // レート制限（issue #41 レビュー・P1）: PWA と Discord/WS で **同一の** `InMemoryRateLimiter`
+    // インスタンス（＝同一の `counters` マップ）を共有する。この実装のユーザー単位窓
+    // （分/日）は `bot_id × user_id` のみで消費され guildId を含まないため、Discord 側の
+    // guild スロット（実ギルド ID）と PWA 側のスロット（"pwa"・finance receipt の "web" と同型）
+    // が違っても、インスタンスさえ同じなら同一ユーザーの利用回数は経路を跨いで正しく合算される。
+    // 別インスタンス（旧実装）だと `counters` マップが分かれ、Discord で分/日上限まで使った
+    // 直後に PWA でも再び上限まで使えてしまう（Bot のレート制限をチャネル切替で迂回できる）。
+    // guild 単位（ギルド日次上限）は `guild_id` を含むキーのままなので、この共有によって
+    // Discord ギルド同士の上限が PWA と混ざることはない（guild スロットは経路ごとに別キー）。
+    let rate_limiter: Arc<dyn RateLimiter> = Arc::new(InMemoryRateLimiter::new(db.clone()));
+
+    // PWA チャット送信（issue #41）。上の共有 `rate_limiter` を Discord と同一インスタンスで消費する
+    // （guildId スロット="pwa"・finance の ReceiptParserAdapter の "web" と同型）。
+    let client_api_routes =
+        yuuka_client_api::routes_with(chat_engine.clone(), rate_limiter.clone());
 
     // 4.7) Discord マルチテナント（P1-3）。実ポート（BotDirectory/RateLimiter/MembershipService）＋
     //      会話エンジン（processor）を注入して DiscordManager を組み、`prepare` でトークン解決 +
@@ -216,7 +224,7 @@ async fn run() -> Result<(), String> {
     //      起動は後述の YUUKA_RUST_DISCORD ゲートで制御する（二重 gateway ＝二重応答の回避）。
     let discord_manager = Arc::new(DiscordManager::new(ManagerPorts {
         directory: Arc::new(DbBotDirectory::new(db.clone(), crypto.clone())),
-        rate_limiter: Arc::new(InMemoryRateLimiter::new(db.clone())),
+        rate_limiter: rate_limiter.clone(),
         processor: chat_engine.clone(),
         membership: Arc::new(DbMembership::new(db.clone())),
     }));
