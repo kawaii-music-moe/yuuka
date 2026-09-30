@@ -17,6 +17,7 @@
 	import { pushToast } from "$lib/stores/toast";
 	import { confirmDialog } from "$lib/components/ui";
 	import { Button, Icon, EmptyState } from "$lib/components/ui";
+	import { withBasePath } from "$lib/router";
 	import type { TodoWithSubtasks, TodoPriority } from "$lib/api/types";
 
 	import TaskCard from "./tasks/TaskCard.svelte";
@@ -234,7 +235,7 @@
 		</div>
 		<div class="tasks-actions-right">
 			<a
-				href="/tasks/guide"
+				href={withBasePath("/tasks/guide")}
 				class="btn btn-secondary tasks-guide-link"
 			>
 				<Icon name="help" size={18} /> 使い方

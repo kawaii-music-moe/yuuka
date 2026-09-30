@@ -4,11 +4,13 @@ import { agentGateway, type CalendarEvent } from '@/api'
 import PageState from '@/components/PageState.vue'
 import PageTitle from '@/components/PageTitle.vue'
 import UiButton from '@/components/UiButton.vue'
-import { time } from '@/utils/format'
+import { localDateKey, time } from '@/utils/format'
 const today = new Date(); const cursor = ref(new Date(today.getFullYear(), today.getMonth(), 1)); const events = ref<CalendarEvent[]>([]); const error = ref(''); const loading = ref(true)
 const label = computed(() => new Intl.DateTimeFormat('ja-JP', { year: 'numeric', month: 'long' }).format(cursor.value))
 const days = computed(() => { const first = new Date(cursor.value); const offset = first.getDay(); const start = new Date(first); start.setDate(1 - offset); return Array.from({ length: 42 }, (_, i) => { const day = new Date(start); day.setDate(start.getDate() + i); return day }) })
-function key(day: Date) { return day.toISOString().slice(0, 10) } function items(day: Date) { return events.value.filter(event => event.startsAt.slice(0, 10) === key(day)) }
+// ローカル日付（`localDateKey`）で比較する。UTC の `toISOString()` ベースで比較すると、
+// JST の 09:00〜23:59 の予定が翌日の枠に表示されてしまう（issue #43）。
+function key(day: Date) { return localDateKey(day) } function items(day: Date) { return events.value.filter(event => localDateKey(new Date(event.startsAt)) === key(day)) }
 async function load() { loading.value = true; try { const from = key(days.value[0]); const to = key(days.value[41]); events.value = await agentGateway.listCalendarEvents(from, to) } catch { error.value = 'カレンダーを取得できません。' } finally { loading.value = false } }
 function move(amount: number) { cursor.value = new Date(cursor.value.getFullYear(), cursor.value.getMonth() + amount, 1); load() }
 onMounted(load)

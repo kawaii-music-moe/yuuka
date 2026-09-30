@@ -18,6 +18,7 @@ yuuka-mcp.workspace = true          # MCP 動的ツール（McpProvider）+ McpC
 yuuka-synapse.workspace = true      # シナプス認知エンジン（in-process・L2 想起 + 索引化）— P1-3/Phase H
 yuuka-google.workspace = true       # CalendarPort（連携カレンダー一覧を systemInstruction へ・P2-E-2）
 yuuka-discord.workspace = true      # provider 中立 DTO（TurnProcessor/TurnReply/IncomingChat 等）+ MemberDmSender
+yuuka-richcontent.workspace = true  # embed_recover の Embed 切り詰め上限を showRichContent と共有（#37）
 yuuka-auth.workspace = true         # 監査ログ（add_audit_log）— 利用申請 Web-API
 axum.workspace = true               # 利用申請 Web-API（member_routes）
 rusqlite.workspace = true

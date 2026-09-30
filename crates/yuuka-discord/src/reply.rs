@@ -1,6 +1,7 @@
 //! provider 中立 DTO → twilight 型の写像と、チャンネルへの分割送信（現行の返信ブロック）。
 //!
-//! - [`to_twilight_embeds`] / [`to_twilight_components`] / [`to_twilight_attachments`] — 純写像。
+//! - [`to_twilight_embeds`] / [`to_twilight_components`] / [`to_twilight_attachments`] — 純写像
+//!   （[`to_twilight_embeds`] のみ Discord の Embed 数上限で切り捨てる・#37）。
 //! - [`send_channel_reply`] — `toDiscordMarkdown` → 2000 字分割 → 最終チャンクへ embeds/files/components
 //!   添付、という現行 [`src/bot.ts:1218-1246`] の送信手順を移植。送信失敗は `safeReply` 同様に
 //!   ログして打ち切り、ハンドラ（ひいてはプロセス）を巻き込まない。
@@ -14,12 +15,20 @@ use twilight_model::id::Id;
 use twilight_util::builder::embed::{EmbedBuilder, EmbedFieldBuilder, EmbedFooterBuilder};
 
 use crate::ports::{self, FileAttachment, RichEmbed, TurnReply};
-use crate::text::{self, DISCORD_MAX_MESSAGE_LEN};
+use crate::text::{self, DISCORD_MAX_EMBEDS, DISCORD_MAX_MESSAGE_LEN};
 
 /// [`RichEmbed`] 群 → twilight [`Embed`] 群へ写像する。
+///
+/// Discord の 1 メッセージあたり Embed 上限（[`DISCORD_MAX_EMBEDS`]）を超える分は切り捨てる
+/// （#37: `showRichContent` 複数呼び出し + `embed_recover` 復元分の合計が超過しうる。超過したまま
+/// 送ると `create_message` が検証エラーで失敗し、本文ごと届かなくなる）。
 #[must_use]
 pub fn to_twilight_embeds(embeds: &[RichEmbed]) -> Vec<Embed> {
-    embeds.iter().map(to_twilight_embed).collect()
+    embeds
+        .iter()
+        .take(DISCORD_MAX_EMBEDS)
+        .map(to_twilight_embed)
+        .collect()
 }
 
 fn to_twilight_embed(e: &RichEmbed) -> Embed {
@@ -166,4 +175,34 @@ pub async fn send_channel_text(
         return false;
     }
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn embed(title: &str) -> RichEmbed {
+        RichEmbed {
+            title: Some(title.to_owned()),
+            ..RichEmbed::default()
+        }
+    }
+
+    /// #37: `showRichContent` 複数回 + `embed_recover` 復元分の合計が Discord 上限（10）を
+    /// 超えても、超過分を切り捨てて検証エラーを起こさないこと。
+    #[test]
+    fn to_twilight_embeds_caps_at_discord_max() {
+        let embeds: Vec<RichEmbed> = (0..15).map(|i| embed(&format!("e{i}"))).collect();
+        let out = to_twilight_embeds(&embeds);
+        assert_eq!(out.len(), DISCORD_MAX_EMBEDS);
+        assert_eq!(out[0].title.as_deref(), Some("e0"));
+        assert_eq!(out[9].title.as_deref(), Some("e9"));
+    }
+
+    #[test]
+    fn to_twilight_embeds_keeps_all_under_cap() {
+        let embeds: Vec<RichEmbed> = (0..3).map(|i| embed(&format!("e{i}"))).collect();
+        let out = to_twilight_embeds(&embeds);
+        assert_eq!(out.len(), 3);
+    }
 }
