@@ -19,6 +19,21 @@ const SCHEDULE_COLUMNS: &str =
 /// Node parity: `remind_before_minutes` 未指定時の既定値。
 const DEFAULT_REMIND_BEFORE_MINUTES: i64 = 10;
 
+/// [`ScheduleRepo::list_in_range`] 専用のビュー（PWA カレンダー表示用）。
+///
+/// [`Schedule`]（`wire DTO`・ts-rs 生成対象）とは別物: `google_calendar_id` を含むため
+/// **`yuuka-client-api` からの内部利用専用**で `TS`/`export_bindings` の対象にしない
+/// （一般ダッシュボードの `Schedule` クリーンビュー契約は変えない）。
+#[derive(Debug, Clone)]
+pub struct ScheduleForClient {
+    pub id: i64,
+    pub title: String,
+    /// `'YYYY-MM-DD HH:MM:SS'`（SQLite localtime）。
+    pub start_at: String,
+    pub end_at: Option<String>,
+    pub google_calendar_id: Option<String>,
+}
+
 /// schedule リポジトリ（DB ハンドルを借用する軽量ラッパ・per-request 構築）。
 pub struct ScheduleRepo<'a> {
     pub(crate) read: &'a ReadPool,
@@ -127,6 +142,54 @@ impl<'a> ScheduleRepo<'a> {
         self.get(scope, id)
             .await?
             .ok_or_else(|| DbError::Operation("inserted schedule not found".to_owned()))
+    }
+
+    /// `[from, to]`（`'YYYY-MM-DD HH:MM:SS'` ローカル・両端含む日境界）の予定を開始時刻昇順で返す
+    /// （PWA `GET /api/client/calendar/events`・issue #33/#43）。
+    ///
+    /// `to_exclusive_end` は「`to` の翌日 0 時」（呼び出し側で JST 日境界から組み立てる）。
+    /// [`Schedule`] の**フィールドに存在しない** `google_calendar_id`（クリーンビューが意図的に
+    /// 隠す内部・Google 同期列）を PWA の `calendar`/`calendarName` 表示用に**別途**返す
+    /// （[`ScheduleForClient`]・一般ダッシュボード向け `Schedule` の契約は変えない）。
+    ///
+    /// # Errors
+    /// クエリ失敗時 [`DbError`]。
+    pub async fn list_in_range(
+        &self,
+        scope: &UserScope,
+        from_inclusive: &str,
+        to_exclusive_end: &str,
+    ) -> Result<Vec<ScheduleForClient>, DbError> {
+        let (uid, bid) = scope_keys(scope);
+        let (from, to) = (from_inclusive.to_owned(), to_exclusive_end.to_owned());
+        self.read
+            .read(move |conn| {
+                let mut stmt = conn
+                    .prepare(
+                        "SELECT id, title, start_at, end_at, google_calendar_id FROM schedules \
+                         WHERE user_id = ?1 AND bot_id = ?2 \
+                           AND start_at >= ?3 AND start_at < ?4 \
+                         ORDER BY start_at ASC",
+                    )
+                    .map_err(map_sqlite)?;
+                let rows = stmt
+                    .query_map(params![uid, bid, from, to], |row| {
+                        Ok(ScheduleForClient {
+                            id: row.get("id")?,
+                            title: row.get("title")?,
+                            start_at: row.get("start_at")?,
+                            end_at: row.get("end_at")?,
+                            google_calendar_id: row.get("google_calendar_id")?,
+                        })
+                    })
+                    .map_err(map_sqlite)?;
+                let mut out = Vec::new();
+                for row in rows {
+                    out.push(row.map_err(map_sqlite)?);
+                }
+                Ok(out)
+            })
+            .await
     }
 
     /// 予定を削除する（削除できたら `true`）。

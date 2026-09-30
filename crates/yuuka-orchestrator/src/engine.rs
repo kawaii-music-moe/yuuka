@@ -91,6 +91,21 @@ enum PersonaSource {
     Bot,
 }
 
+/// 秘書ターンの会話ログ/コンテキストの由来（issue #33/#38 の `source` 分離を秘書ターンへ適用・#41）。
+///
+/// [`ChatEngine::secretary_turn`]（Discord/WS）と [`ChatEngine::secretary_turn_pwa`]（PWA チャット
+/// 送信）は処理内容自体は同一だが、会話ログの読み書き先（[`message_log`] の `add_message_log`/
+/// `recent_context` 系 vs `add_pwa_message_log`/`recent_pwa_context` 系）だけを切り替える。PWA 発の
+/// 発話が Discord/WS の文脈に混ざる（あるいはその逆）と、#38 と同種の「別経路の会話が漏れる」バグに
+/// なるため、供給元ごとに専用の `source`/floor キーを必ず通す。
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MessageSource {
+    /// Discord（ギルド/DM の秘書 Bot）・WS デスクトップ・レシート OCR 等、従来の既定経路。
+    Discord,
+    /// PWA チャット送信（issue #41）。
+    Pwa,
+}
+
 /// 復号済み Gemini キー + モデルから [`GenerateBackend`] を作るファクトリ。
 ///
 /// 本番は [`RealGeminiFactory`]（`GeminiClient`）。テストは fake backend を返す実装を注入し、
@@ -228,7 +243,44 @@ impl ChatEngine {
         msg: IncomingChat,
         status: &StatusSink,
     ) -> Result<TurnReply, TurnError> {
-        match self.secretary_turn_impl(bot_id, user_id, msg, status).await {
+        self.secretary_turn_for_source(bot_id, user_id, msg, status, MessageSource::Discord)
+            .await
+    }
+
+    /// PWA チャット送信の秘書ターン（issue #41）。[`Self::secretary_turn`] と処理内容は同一だが、
+    /// 会話ログ/コンテキストの読み書きが `source='pwa'` 専用の floor（[`message_log::add_pwa_message_log`]/
+    /// [`message_log::recent_pwa_context`]）を経由し、Discord/WS の文脈と混ざらない（#38 のキー不一致
+    /// バグと同種の再発を構造的に防ぐ設計を踏襲・[`MessageSource`] 参照）。
+    ///
+    /// レート制限・Gemini キー事前チェックは呼び出し側（`yuuka-client-api`）が WS/Discord と同じ
+    /// [`yuuka_discord::RateLimiter`]/[`Self::user_has_gemini_key`] で行う（本メソッドはターン本体のみ）。
+    ///
+    /// # Errors
+    /// [`Self::secretary_turn`] と同じ。
+    pub async fn secretary_turn_pwa(
+        &self,
+        bot_id: &BotId,
+        user_id: &UserId,
+        msg: IncomingChat,
+        status: &StatusSink,
+    ) -> Result<TurnReply, TurnError> {
+        self.secretary_turn_for_source(bot_id, user_id, msg, status, MessageSource::Pwa)
+            .await
+    }
+
+    /// [`Self::secretary_turn`]/[`Self::secretary_turn_pwa`] 共通本体（`source` で会話ログの由来を切替）。
+    async fn secretary_turn_for_source(
+        &self,
+        bot_id: &BotId,
+        user_id: &UserId,
+        msg: IncomingChat,
+        status: &StatusSink,
+        source: MessageSource,
+    ) -> Result<TurnReply, TurnError> {
+        match self
+            .secretary_turn_impl(bot_id, user_id, msg, status, source)
+            .await
+        {
             Ok(r) => Ok(r),
             Err(TurnFailure::Llm(e)) => Err(e),
             Err(TurnFailure::NonLlm(e)) => {
@@ -244,13 +296,14 @@ impl ChatEngine {
         }
     }
 
-    /// [`Self::secretary_turn`] の本体（失敗を LLM/非 LLM に分類して返す）。
+    /// [`Self::secretary_turn_for_source`] の本体（失敗を LLM/非 LLM に分類して返す）。
     async fn secretary_turn_impl(
         &self,
         bot_id: &BotId,
         user_id: &UserId,
         msg: IncomingChat,
         status: &StatusSink,
+        source: MessageSource,
     ) -> Result<TurnReply, TurnFailure> {
         let uid = user_id.as_str();
         let bid = bot_id.as_str();
@@ -258,25 +311,45 @@ impl ChatEngine {
         let rich = user::rich_reply_enabled(&self.db, uid).await;
 
         // 1. ユーザー発言を先に永続化（空表現はスキップ・Node describeIncomingMessage）。
+        //    #41: PWA は discord_msg_id/reply_to_msg_id を持たない（`add_pwa_message_log` は常に NULL）。
         let log_text = describe_incoming(&msg);
         if !log_text.is_empty() {
-            message_log::add_message_log(
-                &self.db,
-                uid,
-                bid,
-                "user",
-                &log_text,
-                msg.discord_msg_id.as_deref(),
-                msg.reply_to_msg_id.as_deref(),
-            )
-            .await
-            .map_err(db_fail)?;
+            match source {
+                MessageSource::Discord => {
+                    message_log::add_message_log(
+                        &self.db,
+                        uid,
+                        bid,
+                        "user",
+                        &log_text,
+                        msg.discord_msg_id.as_deref(),
+                        msg.reply_to_msg_id.as_deref(),
+                    )
+                    .await
+                    .map_err(db_fail)?;
+                }
+                MessageSource::Pwa => {
+                    message_log::add_pwa_message_log(&self.db, uid, bid, "user", &log_text)
+                        .await
+                        .map_err(db_fail)?;
+                }
+            }
         }
 
-        // 2. 直近 15 件（古い順）をロードして contents を組む。
-        let history = message_log::recent_context(&self.db, uid, bid, message_log::CONTEXT_LIMIT)
-            .await
-            .map_err(db_fail)?;
+        // 2. 直近 15 件（古い順）をロードして contents を組む（#41: PWA は `source='pwa'` 専用の
+        //    floor/コンテキストのみを見る・Discord/WS の会話と混ざらない）。
+        let history = match source {
+            MessageSource::Discord => {
+                message_log::recent_context(&self.db, uid, bid, message_log::CONTEXT_LIMIT)
+                    .await
+                    .map_err(db_fail)?
+            }
+            MessageSource::Pwa => {
+                message_log::recent_pwa_context(&self.db, uid, bid, message_log::CONTEXT_LIMIT)
+                    .await
+                    .map_err(db_fail)?
+            }
+        };
         let mut contents = build_contents(&history, &msg);
 
         // 3. システムプロンプト（ペルソナ + 固定ルール + 現在日時）。
@@ -408,15 +481,62 @@ impl ChatEngine {
         let (reply_text, recovered) = embed_recover::recover_embeds_from_text(&base_text);
         // #36: 返信が Embed JSON ブロックだけだった場合、復元後に reply_text が空文字化しうる。
         // 「空でも fallback を保存」という不変条件を復元後にも適用し直す（そのまま保存すると、
-        // 次ターンで Gemini へ空の text パートが渡り 400 を招きうる）。
+        // 次ターンで Gemini へ空の text パートが渡り 400 を招きうる）。source（Discord/Pwa）に
+        // 関わらず適用する（PWA チャット送信・issue #41 も同じ不変条件を守る）。
         let reply_text = if reply_text.trim().is_empty() {
             FALLBACK_TEXT.to_owned()
         } else {
             reply_text
         };
-        message_log::add_message_log(&self.db, uid, bid, "assistant", &reply_text, None, None)
-            .await
-            .map_err(db_fail)?;
+
+        // embeds/files はここで確定させ、保存（次段）と戻り値（TurnReply）の両方へ同じ値を使う
+        // （issue #41 PR #75 レビュー・P2: 従来は保存の**後**に組み立てていたため、PWA 経由の保存が
+        // `reply.text` のみで embeds/files を握りつぶしていた。Discord は twilight へ直接渡すだけで
+        // 保存自体は不要だが、PWA は message_logs.rich_content/message_attachments へ永続化し、
+        // GET 履歴・ポーリング応答の両方でリッチ返信を再現できるようにする）。
+        let mut embeds = rich_parts_to_embeds(&result.rich_parts);
+        embeds.extend(recovered);
+        let files = rich_parts_to_files(&result.rich_parts);
+
+        match source {
+            MessageSource::Discord => {
+                message_log::add_message_log(
+                    &self.db,
+                    uid,
+                    bid,
+                    "assistant",
+                    &reply_text,
+                    None,
+                    None,
+                )
+                .await
+                .map_err(db_fail)?;
+            }
+            MessageSource::Pwa => {
+                let embeds_json = (!embeds.is_empty())
+                    .then(|| serde_json::to_string(&embeds))
+                    .transpose()
+                    .map_err(|e| db_fail(DbError::Operation(format!("embeds json: {e}"))))?;
+                let attachment_inputs: Vec<message_log::PwaAttachmentInput> = files
+                    .iter()
+                    .map(|f| message_log::PwaAttachmentInput {
+                        name: f.name.clone(),
+                        mime_type: mime_for_filename(&f.name).to_owned(),
+                        bytes: f.bytes.clone(),
+                    })
+                    .collect();
+                message_log::add_pwa_assistant_reply(
+                    &self.db,
+                    uid,
+                    bid,
+                    &reply_text,
+                    embeds_json.as_deref(),
+                    &attachment_inputs,
+                )
+                .await
+                .map_err(db_fail)?;
+            }
+        }
 
         // R1: 確定した最終ターンからシナプス（記憶の断片）を抽出して長期記憶へ蓄積する（Node `onFinal`）。
         //     ユーザー発話が空（添付のみ等 log_text="" ）なら抽出しない（Node は logText 有りで呼ぶ）。
@@ -430,12 +550,10 @@ impl ChatEngine {
             &log_text,
         );
 
-        let mut embeds = rich_parts_to_embeds(&result.rich_parts);
-        embeds.extend(recovered);
         Ok(TurnReply {
             text: reply_text,
             embeds,
-            files: rich_parts_to_files(&result.rich_parts),
+            files,
             ..TurnReply::default()
         })
     }
@@ -1050,6 +1168,18 @@ fn rich_parts_to_embeds(parts: &[ResponsePart]) -> Vec<RichEmbed> {
             _ => None,
         })
         .collect()
+}
+
+/// [`FileAttachment::name`] の拡張子から MIME タイプを推定する（issue #41 PR #75 レビュー・P2）。
+/// `rich_parts_to_files` が付ける拡張子（png/jpg/bin）の逆写像で、PWA 永続化（`message_attachments`）
+/// 用に `Content-Type` を復元する。`FileAttachment` 自体は MIME を保持しないため名前から推定する。
+fn mime_for_filename(name: &str) -> &'static str {
+    let ext = name.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+    match ext.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        _ => "application/octet-stream",
+    }
 }
 
 /// ツール生成メディア（`rich_parts`）を [`FileAttachment`] へ写像する（base64 デコード）。

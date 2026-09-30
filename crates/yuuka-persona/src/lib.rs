@@ -110,7 +110,8 @@ mod tests {
         {
             let conn = rusqlite::Connection::open(&path).expect("seed db");
             conn.execute_batch(PERSONAS_DDL).expect("create personas");
-            conn.execute_batch(ACTIVE_DDL).expect("create bot_active_personas");
+            conn.execute_batch(ACTIVE_DDL)
+                .expect("create bot_active_personas");
         }
         Db::open(&path).expect("open db")
     }

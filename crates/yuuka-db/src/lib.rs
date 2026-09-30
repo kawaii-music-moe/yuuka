@@ -115,10 +115,12 @@ mod tests {
         // 履歴なし）へ refinery が全マイグレーションを流す。baseline の CREATE 群が IF NOT EXISTS で
         // 冪等でないと「object already exists」で失敗し Rust writer が起動不能になる（#2 のガード）。
         //
-        // 注: post-baseline のマイグレーション（V19 の ALTER TABLE ADD COLUMN 等）は SQLite に
+        // 注: post-baseline のマイグレーション（V19/V21/V22 の ALTER TABLE ADD COLUMN 等）は SQLite に
         // IF NOT EXISTS が無く再走冪等にできないため、「全オブジェクト既存 + 履歴なし」ではなく
         // 「Node 実スキーマ（baseline のみ既存）+ 履歴なし」を正確に再現する: 履歴を消した上で
-        // post-baseline の産物（bot_channels / message_logs.channel_id）も除去してから再走する。
+        // post-baseline の産物（bot_channels / message_logs.channel_id・source / todos.list /
+        // context_notes.title / message_logs.rich_content / message_attachments）も除去してから再走する。V20（bot_muted_channels）は
+        // `CREATE TABLE IF NOT EXISTS` のみで自然に冪等のため対象外。
         let dir = tempdir().unwrap();
         let path = dir.path().join("populated.sqlite");
         seed_db(&path, "");
@@ -131,8 +133,16 @@ mod tests {
         conn.execute_batch(
             "DROP TABLE refinery_schema_history; \
              DROP TABLE bot_channels; \
+             DROP INDEX idx_message_attachments_message_log_id; \
+             DROP TABLE message_attachments; \
+             ALTER TABLE message_logs DROP COLUMN rich_content; \
+             ALTER TABLE message_logs DROP COLUMN is_notice; \
              DROP INDEX idx_message_logs_guild_channel; \
-             ALTER TABLE message_logs DROP COLUMN channel_id;",
+             ALTER TABLE message_logs DROP COLUMN channel_id; \
+             DROP INDEX idx_message_logs_user_bot_source; \
+             ALTER TABLE message_logs DROP COLUMN source; \
+             ALTER TABLE todos DROP COLUMN list; \
+             ALTER TABLE context_notes DROP COLUMN title;",
         )
         .unwrap();
 
@@ -166,6 +176,58 @@ mod tests {
             )
             .unwrap();
         assert_eq!(channel_col, 1, "V19: message_logs.channel_id 再追加");
+
+        // post-baseline の産物が再作成されている（V21・issue #33 PWA API port）。
+        let source_col: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('message_logs') WHERE name='source'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(source_col, 1, "V21: message_logs.source 再追加");
+        let list_col: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('todos') WHERE name='list'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(list_col, 1, "V21: todos.list 再追加");
+        let title_col: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('context_notes') WHERE name='title'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(title_col, 1, "V21: context_notes.title 再追加");
+
+        // V22（issue #41 PR #75・PWA リッチ返信の永続化）の産物。
+        let rich_col: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('message_logs') WHERE name='rich_content'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(rich_col, 1, "V22: message_logs.rich_content 再追加");
+        let attachments_table: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='message_attachments'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(attachments_table, 1, "V22: message_attachments 再作成");
+        let notice_col: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('message_logs') WHERE name='is_notice'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(notice_col, 1, "V22: message_logs.is_notice 再追加");
     }
 
     #[tokio::test]

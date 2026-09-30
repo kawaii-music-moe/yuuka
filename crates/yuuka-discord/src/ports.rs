@@ -110,7 +110,13 @@ pub struct FileAttachment {
 }
 
 /// リッチ埋め込みの provider 中立記述（reply 層で twilight `Embed` へ写像）。
-#[derive(Debug, Clone, Default)]
+///
+/// `Serialize`/`Deserialize`（camelCase）は issue #41 PR #75 レビューで追加: PWA チャット送信
+/// （`yuuka-client-api`）が `secretary_turn_pwa` の埋め込みを `message_logs.rich_content` へ JSON で
+/// 永続化し、履歴取得時に読み戻すために使う（Discord 経路は twilight へ直接写像するだけで
+/// シリアライズを使わない・PWA 専用の利用）。
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RichEmbed {
     pub title: Option<String>,
     pub description: Option<String>,
@@ -120,8 +126,8 @@ pub struct RichEmbed {
     pub footer: Option<String>,
 }
 
-/// 埋め込みフィールド。
-#[derive(Debug, Clone)]
+/// 埋め込みフィールド（`RichEmbed` 参照）。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct EmbedField {
     pub name: String,
     pub value: String,
@@ -319,12 +325,7 @@ pub trait BotDirectory: Send + Sync {
     ) -> bool;
 
     /// 発言禁止チャンネルか（メンション/返信があっても応答しない・Rust 新機能）。DM/未登録は false。
-    async fn is_channel_muted(
-        &self,
-        bot_id: &BotId,
-        guild_id: &GuildId,
-        channel_id: &str,
-    ) -> bool;
+    async fn is_channel_muted(&self, bot_id: &BotId, guild_id: &GuildId, channel_id: &str) -> bool;
 
     /// 保有ロールのいずれかが許可ロールか（現行 `isAnyRoleAllowed`）。
     async fn is_any_role_allowed(

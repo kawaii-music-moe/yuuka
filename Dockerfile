@@ -3,12 +3,14 @@
 # Yuuka — 本番スリムイメージ（Rust 直起動・成果物のみ同梱）
 #
 #   stage rust-builder     : Rust workspace の本番バイナリ `yuuka` をビルド（strip + thin-LTO）
-#   stage frontend-builder : Vite で SPA を `dist/public` へビルド
-#   stage runtime          : debian-slim に **バイナリ + SPA のみ**を載せた最小実行イメージ
+#   stage frontend-builder : Vite で管理画面 SPA を `dist/public` へビルド
+#   stage pwa-builder      : Vite で PWA（`client/pwa`）を `dist/public/pwa` 用にビルド（issue #33）
+#   stage runtime          : debian-slim に **バイナリ + 管理画面 SPA + PWA のみ**を載せた最小実行イメージ
 #
-# 設計: 出荷物は Rust バイナリ `yuuka` と、それが配信する SPA（`dist/public`）＋ browser ツール用
-#   chromium。Node ランタイム / node_modules / dist/index.js（Node サーバ束）/ yuuka-crawler /
-#   yuuka-synapse / デスクトップ exe は Rust 直起動では未使用のため**同梱しない**。
+# 設計: 出荷物は Rust バイナリ `yuuka` と、それが配信する管理画面 SPA（`dist/public`）・PWA
+#   （`dist/public/pwa`）＋ browser ツール用 chromium。Node ランタイム / node_modules /
+#   dist/index.js（Node サーバ束）/ yuuka-crawler / yuuka-synapse / デスクトップ exe は Rust 直起動
+#   では未使用のため**同梱しない**。
 #   （Rust は browser ツール以外で外部プロセスを spawn せず、reqwest=rustls で OpenSSL 不要、
 #    migration はコンパイル時 embed。実行時の外部依存は config.yaml と dist/public のみ。）
 #   **chromium + fonts-noto-cjk は browser ツール（fetchDynamicPage/takePageScreenshot）用に同梱**
@@ -45,6 +47,19 @@ RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
 COPY frontend ./frontend
 RUN pnpm exec vite build --config frontend/vite.config.ts
 
+# ---- stage: PWA（client/pwa・Vite → dist、issue #33） ------------------------
+# `client/pwa` は npm 管理（独立 package-lock.json）で pnpm workspace の外。frontend-builder と
+# 同じ node:24-bookworm を使い、`npm ci && npm run build` で `client/pwa/dist` を生成する
+# （`base: '/'`・`client/pwa/vite.config.ts`。runtime 側で `dist/public/pwa` へ配置し、Rust の
+# `mount_pwa`（`crates/yuuka-web/src/static_files.rs`）が Node `PWA_PUBLIC_DIR` と同じ優先順位
+# ＝このビルド出力を最優先で配信する）。
+FROM node:24-bookworm AS pwa-builder
+WORKDIR /app
+COPY client/pwa/package.json client/pwa/package-lock.json ./
+RUN npm ci
+COPY client/pwa ./
+RUN npm run build
+
 # ---- stage: runtime（最小実行イメージ） --------------------------------------
 FROM debian:bookworm-slim AS runtime
 # TZ=Asia/Tokyo: Rust は chrono の Local と SQLite datetime('now','localtime') で JST 前提の
@@ -68,6 +83,9 @@ WORKDIR /app
 # 成果物のみ: Rust バイナリ + それが配信する SPA。config.yaml と data/ は compose がマウントする。
 COPY --from=rust-builder /yuuka ./yuuka
 COPY --from=frontend-builder /app/dist/public ./dist/public
+# issue #33: PWA（client/pwa）を dist/public/pwa へ同梱する（Node PWA_PUBLIC_DIR 優先パスと一致）。
+# 旧 src/public/pwa（Node 用の事前ビルド成果物）は issue #46 で別途削除するため本 PR では触らない。
+COPY --from=pwa-builder /app/dist ./dist/public/pwa
 # data/ は外部マウント点。所有を非 root（uid 1000・compose の PUID 既定と一致）へ。
 RUN mkdir -p /app/data && chown -R yuuka:yuuka /app
 USER yuuka

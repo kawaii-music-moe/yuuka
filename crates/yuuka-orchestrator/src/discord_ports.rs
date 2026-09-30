@@ -158,12 +158,7 @@ impl BotDirectory for DbBotDirectory {
         )
     }
 
-    async fn is_channel_muted(
-        &self,
-        bot_id: &BotId,
-        guild_id: &GuildId,
-        channel_id: &str,
-    ) -> bool {
+    async fn is_channel_muted(&self, bot_id: &BotId, guild_id: &GuildId, channel_id: &str) -> bool {
         or_default(
             bot_repo::is_channel_muted(&self.db, bot_id.as_str(), guild_id.as_str(), channel_id)
                 .await,
@@ -432,5 +427,102 @@ impl RateLimiter for InMemoryRateLimiter {
             return RateDecision::deny(RateExceeded::GuildDay);
         }
         RateDecision::allow()
+    }
+}
+
+#[cfg(test)]
+mod rate_limiter_tests {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    use yuuka_core::{BotId, GuildId, UserId};
+    use yuuka_discord::{RateExceeded, RateLimiter as _};
+    use yuuka_web::Db;
+
+    use super::InMemoryRateLimiter;
+
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+
+    fn seed_db() -> Db {
+        let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "yuuka_ratelimit_test_{}_{seq}.sqlite",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        {
+            let conn = rusqlite::Connection::open(&path).expect("create empty");
+            drop(conn);
+        }
+        Db::open(&path).expect("open")
+    }
+
+    /// issue #41 レビュー（P1・`main.rs:209`）の核心: 同一の `InMemoryRateLimiter` インスタンス
+    /// （＝同一の `counters` マップ）を Discord/PWA 双方の経路で共有すると、ユーザー単位の分窓
+    /// （`mcp_rate:{bot_id}:{user_id}:m`・guildId を含まない）は経路を跨いで正しく合算される。
+    /// 旧実装は main.rs が経路ごとに別インスタンスを `new` していたため、この `counters` 共有が
+    /// 起きず「Discord で分上限まで使った直後に PWA でも再び分上限まで使える」バグになっていた
+    /// （main.rs の修正: `rate_limiter` を 1 度だけ作り `DiscordManager`/`client_api_routes` の
+    /// 両方へ同じ `Arc` を渡す）。
+    #[tokio::test]
+    async fn shared_instance_counts_usage_across_discord_and_pwa_guild_slots() {
+        let db = seed_db();
+        let limiter = InMemoryRateLimiter::new(db);
+        let bot_id = BotId::new("b1");
+        let user_id = UserId::new("u1");
+
+        // 既定の分あたり上限は 5（DEFAULT_USER_PER_MINUTE）。Discord の実ギルドスロットで使い切る。
+        for i in 0..5 {
+            let d = limiter
+                .consume(&bot_id, &GuildId::new("discord-guild-1"), &user_id)
+                .await;
+            assert!(d.exceeded.is_none(), "iteration {i}: {d:?}");
+        }
+
+        // 同じインスタンス・同じユーザーが PWA スロット（guildId="pwa"）へ切り替えても、
+        // ユーザー単位の分窓は共有されているため即座に拒否される
+        // （= Bot のレート制限を経路切替（Discord→PWA）で迂回できない）。
+        let via_pwa = limiter
+            .consume(&bot_id, &GuildId::new("pwa"), &user_id)
+            .await;
+        assert!(
+            matches!(via_pwa.exceeded, Some(RateExceeded::UserMinute)),
+            "Discord で使い切った分は PWA スロットでも消費済みのまま（共有インスタンス）: {via_pwa:?}"
+        );
+
+        // 別ユーザーの窓は独立（キーに user_id を含む）。
+        let other_user = UserId::new("u2");
+        let other = limiter
+            .consume(&bot_id, &GuildId::new("pwa"), &other_user)
+            .await;
+        assert!(other.exceeded.is_none(), "別ユーザーの窓は独立: {other:?}");
+    }
+
+    /// 対照テスト: main.rs のバグ（経路ごとに別インスタンス＝別 `counters` マップ）を最小再現する。
+    /// インスタンスさえ分かれていれば、Discord 側で使い切っても PWA 側は独立してまだ利用できて
+    /// しまうことを示す（＝上のテストで検証する「共有インスタンス化」が修正の核心）。
+    #[tokio::test]
+    async fn separate_instances_do_not_share_usage_the_bug_this_pr_fixes() {
+        let db = seed_db();
+        // main.rs の旧実装のように経路ごとに `InMemoryRateLimiter::new` を別々に呼ぶと…
+        let discord_side = InMemoryRateLimiter::new(db.clone());
+        let pwa_side = InMemoryRateLimiter::new(db);
+        let bot_id = BotId::new("b1");
+        let user_id = UserId::new("u1");
+
+        for _ in 0..5 {
+            let d = discord_side
+                .consume(&bot_id, &GuildId::new("discord-guild-1"), &user_id)
+                .await;
+            assert!(d.exceeded.is_none());
+        }
+        // 別インスタンスなので `counters` が共有されず、PWA 側はまだ利用できてしまう
+        // （このバグ状態は main.rs で `rate_limiter` を 1 度だけ作ることで解消済み）。
+        let via_pwa = pwa_side
+            .consume(&bot_id, &GuildId::new("pwa"), &user_id)
+            .await;
+        assert!(
+            via_pwa.exceeded.is_none(),
+            "別インスタンスだと counters が共有されずバグが再現する: {via_pwa:?}"
+        );
     }
 }

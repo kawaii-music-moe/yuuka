@@ -964,9 +964,9 @@ dependencies = [
 
 [[package]]
 name = "h2"
-version = "0.4.15"
+version = "0.4.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6cb093c84e8bd9b188d4c4a8cb6579fc016968d14c99882163cd3ff402a4f155"
+checksum = "a9f37a958b41b3b19ee2707c06439c0e9e547e847223eb791ecb0cb821c65e27"
 dependencies = [
  "atomic-waker",
  "bytes",
@@ -1149,7 +1149,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.6.4",
+ "socket2 0.5.10",
  "tokio",
  "tower-service",
  "tracing",
@@ -1823,7 +1823,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash",
  "rustls",
- "socket2 0.6.4",
+ "socket2 0.5.10",
  "thiserror",
  "tokio",
  "tracing",
@@ -1861,7 +1861,7 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "once_cell",
- "socket2 0.6.4",
+ "socket2 0.5.10",
  "tracing",
  "windows-sys 0.61.2",
 ]
@@ -2189,9 +2189,9 @@ dependencies = [
 
 [[package]]
 name = "rustls"
-version = "0.23.41"
+version = "0.23.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6b92b125634d9b795e7beca796cc790df15a7fb38323bf3196fda83292d06b1f"
+checksum = "0d41d731c7d2f962d1ccc364cec258de3c0e93b38c2fb3ba97ac74513048d634"
 dependencies = [
  "once_cell",
  "ring",
@@ -2252,9 +2252,9 @@ checksum = "f87165f0995f63a9fbeea62b64d10b4d9d8e78ec6d7d51fb2125fda7bb36788f"
 
 [[package]]
 name = "rustls-webpki"
-version = "0.103.13"
+version = "0.103.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "61c429a8649f110dddef65e2a5ad240f747e85f7758a6bccc7e5777bd33f756e"
+checksum = "f3c3cf1d8b1e7d4927e2d154c3fcb02979afb9939629c62cd9048d4f07b60ac2"
 dependencies = [
  "ring",
  "rustls-pki-types",
@@ -2695,7 +2695,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",
@@ -3793,6 +3793,38 @@ dependencies = [
 ]
 
 [[package]]
+name = "yuuka-client-api"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "chrono",
+ "rusqlite",
+ "secrecy",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tower",
+ "tracing",
+ "yuuka-auth",
+ "yuuka-core",
+ "yuuka-crypto",
+ "yuuka-db",
+ "yuuka-discord",
+ "yuuka-finance",
+ "yuuka-gemini",
+ "yuuka-mcp",
+ "yuuka-orchestrator",
+ "yuuka-persona",
+ "yuuka-schedule",
+ "yuuka-todo",
+ "yuuka-tools",
+ "yuuka-types",
+ "yuuka-web",
+]
+
+[[package]]
 name = "yuuka-conversation"
 version = "0.1.0"
 dependencies = [
@@ -3880,6 +3912,7 @@ dependencies = [
  "regex",
  "reqwest 0.12.28",
  "secrecy",
+ "serde",
  "thiserror",
  "tokio",
  "tracing",
@@ -4203,6 +4236,7 @@ dependencies = [
  "yuuka-briefing",
  "yuuka-browser",
  "yuuka-chart",
+ "yuuka-client-api",
  "yuuka-conversation",
  "yuuka-core",
  "yuuka-credential",

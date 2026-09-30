@@ -2138,8 +2138,7 @@ mod tests {
         use yuuka_crypto::SystemCrypto;
         let crypto = Arc::new(SystemCrypto::new(SecretString::from("test-secret-xyz")).unwrap());
         let state = AppState::new(Arc::new(FakeAuth), WebConfig::default(), seed_db());
-        let app =
-            super::routes_with(Some(crypto), Arc::new(NullDiscordLive)).with_state(state);
+        let app = super::routes_with(Some(crypto), Arc::new(NullDiscordLive)).with_state(state);
 
         // 形式不正 → 400。
         let (st, _) = send(

@@ -141,6 +141,46 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn list_field_defaults_and_round_trips_and_list_all_flat_includes_done() {
+        let db = seed_db();
+        let repo = TodoRepo::new(&db);
+        let sc = scope("u");
+
+        // 未指定は既定「個人」（issue #47: Node は list を保存せず常に "Personal" 固定だった）。
+        let default_item = repo.add(&sc, new_todo("no-list", vec![])).await.unwrap();
+        assert_eq!(default_item.list, "個人");
+
+        // 明示指定はそのまま保存・往復する（PWA が送る値をそのまま使う）。
+        let work_item = repo
+            .add(
+                &sc,
+                NewTodo {
+                    title: "work-task".to_owned(),
+                    list: Some("仕事".to_owned()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(work_item.list, "仕事");
+        assert_eq!(
+            repo.get(&sc, work_item.id).await.unwrap().unwrap().list,
+            "仕事"
+        );
+
+        // list_all_flat は open/done を問わず全件返す（list_open_flat は open のみ）。
+        repo.complete(&sc, work_item.id).await.unwrap();
+        let all = repo.list_all_flat(&sc).await.unwrap();
+        assert_eq!(all.len(), 2, "done も含め全件");
+        assert!(repo
+            .list_open_flat(&sc)
+            .await
+            .unwrap()
+            .iter()
+            .all(|t| t.status == "open"));
+    }
+
+    #[tokio::test]
     async fn complete_and_delete() {
         let db = seed_db();
         let repo = TodoRepo::new(&db);
