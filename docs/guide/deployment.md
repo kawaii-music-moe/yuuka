@@ -39,12 +39,11 @@ chmod 600 deploy/prod/secret.key
 
 ## デプロイ・更新
 
-コードを変更したら `pnpm run deploy` だけで反映できます。内部で「現行イメージ退避 → ビルド（Rust crawler + tsgo）→ コンテナ再作成 → ヘルスチェック」を実行します。DB マイグレーションは起動時に自動適用されます。
+コードを変更したら `pnpm run deploy` だけで反映できます。内部で「現行イメージ退避 → ビルド（Rust バイナリ + SPA）→ コンテナ再作成 → ヘルスチェック」を実行します。DB マイグレーションは起動時に自動適用されます。
 
 | コマンド | 動作 |
 |---|---|
 | `pnpm run deploy` | 本番(prod)をビルドして反映 |
-| `pnpm run deploy:dev` | 開発(dev)を反映 |
 | `pnpm run deploy:rollback` | 直前イメージ（`yuuka:prev-prod`）へ戻す |
 | `pnpm run deploy:verify` | ヘルスチェックのみ（HTTP / Bot ログイン / エラー件数） |
 | `pnpm run deploy:logs` | 本番ログ追従 |
@@ -52,9 +51,30 @@ chmod 600 deploy/prod/secret.key
 
 > `pnpm deploy`（`run` 無し）は pnpm 組込みコマンドと衝突するため、必ず `pnpm run deploy` を使います。
 
+開発(dev)インスタンスは pnpm スクリプトを介さず `deploy/instance.sh dev update`（ロールバックは `dev rollback`、ログは `pnpm run deploy:logs:dev` または `dev logs -f`）で操作します。dev は `YUUKA_IMAGE_TAG=dev`（`yuuka:dev`）で prod の `yuuka:latest` と分離されているため、prod と同じ手順で安全に更新できます（`deploy/dev/instance.env` に `YUUKA_IMAGE_TAG=dev` が必要。詳細は [deploy/README.md](../../deploy/README.md#dev-インスタンス)）。
+
 低レベルには `deploy/instance.sh <name> <update|rollback|verify|up -d|down|logs -f|build|ps>` でも操作できます。
 
 再作成時は数秒のダウンタイムが発生し、Bot は自動で再ログインします。
+
+### dev のフロント（Vite dev server・HMR）
+
+dev のフロントは、Vite dev server を Docker で常駐させる `deploy/dev/vite.compose.yml`（API とは別の compose プロジェクト `yuuka-dev-vite`）で動かします。`/api`・`/ws/chat` は dev API（`HOST_PORT`=7856）へ proxy されます。dev API を先に起動しておいてください。
+
+```bash
+# 起動（初回）: パラメータは deploy/dev/.env（未設定でも既定値で動く。変数一覧は deploy/dev/.env.example）
+cp deploy/dev/.env.example deploy/dev/.env
+docker compose -f deploy/dev/vite.compose.yml up -d
+docker compose -f deploy/dev/vite.compose.yml logs -f vite
+
+# 更新: ソース変更は HMR で自動反映。lockfile / 依存が変わったときだけ再起動（pnpm install が走る）
+docker compose -f deploy/dev/vite.compose.yml restart vite
+
+# 停止
+docker compose -f deploy/dev/vite.compose.yml down
+```
+
+既定は `127.0.0.1:7855` で待受、proxy 先は `http://127.0.0.1:7856`、公開ホスト名（トンネル）は `yuuka-dev.kawaii-music.moe` です。使うソースツリー・実行ユーザー・ポート・proxy 先は `deploy/dev/.env` の `VITE_*` で変更できます（変数の一覧・デバッグ用の一時プロキシは [deploy/README.md](../../deploy/README.md#dev-インスタンス) の「フロント（Vite dev server・HMR）」を参照）。
 
 ---
 

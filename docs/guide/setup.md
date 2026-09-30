@@ -88,7 +88,7 @@ cargo run --bin yuuka
 VITE_API_TARGET=http://127.0.0.1:7854 pnpm dev
 ```
 
-> `pnpm dev` のデフォルト proxy 先は `http://127.0.0.1:7855`（Docker dev インスタンス用）です。`cargo run` を直接使うローカル実行では、`config.yaml` の `PORT`（既定 `7854`）に合わせて `VITE_API_TARGET` を明示してください。
+> `pnpm dev` のデフォルト proxy 先は `http://127.0.0.1:7855` です。`cargo run` を直接使うローカル実行では、`config.yaml` の `PORT`（既定 `7854`）に合わせて `VITE_API_TARGET` を明示してください。Docker の dev インスタンス（`HOST_PORT=7856`）へ向ける場合は `VITE_API_TARGET=http://127.0.0.1:7856`。dev の Vite を Docker で常駐させる手順は [deployment.md](deployment.md) を参照。
 
 プロダクション相当（Docker を使わない場合）:
 

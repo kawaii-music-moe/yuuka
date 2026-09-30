@@ -12,7 +12,7 @@ REDIS_URL: "redis://redis:6379"
 
 REMINDER_CRON: "* * * * *"
 
-# 管理画面（コンテナ内待受は固定。ホスト公開は instance.env の HOST_PORT=7855）
+# 管理画面（コンテナ内待受は固定。ホスト公開は instance.env の HOST_PORT=7856）
 PORT: 7854
 HOST: "0.0.0.0"
 
@@ -25,7 +25,11 @@ INVITE_CODES:
 GOOGLE_CLIENT_ID: ""
 GOOGLE_CLIENT_SECRET: ""
 
-# 外部公開ベースURL（dev はローカルのみ＝ホスト 7855。http:// のため Cookie は非Secure発行）
+# ローカルアクセス時のベースURL（ブラウザの入口は Vite dev server＝ホスト 7855）。
+# 公開トンネル経由で使う場合は、実際の HTTPS URL（例: https://yuuka-dev.kawaii-music.moe）に
+# 変更すること。Cookie 認証の状態変更 API は Origin と BASE_URL のホストを照合するため、
+# localhost のままだとトンネル経由の POST/PUT/PATCH/DELETE が 403 になる。
+# Vite を使わず API へ直接アクセスする場合は HOST_PORT（既定 7856）に合わせる。
 BASE_URL: "http://localhost:7855"
 
 PRIVACY_POLICY_URL: "/privacy"
