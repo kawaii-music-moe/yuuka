@@ -1024,8 +1024,8 @@ mod tests {
             _tool_config: Option<ToolConfig>,
         ) -> Result<GenerateContentResponse, GeminiError> {
             self.started.notify_one();
-            std::future::pending::<()>().await;
-            unreachable!("timeout はこの await が解決するより先に外側で発火する");
+            // 決して解決しない（外側の timeout が先に発火してキャンセルする）。
+            std::future::pending().await
         }
     }
 
