@@ -115,7 +115,10 @@ async function request<T>(
 		if (!opts.isBootstrap && !isPublicPath(here)) {
 			// #34 症状4: returnTo を付けてログイン後に元の画面へ戻れるようにする
 			// （currentRoute はアプリ相対パス・query/hash は page ストアの URL から補う）。
-			const dest = here === "/login" ? "/login" : `/login?returnTo=${encodeURIComponent(here + get(page).search + get(page).hash)}`;
+			const dest =
+				here === "/login"
+					? "/login"
+					: `/login?returnTo=${encodeURIComponent(here + get(page).search + get(page).hash)}`;
 			goto(dest);
 		}
 		throw new ApiError(401, "認証が必要です");

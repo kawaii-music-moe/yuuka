@@ -50,7 +50,8 @@ const BASE_PATH = import.meta.env.BASE_URL.replace(/\/$/, "");
 function stripBasePath(pathname: string): string {
 	if (!BASE_PATH) return pathname;
 	if (pathname === BASE_PATH) return "/";
-	if (pathname.startsWith(`${BASE_PATH}/`)) return pathname.slice(BASE_PATH.length) || "/";
+	if (pathname.startsWith(`${BASE_PATH}/`))
+		return pathname.slice(BASE_PATH.length) || "/";
 	return pathname;
 }
 
@@ -193,7 +194,9 @@ export function isAllowedReturnPath(path: string | null | undefined): boolean {
 // ── ストア ────────────────────────────────────────────────────────────────
 /** 現パス（cleanPath 正規化済み・アプリ相対）。物理 URL からは stripBasePath を経由する。 */
 export const currentRoute = writable<string>(
-	typeof window !== "undefined" ? cleanPath(stripBasePath(window.location.pathname)) : "/",
+	typeof window !== "undefined"
+		? cleanPath(stripBasePath(window.location.pathname))
+		: "/",
 );
 
 /** 現 URL（物理・searchParams アクセス用。/device の ?code= 等）。BASE_PATH を含む。 */
@@ -293,7 +296,9 @@ export function initRouter(): () => void {
 	// window.location は物理 URL（BASE_PATH を含む）→ stripBasePath でアプリ相対化してから
 	// applyRoute に渡す（applyRoute はアプリ相対パスを前提とする）。
 	const applyFromLocation = () => {
-		applyRoute(stripBasePath(window.location.pathname) + window.location.search);
+		applyRoute(
+			stripBasePath(window.location.pathname) + window.location.search,
+		);
 	};
 	window.addEventListener("popstate", applyFromLocation);
 	// 初期ルートを反映
