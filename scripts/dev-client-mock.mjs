@@ -40,7 +40,7 @@ start("Client", npm, ["run", "dev:client"], {
 start(
 	"Admin",
 	pnpm,
-	["run", "dev:front", "--", "--port", "5174", "--strictPort"],
+	["exec", "vite", "--config", "frontend/vite.config.ts", "--port", "5174", "--strictPort"],
 	{ VITE_API_TARGET: "http://localhost:8787" },
 	root,
 );
