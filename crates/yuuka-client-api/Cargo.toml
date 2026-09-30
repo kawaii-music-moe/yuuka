@@ -32,6 +32,8 @@ tempfile = "3"
 yuuka-types.workspace = true
 yuuka-auth.workspace = true
 yuuka-crypto.workspace = true          # チャット送信テスト: users.gemini_api_key_* の暗号化 seed
+yuuka-tools.workspace = true           # チャット送信テスト: ChatEngine 構築（ToolRegistry）
+yuuka-mcp.workspace = true             # チャット送信テスト: ChatEngine 構築（NullMcpClient）
 async-trait.workspace = true
 secrecy.workspace = true
 

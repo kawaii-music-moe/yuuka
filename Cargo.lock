@@ -3814,10 +3814,12 @@ dependencies = [
  "yuuka-discord",
  "yuuka-finance",
  "yuuka-gemini",
+ "yuuka-mcp",
  "yuuka-orchestrator",
  "yuuka-persona",
  "yuuka-schedule",
  "yuuka-todo",
+ "yuuka-tools",
  "yuuka-types",
  "yuuka-web",
 ]
