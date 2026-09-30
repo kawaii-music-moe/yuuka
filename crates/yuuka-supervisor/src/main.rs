@@ -167,6 +167,14 @@ async fn run() -> Result<(), String> {
     );
     let chat_ws_routes = ws_routes(chat_engine.clone(), cfg.desktop_max_upload_mb);
 
+    // PWA チャット送信（issue #41）。WS/Discord と同じ `RateLimiter` シーム（`InMemoryRateLimiter`）を
+    // PWA 専用インスタンスで消費する（guildId スロット="pwa"・finance の ReceiptParserAdapter の
+    // "web" と同型・レート上限自体は system_settings を共有するため Discord 側の調整がそのまま効く）。
+    let client_api_routes = yuuka_client_api::routes_with(
+        chat_engine.clone(),
+        Arc::new(InMemoryRateLimiter::new(db.clone())),
+    );
+
     // 4.7) Discord マルチテナント（P1-3）。実ポート（BotDirectory/RateLimiter/MembershipService）＋
     //      会話エンジン（processor）を注入して DiscordManager を組み、`prepare` でトークン解決 +
     //      共有 Messenger を作る（ここでは twilight REST クライアント生成のみ・gateway 未接続）。
@@ -383,6 +391,7 @@ async fn run() -> Result<(), String> {
         integrated_routes,
         finance_routes,
         bot_management_routes,
+        client_api_routes,
         addr,
         dist_dir,
         pwa_dist_dir,
@@ -710,6 +719,9 @@ struct WebService {
     finance_routes: Router<AppState>,
     /// Bot 管理ルータ（`BotViewRuntime`/crypto を `Extension` で内包済み・`/api/bots*`）。
     bot_management_routes: Router<AppState>,
+    /// PWA クライアント API ルータ（`ChatEngine`/`RateLimiter` を `Extension` で内包済み・
+    /// `/api/client/*`・チャット送信は issue #41）。
+    client_api_routes: Router<AppState>,
     addr: SocketAddr,
     dist_dir: Option<PathBuf>,
     /// PWA（issue #33）配信元。`None` なら PWA 静的配信を無効化（`/api/client/*` のみ動作）。
@@ -737,6 +749,7 @@ impl SupervisedService for WebService {
             self.integrated_routes.clone(),
             self.finance_routes.clone(),
             self.bot_management_routes.clone(),
+            self.client_api_routes.clone(),
             self.dist_dir.as_deref(),
             self.pwa_dist_dir.as_deref(),
         );

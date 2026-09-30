@@ -143,6 +143,13 @@ pub struct NewTransactionInput {
     pub kind: Option<String>,
 }
 
+/// `POST /api/client/chat/messages` の body（issue #41）。
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct ChatSendInput {
+    #[serde(default)]
+    pub content: Option<String>,
+}
+
 /// `GET /api/client/chat/messages` の 1 件（`ChatMessage`）。
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]

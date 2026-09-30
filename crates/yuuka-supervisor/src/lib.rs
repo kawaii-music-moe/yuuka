@@ -38,9 +38,12 @@ pub use ws::ws_routes;
 /// （`dist/public`）を `fallback_service` として載せる（未指定は API のみ）。
 ///
 /// 引数は state + dist_dir/pwa_dist_dir と、`Extension` で依存を内包済みの pre-built ルータ群
-/// （auth/admin/settings/webhook/bot-attribute/ws）。crypto/runtime を State へ入れると全
+/// （auth/admin/settings/webhook/bot-attribute/ws/client-api）。crypto/runtime を State へ入れると全
 /// `AppState` 構築へ波及するため、これらは main 側で組んで渡す配線関数（引数数の lint は本質的な
 /// 配線都合として許容）。
+///
+/// `client_api_routes` は [`yuuka_client_api::routes_with`] が返す `/api/client/*` ルータ（`ChatEngine`/
+/// `RateLimiter` を `Extension` で内包済み・チャット送信 issue #41）。
 ///
 /// `pwa_dist_dir` を渡すと PWA（issue #33・`client/pwa`）を [`mount_pwa`] で明示ルート群として
 /// 載せる。`dist_dir`（admin SPA・`fallback_service`）とは独立に効くため、両方 `Some` でも
@@ -60,6 +63,7 @@ pub fn build_app(
     integrated_routes: Router<AppState>,
     finance_routes: Router<AppState>,
     bot_management_routes: Router<AppState>,
+    client_api_routes: Router<AppState>,
     dist_dir: Option<&Path>,
     pwa_dist_dir: Option<&Path>,
 ) -> Router {
@@ -86,7 +90,7 @@ pub fn build_app(
         .merge(yuuka_auth::device_routes())
         .merge(yuuka_orchestrator::member_request_routes())
         .merge(yuuka_orchestrator::bot_share_routes())
-        .merge(yuuka_client_api::routes())
+        .merge(client_api_routes)
         .merge(bot_management_routes)
         .merge(desktop_dist::routes());
     let routes = match pwa_dist_dir {
@@ -228,6 +232,8 @@ mod tests {
             yuuka_finance::routes(),
             // Bot 管理ルータ（既定 NullBotViewRuntime・crypto なし）を merge して検証する。
             yuuka_orchestrator::bot_management_routes(),
+            // client-api ルータも merge 検証には不要（ChatEngine 構築を避け空ルータを渡す・WS と同じ理由）。
+            axum::Router::new(),
             None,
             None,
         )

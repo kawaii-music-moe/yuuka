@@ -3,21 +3,25 @@
 //! PWA は常に秘書 Bot（`system_default`）に束縛される（Node `const BOT_ID = "system_default"`）。
 //! `?botId=` は存在しない（一般ダッシュボードの `resolve_scope`/`ScopedJson` は使わない）。
 //!
-//! **未移植**: `POST /api/client/chat/messages`（チャット送信・issue #41）。WS/Discord と同じ
-//! レート制限・APIキー事前判定・リッチ返信を再現するには `ChatEngine`（`yuuka-orchestrator`）の
-//! 秘書ターン処理を source 別コンテキスト対応させる必要があり、同エンジンは他 issue（#35-37）で
-//! 並行改修中のため本 PR では見送る（詳細は PR 本文）。履歴取得（`GET`）のみ実装済み。
+//! チャット送信（`POST /api/client/chat/messages`・issue #41）は [`ChatEngine::secretary_turn_pwa`]
+//! （`source='pwa'`）を通し、WS/Discord 秘書経路と同じ [`yuuka_discord::RateLimiter`]/
+//! [`ChatEngine::user_has_gemini_key`] の事前チェックを Gemini 呼び出し前に行う（詳細は [`chat_send`]）。
+
+use std::sync::Arc;
+use std::time::Duration;
 
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::routing::{get, patch};
-use axum::{Json, Router};
+use axum::{Extension, Json, Router};
 use serde::Deserialize;
-use yuuka_core::{BotId, UserId, UserScope};
+use tokio::time::timeout;
+use yuuka_core::{BotId, GuildId, UserId, UserScope};
+use yuuka_discord::{rate_limit_message, IncomingChat, RateLimiter, StatusSink};
 use yuuka_finance::dto::{Expense, NewExpense};
 use yuuka_finance::repo::ExpenseRepo;
 use yuuka_gemini::ALLOWED_MODELS;
-use yuuka_orchestrator::{context_note, message_log};
+use yuuka_orchestrator::{context_note, message_log, ChatEngine};
 use yuuka_persona::dto::{SavePersona, PERSONA_MAX_LENGTH};
 use yuuka_persona::repo::PersonaRepo;
 use yuuka_schedule::repo::ScheduleRepo;
@@ -29,9 +33,9 @@ use crate::date_util::{
     day_start, local_to_utc_iso, next_day_start, parse_local_date, parse_local_month,
 };
 use crate::dto::{
-    CalendarEventView, ChatMessageView, FinanceSummaryView, NewTodoInput, NewTransactionInput,
-    SettingsUpdate, SettingsView, SharedNoteUpdate, SharedNoteView, StatusView, TodoPatch,
-    TodoView, TransactionView,
+    CalendarEventView, ChatMessageView, ChatSendInput, FinanceSummaryView, NewTodoInput,
+    NewTransactionInput, SettingsUpdate, SettingsView, SharedNoteUpdate, SharedNoteView,
+    StatusView, TodoPatch, TodoView, TransactionView,
 };
 use crate::error::ClientApiError;
 use crate::references::infer_reference;
@@ -41,9 +45,25 @@ use crate::users;
 const BOT_ID: &str = "system_default";
 /// チャット履歴取得の上限（`message_log::list_pwa_messages` が内部で `[1,200]` にクランプする）。
 const CHAT_HISTORY_LIMIT: i64 = 200;
+/// チャット送信レート制限の guildId スロット（issue #41・`yuuka-finance` の `"web"` と同型）。
+///
+/// [`InMemoryRateLimiter`](yuuka_orchestrator::InMemoryRateLimiter)（実装）のユーザー分/日単位の窓は
+/// `bot_id × user_id` のみで消費されるため、この文字列は「ギルド日次上限」バケットを他経路
+/// （Discord の実ギルド ID・finance の `"web"`）と分けるためのラベルに過ぎない。ユーザー単位の
+/// 上限（Bot 設定のレート制限）は Discord/WS と共有され、PWA 経由で迂回することはできない。
+const PWA_RATE_LIMIT_GUILD: &str = "pwa";
+/// チャット送信 1 ターンのタイムアウト（issue #41）。[`chat_send`] のドキュメント参照。
+const CHAT_TURN_TIMEOUT: Duration = Duration::from_secs(180);
 
 /// `/api/client/*` ルータ（`AppState` 上で他ドメインと同様に `merge` される）。
-pub fn routes() -> Router<AppState> {
+///
+/// `engine`/`rate_limiter` はチャット送信（`POST /api/client/chat/messages`）専用で、
+/// `Extension` として内包する（supervisor 側で実インスタンスを注入・`yuuka_finance::routes_with` と
+/// 同型の DI）。他のハンドラは参照しない。
+pub fn routes_with(
+    engine: Arc<ChatEngine>,
+    rate_limiter: Arc<dyn RateLimiter>,
+) -> Router<AppState> {
     Router::new()
         .route("/api/client/status", get(status))
         .route("/api/client/settings", get(settings_get).put(settings_put))
@@ -56,7 +76,12 @@ pub fn routes() -> Router<AppState> {
             "/api/client/finance/transactions",
             get(finance_transactions).post(finance_add),
         )
-        .route("/api/client/chat/messages", get(chat_history))
+        .route(
+            "/api/client/chat/messages",
+            get(chat_history).post(chat_send),
+        )
+        .layer(Extension(engine))
+        .layer(Extension(rate_limiter))
 }
 
 fn scope_for(user_id: &str) -> UserScope {
@@ -565,4 +590,108 @@ async fn chat_history(
         });
     }
     Ok(Json(out))
+}
+
+/// `POST /api/client/chat/messages`（チャット送信・issue #41）。
+///
+/// Node の `POST /api/client/chat/messages` は `processMessage` を直接呼んでおり、WS/Discord
+/// 秘書経路が持つ事前チェック（レート制限・Gemini キー事前判定）を欠いていた（#41）。ここでは
+/// Gemini を呼ぶ**前**に、WS（`crates/yuuka-supervisor/src/ws.rs`）と同じ 2 段の事前チェックを行う:
+///
+/// 1. [`ChatEngine::user_has_gemini_key`] — 未設定なら 400（WS の `error/no_gemini_key` 相当）。
+/// 2. `rate_limiter.consume`（[`yuuka_discord::RateLimiter`]・Discord 汎用モード/finance receipt と
+///    同じ [`yuuka_orchestrator::InMemoryRateLimiter`] シーム）— 超過なら 429。ユーザー単位の窓は
+///    `bot_id × user_id` のみで消費されるため、Discord/WS で使い切った分は PWA でも消費済みのまま
+///    （= Bot のレート制限設定を PWA 経由で迂回できない）。
+///
+/// 通過後は [`ChatEngine::secretary_turn_pwa`]（`source='pwa'`）へ委譲する。history/context の
+/// 読み書きは PWA 専用 floor を経由し、Discord/WS の会話と混ざらない（#38 と同種の再発防止）。
+///
+/// # 同期応答について
+/// PWA クライアント（`client/pwa/src/api/http.ts` の `request()`）は `fetch` の完了をそのまま待つ
+/// だけで、ポーリング/SSE/WS のような非同期受信経路を持たない。加えて、Rust のオーケストレーション
+/// エンジン自体が現状**非同期配信（deferred/`TurnDelivery`）を未実装**で、WS/Discord/レシート OCR
+/// いずれも `ChatEngine` を同期呼び出ししている（`crates/yuuka-supervisor/src/ws.rs` のモジュール doc
+/// 参照）。本 PR の範囲でここだけ非同期配信を新設するのはスコープを大きく超えるため、本エンドポイントも
+/// 同期のまま維持し、[`CHAT_TURN_TIMEOUT`] でターン全体を打ち切る。目的は主にリバースプロキシ
+/// （issue #41 が言及する Cloudflare Tunnel 等）のタイムアウトより手前で、素の接続切断ではなく
+/// 整形された JSON エラー（504）を返し、ハングしたリクエストでサーバーリソースを専有し続けないこと。
+async fn chat_send(
+    user: AuthenticatedUser,
+    Extension(engine): Extension<Arc<ChatEngine>>,
+    Extension(rate_limiter): Extension<Arc<dyn RateLimiter>>,
+    Json(body): Json<ChatSendInput>,
+) -> Result<(StatusCode, Json<ChatMessageView>), ClientApiError> {
+    let content = body
+        .content
+        .as_deref()
+        .unwrap_or_default()
+        .trim()
+        .to_owned();
+    if content.is_empty() {
+        return Err(ClientApiError::bad_request("content is required"));
+    }
+
+    let uid = user.0.discord_id.as_str();
+    // 事前チェック 1/2: Gemini キー未設定（WS `error/no_gemini_key` と同じ判定・Node には無かった）。
+    if !engine.user_has_gemini_key(uid).await {
+        return Err(ClientApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: "Gemini APIキーが未設定です。管理画面から設定してください。".to_owned(),
+        });
+    }
+
+    let bot_id = BotId::new(BOT_ID);
+    let user_id = UserId::new(uid.to_owned());
+
+    // 事前チェック 2/2: レート制限。
+    let decision = rate_limiter
+        .consume(&bot_id, &GuildId::new(PWA_RATE_LIMIT_GUILD), &user_id)
+        .await;
+    if let Some(exceeded) = decision.exceeded {
+        return Err(ClientApiError {
+            status: StatusCode::TOO_MANY_REQUESTS,
+            message: rate_limit_message(exceeded),
+        });
+    }
+
+    let incoming = IncomingChat {
+        text: content,
+        ..IncomingChat::default()
+    };
+    // PWA は status（thinking/writing）フレームを消費しない同期 HTTP 応答のため no-op sink。
+    let status: StatusSink = Arc::new(|_| {});
+    let reply = match timeout(
+        CHAT_TURN_TIMEOUT,
+        engine.secretary_turn_pwa(&bot_id, &user_id, incoming, &status),
+    )
+    .await
+    {
+        Ok(Ok(reply)) => reply,
+        Ok(Err(e)) => {
+            tracing::warn!(error = %e, "client-api: チャット送信ターンが失敗");
+            return Err(ClientApiError {
+                status: StatusCode::INTERNAL_SERVER_ERROR,
+                message: "internal".to_owned(),
+            });
+        }
+        Err(_) => {
+            tracing::warn!(timeout = ?CHAT_TURN_TIMEOUT, "client-api: チャット送信がタイムアウト");
+            return Err(ClientApiError {
+                status: StatusCode::GATEWAY_TIMEOUT,
+                message: "応答の生成に時間がかかりすぎました。もう一度お試しください。".to_owned(),
+            });
+        }
+    };
+
+    Ok((
+        StatusCode::CREATED,
+        Json(ChatMessageView {
+            id: format!("pwa-{}", chrono::Utc::now().timestamp_millis()),
+            role: "agent",
+            content: reply.text.clone(),
+            created_at: now_iso(),
+            references: infer_reference(&reply.text).map(|r| vec![r]),
+        }),
+    ))
 }
