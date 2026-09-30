@@ -2,7 +2,7 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { svelte } from "@sveltejs/vite-plugin-svelte";
-import { defineConfig } from "vite";
+import { defineConfig, type Plugin } from "vite";
 import { VitePWA } from "vite-plugin-pwa";
 
 // API の proxy 先。HOST_PORT は環境毎に異なる(dev=7856, prod=7701 等)ため、必ず env で切替可能に
@@ -41,6 +41,34 @@ function resolveWorkboxWindow(): string | undefined {
 }
 const workboxWindowPath = resolveWorkboxWindow();
 
+// dev 専用・opt-in: PWA（client/pwa の dev server）と管理画面（この dev server）を別ポートで
+// 動かす構成（`pnpm dev:client:mock`・scripts/dev-client-mock.mjs）では、共有ログイン
+// （/admin/login）後の returnTo が PWA のパス（/todo 等）になる。管理画面は base "/admin/" 配下
+// でしか配信されないため、そのままフルページ遷移すると dev server の base 外＝404 になる。
+// `VITE_PWA_DEV_SERVER` が指定されたときだけ、/admin・/api・/ws 以外の GET/HEAD をそちらへ
+// リダイレクトして本番（同一オリジンで PWA が / を配信）と同じ往復を再現する。
+// 未指定（`pnpm dev` 単体）では何もしない。
+function pwaDevelopmentRedirectPlugin(): Plugin | null {
+	const pwaDevServer = process.env.VITE_PWA_DEV_SERVER;
+	if (!pwaDevServer) return null;
+	return {
+		name: "yuuka-pwa-development-redirect",
+		configureServer(server) {
+			server.middlewares.use((request, response, next) => {
+				if (request.method !== "GET" && request.method !== "HEAD")
+					return next();
+				const pathname = new URL(request.url ?? "/", "http://localhost")
+					.pathname;
+				const ours = /^\/(admin|api|ws)(\/|$)/.test(pathname);
+				if (ours) return next();
+				response.statusCode = 302;
+				response.setHeader("Location", `${pwaDevServer}${request.url}`);
+				response.end();
+			});
+		},
+	};
+}
+
 export default defineConfig({
 	root: __dirname,
 	// #34: 管理画面 SPA は Rust 側で /admin 配下に nest される
@@ -57,6 +85,7 @@ export default defineConfig({
 		assetsInlineLimit: 0, // CSP script-src 'self' 準拠: inline module/data-URI を出さない
 	},
 	plugins: [
+		pwaDevelopmentRedirectPlugin(),
 		svelte(),
 		// Service Worker は **無効化**（selfDestroying）。
 		// 経緯: autoUpdate + precache + StaleWhileRevalidate の構成では、アプリを開いたまま

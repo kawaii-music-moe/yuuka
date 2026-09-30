@@ -3,6 +3,7 @@ import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import AppIcon from './AppIcon.vue'
 import { logout, type SessionUser } from '../api/auth'
+import { buildLoginUrl } from '../api/loginRedirect'
 
 const route = useRoute()
 const router = useRouter()
@@ -16,7 +17,8 @@ async function handleLogout() {
   } catch {
     // セッションが既に切れている場合でも、ログイン画面へは戻す。
   } finally {
-    window.location.assign('/login')
+    // 再ログイン後はこの PWA のホームへ戻す（returnTo 無しだと管理画面の Bot 選択へ着地する）。
+    window.location.assign(buildLoginUrl('/'))
   }
 }
 </script>

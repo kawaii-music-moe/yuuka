@@ -12,7 +12,11 @@ Starts the Vue Client at `http://localhost:5173`, the mock API at
 `http://localhost:8787`, and the shared-login admin dev server (`frontend`)
 at `http://localhost:5174` pointed at the same mock API. The Vite proxy is
 automatically configured for the mock API, and `/login`/`/admin` redirect to
-the admin dev server.
+the admin dev server (`http://localhost:5174/admin/...`; the admin SPA is only
+served under `/admin/`). Unauthenticated users are sent to `/admin/login` with
+a `returnTo` of the current page, and after signing in the admin dev server
+redirects that path back to the Client. In mock mode sign in with
+`admin` / `pass`.
 
 ```bash
 pnpm dev

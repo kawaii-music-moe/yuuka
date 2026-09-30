@@ -14,7 +14,12 @@
 import { onMount } from "svelte";
 import { ApiError } from "$lib/api/client";
 import { authApi } from "$lib/api/services";
-import { isAllowedReturnPath, navigateTo, withBasePath } from "$lib/router";
+import {
+	navigateTo,
+	type ReturnTarget,
+	resolveReturnTarget,
+	withBasePath,
+} from "$lib/router";
 import { selectBot } from "$lib/stores/activeBot";
 import { bootstrapSession } from "$lib/stores/session";
 
@@ -54,14 +59,14 @@ function reportError(e: unknown): void {
 }
 
 // ログイン後の戻り先（#34 症状4: returnTo が見られておらず、PWA 等から来たユーザーが
-// 元の画面に戻れない）。`?returnTo=` はオープンリダイレクト対策として
-// isAllowedReturnPath で検証し、通らなければアプリのホーム（"/"）へ。
-// navigateTo はアプリ相対パスを受け取るので、ここではアプリ相対のまま返す
-// （navigateTo 側で BASE_PATH 付与が行われる）。
-function getReturnTo(): string {
-	if (typeof window === "undefined") return "/";
-	const returnTo = new URLSearchParams(window.location.search).get("returnTo");
-	return isAllowedReturnPath(returnTo) ? (returnTo as string) : "/";
+// 元の画面に戻れない）。`?returnTo=` は同一オリジンの物理パス（PWA の `/todo`・この SPA の
+// `/admin/bot/dashboard` 等）。オープンリダイレクト対策の検証と、SPA 内遷移／PWA へのフルページ
+// 遷移の判別は resolveReturnTarget に集約している。通らなければアプリのホーム（"/"）へ。
+function getReturnTarget(): ReturnTarget {
+	if (typeof window === "undefined") return { kind: "app", path: "/" };
+	return resolveReturnTarget(
+		new URLSearchParams(window.location.search).get("returnTo"),
+	);
 }
 
 // 起動時に setup 要否をプローブ（旧 checkSetupStatus）。needSetup なら setup 表示。
@@ -93,7 +98,11 @@ async function submitLogin(e: SubmitEvent): Promise<void> {
 		});
 		// セッション再取得 → App 側が isAuthed を検知して Bot 選択へ遷移。
 		await bootstrapSession();
-		navigateTo(getReturnTo());
+		const target = getReturnTarget();
+		// SPA 外（PWA 等）へはフルページ遷移。navigateTo は BASE_PATH（/admin）を付けて
+		// 管理画面内の未知ルートへ落とすだけで、別バンドルの PWA には戻れない。
+		if (target.kind === "external") window.location.assign(target.href);
+		else navigateTo(target.path);
 	} catch (e) {
 		reportError(e);
 	}

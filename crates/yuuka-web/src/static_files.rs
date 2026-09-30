@@ -15,6 +15,11 @@
 //! 未登録パスは本サービスの対象外＝素の 404（以前はどんな未知パスも index.html(200) を返していたが、
 //! それは `/admin` 移設前の名残で、PWA 領域を誤って呑み込む状態だった）。
 //!
+//! **旧 `/login`（互換）**: `/admin` 移設前、共有ログインは `/login`（ルート直下）にあった。現在は
+//! `/admin/login`（管理画面 SPA 内のルート）にしか存在しないため、ブックマークや旧ビルドの PWA
+//! （`/login?returnTo=…` へ送っていた）が 404 にならないよう、`GET /login`・`/login/` を
+//! クエリ（`returnTo` 等）ごと `/admin/login` へリダイレクトする（[`legacy_login_redirect`]）。
+//!
 //! セキュリティヘッダ（CSP/Referrer/HSTS/nosniff/X-Frame）は `apply_common_layers` が
 //! 全応答へ付与する（本モジュールは `Cache-Control` のみ担当）。
 //! index.html への google-site-verification meta 注入は後続増分（deferred・機能非依存）。
@@ -25,8 +30,8 @@ use std::path::{Path, PathBuf};
 use axum::body::Body;
 use axum::extract::Request;
 use axum::http::header::{HeaderValue, CACHE_CONTROL, CONTENT_TYPE};
-use axum::http::StatusCode;
-use axum::response::{IntoResponse, Response};
+use axum::http::{StatusCode, Uri};
+use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::get;
 use axum::Router;
 use tower::{service_fn, ServiceExt};
@@ -48,6 +53,9 @@ pub const ADMIN_PREFIX: &str = "/admin";
 /// `/api/admin/*`）、この呼び出し順は問わない。ルート `"/"` は本関数では触らない ── PWA
 /// （[`mount_pwa`]）が明示ルートとして配信する面であり、[`mount_pwa`] と組み合わせない呼び出し
 /// （PWA 未配線）では単に [`top_level_fallback`] の 404 に落ちる。
+///
+/// 旧共有ログインのパス `GET /login`・`/login/` だけは例外的に `/admin/login` へ互換リダイレクトする
+/// （[`legacy_login_redirect`]）。
 pub fn mount_static<S>(router: Router<S>, dist_dir: &Path) -> Router<S>
 where
     S: Clone + Send + Sync + 'static,
@@ -59,11 +67,31 @@ where
     });
     let dist_for_fallback = dist_dir.to_path_buf();
     router
+        .route("/login", get(legacy_login_redirect))
+        .route("/login/", get(legacy_login_redirect))
         .nest_service(ADMIN_PREFIX, admin_service)
         .fallback_service(service_fn(move |req: Request| {
             let dist = dist_for_fallback.clone();
             async move { Ok::<Response, Infallible>(top_level_fallback(&dist, req).await) }
         }))
+}
+
+/// 旧共有ログイン `/login` → `/admin/login` の互換リダイレクト先 URL。
+///
+/// クエリは**そのまま**引き継ぐ（PWA が付ける `returnTo`・`/device` 由来の値等。値の検証は移動先の
+/// 管理画面 SPA が `returnTo` ごとに行う）。移動先は常に固定の `/admin/login` で始まり、`Host` や
+/// リクエスト由来の値をパス側へ持ち込まないため、オープンリダイレクトにならない。
+fn legacy_login_target(uri: &Uri) -> String {
+    match uri.query() {
+        Some(query) => format!("{ADMIN_PREFIX}/login?{query}"),
+        None => format!("{ADMIN_PREFIX}/login"),
+    }
+}
+
+/// `GET /login`・`/login/` → `/admin/login`（クエリ保持・307）。恒久化しない（`308`/`301` は
+/// ブラウザにキャッシュされ、将来ログインの居場所が変わったときに戻せない）。
+async fn legacy_login_redirect(uri: Uri) -> Redirect {
+    Redirect::temporary(&legacy_login_target(&uri))
 }
 
 /// `/admin` にマッチしなかった全リクエストの最終フォールバック（`"/"` を含む ── PWA が未配線
@@ -479,6 +507,89 @@ mod tests {
                 !String::from_utf8_lossy(&bytes).contains("SPA-SHELL"),
                 "uri={uri}"
             );
+        }
+    }
+
+    fn location(resp: &axum::response::Response) -> Option<String> {
+        resp.headers()
+            .get("location")
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned)
+    }
+
+    #[tokio::test]
+    async fn legacy_login_redirects_to_admin_login_preserving_query() {
+        // 旧共有ログイン `/login`（PWA・ブックマーク）は `/admin/login` へ。`returnTo` 等のクエリは
+        // 一字一句そのまま引き継ぐ（PWA は `returnTo=%2Ftodo` を付けてくる）。
+        let dir = dist();
+        for (uri, expected) in [
+            ("/login", "/admin/login"),
+            ("/login/", "/admin/login"),
+            ("/login?", "/admin/login?"),
+            ("/login?returnTo=%2Ftodo", "/admin/login?returnTo=%2Ftodo"),
+            (
+                "/login?returnTo=%2Fchat%3Ffrom%3Dchat%23latest&x=1",
+                "/admin/login?returnTo=%2Fchat%3Ffrom%3Dchat%23latest&x=1",
+            ),
+        ] {
+            let resp = get_resp(dir.path(), uri).await;
+            assert_eq!(resp.status(), StatusCode::TEMPORARY_REDIRECT, "uri={uri}");
+            assert_eq!(location(&resp).as_deref(), Some(expected), "uri={uri}");
+        }
+    }
+
+    #[tokio::test]
+    async fn legacy_login_redirect_never_leaves_the_admin_login_path() {
+        // オープンリダイレクトにならない: 移動先は常に `/admin/login` 固定始まり。ホスト差し替え風の
+        // クエリ（`//evil.example`・`https://…`）もクエリ内に留まりパス側へは出ない。
+        let dir = dist();
+        for uri in [
+            "/login?returnTo=//evil.example",
+            "/login?returnTo=https://evil.example/",
+            "/login?//evil.example",
+            "/login?@evil.example",
+        ] {
+            let resp = get_resp(dir.path(), uri).await;
+            assert_eq!(resp.status(), StatusCode::TEMPORARY_REDIRECT, "uri={uri}");
+            let loc = location(&resp).expect("location");
+            assert!(loc.starts_with("/admin/login"), "uri={uri} loc={loc}");
+            assert!(!loc.starts_with("//"), "uri={uri} loc={loc}");
+            let path = loc.split('?').next().unwrap_or_default();
+            assert_eq!(path, "/admin/login", "uri={uri} loc={loc}");
+        }
+    }
+
+    #[tokio::test]
+    async fn legacy_login_redirect_is_get_only_and_leaves_other_unknown_paths_404() {
+        let dir = dist();
+        // HEAD は GET と同じ（axum の `get()` が自動で処理する）。
+        let head = app(dir.path())
+            .oneshot(
+                Request::builder()
+                    .method("HEAD")
+                    .uri("/login?returnTo=%2Ftodo")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(head.status(), StatusCode::TEMPORARY_REDIRECT);
+        // POST は 405（`/api/login` はこの面ではない）。
+        let post = app(dir.path())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/login")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(post.status(), StatusCode::METHOD_NOT_ALLOWED);
+        // `/login` 配下の他パス・類似パスは互換対象外（従来どおり 404）。
+        for uri in ["/login/extra", "/loginx", "/logout"] {
+            let resp = get_resp(dir.path(), uri).await;
+            assert_eq!(resp.status(), StatusCode::NOT_FOUND, "uri={uri}");
         }
     }
 
