@@ -3,6 +3,8 @@
 このディレクトリは、yuuka バックエンド（Node.js/TypeScript）を **Rust へ全面書き換え**する計画・実装ドキュメント一式。
 ブランチ `feature/rust-rewrite`（2026-07-01 起票）。**実装フェーズは完了（2026-07-16）**: 機能パリティ 100%（Web ルート **152/152**・LLM ツール **85/85 + MCP 動的**・常駐サービス予約シーム 0・synapse 吸収）・全ゲート緑（build / clippy -D / **test 717** / deny exit 0）・**dev 環境は web/API/cron/Discord すべて Rust で本稼働中**（`yuuka:dev-rust`・:7855）。**残るのは prod カットオーバー（ユーザー最終判断）のみ**。現況・指摘・残オペレーションは **[remaining-work.md](remaining-work.md)** 冒頭の「移行完了宣言（2026-07-16c）」を参照。
 
+> **⚠️ 履歴資料（Node 撤去前に書かれた移行記録）:** 本ディレクトリの文書は、Node.js 実装が稼働していた時期の移行計画・実施記録です。`src/*.ts` など Node 実装への参照や `deploy/cutover-dev-rust.sh` 等の移行用スクリプトへのリンクは、Node 実装の撤去（[#68](https://github.com/kawaii-music-moe/yuuka/pull/68)）後は**リンク切れ**です（撤去前のソースは `git show 390df39^:<path>` で参照できます）。「prod は Node のまま」「Node と併走する経路 A」などの現況記述も撤去前のものです。現行の構成は [../project_overview.md](../project_overview.md)・[../guide/deployment.md](../guide/deployment.md) とコードを参照してください。
+
 ## 読む順序
 
 1. **[00-decisions.md](00-decisions.md)** — 確定技術選定（ADR）。全バージョン・採用/却下理由の**唯一の基準**。まずここ。

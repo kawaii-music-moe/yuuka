@@ -1,7 +1,7 @@
 # Yuuka Desktop — バックエンド API 増設仕様
 
 対象: バックエンド（Node モノリス）への増設。提案段階（未実装）。
-前提: [architecture.md](architecture.md)。既存規範は [architecture_v2.md](../../architecture/architecture_v2.md) に従う。
+前提: [architecture.md](architecture.md)。（旧 Node 実装時点の規範 [architecture_v2.md](../../architecture/architecture_v2.md) は履歴資料で、現行の規範ではない。本書が想定する Node モノリスは撤去済みで、現行のバックエンドは Rust（`crates/yuuka-supervisor/src/ws.rs`・`crates/yuuka-auth`）。詳細は [index.md](index.md) の注記を参照。本文中の `src/*.ts` へのリンクは切れている。）
 
 この章は **クライアント非依存の汎用チャット API** を定義する。Discord にも Windows にも縛られない（将来の他クライアントも同じ API を使う）。
 

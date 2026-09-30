@@ -1,5 +1,9 @@
 # Svelte 移行 残作業計画書（続編 — ランタイム検証・遅延ロード・SW・Docker/Deploy・撤去）
 
+> **⚠️ 履歴資料（Svelte 移行は完了済み・Node バックエンドは撤去済み）**
+> 本書は、Node.js バックエンド（`src/server.ts`・`tsx`・`tsgo`・`node dist/index.js`・`STATIC_DIR` 環境変数・`src/public` の旧バニラ SPA 等）が存在した時期に書かれた移行の残作業計画書です。これらは現行リポジトリには存在せず、本文中のコマンド・ファイルパス・ポート・Dockerfile の行番号は**現行の手順ではありません**。
+> 現行の構成は次を参照してください: 管理画面 SPA = `frontend/`（`pnpm dev` / `pnpm build:front`、出力は `dist/public`）、バックエンド = `crates/`（Rust。管理画面は `/admin` 配下に静的配信）、セットアップ = [guide/setup.md](guide/setup.md)、デプロイ = [guide/deployment.md](guide/deployment.md)、全体像 = [project_overview.md](project_overview.md)。
+
 対象: `リポジトリルート` / ブランチ `feature/svelte-migration`
 親設計書: `docs/svelte-migration-plan.md`（全16章。以下 §N はこの親書の章番号を指す）
 本書の位置づけ: 親書 §5〜§7・§13・§14・§15 に残る「実装済み・ビルド緑・ただしランタイム未検証」の状態から本番デプロイまでを、実行可能粒度に落とした続編。バックエンド（`server.ts` の `serverHandler` / route registry / `src/server/routes/*` / API 契約）は原則不変。CSP `script-src 'self'`（`src/server.ts:80-81`）は不変。

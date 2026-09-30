@@ -1,5 +1,7 @@
 # MCP ダッシュボード プロキシ アーキテクチャ
 
+> **⚠️ 注記（旧 Node 実装時点の設計）**: 本書の「関連ファイル」表や CSP の出所などが挙げる `src/server.ts`・`src/server/routes/mcpRoutes.ts`・`src/services/mcpClient.ts`・`src/public/*` は Node バックエンド／旧バニラ SPA のファイルで、現行リポジトリには存在しません。現行の実装は `crates/yuuka-mcp`（ダッシュボード/プロキシ API）、`crates/yuuka-web`（本体の CSP・セキュリティヘッダ）、`frontend/src/routes/mcp/McpDashboardModal.svelte`（iframe 埋め込み UI）に移っています。方式（サンドボックス iframe・サーバー側でのトークン解決）の設計意図の参照用として読み、挙動の詳細は現行コードで確認してください。本文は旧実装のまま未更新です。
+
 ## 概要
 
 MCP サーバー（例: ywrk-mcp）のダッシュボードを yuuka の管理画面に**サンドボックス iframe 埋め込み**で表示する際、

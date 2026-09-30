@@ -1,7 +1,8 @@
 # シナプス駆動 認知アーキテクチャ 設計方針書
 
 > **文書種別:** 設計方針書（提案 / RFC）。**Phase 0/1（R0/R1）実装済み** — schema v10 のシナプス記憶層・Rust シナプスエンジン・1st Hop 連想・経験統計の素地が実装され、実装規範 [`architecture/architecture_v2.md`](../architecture/architecture_v2.md) §13 へ昇格済み（R0/R1 コンポーネントは**常時有効**。エンジンバイナリ不在・未起動・タイムアウト時のみ現行挙動〔直近15件の生履歴注入〕へ自動デグレード）。Phase 2（2nd Hop 勝率提示）・Phase 3（ローカル SLM ハイブリッド）・Phase 4（投機/キャッシュ）は未実装。本書は設計思想の原典として維持する。
-> **位置づけ:** 本書は設計思想の原典（why/what）。実装済み部分（R0/R1）の現行規範は [`architecture/architecture_v2.md`](../architecture/architecture_v2.md) §13（現 schema v16）が正であり、矛盾時は architecture_v2 が優先。未実装の Phase 2 以降は本書を指針とし、着手時に architecture_v2 へ昇格する。実装着手時に本書の内容を architecture_v2 へ昇格・統合する。矛盾した場合、現時点では architecture_v2 が優先。
+> **位置づけ:** 本書は設計思想の原典（why/what）。実装済み部分（R0/R1）の現行の実装は `crates/yuuka-synapse`（インプロセス）と `crates/yuuka-orchestrator` の `synapse_*.rs` で、**矛盾する場合は現行コードが正**。旧 Node 実装時点の規範である [`architecture/architecture_v2.md`](../architecture/architecture_v2.md) §13（schema v16）は履歴資料で、優先されない。未実装の Phase 2 以降は本書を指針とし、着手時は現行の Rust 実装・マイグレーション（`crates/yuuka-db/migrations/`）に合わせて具体化する。
+> **⚠️ 旧 Node 実装時点の記述を含みます:** 本文が参照する `src/*.ts`・`src/rust_synapse/` 等は Node 実装（[#68](https://github.com/kawaii-music-moe/yuuka/pull/68) で撤去済み）のファイルで、現行リポジトリには存在しません（リンク切れを含む）。撤去前のソースは `git show 390df39^:<path>` で参照できます。詳細は [docs/index.md](../index.md)。
 > **対象読者:** 設計判断を行う開発者・実装エージェント。
 > **決定済みの前提（本書の3つの軸）:**
 > 1. **ハイブリッドLLM構成** — 重い推論は Gemini、ルーティング/前処理/分類はローカル軽量LLM。

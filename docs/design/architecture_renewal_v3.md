@@ -1,7 +1,8 @@
 # 全体アーキテクチャ一新案（v3 提案）— Rust シナプスエンジン × ハイブリッドLLM
 
 > **文書種別:** アーキテクチャ一新案（提案 / RFC）。**R0/R1 実装済み** — Rust シナプスエンジン（`src/rust_synapse/`、統合方式A=Node 子プロセス）・stdio 改行 JSON プロトコル・read-only WAL 参照・RAM 索引・SQLite v10 を実装し、実装規範 [`architecture/architecture_v2.md`](../architecture/architecture_v2.md) §13 へ昇格済み（機能フラグ既定 OFF）。R2/R3/R4 は未実装。埋め込みは現状ハッシュ n-gram（`Embedder` trait＋cargo feature `onnx` を将来の ONNX 換装点として用意）。本書はシステム実装面の原典として維持する。
-> **位置づけ:** [`synapse_cognitive_architecture.md`](synapse_cognitive_architecture.md)（設計思想＝why/what）の**システム実装面（how/topology）**の対。現行の実装規範 [`architecture/architecture_v2.md`](../architecture/architecture_v2.md)（schema v9）の**将来後継（v3）案**であり、着手時に本書を architecture_v2 へ昇格する。現時点の権威は architecture_v2 が上。
+> **位置づけ:** [`synapse_cognitive_architecture.md`](synapse_cognitive_architecture.md)（設計思想＝why/what）の**システム実装面（how/topology）**の対。旧 Node 実装時点の規範 [`architecture/architecture_v2.md`](../architecture/architecture_v2.md)（schema v9 時点。履歴資料）の**将来後継（v3）案**として書かれた提案書。**Node バックエンドは撤去済み**で、シナプスエンジンは `crates/yuuka-synapse` としてインプロセスのライブラリに統合されているため、本書の 3 プロセス構成（Node / Rust シナプス / ローカル SLM）は現行構成と異なる。**矛盾する場合は現行コードが正**。
+> **⚠️ 旧 Node 実装時点の記述を含みます:** 本文が参照する `src/*.ts`・`src/rust_synapse/`・`src/rust_crawler/` 等は Node 実装（[#68](https://github.com/kawaii-music-moe/yuuka/pull/68) で撤去済み）のファイルで、現行リポジトリには存在しません（リンク切れを含む）。撤去前のソースは `git show 390df39^:<path>` で参照できます。詳細は [docs/index.md](../index.md)。
 > **本書の主眼:** シナプス関連（埋め込み・ベクトル索引・2-Hop連想・統計）を **Rust の独立プロセス**として切り出し、Node(V8) ヒープのメモリトラブル（ヒープ肥大・GC停止・~4GB上限）を構造的に回避する。
 
 ---
@@ -234,5 +235,5 @@ Rust 化に加え、以下で「メモリ関連トラブル」を能動的に潰
 
 ## 付録. 関連文書
 - 設計思想・研究裏付け：[`synapse_cognitive_architecture.md`](synapse_cognitive_architecture.md)
-- 現行実装規範（権威）：[`architecture/architecture_v2.md`](../architecture/architecture_v2.md)
+- 旧 Node 実装時点の規範（履歴資料。権威ではない）：[`architecture/architecture_v2.md`](../architecture/architecture_v2.md)
 - 既存 Rust デーモン前例：[`src/services/browserService.ts`](../../src/services/browserService.ts) / [`src/rust_crawler/`](../../src/rust_crawler/)

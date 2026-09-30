@@ -1,5 +1,9 @@
 # Svelte + 現Node.jsサーバー 移行手順書
 
+> **⚠️ 履歴資料（Svelte 移行は完了済み・Node バックエンドは撤去済み）**
+> 本書は、Node.js バックエンド（`src/server.ts`・`tsx`・`tsgo`・`node dist/index.js`・`STATIC_DIR` 環境変数・`src/public` の旧バニラ SPA 等）が存在した時期に書かれた移行手順書です。これらは現行リポジトリには存在せず、本文中のコマンド・ファイルパス・ポート・Dockerfile の行番号は**現行の手順ではありません**。
+> 現行の構成は次を参照してください: 管理画面 SPA = `frontend/`（`pnpm dev` / `pnpm build:front`、出力は `dist/public`）、バックエンド = `crates/`（Rust。管理画面は `/admin` 配下に静的配信）、セットアップ = [guide/setup.md](guide/setup.md)、デプロイ = [guide/deployment.md](guide/deployment.md)、全体像 = [project_overview.md](project_overview.md)。
+
 対象: `リポジトリルート`（Discord AI秘書Bot + Web管理ダッシュボード）
 方針: フロントエンドを素の vanilla JS SPA から **Svelte(単体) + Vite** へ移行する。バックエンド（`src/server.ts` の素 http サーバー + route registry + API）は原則不変。
 
