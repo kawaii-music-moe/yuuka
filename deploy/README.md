@@ -158,6 +158,11 @@ docker compose -f deploy/dev/vite.compose.yml stop     # 停止のみ（start / 
 docker compose -f deploy/dev/vite.compose.yml down     # 停止・撤去
 ```
 
+公開トンネルから使う場合は、`deploy/dev/config.yaml` の `BASE_URL` をブラウザで開く HTTPS URL
+（例: `https://yuuka-dev.kawaii-music.moe`）に変更し、dev API を再起動する。
+`BASE_URL: "http://localhost:7855"` のままでは、Cookie 認証の状態変更リクエストで
+`Origin` が CSRF 許可ホストと一致せず 403 になる。ローカル専用利用なら既定値のままでよい。
+
 `restart: unless-stopped` のため、ホスト / Docker デーモンの再起動後は自動で立ち上がる
 （`stop` / `down` した場合は立ち上がらない）。トンネル（公開ホスト → `127.0.0.1:7855`）の設定は
 このリポジトリの管理外。
