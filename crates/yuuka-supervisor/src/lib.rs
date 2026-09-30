@@ -38,9 +38,12 @@ pub use ws::ws_routes;
 /// （`dist/public`）を `fallback_service` として載せる（未指定は API のみ）。
 ///
 /// 引数は state + dist_dir/pwa_dist_dir と、`Extension` で依存を内包済みの pre-built ルータ群
-/// （auth/admin/settings/webhook/bot-attribute/ws）。crypto/runtime を State へ入れると全
+/// （auth/admin/settings/webhook/bot-attribute/ws/client-api）。crypto/runtime を State へ入れると全
 /// `AppState` 構築へ波及するため、これらは main 側で組んで渡す配線関数（引数数の lint は本質的な
 /// 配線都合として許容）。
+///
+/// `client_api_routes` は [`yuuka_client_api::routes_with`] が返す `/api/client/*` ルータ（`ChatEngine`/
+/// `RateLimiter` を `Extension` で内包済み・チャット送信 issue #41）。
 ///
 /// `pwa_dist_dir` を渡すと PWA（issue #33・`client/pwa`）を [`mount_pwa`] で明示ルート群として
 /// 載せる。`dist_dir`（admin SPA・`fallback_service`）とは独立に効くため、両方 `Some` でも
@@ -60,6 +63,7 @@ pub fn build_app(
     integrated_routes: Router<AppState>,
     finance_routes: Router<AppState>,
     bot_management_routes: Router<AppState>,
+    client_api_routes: Router<AppState>,
     dist_dir: Option<&Path>,
     pwa_dist_dir: Option<&Path>,
 ) -> Router {
@@ -86,7 +90,7 @@ pub fn build_app(
         .merge(yuuka_auth::device_routes())
         .merge(yuuka_orchestrator::member_request_routes())
         .merge(yuuka_orchestrator::bot_share_routes())
-        .merge(yuuka_client_api::routes())
+        .merge(client_api_routes)
         .merge(bot_management_routes)
         .merge(desktop_dist::routes());
     let routes = match pwa_dist_dir {
@@ -206,8 +210,26 @@ mod tests {
             std::sync::Arc::new(yuuka_google::NullBackup),
             std::sync::Arc::new(yuuka_google::OAuthStateStore::new()),
         ));
+        // client-api ルータ（`/api/client/*`・issue #41 のチャット送信を含む）は `Extension` で
+        // `ChatEngine`/`RateLimiter` を内包するため、WS と違って完全に空のルータでは代替できない
+        // （route 自体を登録しないと `combined_production_router_wires_pwa_admin_and_api_without_route_conflicts`
+        // が検証したい「認証切れ→401」を「未登録→404」に取り違えてしまう）。`RealGeminiFactory` は
+        // ここでは `.build()` まで到達しない（`AuthenticatedUser` 抽出が先に 401 で短絡する）ため、
+        // 実 API キーなしで安全に使える。
+        let db = test_db();
+        let client_api_engine = std::sync::Arc::new(yuuka_orchestrator::ChatEngine::new(
+            db.clone(),
+            None,
+            yuuka_tools::ToolRegistry::new(),
+            std::sync::Arc::new(yuuka_orchestrator::RealGeminiFactory),
+            None,
+            std::sync::Arc::new(yuuka_mcp::NullMcpClient),
+            None,
+        ));
+        let client_api_rate_limiter: std::sync::Arc<dyn yuuka_discord::RateLimiter> =
+            std::sync::Arc::new(yuuka_orchestrator::InMemoryRateLimiter::new(db.clone()));
         super::build_app(
-            AppState::new(Arc::new(FakeAuth), WebConfig::default(), test_db()),
+            AppState::new(Arc::new(FakeAuth), WebConfig::default(), db),
             yuuka_auth::routes(runtime),
             yuuka_admin::routes(admin_runtime),
             yuuka_settings::routes(settings_runtime),
@@ -238,6 +260,8 @@ mod tests {
             yuuka_finance::routes(),
             // Bot 管理ルータ（既定 NullBotViewRuntime・crypto なし）を merge して検証する。
             yuuka_orchestrator::bot_management_routes(),
+            // client-api ルータ（fake ChatEngine・InMemoryRateLimiter）。上のコメント参照。
+            yuuka_client_api::routes_with(client_api_engine, client_api_rate_limiter),
             dist_dir,
             pwa_dist_dir,
         )
@@ -345,6 +369,26 @@ mod tests {
             .unwrap()
     }
 
+    /// [`combined_get`] の POST 版（issue #41・`POST /api/client/chat/messages` の無認証 401 検証用）。
+    async fn combined_post(
+        admin_dir: &std::path::Path,
+        pwa_dir: &std::path::Path,
+        uri: &str,
+        body: &str,
+    ) -> axum::response::Response {
+        build_test_app(Some(admin_dir), Some(pwa_dir))
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(uri)
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_owned()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+    }
+
     #[tokio::test]
     async fn combined_production_router_wires_pwa_admin_and_api_without_route_conflicts() {
         // PR #74 レビュー対応: #73 の暫定 `GET /` → `/admin/` リダイレクトが `mount_pwa` の `"/"`
@@ -408,6 +452,19 @@ mod tests {
         let client_status =
             combined_get(admin_dir.path(), pwa_dir.path(), "/api/client/status").await;
         assert_eq!(client_status.status(), StatusCode::UNAUTHORIZED);
+
+        // PR #75 レビュー対応: POST /api/client/chat/messages（issue #41・チャット送信）も
+        // client_api_routes として組み合わせルータへ登録されていることを検証する。無認証 → 401
+        // （`ChatEngine`/`RateLimiter` の `Extension` 配線がここに来るまでに一切呼ばれないことも
+        // 同時に確認できる ── 呼ばれていれば `RealGeminiFactory` が実 API キー無しで失敗する）。
+        let chat_send = combined_post(
+            admin_dir.path(),
+            pwa_dir.path(),
+            "/api/client/chat/messages",
+            r#"{"content":"hello"}"#,
+        )
+        .await;
+        assert_eq!(chat_send.status(), StatusCode::UNAUTHORIZED);
 
         // 未登録 /api/* は JSON 404（index.html に握り潰されない・B6 parity）。
         let unknown_api =

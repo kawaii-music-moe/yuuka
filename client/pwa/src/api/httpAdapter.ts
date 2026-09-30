@@ -1,6 +1,9 @@
 import type { AgentGateway } from './gateway'
-import type { AgentSettings, SharedNote, Todo, Transaction } from './contracts'
+import type { AgentSettings, ChatMessage, ChatSendAccepted, SharedNote, Todo, Transaction } from './contracts'
+import { pollForChatReply, type ChatPollOptions } from './chatPolling'
 import { request } from './http'
+
+const listChatMessages = () => request<ChatMessage[]>('/api/client/chat/messages')
 
 // このファイルだけが未確定の HTTP req/res 形式を知る。画面・状態管理層は Gateway のみを利用する。
 export const httpAgentGateway: AgentGateway = {
@@ -20,6 +23,11 @@ export const httpAgentGateway: AgentGateway = {
   getFinanceSummary: (month: string) => request(`/api/client/finance/summary?month=${month}`),
   listTransactions: (month: string) => request(`/api/client/finance/transactions?month=${month}`),
   createTransaction: (transaction: Omit<Transaction, 'id'>) => request('/api/client/finance/transactions', { method: 'POST', body: JSON.stringify(transaction) }),
-  listChatMessages: () => request('/api/client/chat/messages'),
-  sendChatMessage: (content: string) => request('/api/client/chat/messages', { method: 'POST', body: JSON.stringify({ content }) }),
+  listChatMessages,
+  // 202 Accepted（応答はバックグラウンド生成）→ 履歴を sinceId 起点でポーリングして完了を検知する。
+  sendChatMessage: async (content: string, options?: Pick<ChatPollOptions, 'onTick' | 'signal'>) => {
+    const accepted = await request<ChatSendAccepted>('/api/client/chat/messages', { method: 'POST', body: JSON.stringify({ content }), signal: options?.signal })
+    return pollForChatReply({ listMessages: listChatMessages, sinceId: accepted.sinceId, ...options })
+  },
+  waitForChatReply: (sinceId: string, options?: Pick<ChatPollOptions, 'onTick' | 'signal'>) => pollForChatReply({ listMessages: listChatMessages, sinceId, ...options }),
 }

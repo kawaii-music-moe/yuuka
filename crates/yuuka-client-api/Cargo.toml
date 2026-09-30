@@ -12,7 +12,8 @@ yuuka-core.workspace = true
 yuuka-db.workspace = true
 yuuka-web.workspace = true
 yuuka-gemini.workspace = true          # ALLOWED_MODELS（issue #39: モデル許可リストの唯一の正）
-yuuka-orchestrator.workspace = true    # message_log（PWA source 分離）・context_note（共有ノート）
+yuuka-orchestrator.workspace = true    # message_log（PWA source 分離）・context_note（共有ノート）・ChatEngine（チャット送信・#41）
+yuuka-discord.workspace = true         # IncomingChat/StatusSink/TurnReply DTO・RateLimiter シーム（チャット送信・#41）
 yuuka-todo.workspace = true            # TodoRepo 再利用
 yuuka-finance.workspace = true         # ExpenseRepo 再利用
 yuuka-schedule.workspace = true        # ScheduleRepo 再利用
@@ -23,14 +24,18 @@ serde.workspace = true
 serde_json.workspace = true
 chrono.workspace = true                # JST 日境界・startsAt/endsAt の UTC ISO8601 変換
 tracing.workspace = true
+tokio.workspace = true                 # チャット送信のターン全体タイムアウト（issue #41・§チャット送信の設計）
 
 [dev-dependencies]
-tokio.workspace = true
 tower = { workspace = true, features = ["util"] }
 tempfile = "3"
 yuuka-types.workspace = true
 yuuka-auth.workspace = true
+yuuka-crypto.workspace = true          # チャット送信テスト: users.gemini_api_key_* の暗号化 seed
+yuuka-tools.workspace = true           # チャット送信テスト: ChatEngine 構築（ToolRegistry）
+yuuka-mcp.workspace = true             # チャット送信テスト: ChatEngine 構築（NullMcpClient）
 async-trait.workspace = true
+secrecy.workspace = true
 
 [lints]
 workspace = true

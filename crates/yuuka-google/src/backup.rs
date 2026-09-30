@@ -412,6 +412,16 @@ fn export_user_data(src: &Connection, dest: &Connection, user_id: &str) -> rusql
     for (table, where_col) in USER_SCOPED_TABLES.iter().chain(USER_KEYED_TABLES) {
         copy_rows(src, dest, table, where_col, user_id)?;
     }
+    // V22: 添付には user_id 列がない。親の message_logs を介して本人分だけをコピーする。
+    // これを省くと返信本文は復元できても、グラフ等のファイル実体が失われる。
+    copy_rows_from_select(
+        src,
+        dest,
+        "message_attachments",
+        "SELECT a.* FROM message_attachments a \
+         JOIN message_logs m ON m.id = a.message_log_id WHERE m.user_id = ?1",
+        user_id,
+    )?;
     copy_rows(src, dest, "bots", "user_id", user_id)?;
     Ok(())
 }
@@ -443,14 +453,26 @@ fn copy_rows(
     user_id: &str,
 ) -> rusqlite::Result<()> {
     let select = format!("SELECT * FROM {table} WHERE {where_col} = ?1");
-    let mut stmt = match src.prepare(&select) {
+    copy_rows_from_select(src, dest, table, &select, user_id)
+}
+
+/// `user_id` を 1 パラメータに取る SELECT の結果を、同名テーブルへ型を保ってコピーする。
+/// V22 の添付のように所有者を親テーブル経由で絞る場合にも使う。
+fn copy_rows_from_select(
+    src: &Connection,
+    dest: &Connection,
+    table: &str,
+    select: &str,
+    user_id: &str,
+) -> rusqlite::Result<()> {
+    let mut stmt = match src.prepare(select) {
         Ok(stmt) => stmt,
         // テーブル不在は skip（Node の catch return）。
         Err(e) if is_missing_table(&e) => return Ok(()),
         // それ以外（列名不一致など）は握り潰さず、警告ログの上で伝播させる（データ欠落を隠さない）。
         Err(e) => {
             tracing::warn!(
-                table = %table, where_col = %where_col, error = %e,
+                table = %table, error = %e,
                 "⚠️ [Backup] テーブルのエクスポートに失敗（スキーマ不整合の可能性）"
             );
             return Err(e);
