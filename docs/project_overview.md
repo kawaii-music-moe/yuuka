@@ -59,7 +59,7 @@ cargo run --bin yuuka   # バックエンド開発起動（config.yaml のある
 pnpm dev                # 管理画面の開発（Vite）。VITE_API_TARGET でバックエンドへ proxy
 pnpm dev:client:mock    # PWA（client/pwa）+ モック API + 管理画面をまとめて起動（手順は client/pwa/README.md）
 cargo test --workspace  # Rust テスト
-pnpm build              # 本番ビルド: cargo build --release --bin yuuka + 管理画面の本番ビルド(dist/public)
+pnpm build              # 本番ビルド: cargo build --release --bin yuuka → build:front → build:pwa（管理画面 + PWA）
 pnpm build:front        # 管理画面のみ本番ビルド(dist/public)
 pnpm build:pwa          # PWA のビルド（client/pwa。出力は dist/public/pwa。依存が無ければ npm ci を実行）
 cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings   # Rust lint/format
