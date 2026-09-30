@@ -21,13 +21,13 @@ use secrecy::SecretString;
 use serde_json::{json, Value};
 use tokio::sync::Semaphore;
 use tower::ServiceExt;
-use yuuka_core::{AuthError, GeminiError};
+use yuuka_core::{AuthError, BotId, GeminiError, GuildId, UserId};
 use yuuka_crypto::SystemCrypto;
-use yuuka_discord::RateLimiter;
+use yuuka_discord::{RateDecision, RateLimiter};
 use yuuka_gemini::{
     Content, FunctionDeclaration, GenerateBackend, GenerateContentResponse, ToolConfig,
 };
-use yuuka_orchestrator::{ChatEngine, GeminiFactory, InMemoryRateLimiter};
+use yuuka_orchestrator::{message_log, ChatEngine, GeminiFactory, InMemoryRateLimiter};
 use yuuka_tools::ToolRegistry;
 use yuuka_types::{Role, SessionUser};
 use yuuka_web::{AppState, AuthBackend, Db, WebConfig};
@@ -228,8 +228,32 @@ fn engine_with(db: Db, crypto: Option<Arc<SystemCrypto>>, text: &str) -> Arc<Cha
 /// しない・本クレートのルート層だけを検証する）。
 fn app(engine: Arc<ChatEngine>, db: Db) -> Router {
     let rate_limiter: Arc<dyn RateLimiter> = Arc::new(InMemoryRateLimiter::new(db.clone()));
+    app_with_rate_limiter(engine, db, rate_limiter)
+}
+
+/// レート制限を差し替えられる [`app`]（連続送信の回数がクォータに当たらないようにしたいテスト用）。
+fn app_with_rate_limiter(
+    engine: Arc<ChatEngine>,
+    db: Db,
+    rate_limiter: Arc<dyn RateLimiter>,
+) -> Router {
     let state = AppState::new(Arc::new(FakeAuth), WebConfig::default(), db);
     yuuka_client_api::routes_with(engine, rate_limiter).with_state(state)
+}
+
+/// 常に許可するレート制限（クォータ消費と同時ターン防止の関心事を分離するため）。
+struct AllowAllRateLimiter;
+
+#[async_trait]
+impl RateLimiter for AllowAllRateLimiter {
+    async fn consume(
+        &self,
+        _bot_id: &BotId,
+        _guild_id: &GuildId,
+        _user_id: &UserId,
+    ) -> RateDecision {
+        RateDecision::allow()
+    }
 }
 
 async fn post_chat(app: &Router, token: Option<&str>, content: &str) -> (StatusCode, Value) {
@@ -281,6 +305,19 @@ async fn get_history(app: &Router, token: &str) -> Vec<Value> {
 /// `since_id` より大きい id を持つ `role:"agent"` の行が現れるまで履歴をポーリングする（issue #41
 /// PR #75 レビュー・P1 のポーリング契約そのもの）。見つからないまま `max_iters` を使い切ったら panic。
 async fn poll_for_reply_after(app: &Router, token: &str, since_id: i64, max_iters: u32) -> Value {
+    poll_for_reply_after_with_backoff(app, token, since_id, max_iters, Duration::from_millis(5))
+        .await
+}
+
+/// [`poll_for_reply_after`] の再取得間隔を指定できる版。`Duration::ZERO`（＝譲るだけ）にすると、応答が
+/// コミットされた直後に観測でき、「観測した直後に次を送る」タイミングを最も厳しくできる。
+async fn poll_for_reply_after_with_backoff(
+    app: &Router,
+    token: &str,
+    since_id: i64,
+    max_iters: u32,
+    backoff: Duration,
+) -> Value {
     for _ in 0..max_iters {
         let history = get_history(app, token).await;
         if let Some(msg) = history.iter().find(|m| {
@@ -292,7 +329,7 @@ async fn poll_for_reply_after(app: &Router, token: &str, since_id: i64, max_iter
         }) {
             return msg.clone();
         }
-        tokio::time::sleep(Duration::from_millis(5)).await;
+        tokio::time::sleep(backoff).await;
     }
     panic!("since_id={since_id} より後の agent 応答が時間内に現れなかった");
 }
@@ -372,8 +409,9 @@ async fn rate_limit_rejects_after_default_per_minute_quota() {
     let app = app(engine, db);
 
     // 既定の分あたり上限（5・`InMemoryRateLimiter` の `DEFAULT_USER_PER_MINUTE`）まで送信できる。
-    // 各回、次を送る前に完了を待つ（同時ターン防止ゲートに引っかからないようにする・issue #41
-    // PR #75 レビュー・P1 の 409 とは別の関心事なのでここでは直列に送る）。
+    // 各回、応答が見えるのを待ってから**すぐ**次を送る（PWA と同じ使い方）。同時ターン防止ゲートは
+    // 終端行の永続化から完了を導出するため、応答が見えた後の送信が 409 になることは無く、6 回目は
+    // タイミングに依らず 429 になる（PR #83 フォロー: 旧実装はガード解放の遅れで 409 に化けて flaky だった）。
     for i in 0..5 {
         let (status, body) = post_chat(&app, Some("u1"), &format!("msg {i}")).await;
         assert_eq!(status, StatusCode::ACCEPTED, "iteration {i}: body={body:?}");
@@ -556,9 +594,51 @@ async fn concurrent_send_for_the_same_user_is_rejected_with_409() {
     let since_id: i64 = body_a["sinceId"].as_str().unwrap().parse().unwrap();
     poll_for_reply_after(&app, "u1", since_id, 200).await;
 
-    // 完了後は新規送信が再び 202 で受け付けられる（guard が解放されている）。
+    // 応答を観測した直後でも新規送信は 202 で受け付けられる。完了は終端行の永続化から導出されるので、
+    // バックグラウンドタスクが戻ってガードが drop されるのを待たない（旧実装はここが稀に 409 になり
+    // flaky だった・PR #83 フォロー）。
     let (status_c, _) = post_chat(&app, Some("u1"), "3通目").await;
     assert_eq!(status_c, StatusCode::ACCEPTED);
+}
+
+/// 回帰（PR #83 フォロー）: 応答をポーリングで観測した**直後**に次を送っても 409 にならない。
+///
+/// 旧実装は終端行（応答）の永続化の後、バックグラウンドタスクが戻ってガードが drop されるまでの間に
+/// 次の送信が来ると 409 を返していた（実 PWA でも「応答が見えたらすぐ次を送れる」ので起きる）。この窓の
+/// 長さは OS のスケジューリング次第のため、多数回繰り返して窓に当たる確率を高くしている（決定的な
+/// 検証は `routes.rs` の単体テスト `slot_is_reclaimed_once_the_reply_is_committed_*`）。あわせて、
+/// 全ターンが重ならず順に完了した（履歴が user/agent の交互で欠落・重複が無い）ことも確認する。
+#[tokio::test]
+async fn next_send_right_after_observing_the_reply_is_never_rejected_with_409() {
+    // 履歴 API の上限（`CHAT_HISTORY_LIMIT` = 200 行）に収まる回数（1 ターン = 2 行）。
+    const TURNS: usize = 90;
+    let (db, path) = fresh_db();
+    let crypto = Arc::new(
+        SystemCrypto::new(SecretString::from("chat-send-test-secret".to_owned())).unwrap(),
+    );
+    seed_user_with_key(&path, &crypto, "u1");
+    let engine = engine_with(db.clone(), Some(crypto), "了解しました！");
+    let app = app_with_rate_limiter(engine, db, Arc::new(AllowAllRateLimiter));
+
+    for i in 0..TURNS {
+        // 直前のターンの応答を観測した直後（`poll_for_reply_after` の戻り直後）に送る。
+        let (status, body) = post_chat(&app, Some("u1"), &format!("msg {i}")).await;
+        assert_eq!(
+            status,
+            StatusCode::ACCEPTED,
+            "iteration {i}: 応答を観測した直後の送信が拒否された body={body:?}"
+        );
+        let since_id: i64 = body["sinceId"].as_str().unwrap().parse().unwrap();
+        // 待ち時間を置かずにポーリングし、応答がコミットされた直後に観測して即座に次を送る。
+        poll_for_reply_after_with_backoff(&app, "u1", since_id, 50_000, Duration::ZERO).await;
+    }
+
+    let history = get_history(&app, "u1").await;
+    assert_eq!(history.len(), TURNS * 2, "history.len()={}", history.len());
+    for (i, m) in history.iter().enumerate() {
+        let expected = if i % 2 == 0 { "user" } else { "agent" };
+        assert_eq!(m["role"], expected, "index {i}: 順序が崩れている");
+    }
 }
 
 // ─── リッチ返信（embeds/files）の配信（issue #41 PR #75 レビュー・P2） ─────────────────────────
@@ -761,4 +841,155 @@ async fn unsaved_warning_reply_is_persisted_as_a_notice_so_polling_terminates() 
         .filter(|m| m["role"] == "agent")
         .count();
     assert_eq!(agent_rows, 1, "通知行はちょうど 1 件");
+}
+
+// ─── 受理の永続化と再起動後の回復（issue #77） ─────────────────────────────────────────────
+
+fn count_pwa_rows(path: &std::path::Path, user_id: &str, filter: &str) -> i64 {
+    rusqlite::Connection::open(path)
+        .unwrap()
+        .query_row(
+            &format!(
+                "SELECT COUNT(*) FROM message_logs \
+                 WHERE user_id = ?1 AND source = 'pwa' AND {filter}"
+            ),
+            rusqlite::params![user_id],
+            |r| r.get(0),
+        )
+        .unwrap()
+}
+
+#[tokio::test]
+async fn accepted_user_message_is_persisted_before_202_and_not_duplicated_by_the_turn() {
+    let (db, path) = fresh_db();
+    let crypto = Arc::new(
+        SystemCrypto::new(SecretString::from("chat-send-test-secret".to_owned())).unwrap(),
+    );
+    seed_user_with_key(&path, &crypto, "u1");
+    // release されるまでターンは進まない＝この間に見える履歴は「`202` の時点で保存済みのもの」だけ。
+    let release = Arc::new(Semaphore::new(0));
+    let engine = engine_with_factory(
+        db.clone(),
+        Some(crypto),
+        Arc::new(GatedFactory {
+            release: release.clone(),
+            text: "お待たせしました".to_owned(),
+        }),
+    );
+    let app = app(engine, db);
+
+    let (status, body) = post_chat(&app, Some("u1"), "  受理された発言  ").await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    let since_id: i64 = body["sinceId"].as_str().unwrap().parse().unwrap();
+
+    // ターン（生成）は未完了のまま、ユーザー発言は既に永続化されている（trim 済み・source='pwa'）。
+    assert_eq!(count_pwa_rows(&path, "u1", "role = 'assistant'"), 0);
+    assert_eq!(
+        count_pwa_rows(&path, "u1", "role = 'user' AND content = '受理された発言'"),
+        1,
+        "202 の時点でユーザー発言が保存済み"
+    );
+    let history = get_history(&app, "u1").await;
+    assert_eq!(history.len(), 1, "history={history:?}");
+    assert_eq!(history[0]["role"], "user");
+    assert_eq!(history[0]["content"], "受理された発言");
+    let user_id: i64 = history[0]["id"].as_str().unwrap().parse().unwrap();
+    assert!(user_id > since_id, "sinceId はユーザー発言より前の起点");
+
+    // ターン完了後もユーザー発言は 1 件のまま（エンジンが再保存しない）・履歴は user → agent の 2 件。
+    release.add_permits(1);
+    let reply = poll_for_reply_after(&app, "u1", since_id, 200).await;
+    assert_eq!(reply["content"], "お待たせしました");
+    assert_eq!(count_pwa_rows(&path, "u1", "role = 'user'"), 1);
+    assert_eq!(count_pwa_rows(&path, "u1", "role = 'assistant'"), 1);
+    let history = get_history(&app, "u1").await;
+    assert_eq!(history.len(), 2, "history={history:?}");
+    assert_eq!(history[0]["role"], "user");
+    assert_eq!(history[1]["role"], "agent");
+}
+
+/// `202` の後にプロセスが落ちた状況を再現する: 1 つ目の「プロセス」のターンは永遠に返らない（＝
+/// 再起動で消えたターン）。2 つ目の「プロセス」（同じ DB ファイルを新しく開いたルータ/`InFlightTurns`）
+/// が起動時スイープを実行し、クライアントのポーリングが終端することを確認する。
+#[tokio::test]
+async fn restart_recovery_terminates_polling_for_an_orphaned_turn() {
+    let (db, path) = fresh_db();
+    let crypto = Arc::new(
+        SystemCrypto::new(SecretString::from("chat-send-test-secret".to_owned())).unwrap(),
+    );
+    seed_user_with_key(&path, &crypto, "u1");
+    seed_user_with_key(&path, &crypto, "u2");
+
+    // プロセス 1: u1 のターンは決して完了しない（release しない）。u2 は完了済みの会話を持つ。
+    let never = Arc::new(Semaphore::new(0));
+    let engine_1 = engine_with_factory(
+        db.clone(),
+        Some(crypto.clone()),
+        Arc::new(GatedFactory {
+            release: never,
+            text: "返らない".to_owned(),
+        }),
+    );
+    let app_1 = app(engine_1, db.clone());
+    let (status, body) = post_chat(&app_1, Some("u1"), "再起動で消える質問").await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    let since_id: i64 = body["sinceId"].as_str().unwrap().parse().unwrap();
+    message_log::add_pwa_message_log(&db, "u2", "system_default", "user", "済んだ質問")
+        .await
+        .unwrap();
+    message_log::add_pwa_assistant_reply(&db, "u2", "system_default", "済んだ返事", None, &[])
+        .await
+        .unwrap();
+
+    // プロセス 2（再起動後）: 同じ DB を新しく開き、in-flight が空のルータを組む。
+    let db_2 = Db::open(&path).expect("reopen db");
+    let engine_2 = engine_with(db_2.clone(), Some(crypto), "再起動後の返事");
+    let app_2 = app(engine_2, db_2.clone());
+
+    // スイープ前: u1 の履歴は未回答のユーザー発言で終わっている（クライアントは待ち続ける状態）。
+    let before = get_history(&app_2, "u1").await;
+    assert_eq!(before.len(), 1);
+    assert_eq!(before[0]["role"], "user");
+
+    // 起動時スイープ: 取り残された u1 の会話だけに通知を 1 件書く（完了済みの u2 には何も書かない）。
+    let swept = yuuka_client_api::recover_orphaned_chat_turns(&db_2).await;
+    assert_eq!(swept, 1);
+    assert_eq!(count_pwa_rows(&path, "u2", "is_notice = 1"), 0);
+    assert_eq!(count_pwa_rows(&path, "u1", "is_notice = 1"), 1);
+
+    // クライアントのポーリング契約（`sinceId` より後の agent 行で終了）がそのまま終端する。
+    let notice = poll_for_reply_after(&app_2, "u1", since_id, 20).await;
+    assert_eq!(notice["role"], "agent");
+    assert_eq!(
+        notice["content"],
+        yuuka_client_api::recovery::RESTART_NOTICE_TEXT
+    );
+    // 受理済みのユーザー発言は失われず、履歴は user → 通知 の 2 件。
+    let history = get_history(&app_2, "u1").await;
+    assert_eq!(history.len(), 2, "history={history:?}");
+    assert_eq!(history[0]["content"], "再起動で消える質問");
+
+    // 冪等: 2 回目のスイープ（例: さらに再起動）は何も書かない。
+    assert_eq!(
+        yuuka_client_api::recover_orphaned_chat_turns(&db_2).await,
+        0
+    );
+    assert_eq!(count_pwa_rows(&path, "u1", "is_notice = 1"), 1);
+
+    // 新プロセスは in-flight が空なので、同じユーザーがすぐ再送でき、正常に完了する。通知行は
+    // LLM 文脈に入らない。
+    let (status, body) = post_chat(&app_2, Some("u1"), "もう一度お願い").await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    let since_id_2: i64 = body["sinceId"].as_str().unwrap().parse().unwrap();
+    let reply = poll_for_reply_after(&app_2, "u1", since_id_2, 200).await;
+    assert_eq!(reply["content"], "再起動後の返事");
+    let context = message_log::recent_pwa_context(&db_2, "u1", "system_default", 15)
+        .await
+        .unwrap();
+    assert!(
+        context
+            .iter()
+            .all(|c| !c.content.contains("サーバー再起動")),
+        "通知行は文脈から除外される: {context:?}"
+    );
 }

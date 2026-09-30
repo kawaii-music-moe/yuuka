@@ -214,6 +214,9 @@ async fn run() -> Result<(), String> {
     // （guildId スロット="pwa"・finance の ReceiptParserAdapter の "web" と同型）。
     let client_api_routes =
         yuuka_client_api::routes_with(chat_engine.clone(), rate_limiter.clone());
+    // 再起動で取り残された PWA チャットの応答待ちを終端させる（issue #77・fail-closed）。新プロセスは
+    // in-flight ターンを持たないため、serve 開始（下の supervisor.run）前の 1 回だけ実行する。
+    yuuka_client_api::recover_orphaned_chat_turns(&db).await;
 
     // 4.7) Discord マルチテナント（P1-3）。実ポート（BotDirectory/RateLimiter/MembershipService）＋
     //      会話エンジン（processor）を注入して DiscordManager を組み、`prepare` でトークン解決 +

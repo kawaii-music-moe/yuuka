@@ -95,7 +95,7 @@ enum PersonaSource {
 ///
 /// [`ChatEngine::secretary_turn`]（Discord/WS）と [`ChatEngine::secretary_turn_pwa`]（PWA チャット
 /// 送信）は処理内容自体は同一だが、会話ログの読み書き先（[`message_log`] の `add_message_log`/
-/// `recent_context` 系 vs `add_pwa_message_log`/`recent_pwa_context` 系）だけを切り替える。PWA 発の
+/// `recent_context` 系 vs `add_pwa_assistant_reply`/`recent_pwa_context` 系）だけを切り替える。PWA 発の
 /// 発話が Discord/WS の文脈に混ざる（あるいはその逆）と、#38 と同種の「別経路の会話が漏れる」バグに
 /// なるため、供給元ごとに専用の `source`/floor キーを必ず通す。
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -248,12 +248,19 @@ impl ChatEngine {
     }
 
     /// PWA チャット送信の秘書ターン（issue #41）。[`Self::secretary_turn`] と処理内容は同一だが、
-    /// 会話ログ/コンテキストの読み書きが `source='pwa'` 専用の floor（[`message_log::add_pwa_message_log`]/
+    /// 会話ログ/コンテキストの読み書きが `source='pwa'` 専用の floor（[`message_log::add_pwa_assistant_reply`]/
     /// [`message_log::recent_pwa_context`]）を経由し、Discord/WS の文脈と混ざらない（#38 のキー不一致
     /// バグと同種の再発を構造的に防ぐ設計を踏襲・[`MessageSource`] 参照）。
     ///
     /// レート制限・Gemini キー事前チェックは呼び出し側（`yuuka-client-api`）が WS/Discord と同じ
     /// [`yuuka_discord::RateLimiter`]/[`Self::user_has_gemini_key`] で行う（本メソッドはターン本体のみ）。
+    ///
+    /// **前提（issue #77）**: `msg` のユーザー発言は、呼び出し側が本メソッドの**前**に
+    /// [`message_log::accept_pwa_user_message`] で `source='pwa'` として永続化済みであること。
+    /// 本メソッドはユーザー発言を保存しない（`202 Accepted` を返す前に発言を永続化し、再起動で
+    /// 受理済みの送信を失わないため）。未保存のまま呼ぶと、履歴（LLM 文脈）に発言が含まれない。
+    /// アシスタント応答の保存は従来どおり本メソッドが行う。`secretary_turn`（Discord/WS）は無変更で、
+    /// ユーザー発言を従来どおり本メソッド内で 1 度だけ保存する。
     ///
     /// # Errors
     /// [`Self::secretary_turn`] と同じ。
@@ -311,7 +318,10 @@ impl ChatEngine {
         let rich = user::rich_reply_enabled(&self.db, uid).await;
 
         // 1. ユーザー発言を先に永続化（空表現はスキップ・Node describeIncomingMessage）。
-        //    #41: PWA は discord_msg_id/reply_to_msg_id を持たない（`add_pwa_message_log` は常に NULL）。
+        //    #77: PWA は呼び出し側（`yuuka-client-api` の `chat_send`）が `202` を返す**前**に
+        //    `message_log::accept_pwa_user_message` で保存済み（受理した発言をプロセス再起動で失わないため）。
+        //    ここで再度保存すると履歴に二重に入るため、PWA ではこの保存をスキップする。次の履歴ロード
+        //    （persist-before-load）は保存済みの発言を含む。
         let log_text = describe_incoming(&msg);
         if !log_text.is_empty() {
             match source {
@@ -328,11 +338,7 @@ impl ChatEngine {
                     .await
                     .map_err(db_fail)?;
                 }
-                MessageSource::Pwa => {
-                    message_log::add_pwa_message_log(&self.db, uid, bid, "user", &log_text)
-                        .await
-                        .map_err(db_fail)?;
-                }
+                MessageSource::Pwa => {}
             }
         }
 

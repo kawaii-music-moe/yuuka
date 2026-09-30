@@ -13,7 +13,7 @@
 //! `GET /api/client/chat/attachments/:id`（[`chat_attachment`]・所有者スコープ）で配信する
 //! （issue #41 PR #75 レビュー・P2）。
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex as StdMutex, PoisonError};
 use std::time::Duration;
 
@@ -115,32 +115,156 @@ pub fn routes_with(
 /// 無言でバックグラウンドへ積み上げるより、即座にエラーを返して「応答を待ってから再送してください」
 /// と伝える方がユーザーにとって分かりやすく、無制限にターンが積み上がる（＝サーバーリソースを
 /// 使い続ける）事態も避けられる。
+///
+/// # 「応答が見えた」時点でゲートは塞がない（issue #77 の PR #83 フォロー: 409 の誤発火の解消）
+/// ターンの終端行（応答/通知）の永続化は [`ChatEngine::secretary_turn_pwa`] の内部で行われ、RAII の
+/// [`InFlightGuard`] は永続化**より後**（バックグラウンドタスクが戻る時点）に drop される。この差の間に
+/// ポーラーが応答を見て次を送ると、ターンは実質完了しているのに 409 が返る誤発火が起きていた
+/// （PWA は応答が見えた直後に次の送信を許すので実 UX でも起きる）。
+///
+/// **ガードを永続化より前に外す案は採らない**（逆向きの窓）: ガードが外れた後・応答が保存される前に
+/// 次の送信が通ると、次のユーザー発言が古い応答**より前**に保存され、次ターンの `sinceId` が古い応答より
+/// 小さくなるため、次ターンのポーラーが古い応答を自分の返信と取り違える（文脈にも入らない）。二重ターンの
+/// 実害になる。
+///
+/// そこで、ガードの解放を早める代わりに「ゲートが塞がっているか」を**永続化から導出**する。
+/// 枠（[`Slot`]）は受理した発言の `since_id`（[`accept_pwa_user_message`](message_log::accept_pwa_user_message)
+/// の返り値）を記録し、[`acquire`](Self::acquire) は枠が埋まっていても
+/// [`message_log::has_pwa_assistant_reply_after`] で「`since_id` より後の終端行が既にコミット済み」と
+/// 確認できれば、そのターンは完了済みとみなして枠を引き継ぐ。ポーラーが応答を見た時点で終端行は
+/// コミット済みなので、以降の読み取りは必ずそれを見る＝**ポーラーが応答を観測した後の送信が 409 になる
+/// ことは無い**（タイミング非依存）。逆向きの窓は存在しない: 引き継ぎは終端行がコミット済みと確認できた
+/// ときだけで、それ以前（実行中・`since_id` 未確定・読み取り失敗）は従来どおり 409 で閉じる
+/// （fail-closed）。旧ターンの [`InFlightGuard`] は後から drop されるが、トークン照合により引き継いだ
+/// 新しい枠は解放しない。RAII ガードは panic/失敗時（終端行が書けない経路）の解放としてそのまま残る。
 #[derive(Clone, Default)]
-struct InFlightTurns(Arc<StdMutex<HashSet<String>>>);
+struct InFlightTurns(Arc<StdMutex<InFlightState>>);
 
-impl InFlightTurns {
-    /// `key`（= user_id）のターンを開始できるか試みる。既に in-flight なら `None`
-    /// （呼び出し側は 409 を返す）。返り値の [`InFlightGuard`] を drop すると自動的に解放される
-    /// （成功・失敗・タイムアウト・panic のいずれの終了経路でも解放を保証する）。
-    fn try_acquire(&self, key: &str) -> Option<InFlightGuard> {
-        let mut set = self.0.lock().unwrap_or_else(PoisonError::into_inner);
-        set.insert(key.to_owned()).then(|| InFlightGuard {
-            set: self.0.clone(),
-            key: key.to_owned(),
-        })
+#[derive(Default)]
+struct InFlightState {
+    /// 枠の所有者を識別する単調増加トークン（[`InFlightGuard`] が自分の枠だけを解放するために使う）。
+    next_token: u64,
+    slots: HashMap<String, Slot>,
+}
+
+/// 進行中ターンの枠。
+struct Slot {
+    token: u64,
+    /// 受理（ユーザー発言の永続化）済みなら、そのターンの `sinceId`。`None` は受理前
+    /// （事前チェック〜永続化の間）で、この間は必ず「進行中」として扱う。
+    since_id: Option<i64>,
+}
+
+impl InFlightState {
+    fn insert(&mut self, key: &str) -> u64 {
+        self.next_token += 1;
+        let token = self.next_token;
+        self.slots.insert(
+            key.to_owned(),
+            Slot {
+                token,
+                since_id: None,
+            },
+        );
+        token
     }
 }
 
-/// [`InFlightTurns::try_acquire`] の RAII ガード。drop で必ずキーを解放する。
+impl InFlightTurns {
+    fn lock(&self) -> std::sync::MutexGuard<'_, InFlightState> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn guard(&self, key: &str, token: u64) -> InFlightGuard {
+        InFlightGuard {
+            state: self.0.clone(),
+            key: key.to_owned(),
+            token,
+        }
+    }
+
+    /// `key`（= user_id）のターンを開始できるか試みる。空いていれば枠を確保して [`InFlightGuard`] を返す
+    /// （drop で自動的に解放される・成功・失敗・タイムアウト・panic のいずれの終了経路でも解放を保証する）。
+    /// 枠が埋まっていても、保持するターンが既に終端行を永続化済みなら引き継ぐ（型のドキュメント参照）。
+    /// 保持者が実行中・受理前・確認の読み取り失敗のときは `None`（呼び出し側は 409 を返す）。
+    async fn acquire(&self, db: &Db, key: &str) -> Option<InFlightGuard> {
+        let (holder_token, since_id) = {
+            let mut state = self.lock();
+            match state.slots.get(key) {
+                None => {
+                    let token = state.insert(key);
+                    drop(state);
+                    return Some(self.guard(key, token));
+                }
+                Some(slot) => (slot.token, slot.since_id?),
+            }
+        };
+        // ロックを跨いで await しない。確認後に再ロックし、枠が「確認した保持者のまま」か「その間に保持者の
+        // ガードが drop されて空になった」場合だけ確保する。別のリクエストが先に引き継いでいれば
+        // （トークンが変わっている）負けなので、同時に複数のリクエストが引き継ごうとしても勝てるのは 1 つだけ。
+        match message_log::has_pwa_assistant_reply_after(db, key, BOT_ID, since_id).await {
+            Ok(true) => {
+                let mut state = self.lock();
+                let still_ours = state
+                    .slots
+                    .get(key)
+                    .is_none_or(|slot| slot.token == holder_token);
+                if still_ours {
+                    let token = state.insert(key);
+                    drop(state);
+                    Some(self.guard(key, token))
+                } else {
+                    None
+                }
+            }
+            Ok(false) => None,
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    user_id = key,
+                    "client-api: 進行中ターンの終端確認に失敗（409 として扱う）"
+                );
+                None
+            }
+        }
+    }
+}
+
+/// [`InFlightTurns::acquire`] の RAII ガード。drop で自分の枠を解放する
+/// （引き継がれて既に別のターンの枠になっていれば何もしない）。
 struct InFlightGuard {
-    set: Arc<StdMutex<HashSet<String>>>,
+    state: Arc<StdMutex<InFlightState>>,
     key: String,
+    token: u64,
+}
+
+impl InFlightGuard {
+    /// 受理したユーザー発言の `since_id` を枠へ記録する（以後、この枠は「`since_id` より後の終端行が
+    /// コミットされた時点で完了」と判定できる）。
+    fn mark_accepted(&self, since_id: i64) {
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(slot) = state.slots.get_mut(&self.key) {
+            if slot.token == self.token {
+                slot.since_id = Some(since_id);
+            }
+        }
+    }
+
+    /// この枠がまだ自分のものか（完了済みとして新しいターンに引き継がれていないか）。
+    fn is_current(&self) -> bool {
+        let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        state
+            .slots
+            .get(&self.key)
+            .is_some_and(|slot| slot.token == self.token)
+    }
 }
 
 impl Drop for InFlightGuard {
     fn drop(&mut self) {
-        if let Ok(mut set) = self.set.lock() {
-            set.remove(&self.key);
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        if state.slots.get(&self.key).map(|s| s.token) == Some(self.token) {
+            state.slots.remove(&self.key);
         }
     }
 }
@@ -725,7 +849,7 @@ fn parse_stored_embeds(raw: Option<&str>) -> Vec<ChatEmbedView> {
 ///
 /// 1. content が空 → 400。
 /// 2. [`ChatEngine::user_has_gemini_key`] — 未設定なら 400（WS の `error/no_gemini_key` 相当）。
-/// 3. [`InFlightTurns::try_acquire`] — 同一ユーザーの前のターンがまだ進行中なら 409（二重送信/連打の
+/// 3. [`InFlightTurns::acquire`] — 同一ユーザーの前のターンがまだ進行中なら 409（二重送信/連打の
 ///    抑止・[`InFlightTurns`] の doc 参照）。レート制限を消費する**前**に弾くため、拒否されたリクエスト
 ///    はクォータを消費しない。
 /// 4. `rate_limiter.consume`（[`yuuka_discord::RateLimiter`]・Discord 汎用モード/finance receipt と
@@ -733,7 +857,7 @@ fn parse_stored_embeds(raw: Option<&str>) -> Vec<ChatEmbedView> {
 ///    `bot_id × user_id` のみで消費されるため、Discord/WS で使い切った分は PWA でも消費済みのまま。
 ///
 /// # 非同期配信（issue #41 PR #75 レビュー・P1）
-/// 上記の同期チェックを通過すると、ターン本体（[`ChatEngine::secretary_turn_pwa`]・`source='pwa'`）を
+/// 上記の同期チェックを通過すると、ユーザー発言を**永続化してから**（issue #77）、ターン本体（[`ChatEngine::secretary_turn_pwa`]・`source='pwa'`）を
 /// `tokio::spawn` でバックグラウンド実行し（[`run_pwa_turn_in_background`]）、**待たずに** `202
 /// Accepted` + [`ChatSendAccepted`]（`sinceId`）を返す。同期 `fetch` で最大 180 秒待つ旧設計は、
 /// リバースプロキシ（issue #41 が言及する Cloudflare Tunnel 等）のタイムアウトが 180 秒より短いと
@@ -746,6 +870,13 @@ fn parse_stored_embeds(raw: Option<&str>) -> Vec<ChatEmbedView> {
 /// を止める（新しい GET エンドポイントを増やさず、既存の履歴取得だけで完結する設計）。バックグラウンド
 /// ターンが失敗/タイムアウトしても [`run_pwa_turn_in_background`] が必ず終端状態（フォールバックの
 /// エラー応答）を保存するため、クライアントは有限時間でポーリングを終えられる。
+///
+/// ## 再起動（fail-closed・issue #77）
+/// `202` の後にサーバーが再起動/異常終了すると、バックグラウンドターンと `InFlightTurns`（メモリ内）は
+/// 失われ、上記の終端保存も走らない。ターンは**再開しない**（ツール呼び出しの副作用が二重実行されうる
+/// ため）。代わりに (1) 発言は `202` の前に永続化済みで失われず、(2) 次回起動時の回復スイープ
+/// （[`crate::recover_orphaned_chat_turns`]）が「最新行がユーザー発言のまま」の会話へ通知行を書き、
+/// クライアントのポーリングを終端させる。クライアントの契約（`202` + `sinceId` + ポーリング）は不変。
 async fn chat_send(
     user: AuthenticatedUser,
     Extension(engine): Extension<Arc<ChatEngine>>,
@@ -774,7 +905,7 @@ async fn chat_send(
     }
 
     // 事前チェック 2/3: 同時ターン防止（[`InFlightTurns`] の doc 参照）。
-    let Some(guard) = in_flight.try_acquire(uid) else {
+    let Some(guard) = in_flight.acquire(&db, uid).await else {
         return Err(ClientApiError::conflict(
             "前のメッセージへの応答がまだ処理中です。応答が届いてから送信してください。",
         ));
@@ -796,9 +927,16 @@ async fn chat_send(
         });
     }
 
-    // ポーリング起点（このターンより前の直近 message_logs.id）。バックグラウンドターンが実際に
-    // ユーザー発言を保存する**前**に読むため、以後 id > since_id の行はすべてこのターンに属する。
-    let since_id = message_log::max_pwa_message_id(&db, uid, BOT_ID).await?;
+    // 受理の永続化（issue #77）: `202` を返す**前**にユーザー発言を保存する。以後にプロセスが落ちても
+    // 受理済みの送信は履歴に残り、起動時の回復スイープ（[`crate::recovery`]）が終端の通知行を書ける
+    // （エンジンのターンはユーザー発言を保存しない・[`ChatEngine::secretary_turn_pwa`] の前提）。
+    // `since_id` は保存の直前の直近 `message_logs.id`（同一トランザクションで読む）なので、以後
+    // id > since_id の行はすべてこのターンに属する。
+    let accepted = message_log::accept_pwa_user_message(&db, uid, BOT_ID, &content).await?;
+    let since_id = accepted.since_id;
+    // 枠へ `sinceId` を記録する。以後、`since_id` より後の終端行がコミットされた時点でこの枠は
+    // 「完了済み」と判定され、ガードの drop を待たずに次の送信へ引き継げる（[`InFlightTurns`] の doc 参照）。
+    guard.mark_accepted(since_id);
 
     let incoming = IncomingChat {
         text: content,
@@ -842,13 +980,15 @@ struct PwaTurnJob {
 ///
 /// `job.guard`（[`InFlightGuard`]）をこの関数の実行中ずっと保持することで、ターンが確定する
 /// （成功・失敗・タイムアウトいずれか）までは同一ユーザーの新規送信が 409 で弾かれる。この関数を
-/// 抜けると（return 経路によらず）`job` ごと drop され、同時に in-flight から解放される。
+/// 抜けると（return 経路によらず）`job` ごと drop され、同時に in-flight から解放される。終端行の
+/// 永続化からこの drop までの間は、[`InFlightTurns::acquire`] が永続化を根拠に枠を引き継ぐため、
+/// 応答を見たポーラーの次の送信が 409 になることは無い（[`InFlightTurns`] の doc 参照）。
 ///
 /// **終端状態の保証**: どの結果でも、返る前に「`since_id` より後のアシスタント行」が履歴に存在する状態にする
 /// （[`chat_history`] をポーリングするクライアントが必ず有限時間で完了/エラーを受け取れるように）。
 ///
-/// - 通常の成功: `engine.secretary_turn_pwa` が内部でユーザー発言/アシスタント応答を（embeds/files 込みで）
-///   永続化済みのため、追加の保存はしない。
+/// - 通常の成功: `engine.secretary_turn_pwa` が内部でアシスタント応答を（embeds/files 込みで）永続化済み
+///   （ユーザー発言は [`chat_send`] が `202` の前に保存済み）のため、追加の保存はしない。
 /// - ⚠️ 定型応答（レート制限・サーバー混雑・鍵未設定）やペルソナ入りエラー報告: エンジンは `Ok(reply)` を
 ///   返すが**履歴には保存しない**（LLM 文脈を汚染しないための既存の不変条件）。そのままではクライアントが
 ///   永遠に待つため、`reply.text` を通知行（[`message_log::add_pwa_notice`]・LLM コンテキストからは除外）
@@ -859,7 +999,7 @@ struct PwaTurnJob {
 /// `timeout()` がキャンセルした future が、キャンセル直前にぎりぎり保存を終えていた場合の二重保存を避ける）。
 async fn run_pwa_turn_in_background(job: PwaTurnJob) {
     let PwaTurnJob {
-        guard: _guard,
+        guard,
         engine,
         db,
         bot_id,
@@ -909,6 +1049,12 @@ async fn run_pwa_turn_in_background(job: PwaTurnJob) {
             user_id = uid,
             "client-api: 応答存在確認に失敗（通知行の保存を試みる）"
         ),
+    }
+    // 枠が既に新しいターンへ引き継がれていたなら、それはこのターンの終端行が保存済みだった場合に限られる
+    // （[`InFlightTurns`] の doc 参照）。存在確認だけが読み取りエラーで失敗した場合でも、次のターンの
+    // 発言より後に重複の通知行を書かない（次ターンのポーラーが取り違える）。
+    if !guard.is_current() {
+        return;
     }
     if let Err(e) = message_log::add_pwa_notice(&db, uid, bid, &notice_text).await {
         tracing::error!(
@@ -1080,7 +1226,10 @@ mod tests {
         ));
 
         let in_flight = InFlightTurns::default();
-        let guard = in_flight.try_acquire("u1").expect("first acquire succeeds");
+        let guard = in_flight
+            .acquire(&db, "u1")
+            .await
+            .expect("first acquire succeeds");
 
         let bot_id = BotId::new(BOT_ID);
         let user_id = UserId::new("u1".to_owned());
@@ -1088,9 +1237,12 @@ mod tests {
             text: "hello".to_owned(),
             ..IncomingChat::default()
         };
-        let since_id = message_log::max_pwa_message_id(&db, "u1", BOT_ID)
+        // `chat_send` と同じく、ターンの前にユーザー発言を受理（永続化）しておく（issue #77）。
+        let since_id = message_log::accept_pwa_user_message(&db, "u1", BOT_ID, "hello")
             .await
-            .unwrap();
+            .unwrap()
+            .since_id;
+        guard.mark_accepted(since_id);
 
         // 実 CHAT_TURN_TIMEOUT（180 秒）は現実的な時間で HTTP 経由で再現できないため、この
         // ユニットテストだけ短いタイムアウトを直接注入する。
@@ -1119,11 +1271,146 @@ mod tests {
         let last = history.last().expect("history is not empty");
         assert_eq!(last.role, "assistant");
         assert_eq!(last.content, FALLBACK_TIMEOUT_TEXT);
+        // 受理済みのユーザー発言はターンに再保存されず 1 件のまま（issue #77）。
+        assert_eq!(
+            history.iter().filter(|m| m.role == "user").count(),
+            1,
+            "history={history:?}"
+        );
 
         // 関数を抜けた時点で guard は解放されている（新規ターンを開始できる）。
         assert!(
-            in_flight.try_acquire("u1").is_some(),
+            in_flight.acquire(&db, "u1").await.is_some(),
             "run_pwa_turn_in_background を抜けると in-flight から解放される"
         );
+    }
+
+    // ─── 終端行の永続化から導出する in-flight 枠（PR #83 フォロー: 応答直後の 409 誤発火） ─────────
+
+    /// `chat_send` と同じ手順（枠の確保 → 発言の受理 → `sinceId` の記録）で 1 ターンを「進行中」にする。
+    async fn start_turn(in_flight: &InFlightTurns, db: &Db) -> (InFlightGuard, i64) {
+        let guard = in_flight
+            .acquire(db, "u1")
+            .await
+            .expect("slot is free for a new turn");
+        let since_id = message_log::accept_pwa_user_message(db, "u1", BOT_ID, "hi")
+            .await
+            .unwrap()
+            .since_id;
+        guard.mark_accepted(since_id);
+        (guard, since_id)
+    }
+
+    async fn persist_reply(db: &Db) {
+        message_log::add_pwa_assistant_reply(db, "u1", BOT_ID, "reply", None, &[])
+            .await
+            .unwrap();
+    }
+
+    async fn persist_notice(db: &Db) {
+        message_log::add_pwa_notice(db, "u1", BOT_ID, "notice")
+            .await
+            .unwrap();
+    }
+
+    /// 実行中（終端行が無い）のターンの枠は、受理前でも受理後でも、そして以前のターンの応答が履歴に
+    /// あっても引き継げない（逆向きの窓を作らない・fail-closed）。
+    #[tokio::test]
+    async fn slot_is_not_reclaimed_while_the_turn_has_no_terminal_row() {
+        let (db, _path) = fresh_db();
+        let in_flight = InFlightTurns::default();
+
+        // 前のターンは完了済み（応答が履歴にある）。
+        let (prev, _) = start_turn(&in_flight, &db).await;
+        persist_reply(&db).await;
+        drop(prev);
+
+        // 受理前（`sinceId` 未確定）: 以前の応答があっても、枠は進行中として扱う。
+        let guard = in_flight.acquire(&db, "u1").await.expect("free");
+        assert!(in_flight.acquire(&db, "u1").await.is_none(), "受理前は 409");
+
+        // 受理後・終端行なし: `since_id` より後の応答が無いので進行中のまま（以前の応答は数えない）。
+        let since_id = message_log::accept_pwa_user_message(&db, "u1", BOT_ID, "next")
+            .await
+            .unwrap()
+            .since_id;
+        guard.mark_accepted(since_id);
+        assert!(
+            in_flight.acquire(&db, "u1").await.is_none(),
+            "終端行が無いターンは引き継げない"
+        );
+        assert!(guard.is_current());
+
+        // 別ユーザーの枠とは独立。
+        assert!(in_flight.acquire(&db, "u2").await.is_some());
+    }
+
+    /// 回帰: 応答（終端行）がコミット済みなら、ガードが drop される前でも次の送信は枠を得られる
+    /// （旧実装は応答の保存 → ガードの drop の間に 409 を返していた）。
+    #[tokio::test]
+    async fn slot_is_reclaimed_once_the_reply_is_committed_even_if_the_guard_is_still_held() {
+        let (db, _path) = fresh_db();
+        let in_flight = InFlightTurns::default();
+        let (old_guard, _) = start_turn(&in_flight, &db).await;
+
+        // エンジンが応答を保存済み。バックグラウンドタスクはまだ戻っておらず、ガードは保持されたまま。
+        persist_reply(&db).await;
+
+        let new_guard = in_flight
+            .acquire(&db, "u1")
+            .await
+            .expect("応答が見える状態では次の送信は 409 にならない");
+        assert!(!old_guard.is_current(), "旧ターンの枠は引き継がれた");
+        assert!(new_guard.is_current());
+
+        // 旧ターンのガードが後から drop されても、引き継がれた新しい枠は解放されない。
+        drop(old_guard);
+        assert!(
+            in_flight.acquire(&db, "u1").await.is_none(),
+            "新しいターンはまだ進行中（受理前）なので 409"
+        );
+
+        // 新しいターンの枠は自分のガードでだけ解放される。
+        drop(new_guard);
+        assert!(in_flight.acquire(&db, "u1").await.is_some());
+    }
+
+    /// 通知行（失敗/タイムアウト/⚠️ 定型応答のフォールバック）も終端行として同様に扱う。
+    #[tokio::test]
+    async fn slot_is_reclaimed_once_a_notice_is_committed_even_if_the_guard_is_still_held() {
+        let (db, _path) = fresh_db();
+        let in_flight = InFlightTurns::default();
+        let (old_guard, _) = start_turn(&in_flight, &db).await;
+        persist_notice(&db).await;
+
+        assert!(in_flight.acquire(&db, "u1").await.is_some());
+        assert!(!old_guard.is_current());
+    }
+
+    /// 完了済みの枠へ同時に複数の送信が来ても、引き継げるのは 1 つだけ（他は 409）。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn only_one_of_many_concurrent_sends_reclaims_a_finished_slot() {
+        let (db, _path) = fresh_db();
+        let in_flight = InFlightTurns::default();
+        let (old_guard, _) = start_turn(&in_flight, &db).await;
+        persist_reply(&db).await;
+
+        let tasks: Vec<_> = (0..16)
+            .map(|_| {
+                let (in_flight, db) = (in_flight.clone(), db.clone());
+                tokio::spawn(async move { in_flight.acquire(&db, "u1").await })
+            })
+            .collect();
+        let mut winners = 0;
+        let mut held = Vec::new();
+        for task in tasks {
+            if let Some(guard) = task.await.unwrap() {
+                winners += 1;
+                held.push(guard);
+            }
+        }
+        assert_eq!(winners, 1, "引き継げるのは 1 リクエストだけ");
+        drop(old_guard);
+        drop(held);
     }
 }
