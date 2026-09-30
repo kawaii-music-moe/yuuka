@@ -101,7 +101,8 @@ pub async fn get_bot_usage_series(
         .await
 }
 
-/// 秘書コンテキストのリセット境界キー（Node `contextFloorKey`）。
+/// 秘書コンテキストのリセット境界キー（Node `contextFloorKey`）。**Discord 専用**（後方互換のため
+/// 無変更で維持・`source` 導入前からの既存境界をそのまま引き継ぐ）。
 fn context_floor_key(user_id: &str, bot_id: &str) -> String {
     format!("context_floor:{bot_id}:{user_id}")
 }
@@ -112,7 +113,19 @@ fn bot_dm_context_floor_key(user_id: &str, bot_id: &str) -> String {
     format!("context_floor:{bot_id}:dm:{user_id}")
 }
 
-/// 送受信メッセージを `message_logs` へ記録する（Node `addMessageLog`・`guild_id = NULL` = 秘書/DM）。
+/// PWA コンテキストのリセット境界キー（issue #33/#38: Discord とは別軸で管理する）。
+///
+/// Node の `source` 導入（8/14 merge bb97bae）は `contextKey`/`contextFloorKey` を
+/// `` `${botId}:${source}` `` で束ねたのに対し `clearContext` だけ据え置きのままで、書き込み/読み出しと
+/// リセットのキーが食い違って「リセットしても消えない」バグ（issue #38）を生んだ。Rust では
+/// **読み出し（[`recent_pwa_context`]）とリセット（[`clear_pwa_context`]）が必ずこの同じ関数を経由する**
+/// ようにして、同種のキー不一致を構造的に起こせなくする。
+fn pwa_context_floor_key(user_id: &str, bot_id: &str) -> String {
+    format!("context_floor:{bot_id}:pwa:{user_id}")
+}
+
+/// 送受信メッセージを `message_logs` へ記録する（Node `addMessageLog`・`guild_id = NULL` = 秘書/DM・
+/// `source` は既定 `"discord"`）。
 ///
 /// # Errors
 /// 書き込み失敗時 [`DbError`]。
@@ -125,20 +138,75 @@ pub async fn add_message_log(
     discord_msg_id: Option<&str>,
     reply_to_msg_id: Option<&str>,
 ) -> Result<(), DbError> {
-    let (user_id, bot_id, role, content) = (
+    add_message_log_for(
+        db,
+        user_id,
+        bot_id,
+        role,
+        content,
+        discord_msg_id,
+        reply_to_msg_id,
+        "discord",
+    )
+    .await
+}
+
+/// PWA 発の送受信メッセージを `message_logs` へ記録する（`source = "pwa"`・discord_msg_id/reply_to_msg_id
+/// は常に `NULL`）。issue #33 の PWA チャット送信用。
+///
+/// # Errors
+/// 書き込み失敗時 [`DbError`]。
+pub async fn add_pwa_message_log(
+    db: &Db,
+    user_id: &str,
+    bot_id: &str,
+    role: &str,
+    content: &str,
+) -> Result<(), DbError> {
+    add_message_log_for(db, user_id, bot_id, role, content, None, None, "pwa").await
+}
+
+/// [`add_message_log`]/[`add_pwa_message_log`] の共通実装。`source` を明示的に列へ書く
+/// （マイグレーション V21 の `DEFAULT 'discord'` に頼らず、Discord 経路も含めて全 INSERT が
+/// 自分の由来を明示する）。
+///
+/// # Errors
+/// 書き込み失敗時 [`DbError`]。
+#[allow(clippy::too_many_arguments)]
+async fn add_message_log_for(
+    db: &Db,
+    user_id: &str,
+    bot_id: &str,
+    role: &str,
+    content: &str,
+    discord_msg_id: Option<&str>,
+    reply_to_msg_id: Option<&str>,
+    source: &str,
+) -> Result<(), DbError> {
+    let (user_id, bot_id, role, content, source) = (
         user_id.to_owned(),
         bot_id.to_owned(),
         role.to_owned(),
         content.to_owned(),
+        source.to_owned(),
     );
     let discord_msg_id = discord_msg_id.map(str::to_owned);
     let reply_to_msg_id = reply_to_msg_id.map(str::to_owned);
     db.writer
         .transaction(move |tx| {
             tx.execute(
-                "INSERT INTO message_logs (user_id, bot_id, discord_msg_id, role, content, reply_to_msg_id) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                params![user_id, bot_id, discord_msg_id, role, content, reply_to_msg_id],
+                "INSERT INTO message_logs \
+                   (user_id, bot_id, discord_msg_id, role, content, reply_to_msg_id, source) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![
+                    user_id,
+                    bot_id,
+                    discord_msg_id,
+                    role,
+                    content,
+                    reply_to_msg_id,
+                    source
+                ],
             )
             .map_err(map_sqlite)?;
             Ok(())
@@ -146,7 +214,8 @@ pub async fn add_message_log(
         .await
 }
 
-/// 秘書コンテキスト（`guild_id IS NULL`・秘書 floor）を古い順に取得する（Node `getRecentContext`）。
+/// 秘書コンテキスト（`guild_id IS NULL`・`source='discord'`・秘書 floor）を古い順に取得する
+/// （Node `getRecentContext`）。
 ///
 /// # Errors
 /// 読み取り失敗時 [`DbError`]。
@@ -161,13 +230,39 @@ pub async fn recent_context(
         user_id,
         bot_id,
         context_floor_key(user_id, bot_id),
+        "discord",
+        limit,
+    )
+    .await
+}
+
+/// PWA コンテキスト（`guild_id IS NULL`・`source='pwa'`・PWA floor）を古い順に取得する（issue #33）。
+///
+/// [`pwa_context_floor_key`] を [`clear_pwa_context`] と共有するため、書き込み/読み出しとリセットの
+/// キーが食い違う心配がない（issue #38 の Node バグの再発防止）。
+///
+/// # Errors
+/// 読み取り失敗時 [`DbError`]。
+pub async fn recent_pwa_context(
+    db: &Db,
+    user_id: &str,
+    bot_id: &str,
+    limit: i64,
+) -> Result<Vec<ContextEntry>, DbError> {
+    recent_context_with_floor(
+        db,
+        user_id,
+        bot_id,
+        pwa_context_floor_key(user_id, bot_id),
+        "pwa",
         limit,
     )
     .await
 }
 
 /// owner DM（汎用モード）コンテキストを古い順に取得する（Node `getBotDmContext`）。SQLite の行は秘書と
-/// 同じ（`bot_id × user_id × guild_id IS NULL`）だが、リセット境界だけ DM 専用 floor で分離する。
+/// 同じ（`bot_id × user_id × guild_id IS NULL`・`source='discord'`）だが、リセット境界だけ DM 専用
+/// floor で分離する。
 ///
 /// # Errors
 /// 読み取り失敗時 [`DbError`]。
@@ -182,21 +277,24 @@ pub async fn recent_bot_dm_context(
         user_id,
         bot_id,
         bot_dm_context_floor_key(user_id, bot_id),
+        "discord",
         limit,
     )
     .await
 }
 
 /// LLM へ渡す直近コンテキストを**古い順**で取得する（Node `getRecentContext`/`getBotDmContext` の SQLite
-/// 再構築部）。指定 `floor_key` より後・`guild_id IS NULL`（秘書/DM）の直近 `limit` 件を古い順に返す。
+/// 再構築部）。指定 `floor_key` より後・`guild_id IS NULL`（秘書/DM）・指定 `source` の直近 `limit` 件を
+/// 古い順に返す。
 async fn recent_context_with_floor(
     db: &Db,
     user_id: &str,
     bot_id: &str,
     floor_key: String,
+    source: &str,
     limit: i64,
 ) -> Result<Vec<ContextEntry>, DbError> {
-    let (user_id, bot_id) = (user_id.to_owned(), bot_id.to_owned());
+    let (user_id, bot_id, source) = (user_id.to_owned(), bot_id.to_owned(), source.to_owned());
     db.read
         .read(move |conn| {
             // floor（無ければ 0・非数値も 0）。
@@ -216,15 +314,69 @@ async fn recent_context_with_floor(
                     "SELECT role, content FROM ( \
                        SELECT id, role, content FROM message_logs \
                        WHERE user_id = ?1 AND bot_id = ?2 AND id > ?3 AND guild_id IS NULL \
+                         AND source = ?5 \
                        ORDER BY id DESC LIMIT ?4 \
                      ) ORDER BY id ASC",
                 )
                 .map_err(map_sqlite)?;
             let rows = stmt
-                .query_map(params![user_id, bot_id, floor, limit], |r| {
+                .query_map(params![user_id, bot_id, floor, limit, source], |r| {
                     Ok(ContextEntry {
                         role: r.get::<_, String>(0)?,
                         content: r.get::<_, String>(1)?,
+                    })
+                })
+                .map_err(map_sqlite)?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(map_sqlite)?;
+            Ok(rows)
+        })
+        .await
+}
+
+/// PWA チャット画面の履歴一覧 1 件（Node `MessageLogRecord` の PWA 表示に使う部分集合）。
+#[derive(Debug, Clone)]
+pub struct PwaMessageRow {
+    pub id: i64,
+    /// `"user" | "assistant"`。
+    pub role: String,
+    pub content: String,
+    /// `'YYYY-MM-DD HH:MM:SS'`（SQLite localtime）。
+    pub created_at: String,
+}
+
+/// PWA チャット履歴を古い順に返す（Node `listPwaMessages`・`source='pwa'` のみ・floor 非依存＝
+/// リセット後も永続ログ自体は表示する、Node と同じ「履歴一覧は全件、LLM コンテキストだけ floor で
+/// 絞る」設計）。
+///
+/// # Errors
+/// 読み取り失敗時 [`DbError`]。
+pub async fn list_pwa_messages(
+    db: &Db,
+    user_id: &str,
+    bot_id: &str,
+    limit: i64,
+) -> Result<Vec<PwaMessageRow>, DbError> {
+    let (user_id, bot_id) = (user_id.to_owned(), bot_id.to_owned());
+    let limit = limit.clamp(1, 200);
+    db.read
+        .read(move |conn| {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT id, role, content, created_at FROM ( \
+                       SELECT id, role, content, created_at FROM message_logs \
+                       WHERE user_id = ?1 AND bot_id = ?2 AND source = 'pwa' \
+                       ORDER BY id DESC LIMIT ?3 \
+                     ) ORDER BY id ASC",
+                )
+                .map_err(map_sqlite)?;
+            let rows = stmt
+                .query_map(params![user_id, bot_id, limit], |r| {
+                    Ok(PwaMessageRow {
+                        id: r.get::<_, i64>(0)?,
+                        role: r.get::<_, String>(1)?,
+                        content: r.get::<_, String>(2)?,
+                        created_at: r.get::<_, String>(3)?,
                     })
                 })
                 .map_err(map_sqlite)?
@@ -337,6 +489,44 @@ pub async fn clear_context(db: &Db, user_id: &str, bot_id: &str) -> Result<(), D
             let max_id: Option<i64> = tx
                 .query_row(
                     "SELECT MAX(id) FROM message_logs WHERE user_id = ?1 AND bot_id = ?2",
+                    params![user_id, bot_id],
+                    |r| r.get::<_, Option<i64>>(0),
+                )
+                .map_err(map_sqlite)?;
+            if let Some(max_id) = max_id {
+                tx.execute(
+                    "INSERT INTO system_settings (key, value) VALUES (?1, ?2) \
+                     ON CONFLICT(key) DO UPDATE SET value = excluded.value, \
+                     updated_at = datetime('now', 'localtime')",
+                    params![floor_key, max_id.to_string()],
+                )
+                .map_err(map_sqlite)?;
+            }
+            Ok(())
+        })
+        .await
+}
+
+/// PWA コンテキストをリセットする（issue #33/#38）。[`clear_context`] の PWA 版で、境界キーは
+/// 必ず [`pwa_context_floor_key`]（[`recent_pwa_context`] と共有）を使う。
+///
+/// Node の bug（issue #38）は、コンテキストを `source` 別キーへ分けた際に `clearContext` だけ
+/// 旧キーのまま据え置かれ、リセットが何も消さなくなった。Rust では読み出し・リセットが同じ
+/// `pwa_context_floor_key` 関数を経由するため、この種のキー不一致は構造的に起こらない。
+///
+/// # Errors
+/// 書き込み失敗時 [`DbError`]。
+pub async fn clear_pwa_context(db: &Db, user_id: &str, bot_id: &str) -> Result<(), DbError> {
+    let floor_key = pwa_context_floor_key(user_id, bot_id);
+    let (user_id, bot_id) = (user_id.to_owned(), bot_id.to_owned());
+    db.writer
+        .transaction(move |tx| {
+            // PWA (`source='pwa'`) の最大 id のみを境界にする（Discord 側の id が pwa より新しくても
+            // 巻き込まない・[`recent_pwa_context`] が `source='pwa'` で絞るのと対称）。
+            let max_id: Option<i64> = tx
+                .query_row(
+                    "SELECT MAX(id) FROM message_logs \
+                     WHERE user_id = ?1 AND bot_id = ?2 AND source = 'pwa'",
                     params![user_id, bot_id],
                     |r| r.get::<_, Option<i64>>(0),
                 )
@@ -479,5 +669,136 @@ mod tests {
                 .len(),
             90
         );
+    }
+
+    // ─── issue #33/#38: source 分離コンテキスト（discord/pwa）のテスト ───
+
+    use super::{
+        add_message_log, add_pwa_message_log, clear_context, clear_pwa_context, list_pwa_messages,
+        recent_context, recent_pwa_context, CONTEXT_LIMIT,
+    };
+
+    /// `users` 行を用意する（`message_logs`/`context_notes` の FK 対象）。
+    fn seed_user(path: &std::path::Path, user_id: &str) {
+        let conn = rusqlite::Connection::open(path).expect("open");
+        conn.execute(
+            "INSERT OR IGNORE INTO users (discord_id, username, password_hash, salt) \
+             VALUES (?1, ?1, 'x', 'x')",
+            rusqlite::params![user_id],
+        )
+        .expect("seed user");
+    }
+
+    #[tokio::test]
+    async fn pwa_and_discord_contexts_are_isolated() {
+        let (db, path) = seed_db();
+        seed_user(&path, "u");
+
+        add_message_log(&db, "u", "b1", "user", "discord-1", None, None)
+            .await
+            .unwrap();
+        add_pwa_message_log(&db, "u", "b1", "user", "pwa-1")
+            .await
+            .unwrap();
+
+        // Discord 側の再構築には PWA の発話が混ざらない。
+        let discord_ctx = recent_context(&db, "u", "b1", CONTEXT_LIMIT).await.unwrap();
+        assert_eq!(discord_ctx.len(), 1);
+        assert_eq!(discord_ctx[0].content, "discord-1");
+
+        // PWA 側の再構築には Discord の発話が混ざらない。
+        let pwa_ctx = recent_pwa_context(&db, "u", "b1", CONTEXT_LIMIT)
+            .await
+            .unwrap();
+        assert_eq!(pwa_ctx.len(), 1);
+        assert_eq!(pwa_ctx[0].content, "pwa-1");
+    }
+
+    #[tokio::test]
+    async fn clear_pwa_context_resets_pwa_only_and_uses_same_key_as_read() {
+        let (db, path) = seed_db();
+        seed_user(&path, "u");
+
+        add_pwa_message_log(&db, "u", "b1", "user", "pwa-before")
+            .await
+            .unwrap();
+        add_message_log(&db, "u", "b1", "user", "discord-before", None, None)
+            .await
+            .unwrap();
+
+        clear_pwa_context(&db, "u", "b1").await.unwrap();
+
+        // PWA コンテキストはリセット後、境界以前の発話を含まない（issue #38 の再発防止）。
+        let pwa_ctx = recent_pwa_context(&db, "u", "b1", CONTEXT_LIMIT)
+            .await
+            .unwrap();
+        assert!(
+            pwa_ctx.is_empty(),
+            "pwa clear は pwa floor を境界まで進める"
+        );
+
+        // Discord コンテキストは pwa のリセットに巻き込まれない（境界キーが別）。
+        let discord_ctx = recent_context(&db, "u", "b1", CONTEXT_LIMIT).await.unwrap();
+        assert_eq!(discord_ctx.len(), 1);
+        assert_eq!(discord_ctx[0].content, "discord-before");
+
+        // 新しい PWA 発話は境界より後なので見える。
+        add_pwa_message_log(&db, "u", "b1", "user", "pwa-after")
+            .await
+            .unwrap();
+        let pwa_ctx_after = recent_pwa_context(&db, "u", "b1", CONTEXT_LIMIT)
+            .await
+            .unwrap();
+        assert_eq!(pwa_ctx_after.len(), 1);
+        assert_eq!(pwa_ctx_after[0].content, "pwa-after");
+    }
+
+    #[tokio::test]
+    async fn clear_context_discord_does_not_affect_pwa_context() {
+        // 対称性の確認: 既存の (discord 用) clear_context も pwa 側を巻き込まない。
+        let (db, path) = seed_db();
+        seed_user(&path, "u");
+
+        add_message_log(&db, "u", "b1", "user", "discord-before", None, None)
+            .await
+            .unwrap();
+        add_pwa_message_log(&db, "u", "b1", "user", "pwa-before")
+            .await
+            .unwrap();
+
+        clear_context(&db, "u", "b1").await.unwrap();
+
+        assert!(recent_context(&db, "u", "b1", CONTEXT_LIMIT)
+            .await
+            .unwrap()
+            .is_empty());
+        let pwa_ctx = recent_pwa_context(&db, "u", "b1", CONTEXT_LIMIT)
+            .await
+            .unwrap();
+        assert_eq!(pwa_ctx.len(), 1, "discord の clear は pwa floor を進めない");
+    }
+
+    #[tokio::test]
+    async fn list_pwa_messages_returns_pwa_only_oldest_first_and_ignores_floor() {
+        let (db, path) = seed_db();
+        seed_user(&path, "u");
+
+        add_pwa_message_log(&db, "u", "b1", "user", "pwa-1")
+            .await
+            .unwrap();
+        add_message_log(&db, "u", "b1", "user", "discord-1", None, None)
+            .await
+            .unwrap();
+        add_pwa_message_log(&db, "u", "b1", "assistant", "pwa-2")
+            .await
+            .unwrap();
+
+        // 履歴一覧は floor 非依存（リセット後も全件表示）: 先に clear しても件数は変わらない。
+        clear_pwa_context(&db, "u", "b1").await.unwrap();
+
+        let history = list_pwa_messages(&db, "u", "b1", 50).await.unwrap();
+        assert_eq!(history.len(), 2, "discord のログは含まず pwa のみ");
+        assert_eq!(history[0].content, "pwa-1", "古い順");
+        assert_eq!(history[1].content, "pwa-2");
     }
 }
