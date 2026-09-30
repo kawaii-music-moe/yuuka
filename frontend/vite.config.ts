@@ -52,7 +52,9 @@ export default defineConfig({
 	publicDir: "public",
 	build: {
 		outDir: "../dist/public",
-		emptyOutDir: true, // dist/public 配下のみクリア
+		// dist/public 配下をクリアする。PWA の出力先 dist/public/pwa（scripts/build-pwa.mjs）も
+		// 消えるため、`pnpm build:pwa` は必ずこのビルドの後に実行すること（root の `pnpm build` はその順）。
+		emptyOutDir: true,
 		assetsDir: "assets", // ★固定: ハッシュ資産を assets/ 直下に集約（chunk 含む）
 		assetsInlineLimit: 0, // CSP script-src 'self' 準拠: inline module/data-URI を出さない
 	},
