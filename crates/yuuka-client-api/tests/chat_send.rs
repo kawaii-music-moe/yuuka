@@ -27,7 +27,7 @@ use yuuka_discord::RateLimiter;
 use yuuka_gemini::{
     Content, FunctionDeclaration, GenerateBackend, GenerateContentResponse, ToolConfig,
 };
-use yuuka_orchestrator::{ChatEngine, GeminiFactory, InMemoryRateLimiter};
+use yuuka_orchestrator::{message_log, ChatEngine, GeminiFactory, InMemoryRateLimiter};
 use yuuka_tools::ToolRegistry;
 use yuuka_types::{Role, SessionUser};
 use yuuka_web::{AppState, AuthBackend, Db, WebConfig};
@@ -826,4 +826,90 @@ async fn accepted_user_message_is_persisted_before_202_and_not_duplicated_by_the
     assert_eq!(history.len(), 2, "history={history:?}");
     assert_eq!(history[0]["role"], "user");
     assert_eq!(history[1]["role"], "agent");
+}
+
+/// `202` の後にプロセスが落ちた状況を再現する: 1 つ目の「プロセス」のターンは永遠に返らない（＝
+/// 再起動で消えたターン）。2 つ目の「プロセス」（同じ DB ファイルを新しく開いたルータ/`InFlightTurns`）
+/// が起動時スイープを実行し、クライアントのポーリングが終端することを確認する。
+#[tokio::test]
+async fn restart_recovery_terminates_polling_for_an_orphaned_turn() {
+    let (db, path) = fresh_db();
+    let crypto = Arc::new(
+        SystemCrypto::new(SecretString::from("chat-send-test-secret".to_owned())).unwrap(),
+    );
+    seed_user_with_key(&path, &crypto, "u1");
+    seed_user_with_key(&path, &crypto, "u2");
+
+    // プロセス 1: u1 のターンは決して完了しない（release しない）。u2 は完了済みの会話を持つ。
+    let never = Arc::new(Semaphore::new(0));
+    let engine_1 = engine_with_factory(
+        db.clone(),
+        Some(crypto.clone()),
+        Arc::new(GatedFactory {
+            release: never,
+            text: "返らない".to_owned(),
+        }),
+    );
+    let app_1 = app(engine_1, db.clone());
+    let (status, body) = post_chat(&app_1, Some("u1"), "再起動で消える質問").await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    let since_id: i64 = body["sinceId"].as_str().unwrap().parse().unwrap();
+    message_log::add_pwa_message_log(&db, "u2", "system_default", "user", "済んだ質問")
+        .await
+        .unwrap();
+    message_log::add_pwa_assistant_reply(&db, "u2", "system_default", "済んだ返事", None, &[])
+        .await
+        .unwrap();
+
+    // プロセス 2（再起動後）: 同じ DB を新しく開き、in-flight が空のルータを組む。
+    let db_2 = Db::open(&path).expect("reopen db");
+    let engine_2 = engine_with(db_2.clone(), Some(crypto), "再起動後の返事");
+    let app_2 = app(engine_2, db_2.clone());
+
+    // スイープ前: u1 の履歴は未回答のユーザー発言で終わっている（クライアントは待ち続ける状態）。
+    let before = get_history(&app_2, "u1").await;
+    assert_eq!(before.len(), 1);
+    assert_eq!(before[0]["role"], "user");
+
+    // 起動時スイープ: 取り残された u1 の会話だけに通知を 1 件書く（完了済みの u2 には何も書かない）。
+    let swept = yuuka_client_api::recover_orphaned_chat_turns(&db_2).await;
+    assert_eq!(swept, 1);
+    assert_eq!(count_pwa_rows(&path, "u2", "is_notice = 1"), 0);
+    assert_eq!(count_pwa_rows(&path, "u1", "is_notice = 1"), 1);
+
+    // クライアントのポーリング契約（`sinceId` より後の agent 行で終了）がそのまま終端する。
+    let notice = poll_for_reply_after(&app_2, "u1", since_id, 20).await;
+    assert_eq!(notice["role"], "agent");
+    assert_eq!(
+        notice["content"],
+        yuuka_client_api::recovery::RESTART_NOTICE_TEXT
+    );
+    // 受理済みのユーザー発言は失われず、履歴は user → 通知 の 2 件。
+    let history = get_history(&app_2, "u1").await;
+    assert_eq!(history.len(), 2, "history={history:?}");
+    assert_eq!(history[0]["content"], "再起動で消える質問");
+
+    // 冪等: 2 回目のスイープ（例: さらに再起動）は何も書かない。
+    assert_eq!(
+        yuuka_client_api::recover_orphaned_chat_turns(&db_2).await,
+        0
+    );
+    assert_eq!(count_pwa_rows(&path, "u1", "is_notice = 1"), 1);
+
+    // 新プロセスは in-flight が空なので、同じユーザーがすぐ再送でき、正常に完了する。通知行は
+    // LLM 文脈に入らない。
+    let (status, body) = post_chat(&app_2, Some("u1"), "もう一度お願い").await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    let since_id_2: i64 = body["sinceId"].as_str().unwrap().parse().unwrap();
+    let reply = poll_for_reply_after(&app_2, "u1", since_id_2, 200).await;
+    assert_eq!(reply["content"], "再起動後の返事");
+    let context = message_log::recent_pwa_context(&db_2, "u1", "system_default", 15)
+        .await
+        .unwrap();
+    assert!(
+        context
+            .iter()
+            .all(|c| !c.content.contains("サーバー再起動")),
+        "通知行は文脈から除外される: {context:?}"
+    );
 }

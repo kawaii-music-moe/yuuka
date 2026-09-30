@@ -8,15 +8,18 @@
 //! チャット送信の事前チェック配線（issue #41）のみを持つ。
 //!
 //! チャット送信（`POST /api/client/chat/messages`）の設計は [`routes::routes_with`] のモジュール doc
-//! および同関数直下の `chat_send` ドキュメントを参照。
+//! および同関数直下の `chat_send` ドキュメントを参照。`202` 受理後の再起動でターンが失われた場合の
+//! 回復（起動時スイープ・issue #77）は [`recovery`]。
 //!
 //! DAG: `client-api → web, orchestrator, discord(DTO/RateLimiter シーム), todo, finance, schedule, persona, gemini, core, db`。
 
 pub mod date_util;
 pub mod dto;
 pub mod error;
+pub mod recovery;
 pub mod references;
 pub mod routes;
 pub mod users;
 
+pub use recovery::recover_orphaned_chat_turns;
 pub use routes::routes_with;
