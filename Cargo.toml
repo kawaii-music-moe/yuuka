@@ -26,6 +26,7 @@ members = [
     "crates/yuuka-todo",
     "crates/yuuka-finance",
     "crates/yuuka-schedule",
+    "crates/yuuka-client-api",
     "crates/yuuka-timeline",
     "crates/yuuka-reminder",
     "crates/yuuka-personal",
@@ -156,6 +157,7 @@ yuuka-discord    = { path = "crates/yuuka-discord" }
 yuuka-todo       = { path = "crates/yuuka-todo" }
 yuuka-finance    = { path = "crates/yuuka-finance" }
 yuuka-schedule   = { path = "crates/yuuka-schedule" }
+yuuka-client-api = { path = "crates/yuuka-client-api" }
 yuuka-timeline   = { path = "crates/yuuka-timeline" }
 yuuka-reminder   = { path = "crates/yuuka-reminder" }
 yuuka-personal   = { path = "crates/yuuka-personal" }

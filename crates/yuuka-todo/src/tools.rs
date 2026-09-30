@@ -291,6 +291,7 @@ impl Tool for AddTodoTool {
             repeat_until: repeat_rule.as_ref().and(arg_str(&args, "repeat_until")),
             repeat_count: repeat_rule.as_ref().and(repeat_count),
             repeat_rule,
+            list: None,
         };
 
         let todo = TodoRepo::new(&self.db)
@@ -524,6 +525,7 @@ impl Tool for AddSubtaskTool {
             repeat_rule: None,
             repeat_until: None,
             repeat_count: None,
+            list: None,
         };
         let subtask = repo.add(&scope, new).await.map_err(exec_err)?;
 
@@ -1545,6 +1547,7 @@ mod tests {
                     repeat_rule: None,
                     repeat_until: None,
                     repeat_count: None,
+                    list: None,
                 },
             )
             .await

@@ -20,6 +20,7 @@ yuuka-web.workspace = true
 yuuka-todo.workspace = true
 yuuka-finance.workspace = true
 yuuka-schedule.workspace = true
+yuuka-client-api.workspace = true      # /api/client/* — PWA 用 API（issue #33 port）
 yuuka-timeline.workspace = true
 yuuka-reminder.workspace = true
 yuuka-personal.workspace = true

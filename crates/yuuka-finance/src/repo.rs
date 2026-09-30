@@ -69,6 +69,41 @@ impl<'a> ExpenseRepo<'a> {
             .await
     }
 
+    /// 指定月（JST 暦月・`date LIKE 'YYYY-MM%'`）の収支を新しい順に全件返す
+    /// （PWA `GET /api/client/finance/transactions?month=`・issue #47: Node は `month` を無視し
+    /// 常に直近 100 件を返すバグだった）。`date` 列は既にローカル暦日文字列のため、`LIKE` 前方一致は
+    /// JST の月境界と一致する（UTC 変換は不要・issue #43 の対象外）。
+    ///
+    /// # Errors
+    /// クエリ失敗時 [`DbError`]。
+    pub async fn list_by_month(
+        &self,
+        scope: &UserScope,
+        year: i64,
+        month: i64,
+    ) -> Result<Vec<Expense>, DbError> {
+        let (uid, bid) = scope_keys(scope);
+        let like = format!("{year}-{month:02}%");
+        self.read
+            .read(move |conn| {
+                let sql = format!(
+                    "SELECT {EXPENSE_COLUMNS} FROM expenses \
+                     WHERE user_id = ?1 AND bot_id = ?2 AND date LIKE ?3 \
+                     ORDER BY date DESC, created_at DESC, id DESC"
+                );
+                let mut stmt = conn.prepare(&sql).map_err(map_sqlite)?;
+                let rows = stmt
+                    .query_map(params![uid, bid, like], row_to_expense)
+                    .map_err(map_sqlite)?;
+                let mut out = Vec::new();
+                for row in rows {
+                    out.push(row.map_err(map_sqlite)?);
+                }
+                Ok(out)
+            })
+            .await
+    }
+
     /// スコープ内の単一収支を取得する（無ければ `None`）。
     ///
     /// # Errors

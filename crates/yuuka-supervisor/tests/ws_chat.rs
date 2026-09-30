@@ -154,6 +154,7 @@ async fn ws_chat_ready_then_msg_returns_done() {
         axum::Router::new(),
         axum::Router::new(),
         None,
+        None,
     );
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -228,6 +229,7 @@ async fn ws_chat_rejects_cookie_only_auth() {
         axum::Router::new(),
         axum::Router::new(),
         axum::Router::new(),
+        None,
         None,
     );
 

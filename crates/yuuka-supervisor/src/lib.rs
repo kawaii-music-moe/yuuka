@@ -9,7 +9,7 @@
 use std::path::Path;
 
 use axum::Router;
-use yuuka_web::{apply_common_layers, framework_routes, mount_static, AppState};
+use yuuka_web::{apply_common_layers, framework_routes, mount_pwa, mount_static, AppState};
 
 pub mod desktop_dist;
 pub mod discord;
@@ -37,9 +37,14 @@ pub use ws::ws_routes;
 /// 組んだものを clone して渡す（`Router` は安価に clone 可能）。`dist_dir` を渡すと SPA
 /// （`dist/public`）を `fallback_service` として載せる（未指定は API のみ）。
 ///
-/// 引数は state + dist_dir と、`Extension` で依存を内包済みの pre-built ルータ群（auth/admin/settings/
-/// webhook/bot-attribute/ws）。crypto/runtime を State へ入れると全 `AppState` 構築へ波及するため、
-/// これらは main 側で組んで渡す配線関数（引数数の lint は本質的な配線都合として許容）。
+/// 引数は state + dist_dir/pwa_dist_dir と、`Extension` で依存を内包済みの pre-built ルータ群
+/// （auth/admin/settings/webhook/bot-attribute/ws）。crypto/runtime を State へ入れると全
+/// `AppState` 構築へ波及するため、これらは main 側で組んで渡す配線関数（引数数の lint は本質的な
+/// 配線都合として許容）。
+///
+/// `pwa_dist_dir` を渡すと PWA（issue #33・`client/pwa`）を [`mount_pwa`] で明示ルート群として
+/// 載せる。`dist_dir`（admin SPA・`fallback_service`）とは独立に効くため、両方 `Some` でも
+/// 互いを横取りしない（[`yuuka_web::mount_pwa`] のドキュメント参照）。
 #[allow(clippy::too_many_arguments)]
 pub fn build_app(
     state: AppState,
@@ -56,6 +61,7 @@ pub fn build_app(
     finance_routes: Router<AppState>,
     bot_management_routes: Router<AppState>,
     dist_dir: Option<&Path>,
+    pwa_dist_dir: Option<&Path>,
 ) -> Router {
     let routes = framework_routes()
         .merge(auth_routes)
@@ -80,8 +86,13 @@ pub fn build_app(
         .merge(yuuka_auth::device_routes())
         .merge(yuuka_orchestrator::member_request_routes())
         .merge(yuuka_orchestrator::bot_share_routes())
+        .merge(yuuka_client_api::routes())
         .merge(bot_management_routes)
         .merge(desktop_dist::routes());
+    let routes = match pwa_dist_dir {
+        Some(dir) => mount_pwa(routes, dir),
+        None => routes,
+    };
     let routes = match dist_dir {
         Some(dir) => mount_static(routes, dir),
         None => routes,
@@ -157,6 +168,16 @@ mod tests {
     }
 
     fn app() -> Router {
+        build_test_app(None, None)
+    }
+
+    /// [`app`] のパラメータ化版。`dist_dir`/`pwa_dist_dir` を渡すと [`super::build_app`] が実サーバ
+    /// （`main.rs`）と全く同じ組み立て（PWA → admin static の順で mount）を行う。組み合わせルータの
+    /// 検証（[`combined_production_router_wires_pwa_admin_and_api_without_route_conflicts`]）に使う。
+    fn build_test_app(
+        dist_dir: Option<&std::path::Path>,
+        pwa_dist_dir: Option<&std::path::Path>,
+    ) -> Router {
         // 認証発行ルータ（in-memory セッション・DM 未配線・暗号なし）を組んで merge を検証する。
         let runtime = std::sync::Arc::new(yuuka_auth::AuthRuntime::new(
             yuuka_auth::SessionStore::in_memory(),
@@ -217,7 +238,8 @@ mod tests {
             yuuka_finance::routes(),
             // Bot 管理ルータ（既定 NullBotViewRuntime・crypto なし）を merge して検証する。
             yuuka_orchestrator::bot_management_routes(),
-            None,
+            dist_dir,
+            pwa_dist_dir,
         )
     }
 
@@ -278,5 +300,125 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    /// PWA dist（index.html + manifest + sw.js + icon + ハッシュ資産）。
+    /// `crates/yuuka-web/src/static_files.rs` の `pwa_tests::pwa_dist` と同じ形。
+    fn pwa_test_dist() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().expect("tmp");
+        std::fs::write(dir.path().join("index.html"), "<html>PWA-SHELL</html>").expect("index");
+        std::fs::write(dir.path().join("manifest.webmanifest"), "{}").expect("manifest");
+        std::fs::write(dir.path().join("sw.js"), "// sw").expect("sw");
+        std::fs::create_dir_all(dir.path().join("icons")).expect("icons dir");
+        std::fs::write(dir.path().join("icons/app-icon.svg"), "<svg/>").expect("icon");
+        std::fs::create_dir_all(dir.path().join("assets")).expect("assets dir");
+        std::fs::write(dir.path().join("assets/app-BIDAdKj3.js"), "console.log(1)")
+            .expect("hashed");
+        dir
+    }
+
+    /// 管理画面 SPA dist（index.html + 404.html + ハッシュ資産）。
+    fn admin_test_dist() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().expect("tmp");
+        std::fs::write(dir.path().join("index.html"), "<html>ADMIN-SHELL</html>").expect("index");
+        std::fs::write(dir.path().join("404.html"), "<html>NOT-FOUND</html>").expect("404");
+        std::fs::create_dir_all(dir.path().join("assets")).expect("assets dir");
+        std::fs::write(
+            dir.path().join("assets/admin-CAFEBEEF.js"),
+            "console.log(2)",
+        )
+        .expect("hashed");
+        dir
+    }
+
+    async fn combined_get(
+        admin_dir: &std::path::Path,
+        pwa_dir: &std::path::Path,
+        uri: &str,
+    ) -> axum::response::Response {
+        // 実サーバ（main.rs）と全く同じ [`super::build_app`] 呼び出し（PWA → admin static の順で
+        // mount）でルータを組み立てる。axum は `Router::route` で GET が重複登録された時点で panic
+        // するため、本ヘルパー呼び出し自体が「重複ルートでビルドが壊れていないか」を毎回検証する。
+        build_test_app(Some(admin_dir), Some(pwa_dir))
+            .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn combined_production_router_wires_pwa_admin_and_api_without_route_conflicts() {
+        // PR #74 レビュー対応: #73 の暫定 `GET /` → `/admin/` リダイレクトが `mount_pwa` の `"/"`
+        // シェルルートと衝突し、実サーバ（`build_app` が PWA→admin static の順で mount）は
+        // 起動時に panic していた。本テストは `build_app` をそのまま呼び出すため、同種の重複ルートが
+        // 再発すればここで（起動を待たずに）検知できる。
+        let pwa_dir = pwa_test_dist();
+        let admin_dir = admin_test_dist();
+
+        // GET / → PWA シェル（200・no-cache）。
+        let root = combined_get(admin_dir.path(), pwa_dir.path(), "/").await;
+        assert_eq!(root.status(), StatusCode::OK);
+        assert_eq!(
+            root.headers()
+                .get("cache-control")
+                .and_then(|v| v.to_str().ok()),
+            Some("no-cache, no-store, must-revalidate")
+        );
+        let root_body = axum::body::to_bytes(root.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert!(String::from_utf8_lossy(&root_body).contains("PWA-SHELL"));
+
+        // /admin/<deep-link> → 管理画面 SPA index（200・拡張子なし deep link フォールバック）。
+        let admin_deep = combined_get(admin_dir.path(), pwa_dir.path(), "/admin/bots/123").await;
+        assert_eq!(admin_deep.status(), StatusCode::OK);
+        let admin_body = axum::body::to_bytes(admin_deep.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert!(String::from_utf8_lossy(&admin_body).contains("ADMIN-SHELL"));
+
+        // PWA のハッシュ資産 → immutable。
+        let pwa_asset =
+            combined_get(admin_dir.path(), pwa_dir.path(), "/assets/app-BIDAdKj3.js").await;
+        assert_eq!(pwa_asset.status(), StatusCode::OK);
+        assert_eq!(
+            pwa_asset
+                .headers()
+                .get("cache-control")
+                .and_then(|v| v.to_str().ok()),
+            Some("public, max-age=31536000, immutable")
+        );
+
+        // 管理画面のハッシュ資産 → immutable。
+        let admin_asset = combined_get(
+            admin_dir.path(),
+            pwa_dir.path(),
+            "/admin/assets/admin-CAFEBEEF.js",
+        )
+        .await;
+        assert_eq!(admin_asset.status(), StatusCode::OK);
+        assert_eq!(
+            admin_asset
+                .headers()
+                .get("cache-control")
+                .and_then(|v| v.to_str().ok()),
+            Some("public, max-age=31536000, immutable")
+        );
+
+        // /api/client/* は無認証 → 401（PWA の API・yuuka-client-api）。
+        let client_status =
+            combined_get(admin_dir.path(), pwa_dir.path(), "/api/client/status").await;
+        assert_eq!(client_status.status(), StatusCode::UNAUTHORIZED);
+
+        // 未登録 /api/* は JSON 404（index.html に握り潰されない・B6 parity）。
+        let unknown_api =
+            combined_get(admin_dir.path(), pwa_dir.path(), "/api/does-not-exist").await;
+        assert_eq!(unknown_api.status(), StatusCode::NOT_FOUND);
+        assert_eq!(
+            unknown_api
+                .headers()
+                .get("content-type")
+                .and_then(|v| v.to_str().ok()),
+            Some("application/json")
+        );
     }
 }

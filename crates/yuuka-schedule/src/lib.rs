@@ -1,9 +1,12 @@
 //! yuuka-schedule — schedule ドメイン（T1 fan-out）。**参照実装は yuuka-todo**（repo/dto/routes の縦スライス）。
 //!
 //! 参照スコープ = コア CRUD（list_upcoming/add/delete）。Google カレンダー同期
-//! （google_event_id/google_calendar_id・link/update/backfill）、期間集約
-//! （listSchedulesInRange・日報/週報）は deferred（後続パスで追加）。cron リマインド
-//! （getUnreminded/markReminded）は Phase 4 で [`cron`] に追加済み。DAG: `schedule → web, db, types, core`。
+//! （google_event_id・link/update/backfill）は deferred（後続パスで追加）。期間集約
+//! （`listSchedulesInRange` 相当）は issue #33（PWA カレンダー `GET /api/client/calendar/events`）
+//! 向けに [`repo::ScheduleRepo::list_in_range`] として実装済み（`google_calendar_id` を含む
+//! 内部専用ビュー [`repo::ScheduleForClient`] を返す・一般ダッシュボードの [`dto::Schedule`]
+//! クリーンビューは変えない）。cron リマインド（getUnreminded/markReminded）は Phase 4 で
+//! [`cron`] に追加済み。DAG: `schedule → web, db, types, core`。
 
 pub mod cron;
 pub mod dto;
@@ -41,6 +44,7 @@ mod tests {
     use axum::http::{Request, StatusCode};
     use tower::ServiceExt;
     use yuuka_core::{AuthError, BotId, UserId, UserScope};
+    use yuuka_db::map_sqlite;
     use yuuka_types::{Role, SessionUser};
     use yuuka_web::{AppState, AuthBackend, Db, WebConfig};
 
@@ -130,6 +134,88 @@ mod tests {
             .await
             .unwrap()
             .is_empty());
+    }
+
+    #[tokio::test]
+    async fn list_in_range_uses_day_boundaries() {
+        // issue #33/#43: PWA カレンダーが使う範囲取得。`to` は「翌日 0 時未満」で渡し、最終日の
+        // 予定も含む（文字列 `<=` 比較で最終日が抜け落ちる Node の旧バグの再発防止）。
+        let db = seed_db();
+        let repo = ScheduleRepo::new(&db);
+        let s = scope("u");
+
+        repo.add(&s, new_schedule("in-range-start", "2026-09-01 00:00:00"))
+            .await
+            .unwrap();
+        repo.add(&s, new_schedule("in-range-end", "2026-09-30 23:59:59"))
+            .await
+            .unwrap();
+        repo.add(&s, new_schedule("before-range", "2026-08-31 23:59:59"))
+            .await
+            .unwrap();
+        repo.add(&s, new_schedule("after-range", "2026-10-01 00:00:00"))
+            .await
+            .unwrap();
+
+        let in_range = repo
+            .list_in_range(&s, "2026-09-01 00:00:00", "2026-10-01 00:00:00")
+            .await
+            .unwrap();
+        assert_eq!(
+            in_range
+                .iter()
+                .map(|e| e.title.as_str())
+                .collect::<Vec<_>>(),
+            vec!["in-range-start", "in-range-end"],
+            "開始時刻昇順・月初/月末を含み前後月を除外"
+        );
+
+        // 別ユーザーには見えない。
+        assert!(repo
+            .list_in_range(
+                &scope("other"),
+                "2026-09-01 00:00:00",
+                "2026-10-01 00:00:00"
+            )
+            .await
+            .unwrap()
+            .is_empty());
+    }
+
+    #[tokio::test]
+    async fn list_in_range_exposes_google_calendar_id_for_client_labeling() {
+        // `Schedule`（一般ダッシュボード向け）は google_calendar_id を意図的に隠すが、
+        // PWA の calendar/calendarName 表示にはこの内部列が要る（ScheduleForClient 経由）。
+        let db = seed_db();
+        let repo = ScheduleRepo::new(&db);
+        let s = scope("u");
+        let created = repo
+            .add(&s, new_schedule("synced", "2026-09-10 10:00:00"))
+            .await
+            .unwrap();
+        // add() は google_calendar_id を書けないため、テスト用に直接 UPDATE する
+        // （Google 同期バックフィルの縮退シーム）。
+        db.writer
+            .transaction(move |tx| {
+                tx.execute(
+                    "UPDATE schedules SET google_calendar_id = ?1 WHERE id = ?2",
+                    rusqlite::params!["cal_abc123@group.calendar.google.com", created.id],
+                )
+                .map_err(map_sqlite)?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+
+        let rows = repo
+            .list_in_range(&s, "2026-09-01 00:00:00", "2026-10-01 00:00:00")
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            rows[0].google_calendar_id.as_deref(),
+            Some("cal_abc123@group.calendar.google.com")
+        );
     }
 
     #[tokio::test]

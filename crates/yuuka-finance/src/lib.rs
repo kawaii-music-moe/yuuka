@@ -275,6 +275,40 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn list_by_month_honors_month_filter_and_scope() {
+        // issue #47: Node の GET /api/client/finance/transactions は month を無視し常に直近
+        // 100 件を返すバグだった。Rust 版の list_by_month は月で絞り込む。
+        let db = seed_db();
+        let repo = ExpenseRepo::new(&db);
+        let s = scope("u");
+        repo.add(&s, dated_expense(1000, "食費", "2026-03-05", "expense"))
+            .await
+            .unwrap();
+        repo.add(&s, dated_expense(500, "食費", "2026-03-20", "expense"))
+            .await
+            .unwrap();
+        repo.add(&s, dated_expense(999, "食費", "2026-02-10", "expense"))
+            .await
+            .unwrap();
+
+        let march = repo.list_by_month(&s, 2026, 3).await.unwrap();
+        assert_eq!(march.len(), 2, "2026-02 の記録は含まれない");
+        assert!(march.iter().all(|e| e.date.starts_with("2026-03")));
+        // 新しい順（date DESC）。
+        assert_eq!(march[0].date, "2026-03-20");
+
+        // 記録の無い月は空。
+        assert!(repo.list_by_month(&s, 2026, 4).await.unwrap().is_empty());
+
+        // 別ユーザーには漏れない。
+        assert!(repo
+            .list_by_month(&scope("userB"), 2026, 3)
+            .await
+            .unwrap()
+            .is_empty());
+    }
+
     struct FakeAuth {
         user: SessionUser,
     }

@@ -13,7 +13,7 @@ pub mod fc_loop;
 pub mod wire;
 
 pub use breaker::CircuitBreaker;
-pub use client::{ClientOptions, GeminiClient, GenerateBackend, DEFAULT_MODEL};
+pub use client::{ClientOptions, GeminiClient, GenerateBackend, ALLOWED_MODELS, DEFAULT_MODEL};
 pub use fc_loop::{
     claims_action_completed, run_function_calling_loop, LoopOptions, LoopResult, Status, StatusCb,
     COMPLETION_CORRECTION_PROMPT,
