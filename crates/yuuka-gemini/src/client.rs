@@ -20,6 +20,22 @@ use crate::wire::{
 
 /// 既定モデル（GA・`-preview` は使わない・§8.2.5）。
 pub const DEFAULT_MODEL: &str = "gemini-3.1-flash-lite";
+
+/// ユーザーが選択できる Gemini モデルの許可リスト（GA モデルのみ・issue #39）。
+///
+/// PWA 設定画面（`PUT /api/client/settings`）はモデル選択肢を Gemini モデルに限定した上で、
+/// **サーバー側でもこの許可リストに対して検証**する。Node 版は `body.model` を検証なしに
+/// `users.gemini_model` へ保存しており、GPT-4o 等の他社モデル名を選ぶと以後 Discord を含む
+/// そのユーザーの全会話が Gemini 呼び出し失敗で壊れていた（`docs/rust-rewrite/verification/
+/// rpt-gemini-design-verify.md` で確認済みの GA モデル一覧と一致させ、単一の定数として
+/// `crates/` 側の唯一の正とする）。
+pub const ALLOWED_MODELS: &[&str] = &[
+    "gemini-3.5-flash",
+    "gemini-3.1-flash-lite",
+    "gemini-2.5-pro",
+    "gemini-2.5-flash",
+    "gemini-2.5-flash-lite",
+];
 const DEFAULT_BASE_URL: &str = "https://generativelanguage.googleapis.com";
 /// FC ループ用タイムアウト（現行 120s・[`src/gemini.ts:420`]）。
 const LOOP_TIMEOUT: Duration = Duration::from_secs(120);
