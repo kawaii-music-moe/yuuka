@@ -172,6 +172,16 @@ mod tests {
     }
 
     fn app() -> Router {
+        build_test_app(None, None)
+    }
+
+    /// [`app`] のパラメータ化版。`dist_dir`/`pwa_dist_dir` を渡すと [`super::build_app`] が実サーバ
+    /// （`main.rs`）と全く同じ組み立て（PWA → admin static の順で mount）を行う。組み合わせルータの
+    /// 検証（[`combined_production_router_wires_pwa_admin_and_api_without_route_conflicts`]）に使う。
+    fn build_test_app(
+        dist_dir: Option<&std::path::Path>,
+        pwa_dist_dir: Option<&std::path::Path>,
+    ) -> Router {
         // 認証発行ルータ（in-memory セッション・DM 未配線・暗号なし）を組んで merge を検証する。
         let runtime = std::sync::Arc::new(yuuka_auth::AuthRuntime::new(
             yuuka_auth::SessionStore::in_memory(),
@@ -200,8 +210,26 @@ mod tests {
             std::sync::Arc::new(yuuka_google::NullBackup),
             std::sync::Arc::new(yuuka_google::OAuthStateStore::new()),
         ));
+        // client-api ルータ（`/api/client/*`・issue #41 のチャット送信を含む）は `Extension` で
+        // `ChatEngine`/`RateLimiter` を内包するため、WS と違って完全に空のルータでは代替できない
+        // （route 自体を登録しないと `combined_production_router_wires_pwa_admin_and_api_without_route_conflicts`
+        // が検証したい「認証切れ→401」を「未登録→404」に取り違えてしまう）。`RealGeminiFactory` は
+        // ここでは `.build()` まで到達しない（`AuthenticatedUser` 抽出が先に 401 で短絡する）ため、
+        // 実 API キーなしで安全に使える。
+        let db = test_db();
+        let client_api_engine = std::sync::Arc::new(yuuka_orchestrator::ChatEngine::new(
+            db.clone(),
+            None,
+            yuuka_tools::ToolRegistry::new(),
+            std::sync::Arc::new(yuuka_orchestrator::RealGeminiFactory),
+            None,
+            std::sync::Arc::new(yuuka_mcp::NullMcpClient),
+            None,
+        ));
+        let client_api_rate_limiter: std::sync::Arc<dyn yuuka_discord::RateLimiter> =
+            std::sync::Arc::new(yuuka_orchestrator::InMemoryRateLimiter::new(db.clone()));
         super::build_app(
-            AppState::new(Arc::new(FakeAuth), WebConfig::default(), test_db()),
+            AppState::new(Arc::new(FakeAuth), WebConfig::default(), db),
             yuuka_auth::routes(runtime),
             yuuka_admin::routes(admin_runtime),
             yuuka_settings::routes(settings_runtime),
@@ -232,10 +260,10 @@ mod tests {
             yuuka_finance::routes(),
             // Bot 管理ルータ（既定 NullBotViewRuntime・crypto なし）を merge して検証する。
             yuuka_orchestrator::bot_management_routes(),
-            // client-api ルータも merge 検証には不要（ChatEngine 構築を避け空ルータを渡す・WS と同じ理由）。
-            axum::Router::new(),
-            None,
-            None,
+            // client-api ルータ（fake ChatEngine・InMemoryRateLimiter）。上のコメント参照。
+            yuuka_client_api::routes_with(client_api_engine, client_api_rate_limiter),
+            dist_dir,
+            pwa_dist_dir,
         )
     }
 
@@ -296,5 +324,158 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    /// PWA dist（index.html + manifest + sw.js + icon + ハッシュ資産）。
+    /// `crates/yuuka-web/src/static_files.rs` の `pwa_tests::pwa_dist` と同じ形。
+    fn pwa_test_dist() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().expect("tmp");
+        std::fs::write(dir.path().join("index.html"), "<html>PWA-SHELL</html>").expect("index");
+        std::fs::write(dir.path().join("manifest.webmanifest"), "{}").expect("manifest");
+        std::fs::write(dir.path().join("sw.js"), "// sw").expect("sw");
+        std::fs::create_dir_all(dir.path().join("icons")).expect("icons dir");
+        std::fs::write(dir.path().join("icons/app-icon.svg"), "<svg/>").expect("icon");
+        std::fs::create_dir_all(dir.path().join("assets")).expect("assets dir");
+        std::fs::write(dir.path().join("assets/app-BIDAdKj3.js"), "console.log(1)")
+            .expect("hashed");
+        dir
+    }
+
+    /// 管理画面 SPA dist（index.html + 404.html + ハッシュ資産）。
+    fn admin_test_dist() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().expect("tmp");
+        std::fs::write(dir.path().join("index.html"), "<html>ADMIN-SHELL</html>").expect("index");
+        std::fs::write(dir.path().join("404.html"), "<html>NOT-FOUND</html>").expect("404");
+        std::fs::create_dir_all(dir.path().join("assets")).expect("assets dir");
+        std::fs::write(
+            dir.path().join("assets/admin-CAFEBEEF.js"),
+            "console.log(2)",
+        )
+        .expect("hashed");
+        dir
+    }
+
+    async fn combined_get(
+        admin_dir: &std::path::Path,
+        pwa_dir: &std::path::Path,
+        uri: &str,
+    ) -> axum::response::Response {
+        // 実サーバ（main.rs）と全く同じ [`super::build_app`] 呼び出し（PWA → admin static の順で
+        // mount）でルータを組み立てる。axum は `Router::route` で GET が重複登録された時点で panic
+        // するため、本ヘルパー呼び出し自体が「重複ルートでビルドが壊れていないか」を毎回検証する。
+        build_test_app(Some(admin_dir), Some(pwa_dir))
+            .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap()
+    }
+
+    /// [`combined_get`] の POST 版（issue #41・`POST /api/client/chat/messages` の無認証 401 検証用）。
+    async fn combined_post(
+        admin_dir: &std::path::Path,
+        pwa_dir: &std::path::Path,
+        uri: &str,
+        body: &str,
+    ) -> axum::response::Response {
+        build_test_app(Some(admin_dir), Some(pwa_dir))
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(uri)
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_owned()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn combined_production_router_wires_pwa_admin_and_api_without_route_conflicts() {
+        // PR #74 レビュー対応: #73 の暫定 `GET /` → `/admin/` リダイレクトが `mount_pwa` の `"/"`
+        // シェルルートと衝突し、実サーバ（`build_app` が PWA→admin static の順で mount）は
+        // 起動時に panic していた。本テストは `build_app` をそのまま呼び出すため、同種の重複ルートが
+        // 再発すればここで（起動を待たずに）検知できる。
+        let pwa_dir = pwa_test_dist();
+        let admin_dir = admin_test_dist();
+
+        // GET / → PWA シェル（200・no-cache）。
+        let root = combined_get(admin_dir.path(), pwa_dir.path(), "/").await;
+        assert_eq!(root.status(), StatusCode::OK);
+        assert_eq!(
+            root.headers()
+                .get("cache-control")
+                .and_then(|v| v.to_str().ok()),
+            Some("no-cache, no-store, must-revalidate")
+        );
+        let root_body = axum::body::to_bytes(root.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert!(String::from_utf8_lossy(&root_body).contains("PWA-SHELL"));
+
+        // /admin/<deep-link> → 管理画面 SPA index（200・拡張子なし deep link フォールバック）。
+        let admin_deep = combined_get(admin_dir.path(), pwa_dir.path(), "/admin/bots/123").await;
+        assert_eq!(admin_deep.status(), StatusCode::OK);
+        let admin_body = axum::body::to_bytes(admin_deep.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert!(String::from_utf8_lossy(&admin_body).contains("ADMIN-SHELL"));
+
+        // PWA のハッシュ資産 → immutable。
+        let pwa_asset =
+            combined_get(admin_dir.path(), pwa_dir.path(), "/assets/app-BIDAdKj3.js").await;
+        assert_eq!(pwa_asset.status(), StatusCode::OK);
+        assert_eq!(
+            pwa_asset
+                .headers()
+                .get("cache-control")
+                .and_then(|v| v.to_str().ok()),
+            Some("public, max-age=31536000, immutable")
+        );
+
+        // 管理画面のハッシュ資産 → immutable。
+        let admin_asset = combined_get(
+            admin_dir.path(),
+            pwa_dir.path(),
+            "/admin/assets/admin-CAFEBEEF.js",
+        )
+        .await;
+        assert_eq!(admin_asset.status(), StatusCode::OK);
+        assert_eq!(
+            admin_asset
+                .headers()
+                .get("cache-control")
+                .and_then(|v| v.to_str().ok()),
+            Some("public, max-age=31536000, immutable")
+        );
+
+        // /api/client/* は無認証 → 401（PWA の API・yuuka-client-api）。
+        let client_status =
+            combined_get(admin_dir.path(), pwa_dir.path(), "/api/client/status").await;
+        assert_eq!(client_status.status(), StatusCode::UNAUTHORIZED);
+
+        // PR #75 レビュー対応: POST /api/client/chat/messages（issue #41・チャット送信）も
+        // client_api_routes として組み合わせルータへ登録されていることを検証する。無認証 → 401
+        // （`ChatEngine`/`RateLimiter` の `Extension` 配線がここに来るまでに一切呼ばれないことも
+        // 同時に確認できる ── 呼ばれていれば `RealGeminiFactory` が実 API キー無しで失敗する）。
+        let chat_send = combined_post(
+            admin_dir.path(),
+            pwa_dir.path(),
+            "/api/client/chat/messages",
+            r#"{"content":"hello"}"#,
+        )
+        .await;
+        assert_eq!(chat_send.status(), StatusCode::UNAUTHORIZED);
+
+        // 未登録 /api/* は JSON 404（index.html に握り潰されない・B6 parity）。
+        let unknown_api =
+            combined_get(admin_dir.path(), pwa_dir.path(), "/api/does-not-exist").await;
+        assert_eq!(unknown_api.status(), StatusCode::NOT_FOUND);
+        assert_eq!(
+            unknown_api
+                .headers()
+                .get("content-type")
+                .and_then(|v| v.to_str().ok()),
+            Some("application/json")
+        );
     }
 }

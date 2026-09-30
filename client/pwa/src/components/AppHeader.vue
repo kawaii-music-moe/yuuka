@@ -2,13 +2,23 @@
 import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import AppIcon from './AppIcon.vue'
-import type { SessionUser } from '../api/auth'
+import { logout, type SessionUser } from '../api/auth'
 
 const route = useRoute()
 const router = useRouter()
 const title = computed(() => route.meta.title ?? 'Agent Desk')
 const fromChat = computed(() => route.query.from === 'chat')
 defineProps<{ user: SessionUser | null }>()
+
+async function handleLogout() {
+  try {
+    await logout()
+  } catch {
+    // セッションが既に切れている場合でも、ログイン画面へは戻す。
+  } finally {
+    window.location.assign('/login')
+  }
+}
 </script>
 
 <template>
@@ -29,6 +39,9 @@ defineProps<{ user: SessionUser | null }>()
       <RouterLink class="icon-button" to="/settings" aria-label="Open settings">
         <AppIcon name="settings" />
       </RouterLink>
+      <button class="icon-button" type="button" aria-label="Log out" @click="handleLogout">
+        <AppIcon name="logout" />
+      </button>
     </div>
   </header>
 </template>
