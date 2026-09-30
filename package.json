@@ -15,7 +15,7 @@
     "test:front": "vitest run --config frontend/vitest.config.ts",
     "dev:client:mock": "node scripts/dev-client-mock.mjs",
     "build:pwa": "node scripts/build-pwa.mjs",
-    "build": "cargo build --release --bin yuuka && pnpm build:front",
+    "build": "cargo build --release --bin yuuka && pnpm build:front && pnpm build:pwa",
     "lint": "biome check frontend/src scripts",
     "lint:fix": "biome check --write frontend/src scripts",
     "check": "pnpm typecheck:front && pnpm lint",

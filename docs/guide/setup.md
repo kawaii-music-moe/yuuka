@@ -93,9 +93,11 @@ VITE_API_TARGET=http://127.0.0.1:7854 pnpm dev
 プロダクション相当（Docker を使わない場合）:
 
 ```bash
-pnpm build              # cargo build --release --bin yuuka + フロントエンドの本番ビルド（dist/public）
-./target/release/yuuka  # config.yaml のある repo ルートで実行（dist/public を静的配信）
+pnpm build              # cargo build --release --bin yuuka + 管理画面 SPA（dist/public）+ PWA（dist/public/pwa）
+./target/release/yuuka  # config.yaml のある repo ルートで実行（dist/public と dist/public/pwa を静的配信）
 ```
+
+> PWA のビルド成果物（`dist/public/pwa`）はリポジトリにコミットされません（#46）。`pnpm build` は `build:front`（`dist/public` を空にして管理画面をビルド）→ `build:pwa` の順で実行します。個別に実行する場合もこの順にしてください（逆順だと `dist/public/pwa` が消えます）。`dist/public/pwa` が無い場合、サーバーは警告を出して PWA の静的配信だけを無効化します（管理画面と API は動作）。
 
 起動後、ブラウザで `http://localhost:7854`（設定したポート）にアクセスします。
 

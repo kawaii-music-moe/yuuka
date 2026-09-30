@@ -26,3 +26,7 @@ node_modules
 
 # Rust 移行ワークスペース（Phase 0〜）のビルド成果物
 /target
+
+# PWA（client/pwa）のビルド成果物は追跡しない（#46）。出力先は dist/public/pwa（dist/ で除外済み）。
+# 旧 Node 時代の出力先だった src/public/pwa も、古いブランチ等から再生成されて誤コミットされないよう明示的に除外する。
+/src/public/pwa/

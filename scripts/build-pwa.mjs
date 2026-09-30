@@ -11,7 +11,10 @@ import { fileURLToPath } from "node:url";
 // (see issue #45).
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const clientDir = path.join(root, "client", "pwa");
-const target = path.join(root, "src", "public", "pwa");
+// 出力先は Rust 側の配信元（crates/yuuka-supervisor の PWA_DIST_DIR）と一致させる。
+// 管理画面 SPA のビルド（`pnpm build:front`・`emptyOutDir: true`）は dist/public 全体を
+// 空にするため、必ず build:front の後に実行すること（root の `pnpm build` はこの順で実行する）。
+const target = path.join(root, "dist", "public", "pwa");
 
 if (!existsSync(path.join(clientDir, "node_modules"))) {
 	const install = spawnSync("npm ci", {

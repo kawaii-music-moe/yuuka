@@ -34,11 +34,9 @@ use yuuka_web::{AppState, Db, WebConfig};
 const CONFIG_PATH: &str = "config.yaml";
 /// ビルド済み SPA の配信元（vite `outDir` = `dist/public`）。
 const DIST_DIR: &str = "dist/public";
-/// PWA（`client/pwa`）のビルド出力（issue #33・Node `PWA_PUBLIC_DIR` 一致: `dist/public/pwa` 優先）。
+/// PWA（`client/pwa`）のビルド出力（issue #33。`pnpm build:pwa` / Dockerfile の PWA stage が生成する）。
+/// ビルド成果物はリポジトリにコミットしない（#46）ため、ここが唯一の配信元。
 const PWA_DIST_DIR: &str = "dist/public/pwa";
-/// PWA ビルド出力が無いときのフォールバック（Node と同じくコミット済みの事前ビルド成果物）。
-/// issue #46（この成果物自体の削除）とは別スコープのため、本 PR では削除しない。
-const PWA_FALLBACK_DIST_DIR: &str = "src/public/pwa";
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -398,21 +396,15 @@ async fn run() -> Result<(), String> {
         );
     }
 
-    // 5.5) PWA（issue #33）配信元。Node `PWA_PUBLIC_DIR` と同じ優先順位: ビルド出力
-    //      （`dist/public/pwa`）があればそれを、無ければコミット済みの事前ビルド成果物
-    //      （`src/public/pwa`）へフォールバックする。両方無ければ PWA 配信は無効化（API のみ）。
+    // 5.5) PWA（issue #33）配信元。ビルド出力（`dist/public/pwa`）のみを配信する（コミット済み
+    //      成果物へのフォールバックは #46 で廃止）。無ければ PWA 静的配信を無効化（API のみ）。
+    //      `pnpm build`（build:front → build:pwa の順）または Docker イメージビルドで生成すること。
     let pwa_dist = PathBuf::from(PWA_DIST_DIR);
-    let pwa_dist_dir = if pwa_dist.is_dir() {
-        Some(pwa_dist)
-    } else {
-        let fallback = PathBuf::from(PWA_FALLBACK_DIST_DIR);
-        fallback.is_dir().then_some(fallback)
-    };
+    let pwa_dist_dir = pwa_dist.is_dir().then_some(pwa_dist);
     if pwa_dist_dir.is_none() {
         tracing::warn!(
             dir = PWA_DIST_DIR,
-            fallback = PWA_FALLBACK_DIST_DIR,
-            "PWA ディレクトリが無いため PWA 静的配信を無効化（/api/client/* は引き続き動作）"
+            "PWA ディレクトリが無いため PWA 静的配信を無効化（/api/client/* は引き続き動作）。`pnpm build:pwa` で生成してください"
         );
     }
 

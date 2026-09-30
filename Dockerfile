@@ -51,8 +51,7 @@ RUN pnpm exec vite build --config frontend/vite.config.ts
 # `client/pwa` は npm 管理（独立 package-lock.json）で pnpm workspace の外。frontend-builder と
 # 同じ node:24-bookworm を使い、`npm ci && npm run build` で `client/pwa/dist` を生成する
 # （`base: '/'`・`client/pwa/vite.config.ts`。runtime 側で `dist/public/pwa` へ配置し、Rust の
-# `mount_pwa`（`crates/yuuka-web/src/static_files.rs`）が Node `PWA_PUBLIC_DIR` と同じ優先順位
-# ＝このビルド出力を最優先で配信する）。
+# `mount_pwa`（`crates/yuuka-web/src/static_files.rs`）がこのビルド出力を配信する）。
 FROM node:24-bookworm AS pwa-builder
 WORKDIR /app
 COPY client/pwa/package.json client/pwa/package-lock.json ./
@@ -83,8 +82,9 @@ WORKDIR /app
 # 成果物のみ: Rust バイナリ + それが配信する SPA。config.yaml と data/ は compose がマウントする。
 COPY --from=rust-builder /yuuka ./yuuka
 COPY --from=frontend-builder /app/dist/public ./dist/public
-# issue #33: PWA（client/pwa）を dist/public/pwa へ同梱する（Node PWA_PUBLIC_DIR 優先パスと一致）。
-# 旧 src/public/pwa（Node 用の事前ビルド成果物）は issue #46 で別途削除するため本 PR では触らない。
+# issue #33: PWA（client/pwa）のビルド出力を dist/public/pwa へ同梱する（Rust の配信元。#46 で
+# コミット済み成果物へのフォールバックを廃止したため、このパスが唯一の PWA 配信元）。
+# 管理画面 SPA の COPY（dist/public）より後に置くこと（先に pwa を置くと上書きで消える）。
 COPY --from=pwa-builder /app/dist ./dist/public/pwa
 # data/ は外部マウント点。所有を非 root（uid 1000・compose の PUID 既定と一致）へ。
 RUN mkdir -p /app/data && chown -R yuuka:yuuka /app

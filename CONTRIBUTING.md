@@ -63,7 +63,9 @@ pnpm check          # = pnpm typecheck:front && pnpm lint
 ## ビルドとデプロイ
 
 ```bash
-pnpm build          # Rust バイナリ（target/release/yuuka）+ SPA（dist/public）
+pnpm build          # Rust バイナリ（target/release/yuuka）+ 管理画面 SPA（dist/public）+ PWA（dist/public/pwa）
+# 個別に実行する場合は build:front → build:pwa の順（build:front は dist/public を空にするため、
+# 先に build:pwa を実行すると dist/public/pwa が消える）。PWA のビルド成果物はコミットしない（#46）。
 
 # Docker による本番 / 開発インスタンス運用（詳細は docs/guide/deployment.md）
 pnpm run deploy     # prod を更新（dev の更新手順は deploy/README.md 参照）
