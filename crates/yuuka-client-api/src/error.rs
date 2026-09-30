@@ -32,6 +32,15 @@ impl ClientApiError {
             message: message.into(),
         }
     }
+
+    /// 同一ユーザーのチャット送信ターンが既に進行中（issue #41 PR #75 レビュー・P1: 非同期配信の
+    /// 重複ターン防止）。
+    pub fn conflict(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::CONFLICT,
+            message: message.into(),
+        }
+    }
 }
 
 impl IntoResponse for ClientApiError {

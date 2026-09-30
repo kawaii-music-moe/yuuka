@@ -150,6 +150,23 @@ pub struct ChatSendInput {
     pub content: Option<String>,
 }
 
+/// `POST /api/client/chat/messages` の応答（issue #41 PR #75 レビュー・P1: 非同期配信）。
+///
+/// 重いターン本体はバックグラウンドで実行するため `202 Accepted` を即座に返す（同期 `fetch` で
+/// 180 秒待つ旧設計だとリバースプロキシのタイムアウトが先に来て JSON 504 すら届かない問題の解消）。
+/// クライアントは `sinceId` を起点に `GET /api/client/chat/messages` をポーリングし、
+/// `id > sinceId` のアシスタント応答（`role:"agent"`）が現れたら完了とみなす（詳細は
+/// `routes.rs` の `chat_send` ハンドラ doc 参照）。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatSendAccepted {
+    /// 常に `"pending"`（将来 SSE 等を足す余地のため文字列で固定）。
+    pub status: &'static str,
+    /// この送信より前の直近 `message_logs.id`（文字列化・`ChatMessageView::id` と型を揃える）。
+    /// ポーリングはこの値より大きい `id` を持つ `role:"agent"` の出現を待つ。
+    pub since_id: String,
+}
+
 /// `GET /api/client/chat/messages` の 1 件（`ChatMessage`）。
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -161,6 +178,49 @@ pub struct ChatMessageView {
     pub created_at: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub references: Option<Vec<ChatReferenceView>>,
+    /// リッチ埋め込み（issue #41 PR #75 レビュー・P2）。無ければ省略（配列を送らない＝旧クライアント
+    /// 互換）。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub embeds: Vec<ChatEmbedView>,
+    /// ファイル添付（issue #41 PR #75 レビュー・P2）。実バイトは `url` の認証済みエンドポイントへ。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub files: Vec<ChatFileView>,
+}
+
+/// [`ChatMessageView::embeds`] の 1 件（`yuuka_discord::RichEmbed` の wire 表現・camelCase）。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatEmbedView {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// 0xRRGGBB。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color: Option<u32>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fields: Vec<ChatEmbedFieldView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub footer: Option<String>,
+}
+
+/// [`ChatEmbedView::fields`] の 1 件。
+#[derive(Debug, Clone, Serialize)]
+pub struct ChatEmbedFieldView {
+    pub name: String,
+    pub value: String,
+    pub inline: bool,
+}
+
+/// [`ChatMessageView::files`] の 1 件（issue #41 PR #75 レビュー・P2）。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatFileView {
+    pub id: String,
+    pub name: String,
+    pub mime_type: String,
+    /// `GET /api/client/chat/attachments/:id`（認証必須・所有者スコープ）。
+    pub url: String,
 }
 
 /// [`ChatMessageView::references`] の 1 件（`ChatReference`）。
