@@ -1,177 +1,178 @@
 <script lang="ts">
-	// ─────────────────────────────────────────────────────────────────────────
-	// タイムライン タブ（旧 app.js デイリータイムライン群 2811-3187 + index.html
-	// #tab-timeline を移植）。timelineApi 使用（bot-scoped）。
-	//
-	// 挙動の忠実移植:
-	//   - 日付ナビ（前/次/今日、tlShiftDay）。日付変更で再取得。
-	//   - 2カラム（計画 blocks / 記録 records）を並べて表示。
-	//   - 計画ブロック 追加/編集/削除、記録 追加/削除。
-	//   - メディア（写真・動画）は base64 化して /api/timeline/media へ。
-	//   - activeBot 変更でリロード。
-	// ─────────────────────────────────────────────────────────────────────────
-	import { activeBot } from "$lib/stores/activeBot";
-	import { timelineApi } from "$lib/api/services";
-	import { ApiError } from "$lib/api/client";
-	import { pushToast } from "$lib/stores/toast";
-	import { confirmDialog } from "$lib/components/ui";
-	import { Icon } from "$lib/components/ui";
-	import type { DayPlanBlock, TimelineRecord } from "$lib/api/types";
+// ─────────────────────────────────────────────────────────────────────────
+// タイムライン タブ（旧 app.js デイリータイムライン群 2811-3187 + index.html
+// #tab-timeline を移植）。timelineApi 使用（bot-scoped）。
+//
+// 挙動の忠実移植:
+//   - 日付ナビ（前/次/今日、tlShiftDay）。日付変更で再取得。
+//   - 2カラム（計画 blocks / 記録 records）を並べて表示。
+//   - 計画ブロック 追加/編集/削除、記録 追加/削除。
+//   - メディア（写真・動画）は base64 化して /api/timeline/media へ。
+//   - activeBot 変更でリロード。
+// ─────────────────────────────────────────────────────────────────────────
 
-	import PlanCard from "./timeline/PlanCard.svelte";
-	import RecordCard from "./timeline/RecordCard.svelte";
-	import PlanBlockModal, {
-		type PlanBlockFormPayload,
-	} from "./timeline/PlanBlockModal.svelte";
-	import RecordModal, { type RecordFormPayload } from "./timeline/RecordModal.svelte";
-	import {
-		todayIso,
-		fmtTimelineDate,
-		shiftDay,
-		fileToBase64,
-	} from "./timeline/timelineUtils";
+import { ApiError } from "$lib/api/client";
+import { timelineApi } from "$lib/api/services";
+import type { DayPlanBlock, TimelineRecord } from "$lib/api/types";
+import { confirmDialog, Icon } from "$lib/components/ui";
+import { activeBot } from "$lib/stores/activeBot";
+import { pushToast } from "$lib/stores/toast";
+import PlanBlockModal, {
+	type PlanBlockFormPayload,
+} from "./timeline/PlanBlockModal.svelte";
+import PlanCard from "./timeline/PlanCard.svelte";
+import RecordCard from "./timeline/RecordCard.svelte";
+import RecordModal, {
+	type RecordFormPayload,
+} from "./timeline/RecordModal.svelte";
+import {
+	fileToBase64,
+	fmtTimelineDate,
+	shiftDay,
+	todayIso,
+} from "./timeline/timelineUtils";
 
-	let currentDate = $state(todayIso());
-	let blocks = $state<DayPlanBlock[]>([]);
-	let records = $state<TimelineRecord[]>([]);
+let currentDate = $state(todayIso());
+let blocks = $state<DayPlanBlock[]>([]);
+let records = $state<TimelineRecord[]>([]);
 
-	// モーダル state
-	let planOpen = $state(false);
-	let editingBlock = $state<DayPlanBlock | null>(null);
-	let recordOpen = $state(false);
+// モーダル state
+let planOpen = $state(false);
+let editingBlock = $state<DayPlanBlock | null>(null);
+let recordOpen = $state(false);
 
-	const dateLabel = $derived(fmtTimelineDate(currentDate));
+const dateLabel = $derived(fmtTimelineDate(currentDate));
 
-	function reportError(e: unknown) {
-		const msg = e instanceof ApiError ? e.message : "エラーが発生しました";
-		pushToast(msg, "error");
+function reportError(e: unknown) {
+	const msg = e instanceof ApiError ? e.message : "エラーが発生しました";
+	pushToast(msg, "error");
+}
+
+async function loadDay() {
+	try {
+		const res = await timelineApi.day(currentDate);
+		blocks = res.blocks ?? [];
+		records = res.records ?? [];
+	} catch (e) {
+		reportError(e);
+		blocks = [];
+		records = [];
 	}
+}
 
-	async function loadDay() {
-		try {
-			const res = await timelineApi.day(currentDate);
-			blocks = res.blocks ?? [];
-			records = res.records ?? [];
-		} catch (e) {
-			reportError(e);
-			blocks = [];
-			records = [];
+// activeBot（bot-scoped）変更 or currentDate 変更で再取得。
+$effect(() => {
+	void $activeBot?.id;
+	void currentDate;
+	void loadDay();
+});
+
+// ── 日付ナビ ──
+function prevDay() {
+	currentDate = shiftDay(currentDate, -1);
+}
+function nextDay() {
+	currentDate = shiftDay(currentDate, 1);
+}
+function goToday() {
+	currentDate = todayIso();
+}
+
+// ── 計画ブロック ──
+function openNewPlan() {
+	editingBlock = null;
+	planOpen = true;
+}
+function onEditPlan(block: DayPlanBlock) {
+	editingBlock = block;
+	planOpen = true;
+}
+async function savePlan(p: PlanBlockFormPayload) {
+	try {
+		const common = {
+			date: currentDate,
+			type: p.type,
+			title: p.title,
+			startTime: p.startTime || undefined,
+			endTime: p.endTime || undefined,
+			description: p.description || undefined,
+			transitFrom: p.transitFrom || undefined,
+			transitTo: p.transitTo || undefined,
+			transitLine: p.transitLine || undefined,
+		};
+		if (p.id != null) {
+			await timelineApi.updatePlan({ ...common, id: p.id });
+		} else {
+			await timelineApi.addPlan(common);
 		}
+		planOpen = false;
+		await loadDay();
+	} catch (e) {
+		reportError(e);
 	}
-
-	// activeBot（bot-scoped）変更 or currentDate 変更で再取得。
-	$effect(() => {
-		void $activeBot?.id;
-		void currentDate;
-		void loadDay();
+}
+async function onDeletePlan(id: number) {
+	const ok = await confirmDialog({
+		message: "この計画ブロックを削除しますか？",
+		danger: true,
+		confirmLabel: "削除",
 	});
+	if (!ok) return;
+	try {
+		await timelineApi.deletePlan(id);
+		await loadDay();
+	} catch (e) {
+		reportError(e);
+	}
+}
 
-	// ── 日付ナビ ──
-	function prevDay() {
-		currentDate = shiftDay(currentDate, -1);
-	}
-	function nextDay() {
-		currentDate = shiftDay(currentDate, 1);
-	}
-	function goToday() {
-		currentDate = todayIso();
-	}
-
-	// ── 計画ブロック ──
-	function openNewPlan() {
-		editingBlock = null;
-		planOpen = true;
-	}
-	function onEditPlan(block: DayPlanBlock) {
-		editingBlock = block;
-		planOpen = true;
-	}
-	async function savePlan(p: PlanBlockFormPayload) {
-		try {
-			const common = {
+// ── 記録 ──
+function openNewRecord() {
+	recordOpen = true;
+}
+async function saveRecord(p: RecordFormPayload) {
+	try {
+		if (p.kind === "media") {
+			const base64 = await fileToBase64(p.file);
+			await timelineApi.uploadMedia({
+				date: currentDate,
+				base64,
+				mimeType: p.file.type,
+				title: p.title || undefined,
+				location: p.location || undefined,
+			});
+		} else {
+			await timelineApi.addRecord({
 				date: currentDate,
 				type: p.type,
-				title: p.title,
-				startTime: p.startTime || undefined,
-				endTime: p.endTime || undefined,
-				description: p.description || undefined,
-				transitFrom: p.transitFrom || undefined,
-				transitTo: p.transitTo || undefined,
-				transitLine: p.transitLine || undefined,
-			};
-			if (p.id != null) {
-				await timelineApi.updatePlan({ ...common, id: p.id });
-			} else {
-				await timelineApi.addPlan(common);
-			}
-			planOpen = false;
-			await loadDay();
-		} catch (e) {
-			reportError(e);
+				title: p.title || undefined,
+				content: p.content || undefined,
+				location: p.location || undefined,
+				...(p.type === "expense"
+					? { amount: p.amount, category: p.category }
+					: {}),
+			});
 		}
+		recordOpen = false;
+		await loadDay();
+	} catch (e) {
+		reportError(e);
 	}
-	async function onDeletePlan(id: number) {
-		const ok = await confirmDialog({
-			message: "この計画ブロックを削除しますか？",
-			danger: true,
-			confirmLabel: "削除",
-		});
-		if (!ok) return;
-		try {
-			await timelineApi.deletePlan(id);
-			await loadDay();
-		} catch (e) {
-			reportError(e);
-		}
+}
+async function onDeleteRecord(id: number) {
+	const ok = await confirmDialog({
+		message: "この記録を削除しますか？",
+		danger: true,
+		confirmLabel: "削除",
+	});
+	if (!ok) return;
+	try {
+		await timelineApi.deleteRecord(id);
+		await loadDay();
+	} catch (e) {
+		reportError(e);
 	}
-
-	// ── 記録 ──
-	function openNewRecord() {
-		recordOpen = true;
-	}
-	async function saveRecord(p: RecordFormPayload) {
-		try {
-			if (p.kind === "media") {
-				const base64 = await fileToBase64(p.file);
-				await timelineApi.uploadMedia({
-					date: currentDate,
-					base64,
-					mimeType: p.file.type,
-					title: p.title || undefined,
-					location: p.location || undefined,
-				});
-			} else {
-				await timelineApi.addRecord({
-					date: currentDate,
-					type: p.type,
-					title: p.title || undefined,
-					content: p.content || undefined,
-					location: p.location || undefined,
-					...(p.type === "expense"
-						? { amount: p.amount, category: p.category }
-						: {}),
-				});
-			}
-			recordOpen = false;
-			await loadDay();
-		} catch (e) {
-			reportError(e);
-		}
-	}
-	async function onDeleteRecord(id: number) {
-		const ok = await confirmDialog({
-			message: "この記録を削除しますか？",
-			danger: true,
-			confirmLabel: "削除",
-		});
-		if (!ok) return;
-		try {
-			await timelineApi.deleteRecord(id);
-			await loadDay();
-		} catch (e) {
-			reportError(e);
-		}
-	}
+}
 </script>
 
 <section class="tab-view">

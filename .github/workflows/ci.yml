@@ -33,9 +33,6 @@ jobs:
   lint:
     name: Lint (biome)
     runs-on: ubuntu-latest
-    # NOTE: lint は現状 red（#59）のため当面 non-blocking。
-    #       #59 で green 化したら下の continue-on-error を削除して必須化する。
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4

@@ -4,4 +4,4 @@ import type { Expense } from "./Expense";
 /**
  * 単一収支を返すペイロード（add。`{success, expense}`）。
  */
-export type ExpenseData = { expense: Expense, };
+export type ExpenseData = { expense: Expense };

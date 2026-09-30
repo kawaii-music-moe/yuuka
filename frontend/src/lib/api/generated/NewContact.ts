@@ -10,4 +10,12 @@
  * 既存 `contact_info` を NULL で消去**する（H-1）。入力 DTO に camelCase を強制して防ぐ。
  * **出力ビュー [`Contact`] は snake_case のまま**。
  */
-export type NewContact = { id: bigint | null, name: string, birthday: string | null, relationship: string | null, contactInfo: string | null, notes: string | null, tags: Array<string>, };
+export type NewContact = {
+	id: bigint | null;
+	name: string;
+	birthday: string | null;
+	relationship: string | null;
+	contactInfo: string | null;
+	notes: string | null;
+	tags: Array<string>;
+};

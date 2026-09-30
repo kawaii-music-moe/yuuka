@@ -2,9 +2,9 @@
 // briefing-config / report-configs。ハンドラは ctx.body.botId ?? query botId を読む（bot-scoped）。
 import { api } from "../client";
 import type {
+	ApiResponse,
 	BriefingConfigResponse,
 	ReportConfigsResponse,
-	ApiResponse,
 } from "../types";
 
 const BOT = { scope: "bot" } as const;
@@ -12,7 +12,8 @@ const BOT = { scope: "bot" } as const;
 export const deliveryApi = {
 	// ── ブリーフィング設定 ──
 	/** GET /api/briefing-config */
-	getBriefingConfig: () => api.get<BriefingConfigResponse>("/api/briefing-config", BOT),
+	getBriefingConfig: () =>
+		api.get<BriefingConfigResponse>("/api/briefing-config", BOT),
 	/** POST /api/briefing-config */
 	saveBriefingConfig: (body: Record<string, unknown>) =>
 		api.post<ApiResponse>("/api/briefing-config", body, BOT),
@@ -21,7 +22,8 @@ export const deliveryApi = {
 
 	// ── レポート設定 ──
 	/** GET /api/report-configs */
-	reportConfigs: () => api.get<ReportConfigsResponse>("/api/report-configs", BOT),
+	reportConfigs: () =>
+		api.get<ReportConfigsResponse>("/api/report-configs", BOT),
 	/** POST /api/report-configs */
 	saveReportConfig: (body: Record<string, unknown>) =>
 		api.post<ApiResponse>("/api/report-configs", body, BOT),

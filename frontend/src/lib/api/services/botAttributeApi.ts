@@ -5,7 +5,7 @@
 //   呼び出し側が botId を明示的に渡す（GET は query、POST は body）。自動注入で上書きしない。
 //   config タブ（芋づる: attributes/modules/assistant-config）が主な利用元。
 import { api } from "../client";
-import type { PresetsResponse, BotUsageResponse, ApiResponse } from "../types";
+import type { ApiResponse, BotUsageResponse, PresetsResponse } from "../types";
 
 const USER = { scope: "user" } as const;
 
@@ -30,7 +30,10 @@ export const botAttributeApi = {
 
 	/** GET /api/bots/assistant-config?botId= — アシスタント設定一括取得 */
 	assistantConfig: (botId: string) =>
-		api.get<ApiResponse>("/api/bots/assistant-config", { ...USER, query: { botId } }),
+		api.get<ApiResponse>("/api/bots/assistant-config", {
+			...USER,
+			query: { botId },
+		}),
 
 	// ── assistant/* サブ設定 ──
 	/** POST /api/bots/assistant/gemini-key */

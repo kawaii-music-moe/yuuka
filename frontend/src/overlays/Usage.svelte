@@ -1,8 +1,9 @@
 <script lang="ts">
-	// 利用ガイド（旧 index.html #usage-overlay）。公開ルート・API 不要。
-	// App.svelte が /usage で本コンポーネントを描画する（.active は常時付与）。
-	import { goto } from "$lib/router";
-	import { Icon } from "$lib/components/ui";
+// 利用ガイド（旧 index.html #usage-overlay）。公開ルート・API 不要。
+// App.svelte が /usage で本コンポーネントを描画する（.active は常時付与）。
+
+import { Icon } from "$lib/components/ui";
+import { goto } from "$lib/router";
 </script>
 
 <div class="overlay active">

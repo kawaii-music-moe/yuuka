@@ -14,7 +14,9 @@
 import type { DeviceCodeResponse, PollResult } from "./types";
 
 /** POST /api/auth/device/code: デバイスコードの発行を要求（auth:'none'）。 */
-export async function requestDeviceCode(deviceName?: string): Promise<DeviceCodeResponse> {
+export async function requestDeviceCode(
+	deviceName?: string,
+): Promise<DeviceCodeResponse> {
 	const res = await fetch("/api/auth/device/code", {
 		method: "POST",
 		credentials: "same-origin",

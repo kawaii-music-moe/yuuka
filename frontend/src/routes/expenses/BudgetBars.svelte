@@ -1,17 +1,17 @@
 <script lang="ts">
-	// カテゴリー別上限進捗バー（旧 app.js:3984 renderCategoryBudgetBars）。
-	// {@html} を使わず {#each} で <div> をバインド（§11.4）。
-	import type { CategoryTotal, BudgetLimit } from "$lib/api/types";
-	import { buildBudgetBars, yen } from "./expenseUtils";
+// カテゴリー別上限進捗バー（旧 app.js:3984 renderCategoryBudgetBars）。
+// {@html} を使わず {#each} で <div> をバインド（§11.4）。
+import type { BudgetLimit, CategoryTotal } from "$lib/api/types";
+import { buildBudgetBars, yen } from "./expenseUtils";
 
-	interface Props {
-		breakdown: CategoryTotal[];
-		limits: BudgetLimit[];
-	}
+interface Props {
+	breakdown: CategoryTotal[];
+	limits: BudgetLimit[];
+}
 
-	let { breakdown, limits }: Props = $props();
+let { breakdown, limits }: Props = $props();
 
-	const bars = $derived(buildBudgetBars(breakdown, limits));
+const bars = $derived(buildBudgetBars(breakdown, limits));
 </script>
 
 {#if bars.length === 0}

@@ -1,52 +1,52 @@
 <script lang="ts">
-	// 新規予定モーダル（旧 index.html #modal-schedule + app.js scheduleForm submit）。
-	// datetime-local 入力を保持し、保存は onsave で親へ委譲（子は API を叩かない）。
-	import { Modal, Button } from "$lib/components/ui";
-	import { toDbDatetime } from "./scheduleUtils";
+// 新規予定モーダル（旧 index.html #modal-schedule + app.js scheduleForm submit）。
+// datetime-local 入力を保持し、保存は onsave で親へ委譲（子は API を叩かない）。
+import { Button, Modal } from "$lib/components/ui";
+import { toDbDatetime } from "./scheduleUtils";
 
-	interface Props {
-		open?: boolean;
-		/** 保存ハンドラ。親が API を叩き、成功時に open=false にする。 */
-		onsave: (payload: {
-			title: string;
-			description: string;
-			startAt: string;
-			endAt?: string;
-			remindBeforeMinutes: number;
-		}) => void;
-	}
+interface Props {
+	open?: boolean;
+	/** 保存ハンドラ。親が API を叩き、成功時に open=false にする。 */
+	onsave: (payload: {
+		title: string;
+		description: string;
+		startAt: string;
+		endAt?: string;
+		remindBeforeMinutes: number;
+	}) => void;
+}
 
-	let { open = $bindable(false), onsave }: Props = $props();
+let { open = $bindable(false), onsave }: Props = $props();
 
-	let title = $state("");
-	let description = $state("");
-	let start = $state("");
-	let end = $state("");
-	let remind = $state(30);
+let title = $state("");
+let description = $state("");
+let start = $state("");
+let end = $state("");
+let remind = $state(30);
 
-	// 開くたびに初期化（旧 scheduleForm.reset()）。
-	$effect(() => {
-		if (!open) return;
-		title = "";
-		description = "";
-		start = "";
-		end = "";
-		remind = 30;
+// 開くたびに初期化（旧 scheduleForm.reset()）。
+$effect(() => {
+	if (!open) return;
+	title = "";
+	description = "";
+	start = "";
+	end = "";
+	remind = 30;
+});
+
+function submit(e: SubmitEvent) {
+	e.preventDefault();
+	const trimmed = title.trim();
+	const startAt = toDbDatetime(start);
+	if (!trimmed || !startAt) return;
+	onsave({
+		title: trimmed,
+		description: description.trim(),
+		startAt,
+		endAt: toDbDatetime(end),
+		remindBeforeMinutes: Number(remind),
 	});
-
-	function submit(e: SubmitEvent) {
-		e.preventDefault();
-		const trimmed = title.trim();
-		const startAt = toDbDatetime(start);
-		if (!trimmed || !startAt) return;
-		onsave({
-			title: trimmed,
-			description: description.trim(),
-			startAt,
-			endAt: toDbDatetime(end),
-			remindBeforeMinutes: Number(remind),
-		});
-	}
+}
 </script>
 
 <Modal bind:open title="新規予定の登録">

@@ -1,67 +1,68 @@
 <script lang="ts">
-	// 連絡先の追加/編集モーダル（旧 app.js openContactModal + contact-form submit /
-	//  index.html #modal-contact）。editing が null なら新規。
-	// タグはカンマ区切り文字列で編集し、保存時に string[] へ分解する。
-	import { Modal, Button } from "$lib/components/ui";
-	import type { ContactView } from "$lib/api/types";
+// 連絡先の追加/編集モーダル（旧 app.js openContactModal + contact-form submit /
+//  index.html #modal-contact）。editing が null なら新規。
+// タグはカンマ区切り文字列で編集し、保存時に string[] へ分解する。
 
-	interface Props {
-		open?: boolean;
-		/** 編集対象。null なら新規追加。 */
-		editing?: ContactView | null;
-		/** 保存ハンドラ。親が API を叩き、成功時に open=false にする。 */
-		onsave: (payload: {
-			id?: number;
-			name: string;
-			birthday: string;
-			relationship: string;
-			contactInfo: string;
-			notes: string;
-			tags: string[];
-		}) => void;
-	}
+import type { ContactView } from "$lib/api/types";
+import { Button, Modal } from "$lib/components/ui";
 
-	let { open = $bindable(false), editing = null, onsave }: Props = $props();
+interface Props {
+	open?: boolean;
+	/** 編集対象。null なら新規追加。 */
+	editing?: ContactView | null;
+	/** 保存ハンドラ。親が API を叩き、成功時に open=false にする。 */
+	onsave: (payload: {
+		id?: number;
+		name: string;
+		birthday: string;
+		relationship: string;
+		contactInfo: string;
+		notes: string;
+		tags: string[];
+	}) => void;
+}
 
-	let name = $state("");
-	let birthday = $state("");
-	let relationship = $state("");
-	let contactInfo = $state("");
-	let tagsRaw = $state("");
-	let notes = $state("");
+let { open = $bindable(false), editing = null, onsave }: Props = $props();
 
-	const isEdit = $derived(editing != null);
+let name = $state("");
+let birthday = $state("");
+let relationship = $state("");
+let contactInfo = $state("");
+let tagsRaw = $state("");
+let notes = $state("");
 
-	// 開くたびに editing で初期化（旧 openContactModal の value 代入）。
-	$effect(() => {
-		if (!open) return;
-		const c = editing;
-		name = c?.name ?? "";
-		birthday = c?.birthday ?? "";
-		relationship = c?.relationship ?? "";
-		contactInfo = c?.contact_info ?? "";
-		tagsRaw = (c?.tags ?? []).join(", ");
-		notes = c?.notes ?? "";
+const isEdit = $derived(editing != null);
+
+// 開くたびに editing で初期化（旧 openContactModal の value 代入）。
+$effect(() => {
+	if (!open) return;
+	const c = editing;
+	name = c?.name ?? "";
+	birthday = c?.birthday ?? "";
+	relationship = c?.relationship ?? "";
+	contactInfo = c?.contact_info ?? "";
+	tagsRaw = (c?.tags ?? []).join(", ");
+	notes = c?.notes ?? "";
+});
+
+function submit(e: SubmitEvent) {
+	e.preventDefault();
+	const trimmed = name.trim();
+	if (!trimmed) return;
+	const tags = tagsRaw
+		.split(",")
+		.map((t) => t.trim())
+		.filter((t) => t.length > 0);
+	onsave({
+		id: editing?.id,
+		name: trimmed,
+		birthday: birthday.trim(),
+		relationship: relationship.trim(),
+		contactInfo: contactInfo.trim(),
+		notes: notes.trim(),
+		tags,
 	});
-
-	function submit(e: SubmitEvent) {
-		e.preventDefault();
-		const trimmed = name.trim();
-		if (!trimmed) return;
-		const tags = tagsRaw
-			.split(",")
-			.map((t) => t.trim())
-			.filter((t) => t.length > 0);
-		onsave({
-			id: editing?.id,
-			name: trimmed,
-			birthday: birthday.trim(),
-			relationship: relationship.trim(),
-			contactInfo: contactInfo.trim(),
-			notes: notes.trim(),
-			tags,
-		});
-	}
+}
 </script>
 
 <Modal

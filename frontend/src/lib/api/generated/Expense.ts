@@ -3,24 +3,29 @@
 /**
  * クライアントへ返す収支記録（クリーンビュー・snake_case）。
  */
-export type Expense = { id: bigint, 
-/**
- * `"income" | "expense"`。
- */
-type: string, 
-/**
- * 円単位（整数）。
- */
-amount: bigint, category: string, memo: string | null, 
-/**
- * `'YYYY-MM-DD'`。
- */
-date: string, 
-/**
- * `'HH:MM:SS'`（任意）。
- */
-time: string | null, 
-/**
- * `"manual" | "receipt_ocr"`。
- */
-source: string, created_at: string, };
+export type Expense = {
+	id: bigint;
+	/**
+	 * `"income" | "expense"`。
+	 */
+	type: string;
+	/**
+	 * 円単位（整数）。
+	 */
+	amount: bigint;
+	category: string;
+	memo: string | null;
+	/**
+	 * `'YYYY-MM-DD'`。
+	 */
+	date: string;
+	/**
+	 * `'HH:MM:SS'`（任意）。
+	 */
+	time: string | null;
+	/**
+	 * `"manual" | "receipt_ocr"`。
+	 */
+	source: string;
+	created_at: string;
+};

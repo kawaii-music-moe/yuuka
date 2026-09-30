@@ -6,7 +6,10 @@
  *   開始: 'YYYY-MM-DD HH:mm'（先頭16文字）
  *   終了があれば ' 〜 HH:mm'（終了の時刻部のみ）を付加。
  */
-export function formatScheduleRange(startAt: string, endAt: string | null): string {
+export function formatScheduleRange(
+	startAt: string,
+	endAt: string | null,
+): string {
 	const startClean = startAt.slice(0, 16);
 	const endClean = endAt ? ` 〜 ${endAt.slice(11, 16)}` : "";
 	return `${startClean}${endClean}`;

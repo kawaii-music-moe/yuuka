@@ -1,41 +1,42 @@
 <script lang="ts">
-	// ペルソナ 作成/編集モーダル（旧 app.js persona-edit-form + index.html
-	//  #modal-persona-edit）。editing が null なら新規。
-	import { Modal, Button, CharCounter } from "$lib/components/ui";
-	import type { PersonaRecord } from "$lib/api/types";
+// ペルソナ 作成/編集モーダル（旧 app.js persona-edit-form + index.html
+//  #modal-persona-edit）。editing が null なら新規。
 
-	interface Props {
-		open?: boolean;
-		editing?: PersonaRecord | null;
-		maxLength?: number;
-		onsave: (payload: { id?: number; name: string; prompt: string }) => void;
-	}
+import type { PersonaRecord } from "$lib/api/types";
+import { Button, CharCounter, Modal } from "$lib/components/ui";
 
-	let {
-		open = $bindable(false),
-		editing = null,
-		maxLength = 20000,
-		onsave,
-	}: Props = $props();
+interface Props {
+	open?: boolean;
+	editing?: PersonaRecord | null;
+	maxLength?: number;
+	onsave: (payload: { id?: number; name: string; prompt: string }) => void;
+}
 
-	let name = $state("");
-	let prompt = $state("");
+let {
+	open = $bindable(false),
+	editing = null,
+	maxLength = 20000,
+	onsave,
+}: Props = $props();
 
-	const isEdit = $derived(editing != null);
+let name = $state("");
+let prompt = $state("");
 
-	$effect(() => {
-		if (!open) return;
-		name = editing?.name ?? "";
-		prompt = editing?.prompt ?? "";
-	});
+const isEdit = $derived(editing != null);
 
-	function submit(e: SubmitEvent) {
-		e.preventDefault();
-		const trimmed = name.trim();
-		if (!trimmed) return;
-		if (prompt.length > maxLength) return;
-		onsave({ id: editing?.id, name: trimmed, prompt });
-	}
+$effect(() => {
+	if (!open) return;
+	name = editing?.name ?? "";
+	prompt = editing?.prompt ?? "";
+});
+
+function submit(e: SubmitEvent) {
+	e.preventDefault();
+	const trimmed = name.trim();
+	if (!trimmed) return;
+	if (prompt.length > maxLength) return;
+	onsave({ id: editing?.id, name: trimmed, prompt });
+}
 </script>
 
 <Modal

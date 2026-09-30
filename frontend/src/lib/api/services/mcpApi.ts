@@ -6,7 +6,7 @@
 //
 // ★add の body は camelCase（ctx.body.endpointUrl / authCredential / requiresConfirmation / scope）。
 import { api } from "../client";
-import type { McpServersResponse, ApiResponse } from "../types";
+import type { ApiResponse, McpServersResponse } from "../types";
 
 const USER = { scope: "user" } as const;
 
@@ -24,14 +24,16 @@ export const mcpApi = {
 	}) => api.post<ApiResponse>("/api/mcp-servers/add", body, USER),
 
 	/** POST /api/mcp-servers/refresh — ツールキャッシュ更新 */
-	refresh: (id: number) => api.post<ApiResponse>("/api/mcp-servers/refresh", { id }, USER),
+	refresh: (id: number) =>
+		api.post<ApiResponse>("/api/mcp-servers/refresh", { id }, USER),
 
 	/** POST /api/mcp-servers/toggle — 有効/無効切替 */
 	toggle: (body: { id: number; enabled: boolean }) =>
 		api.post<ApiResponse>("/api/mcp-servers/toggle", body, USER),
 
 	/** POST /api/mcp-servers/delete */
-	delete: (id: number) => api.post<ApiResponse>("/api/mcp-servers/delete", { id }, USER),
+	delete: (id: number) =>
+		api.post<ApiResponse>("/api/mcp-servers/delete", { id }, USER),
 
 	/** GET /api/mcp-servers/:id/dashboard/status — ダッシュボード提供の有無 */
 	dashboardStatus: (id: number) =>

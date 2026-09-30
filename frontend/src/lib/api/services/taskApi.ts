@@ -1,10 +1,10 @@
 // taskApi — bot-scoped（scope:'bot'）。src/server/routes/todoRoutes.ts に対応。
 import { api } from "../client";
 import type {
-	TasksResponse,
+	ApiResponse,
 	TaskDetailResponse,
 	TaskGanttResponse,
-	ApiResponse,
+	TasksResponse,
 } from "../types";
 
 const BOT = { scope: "bot" } as const;
@@ -54,8 +54,10 @@ export const taskApi = {
 		api.post<ApiResponse>("/api/tasks/progress", body, BOT),
 
 	/** POST /api/tasks/complete */
-	complete: (id: number) => api.post<ApiResponse>("/api/tasks/complete", { id }, BOT),
+	complete: (id: number) =>
+		api.post<ApiResponse>("/api/tasks/complete", { id }, BOT),
 
 	/** POST /api/tasks/delete */
-	delete: (id: number) => api.post<ApiResponse>("/api/tasks/delete", { id }, BOT),
+	delete: (id: number) =>
+		api.post<ApiResponse>("/api/tasks/delete", { id }, BOT),
 };

@@ -1,58 +1,59 @@
 <script lang="ts">
-	// ─────────────────────────────────────────────────────────────────────────
-	// デバイスフロー認可ページ（/device）（旧 app.js showDeviceApprovalView /
-	//   deviceCodeInput / btnDeviceApprove / btnDeviceDone / btnDeviceCancel
-	//   + index.html #device-overlay を移植）。
-	//
-	//   ?code= は URL（router の page ストア）から取得。承認は deviceApi.approve。
-	//   入力は formatDeviceCode で XXXX-XXXX に自動整形。ログイン中ユーザー名は session ストア。
-	// ─────────────────────────────────────────────────────────────────────────
-	import { page, goto } from "$lib/router";
-	import { currentUser } from "$lib/stores/session";
-	import { deviceApi } from "$lib/api/services";
-	import { ApiError } from "$lib/api/client";
-	import { formatDeviceCode } from "./deviceUtils";
+// ─────────────────────────────────────────────────────────────────────────
+// デバイスフロー認可ページ（/device）（旧 app.js showDeviceApprovalView /
+//   deviceCodeInput / btnDeviceApprove / btnDeviceDone / btnDeviceCancel
+//   + index.html #device-overlay を移植）。
+//
+//   ?code= は URL（router の page ストア）から取得。承認は deviceApi.approve。
+//   入力は formatDeviceCode で XXXX-XXXX に自動整形。ログイン中ユーザー名は session ストア。
+// ─────────────────────────────────────────────────────────────────────────
 
-	let code = $state("");
-	let errorMsg = $state("");
-	let approving = $state(false);
-	// 認可成功時に入力フォームを隠して成功メッセージを表示する。
-	let successText = $state<string | null>(null);
+import { ApiError } from "$lib/api/client";
+import { deviceApi } from "$lib/api/services";
+import { goto, page } from "$lib/router";
+import { currentUser } from "$lib/stores/session";
+import { formatDeviceCode } from "./deviceUtils";
 
-	const userDisplay = $derived($currentUser?.username ?? "—");
+let code = $state("");
+let errorMsg = $state("");
+let approving = $state(false);
+// 認可成功時に入力フォームを隠して成功メッセージを表示する。
+let successText = $state<string | null>(null);
 
-	// URL の ?code= を初期プリフィル（旧 sessionStorage 退避は router の URL 真実に集約）。
-	$effect(() => {
-		const c = $page.searchParams.get("code") ?? "";
-		if (c) code = formatDeviceCode(c);
-	});
+const userDisplay = $derived($currentUser?.username ?? "—");
 
-	function onInput() {
-		code = formatDeviceCode(code);
+// URL の ?code= を初期プリフィル（旧 sessionStorage 退避は router の URL 真実に集約）。
+$effect(() => {
+	const c = $page.searchParams.get("code") ?? "";
+	if (c) code = formatDeviceCode(c);
+});
+
+function onInput() {
+	code = formatDeviceCode(code);
+}
+
+async function approve() {
+	errorMsg = "";
+	const userCode = formatDeviceCode(code);
+	if (userCode.length !== 9) {
+		errorMsg = "コードは XXXX-XXXX 形式で入力してください。";
+		return;
 	}
-
-	async function approve() {
-		errorMsg = "";
-		const userCode = formatDeviceCode(code);
-		if (userCode.length !== 9) {
-			errorMsg = "コードは XXXX-XXXX 形式で入力してください。";
-			return;
+	approving = true;
+	try {
+		const res = await deviceApi.approve(userCode);
+		if (res.success) {
+			successText = `${res.device_name || "端末"} を許可しました。アプリに戻ってください。`;
+		} else {
+			errorMsg = res.message ?? "コードが無効か、有効期限が切れています。";
 		}
-		approving = true;
-		try {
-			const res = await deviceApi.approve(userCode);
-			if (res.success) {
-				successText = `${res.device_name || "端末"} を許可しました。アプリに戻ってください。`;
-			} else {
-				errorMsg = res.message ?? "コードが無効か、有効期限が切れています。";
-			}
-		} catch (err) {
-			errorMsg =
-				err instanceof ApiError ? err.message : "サーバー接続に失敗しました。";
-		} finally {
-			approving = false;
-		}
+	} catch (err) {
+		errorMsg =
+			err instanceof ApiError ? err.message : "サーバー接続に失敗しました。";
+	} finally {
+		approving = false;
 	}
+}
 </script>
 
 <div id="device-overlay" class="overlay active">

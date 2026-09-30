@@ -3,16 +3,29 @@
 /**
  * クライアントへ返す todo（クリーンビュー・snake_case）。
  */
-export type Todo = { id: bigint, title: string, description: string | null, due_date: string | null, start_date: string | null, 
-/**
- * `"high" | "medium" | "low"` または未設定。
- */
-priority: string | null, 
-/**
- * パース済みタグ（DB は JSON 文字列 `tags` で保持）。
- */
-tags: Array<string>, 
-/**
- * `"open" | "done"` 等。
- */
-status: string, progress: bigint, parent_id: bigint | null, repeat_rule: string | null, repeat_until: string | null, repeat_count: bigint | null, created_at: string, updated_at: string, };
+export type Todo = {
+	id: bigint;
+	title: string;
+	description: string | null;
+	due_date: string | null;
+	start_date: string | null;
+	/**
+	 * `"high" | "medium" | "low"` または未設定。
+	 */
+	priority: string | null;
+	/**
+	 * パース済みタグ（DB は JSON 文字列 `tags` で保持）。
+	 */
+	tags: Array<string>;
+	/**
+	 * `"open" | "done"` 等。
+	 */
+	status: string;
+	progress: bigint;
+	parent_id: bigint | null;
+	repeat_rule: string | null;
+	repeat_until: string | null;
+	repeat_count: bigint | null;
+	created_at: string;
+	updated_at: string;
+};

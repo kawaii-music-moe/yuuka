@@ -4,10 +4,10 @@
 // 例外: GET /api/status はダッシュボード集計で botId を読む（bot-scoped）→ scope:'bot'。
 import { api } from "../client";
 import type {
-	StatusResponse,
+	ApiResponse,
 	DiscordSettingsResponse,
 	GoogleOAuthUrlResponse,
-	ApiResponse,
+	StatusResponse,
 } from "../types";
 
 const USER = { scope: "user" } as const;
@@ -41,7 +41,8 @@ export const settingsApi = {
 	//   USER だと botId 欠落 → 常に system_default 扱い → 非Adminは 403、
 	//   独自Botのトークン閲覧/保存が誤対象になる。
 	/** GET /api/settings/discord */
-	getDiscord: () => api.get<DiscordSettingsResponse>("/api/settings/discord", BOT),
+	getDiscord: () =>
+		api.get<DiscordSettingsResponse>("/api/settings/discord", BOT),
 	/** POST /api/settings/discord */
 	updateDiscord: (body: Record<string, unknown>) =>
 		api.post<ApiResponse>("/api/settings/discord", body, BOT),
@@ -61,5 +62,6 @@ export const settingsApi = {
 	updateBackup: (body: Record<string, unknown>) =>
 		api.post<ApiResponse>("/api/settings/backup", body, USER),
 	/** POST /api/settings/backup/trigger — 手動バックアップ実行 */
-	triggerBackup: () => api.post<ApiResponse>("/api/settings/backup/trigger", {}, USER),
+	triggerBackup: () =>
+		api.post<ApiResponse>("/api/settings/backup/trigger", {}, USER),
 };

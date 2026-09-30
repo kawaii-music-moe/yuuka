@@ -1,113 +1,125 @@
 <script lang="ts">
-	// ─────────────────────────────────────────────────────────────────────────
-	// Webhook タブ（旧 app.js fetchWebhooksList / fetchWebhookDeliveries +
-	//  index.html #tab-webhooks を移植）。webhookApi 使用（scope:'user'）。
-	//   - エンドポイント一覧（URL コピー・有効/無効トグル・削除）
-	//   - 受信履歴（直近50件）
-	//   - 作成モーダル
-	// user-scoped のため activeBot に依存しない（$effect で一度だけ取得）。
-	// ─────────────────────────────────────────────────────────────────────────
-	import { webhookApi } from "$lib/api/services";
-	import { ApiError } from "$lib/api/client";
-	import { pushToast } from "$lib/stores/toast";
-	import { confirmDialog } from "$lib/components/ui";
-	import { Button, Icon, Badge, EmptyState } from "$lib/components/ui";
-	import type {
-		WebhookEndpointView,
-		WebhookDeliveryRecord,
-	} from "$lib/api/types";
-	import WebhookCreateModal from "./webhooks/WebhookCreateModal.svelte";
-	import { deliveryStatusLabel, deliveryStatusTone } from "./webhooks/webhookUtils";
+// ─────────────────────────────────────────────────────────────────────────
+// Webhook タブ（旧 app.js fetchWebhooksList / fetchWebhookDeliveries +
+//  index.html #tab-webhooks を移植）。webhookApi 使用（scope:'user'）。
+//   - エンドポイント一覧（URL コピー・有効/無効トグル・削除）
+//   - 受信履歴（直近50件）
+//   - 作成モーダル
+// user-scoped のため activeBot に依存しない（$effect で一度だけ取得）。
+// ─────────────────────────────────────────────────────────────────────────
 
-	let endpoints = $state<WebhookEndpointView[]>([]);
-	let deliveries = $state<WebhookDeliveryRecord[]>([]);
-	let createOpen = $state(false);
+import { ApiError } from "$lib/api/client";
+import { webhookApi } from "$lib/api/services";
+import type {
+	WebhookDeliveryRecord,
+	WebhookEndpointView,
+} from "$lib/api/types";
+import {
+	Badge,
+	Button,
+	confirmDialog,
+	EmptyState,
+	Icon,
+} from "$lib/components/ui";
+import { pushToast } from "$lib/stores/toast";
+import WebhookCreateModal from "./webhooks/WebhookCreateModal.svelte";
+import {
+	deliveryStatusLabel,
+	deliveryStatusTone,
+} from "./webhooks/webhookUtils";
 
-	function reportError(e: unknown) {
-		pushToast(e instanceof ApiError ? e.message : "エラーが発生しました", "error");
+let endpoints = $state<WebhookEndpointView[]>([]);
+let deliveries = $state<WebhookDeliveryRecord[]>([]);
+let createOpen = $state(false);
+
+function reportError(e: unknown) {
+	pushToast(
+		e instanceof ApiError ? e.message : "エラーが発生しました",
+		"error",
+	);
+}
+
+async function loadEndpoints() {
+	try {
+		const res = await webhookApi.list();
+		endpoints = res.endpoints ?? [];
+	} catch (e) {
+		reportError(e);
+		endpoints = [];
 	}
+}
 
-	async function loadEndpoints() {
-		try {
-			const res = await webhookApi.list();
-			endpoints = res.endpoints ?? [];
-		} catch (e) {
-			reportError(e);
-			endpoints = [];
-		}
+async function loadDeliveries() {
+	try {
+		const res = await webhookApi.deliveries();
+		deliveries = res.deliveries ?? [];
+	} catch (e) {
+		reportError(e);
+		deliveries = [];
 	}
+}
 
-	async function loadDeliveries() {
-		try {
-			const res = await webhookApi.deliveries();
-			deliveries = res.deliveries ?? [];
-		} catch (e) {
-			reportError(e);
-			deliveries = [];
-		}
+// user-scoped。マウント時に一度取得（activeBot 非依存）。
+$effect(() => {
+	void loadEndpoints();
+	void loadDeliveries();
+});
+
+async function copyUrl(url: string) {
+	try {
+		await navigator.clipboard.writeText(url);
+		pushToast("コピーしました", "success");
+	} catch {
+		pushToast(
+			"コピーに失敗しました。手動で選択してコピーしてください。",
+			"error",
+		);
 	}
+}
 
-	// user-scoped。マウント時に一度取得（activeBot 非依存）。
-	$effect(() => {
-		void loadEndpoints();
-		void loadDeliveries();
+async function toggleEnabled(ep: WebhookEndpointView) {
+	try {
+		await webhookApi.update({ id: ep.id, enabled: !ep.enabled });
+		await loadEndpoints();
+	} catch (e) {
+		reportError(e);
+	}
+}
+
+async function deleteEndpoint(ep: WebhookEndpointView) {
+	const ok = await confirmDialog({
+		message: `Webhook「${ep.name}」を削除しますか？\n発行済みURLは無効になります。`,
+		danger: true,
+		confirmLabel: "削除",
 	});
-
-	async function copyUrl(url: string) {
-		try {
-			await navigator.clipboard.writeText(url);
-			pushToast("コピーしました", "success");
-		} catch {
-			pushToast(
-				"コピーに失敗しました。手動で選択してコピーしてください。",
-				"error",
-			);
-		}
+	if (!ok) return;
+	try {
+		await webhookApi.delete(ep.id);
+		await loadEndpoints();
+	} catch (e) {
+		reportError(e);
 	}
+}
 
-	async function toggleEnabled(ep: WebhookEndpointView) {
-		try {
-			await webhookApi.update({ id: ep.id, enabled: !ep.enabled });
-			await loadEndpoints();
-		} catch (e) {
-			reportError(e);
-		}
+async function createEndpoint(payload: {
+	name: string;
+	secret: string;
+	notifyTargetType: "dm" | "channel";
+	notifyTargetId: string;
+	template: string;
+	filterKeyword: string;
+	createTodo: boolean;
+	createReminder: boolean;
+}) {
+	try {
+		const res = await webhookApi.create(payload);
+		pushToast(res.message ?? "Webhookを作成しました。", "success");
+		createOpen = false;
+		await loadEndpoints();
+	} catch (e) {
+		reportError(e);
 	}
-
-	async function deleteEndpoint(ep: WebhookEndpointView) {
-		const ok = await confirmDialog({
-			message: `Webhook「${ep.name}」を削除しますか？\n発行済みURLは無効になります。`,
-			danger: true,
-			confirmLabel: "削除",
-		});
-		if (!ok) return;
-		try {
-			await webhookApi.delete(ep.id);
-			await loadEndpoints();
-		} catch (e) {
-			reportError(e);
-		}
-	}
-
-	async function createEndpoint(payload: {
-		name: string;
-		secret: string;
-		notifyTargetType: "dm" | "channel";
-		notifyTargetId: string;
-		template: string;
-		filterKeyword: string;
-		createTodo: boolean;
-		createReminder: boolean;
-	}) {
-		try {
-			const res = await webhookApi.create(payload);
-			pushToast(res.message ?? "Webhookを作成しました。", "success");
-			createOpen = false;
-			await loadEndpoints();
-		} catch (e) {
-			reportError(e);
-		}
-	}
+}
 </script>
 
 <section class="tab-view">

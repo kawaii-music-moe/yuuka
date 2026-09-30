@@ -1,6 +1,6 @@
 // reminderApi — bot-scoped（scope:'bot'）。src/server/routes/reminderRoutes.ts に対応。
 import { api } from "../client";
-import type { RemindersResponse, ApiResponse } from "../types";
+import type { ApiResponse, RemindersResponse } from "../types";
 
 const BOT = { scope: "bot" } as const;
 

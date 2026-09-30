@@ -1,20 +1,21 @@
 <script lang="ts">
-	// 接続端末1件のカード（旧 buildDeviceCard）。
-	import { Icon, MetaItem } from "$lib/components/ui";
-	import type { DesktopDevice } from "$lib/api/services/deviceApi";
+// 接続端末1件のカード（旧 buildDeviceCard）。
 
-	interface Props {
-		device: DesktopDevice;
-		onrevoke: (id: number) => void;
-	}
-	let { device, onrevoke }: Props = $props();
+import type { DesktopDevice } from "$lib/api/services/deviceApi";
+import { Icon, MetaItem } from "$lib/components/ui";
 
-	const createdText = $derived(`認可: ${(device.created_at || "").slice(0, 16)}`);
-	const usedText = $derived(
-		device.last_used_at
-			? `最終利用: ${device.last_used_at.slice(0, 16)}`
-			: "最終利用: 未使用",
-	);
+interface Props {
+	device: DesktopDevice;
+	onrevoke: (id: number) => void;
+}
+let { device, onrevoke }: Props = $props();
+
+const createdText = $derived(`認可: ${(device.created_at || "").slice(0, 16)}`);
+const usedText = $derived(
+	device.last_used_at
+		? `最終利用: ${device.last_used_at.slice(0, 16)}`
+		: "最終利用: 未使用",
+);
 </script>
 
 <div class="card-item glass hover-lift">

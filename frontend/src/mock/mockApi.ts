@@ -17,27 +17,70 @@ const state = {
 		{ guild_id: "333333333333333333", guild_name: null }, // 名前解決不能（Bot未参加）ケース
 	] as AssistantGuild[],
 	channels: [
-		{ guild_id: "111111111111111111", channel_id: "444444444444444444", channel_name: "雑談" },
-		{ guild_id: "222222222222222222", channel_id: "555555555555555555", channel_name: null },
+		{
+			guild_id: "111111111111111111",
+			channel_id: "444444444444444444",
+			channel_name: "雑談",
+		},
+		{
+			guild_id: "222222222222222222",
+			channel_id: "555555555555555555",
+			channel_name: null,
+		},
 	] as AssistantChannel[],
 	mutedChannels: [
-		{ guild_id: "222222222222222222", channel_id: "666666666666666666", channel_name: "運営専用" },
+		{
+			guild_id: "222222222222222222",
+			channel_id: "666666666666666666",
+			channel_name: "運営専用",
+		},
 	] as AssistantChannel[],
 	members: [
-		{ guild_id: "111111111111111111", user_id: "600000000000000001", member_name: "すずね" },
-		{ guild_id: "111111111111111111", user_id: "600000000000000002", member_name: "Komorida" },
-		{ guild_id: "222222222222222222", user_id: "600000000000000003", member_name: null },
+		{
+			guild_id: "111111111111111111",
+			user_id: "600000000000000001",
+			member_name: "すずね",
+		},
+		{
+			guild_id: "111111111111111111",
+			user_id: "600000000000000002",
+			member_name: "Komorida",
+		},
+		{
+			guild_id: "222222222222222222",
+			user_id: "600000000000000003",
+			member_name: null,
+		},
 	] as AssistantMember[],
 	roles: [
-		{ guild_id: "111111111111111111", role_id: "700000000000000001", role_name: "スタッフ" },
-		{ guild_id: "222222222222222222", role_id: "700000000000000002", role_name: null },
+		{
+			guild_id: "111111111111111111",
+			role_id: "700000000000000001",
+			role_name: "スタッフ",
+		},
+		{
+			guild_id: "222222222222222222",
+			role_id: "700000000000000002",
+			role_name: null,
+		},
 	] as AssistantRole[],
 	requests: [
-		{ id: 1, user_id: "600000000000000009", guild_id: "111111111111111111", note: "リスナー枠で使いたいです" },
-		{ id: 2, user_id: "600000000000000010", guild_id: "222222222222222222", note: null },
+		{
+			id: 1,
+			user_id: "600000000000000009",
+			guild_id: "111111111111111111",
+			note: "リスナー枠で使いたいです",
+		},
+		{
+			id: 2,
+			user_id: "600000000000000010",
+			guild_id: "222222222222222222",
+			note: null,
+		},
 	] as MemberRequest[],
 	notes: {
-		"111111111111111111": "・配信告知は #お知らせ に流す\n・敬称は「さん」で統一",
+		"111111111111111111":
+			"・配信告知は #お知らせ に流す\n・敬称は「さん」で統一",
 	} as Record<string, string>,
 };
 
@@ -58,7 +101,11 @@ const optionRoles: Record<string, GuildOptionItem[]> = {
 	"222222222222222222": [{ id: "700000000000000002", name: "tester" }],
 };
 
-function lookupName(options: Record<string, GuildOptionItem[]>, guildId: string, id: string): string | null {
+function lookupName(
+	options: Record<string, GuildOptionItem[]>,
+	guildId: string,
+	id: string,
+): string | null {
 	return options[guildId]?.find((o) => o.id === id)?.name ?? null;
 }
 
@@ -81,24 +128,35 @@ function route(url: URL, method: string, body: any): unknown {
 		if (body.action === "add") {
 			if (!state.guilds.some((g) => g.guild_id === body.guildId))
 				state.guilds.push({ guild_id: body.guildId, guild_name: null });
-		} else state.guilds = state.guilds.filter((g) => g.guild_id !== body.guildId);
+		} else
+			state.guilds = state.guilds.filter((g) => g.guild_id !== body.guildId);
 		return { success: true };
 	}
 	if (p === "/api/bots/assistant/channels" && method === "POST") {
 		if (body.action === "add")
-			state.channels.push({ guild_id: body.guildId, channel_id: body.channelId, channel_name: null });
+			state.channels.push({
+				guild_id: body.guildId,
+				channel_id: body.channelId,
+				channel_name: null,
+			});
 		else
 			state.channels = state.channels.filter(
-				(c) => !(c.guild_id === body.guildId && c.channel_id === body.channelId),
+				(c) =>
+					!(c.guild_id === body.guildId && c.channel_id === body.channelId),
 			);
 		return { success: true };
 	}
 	if (p === "/api/bots/assistant/muted-channels" && method === "POST") {
 		if (body.action === "add")
-			state.mutedChannels.push({ guild_id: body.guildId, channel_id: body.channelId, channel_name: null });
+			state.mutedChannels.push({
+				guild_id: body.guildId,
+				channel_id: body.channelId,
+				channel_name: null,
+			});
 		else
 			state.mutedChannels = state.mutedChannels.filter(
-				(c) => !(c.guild_id === body.guildId && c.channel_id === body.channelId),
+				(c) =>
+					!(c.guild_id === body.guildId && c.channel_id === body.channelId),
 			);
 		return { success: true };
 	}
@@ -143,7 +201,11 @@ function route(url: URL, method: string, body: any): unknown {
 			state.notes[body.guildId] = body.content ?? "";
 			return { success: true };
 		}
-		return { success: true, content: state.notes[q("guildId")] ?? "", max_length: 10000 };
+		return {
+			success: true,
+			content: state.notes[q("guildId")] ?? "",
+			max_length: 10000,
+		};
 	}
 	if (p === "/api/bots/member-requests") {
 		return { success: true, requests: state.requests };
@@ -169,9 +231,16 @@ function route(url: URL, method: string, body: any): unknown {
 
 export function installMockApi(): void {
 	const realFetch = window.fetch.bind(window);
-	window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+	window.fetch = async (
+		input: RequestInfo | URL,
+		init?: RequestInit,
+	): Promise<Response> => {
 		const urlStr =
-			typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+			typeof input === "string"
+				? input
+				: input instanceof URL
+					? input.href
+					: input.url;
 		const url = new URL(urlStr, location.origin);
 		if (!url.pathname.startsWith("/api/")) return realFetch(input, init);
 		const method = (init?.method ?? "GET").toUpperCase();

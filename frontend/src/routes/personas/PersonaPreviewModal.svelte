@@ -1,24 +1,24 @@
 <script lang="ts">
-	// マーケットプレイス ペルソナ全文プレビュー（旧 index.html #modal-persona-preview）。
-	// 「このペルソナをインポート」で親の onimport を呼ぶ。
-	import { Modal, Button } from "$lib/components/ui";
+// マーケットプレイス ペルソナ全文プレビュー（旧 index.html #modal-persona-preview）。
+// 「このペルソナをインポート」で親の onimport を呼ぶ。
+import { Button, Modal } from "$lib/components/ui";
 
-	interface Props {
-		open?: boolean;
-		personaName?: string;
-		prompt?: string;
-		/** インポート対象の marketplace persona id。 */
-		personaId?: number | null;
-		onimport: (id: number) => void;
-	}
+interface Props {
+	open?: boolean;
+	personaName?: string;
+	prompt?: string;
+	/** インポート対象の marketplace persona id。 */
+	personaId?: number | null;
+	onimport: (id: number) => void;
+}
 
-	let {
-		open = $bindable(false),
-		personaName = "",
-		prompt = "",
-		personaId = null,
-		onimport,
-	}: Props = $props();
+let {
+	open = $bindable(false),
+	personaName = "",
+	prompt = "",
+	personaId = null,
+	onimport,
+}: Props = $props();
 </script>
 
 <Modal

@@ -1,8 +1,9 @@
 <script lang="ts">
-	// タスクの使い方ガイド（旧 index.html #task-guide-overlay）。公開ルート・API 不要。
-	// 「閉じる」でタスクタブへ戻る（旧 btn-task-guide-back）。
-	import { goto } from "$lib/router";
-	import { Icon } from "$lib/components/ui";
+// タスクの使い方ガイド（旧 index.html #task-guide-overlay）。公開ルート・API 不要。
+// 「閉じる」でタスクタブへ戻る（旧 btn-task-guide-back）。
+
+import { Icon } from "$lib/components/ui";
+import { goto } from "$lib/router";
 </script>
 
 <div class="overlay active">

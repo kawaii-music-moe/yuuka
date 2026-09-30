@@ -1,68 +1,70 @@
 <script lang="ts">
-	// 有効な機能（モジュール選択）カード（旧 loadBotModules + saveBotModules）。
-	// ユーザー個別設定。アクセス権のある全 Bot（デフォルト含む）で表示。
-	import { botAttributeApi } from "$lib/api/services";
-	import { ApiError } from "$lib/api/client";
-	import { pushToast } from "$lib/stores/toast";
-	import { Button, Checkbox } from "$lib/components/ui";
-	import type { ModuleItem, ModulesResp } from "./configTypes";
+// 有効な機能（モジュール選択）カード（旧 loadBotModules + saveBotModules）。
+// ユーザー個別設定。アクセス権のある全 Bot（デフォルト含む）で表示。
 
-	interface Props {
-		botId: string;
-	}
-	let { botId }: Props = $props();
+import { ApiError } from "$lib/api/client";
+import { botAttributeApi } from "$lib/api/services";
+import { Button, Checkbox } from "$lib/components/ui";
+import { pushToast } from "$lib/stores/toast";
+import type { ModuleItem, ModulesResp } from "./configTypes";
 
-	// enabled はローカルで bind するため id→boolean のマップで保持し、表示は元配列順。
-	let modules = $state<ModuleItem[]>([]);
-	let enabledMap = $state<Record<string, boolean>>({});
-	let visible = $state(false);
+interface Props {
+	botId: string;
+}
+let { botId }: Props = $props();
 
-	const onCount = $derived(
-		modules.filter((m) => enabledMap[m.id]).length,
-	);
+// enabled はローカルで bind するため id→boolean のマップで保持し、表示は元配列順。
+let modules = $state<ModuleItem[]>([]);
+let enabledMap = $state<Record<string, boolean>>({});
+let visible = $state(false);
 
-	$effect(() => {
-		void botId;
-		void load();
-	});
+const onCount = $derived(modules.filter((m) => enabledMap[m.id]).length);
 
-	async function load() {
-		try {
-			const res = (await botAttributeApi.modules(botId)) as ModulesResp;
-			if (!res.success) {
-				visible = false;
-				return;
-			}
-			modules = res.modules ?? [];
-			const map: Record<string, boolean> = {};
-			for (const m of modules) map[m.id] = !!m.enabled;
-			enabledMap = map;
-			visible = true;
-		} catch {
+$effect(() => {
+	void botId;
+	void load();
+});
+
+async function load() {
+	try {
+		const res = (await botAttributeApi.modules(botId)) as ModulesResp;
+		if (!res.success) {
 			visible = false;
+			return;
 		}
+		modules = res.modules ?? [];
+		const map: Record<string, boolean> = {};
+		for (const m of modules) map[m.id] = !!m.enabled;
+		enabledMap = map;
+		visible = true;
+	} catch {
+		visible = false;
 	}
+}
 
-	async function save(enabled: string[] | "all") {
-		try {
-			const res = await botAttributeApi.updateModules({
-				botId,
-				enabledModules: enabled,
-			});
-			pushToast(res.message ?? "保存しました。", res.success ? "success" : "error");
-			if (res.success) await load();
-		} catch (err) {
-			pushToast(
-				err instanceof ApiError ? err.message : "通信エラーが発生しました。",
-				"error",
-			);
-		}
+async function save(enabled: string[] | "all") {
+	try {
+		const res = await botAttributeApi.updateModules({
+			botId,
+			enabledModules: enabled,
+		});
+		pushToast(
+			res.message ?? "保存しました。",
+			res.success ? "success" : "error",
+		);
+		if (res.success) await load();
+	} catch (err) {
+		pushToast(
+			err instanceof ApiError ? err.message : "通信エラーが発生しました。",
+			"error",
+		);
 	}
+}
 
-	function saveSelected() {
-		const enabled = modules.filter((m) => enabledMap[m.id]).map((m) => m.id);
-		void save(enabled);
-	}
+function saveSelected() {
+	const enabled = modules.filter((m) => enabledMap[m.id]).map((m) => m.id);
+	void save(enabled);
+}
 </script>
 
 {#if visible}

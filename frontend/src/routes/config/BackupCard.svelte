@@ -1,89 +1,95 @@
 <script lang="ts">
-	// Google Drive バックアップ設定カード（旧 backup-config-form + btn-trigger-backup）。
-	import { settingsApi } from "$lib/api/services";
-	import { ApiError } from "$lib/api/client";
-	import { pushToast } from "$lib/stores/toast";
-	import { Button } from "$lib/components/ui";
-	import type { StatusConfig } from "./configTypes";
+// Google Drive バックアップ設定カード（旧 backup-config-form + btn-trigger-backup）。
 
-	interface Props {
-		config: StatusConfig | null;
-		/** 保存後に /api/status を再取得して最終実行時刻等を反映 */
-		onsaved?: () => void;
-	}
-	let { config, onsaved }: Props = $props();
+import { ApiError } from "$lib/api/client";
+import { settingsApi } from "$lib/api/services";
+import { Button } from "$lib/components/ui";
+import { pushToast } from "$lib/stores/toast";
+import type { StatusConfig } from "./configTypes";
 
-	let enabled = $state(false);
-	let folderId = $state("");
-	let intervalHours = $state(24);
-	let generations = $state(7);
-	let lastRun = $state<string | null>(null);
-	let triggering = $state(false);
+interface Props {
+	config: StatusConfig | null;
+	/** 保存後に /api/status を再取得して最終実行時刻等を反映 */
+	onsaved?: () => void;
+}
+let { config, onsaved }: Props = $props();
 
-	$effect(() => {
-		const c = config;
-		if (!c) return;
-		enabled = !!c.backupEnabled;
-		folderId = c.backupFolderId === "未設定" ? "" : (c.backupFolderId ?? "");
-		intervalHours = c.backupIntervalHours ?? 24;
-		generations = c.backupGenerations ?? 7;
-		lastRun = c.backupLastRunAt ?? null;
-	});
+let enabled = $state(false);
+let folderId = $state("");
+let intervalHours = $state(24);
+let generations = $state(7);
+let lastRun = $state<string | null>(null);
+let triggering = $state(false);
 
-	async function submit(e: SubmitEvent) {
-		e.preventDefault();
-		const hours = Math.min(Math.max(Number(intervalHours) || 24, 1), 720);
-		const gens = Math.max(Number(generations) || 7, 1);
-		try {
-			const res = await settingsApi.updateBackup({
-				enabled,
-				folderId: folderId.trim(),
-				intervalHours: hours,
-				generations: gens,
-			});
-			if (res.success) {
-				pushToast("バックアップ設定を保存しました。", "success");
-				onsaved?.();
-			} else {
-				pushToast(`設定の保存に失敗しました: ${res.message ?? ""}`, "error");
-			}
-		} catch (err) {
-			pushToast(
-				err instanceof ApiError ? err.message : "通信エラーが発生しました。",
-				"error",
-			);
+$effect(() => {
+	const c = config;
+	if (!c) return;
+	enabled = !!c.backupEnabled;
+	folderId = c.backupFolderId === "未設定" ? "" : (c.backupFolderId ?? "");
+	intervalHours = c.backupIntervalHours ?? 24;
+	generations = c.backupGenerations ?? 7;
+	lastRun = c.backupLastRunAt ?? null;
+});
+
+async function submit(e: SubmitEvent) {
+	e.preventDefault();
+	const hours = Math.min(Math.max(Number(intervalHours) || 24, 1), 720);
+	const gens = Math.max(Number(generations) || 7, 1);
+	try {
+		const res = await settingsApi.updateBackup({
+			enabled,
+			folderId: folderId.trim(),
+			intervalHours: hours,
+			generations: gens,
+		});
+		if (res.success) {
+			pushToast("バックアップ設定を保存しました。", "success");
+			onsaved?.();
+		} else {
+			pushToast(`設定の保存に失敗しました: ${res.message ?? ""}`, "error");
 		}
+	} catch (err) {
+		pushToast(
+			err instanceof ApiError ? err.message : "通信エラーが発生しました。",
+			"error",
+		);
 	}
+}
 
-	async function trigger() {
-		if (!enabled) {
-			pushToast(
-				"手動バックアップを実行するには、先にバックアップを有効にして設定を保存してください。",
-				"error",
-			);
-			return;
-		}
-		triggering = true;
-		try {
-			const res = (await settingsApi.triggerBackup()) as {
-				success: boolean;
-				message?: string;
-				url?: string;
-			};
-			if (res.success) {
-				pushToast(`バックアップが完了しました！${res.url ? ` URL: ${res.url}` : ""}`, "success");
-			} else {
-				pushToast(`バックアップ失敗: ${res.message ?? ""}`, "error");
-			}
-		} catch (err) {
-			pushToast(
-				err instanceof ApiError ? err.message : "バックアップ処理中にエラーが発生しました。",
-				"error",
-			);
-		} finally {
-			triggering = false;
-		}
+async function trigger() {
+	if (!enabled) {
+		pushToast(
+			"手動バックアップを実行するには、先にバックアップを有効にして設定を保存してください。",
+			"error",
+		);
+		return;
 	}
+	triggering = true;
+	try {
+		const res = (await settingsApi.triggerBackup()) as {
+			success: boolean;
+			message?: string;
+			url?: string;
+		};
+		if (res.success) {
+			pushToast(
+				`バックアップが完了しました！${res.url ? ` URL: ${res.url}` : ""}`,
+				"success",
+			);
+		} else {
+			pushToast(`バックアップ失敗: ${res.message ?? ""}`, "error");
+		}
+	} catch (err) {
+		pushToast(
+			err instanceof ApiError
+				? err.message
+				: "バックアップ処理中にエラーが発生しました。",
+			"error",
+		);
+	} finally {
+		triggering = false;
+	}
+}
 </script>
 
 <details class="config-card card">

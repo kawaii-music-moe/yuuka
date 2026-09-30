@@ -1,56 +1,61 @@
 <script lang="ts">
-	// 秘書モードのダッシュボード本体（旧 dashboard-secretary-only 群）。
-	// 手描きSVGは innerHTML 廃止し {#each} で <path>/<line>/<circle> をバインド描画。
-	import { Icon } from "$lib/components/ui";
-	import type { ScheduleRecord, TodoWithSubtasks } from "$lib/api/types";
-	import type {
-		DashboardStats,
-		DashboardExpense,
-		DashboardExpenseBreakdown,
-	} from "./dashboardTypes";
-	import {
-		sparklinePath,
-		priorityBars,
-		priceTrendChart,
-		donutChart,
-		yen,
-	} from "./dashboardCharts";
-	import {
-		buildUrgentItems,
-		highestExpense,
-		highestCategory,
-		averageExpense,
-	} from "./dashboardUtils";
+// 秘書モードのダッシュボード本体（旧 dashboard-secretary-only 群）。
+// 手描きSVGは innerHTML 廃止し {#each} で <path>/<line>/<circle> をバインド描画。
 
-	interface Props {
-		stats: DashboardStats;
-		total: number;
-		expenses: DashboardExpense[];
-		breakdown: DashboardExpenseBreakdown[];
-		schedules: ScheduleRecord[];
-		pendingTasks: TodoWithSubtasks[];
-		baTheme: boolean;
-	}
+import type { ScheduleRecord, TodoWithSubtasks } from "$lib/api/types";
+import { Icon } from "$lib/components/ui";
+import {
+	donutChart,
+	priceTrendChart,
+	priorityBars,
+	sparklinePath,
+	yen,
+} from "./dashboardCharts";
+import type {
+	DashboardExpense,
+	DashboardExpenseBreakdown,
+	DashboardStats,
+} from "./dashboardTypes";
+import {
+	averageExpense,
+	buildUrgentItems,
+	highestCategory,
+	highestExpense,
+} from "./dashboardUtils";
 
-	let {
-		stats,
-		total,
-		expenses,
-		breakdown,
-		schedules,
-		pendingTasks,
-		baTheme,
-	}: Props = $props();
+interface Props {
+	stats: DashboardStats;
+	total: number;
+	expenses: DashboardExpense[];
+	breakdown: DashboardExpenseBreakdown[];
+	schedules: ScheduleRecord[];
+	pendingTasks: TodoWithSubtasks[];
+	baTheme: boolean;
+}
 
-	const scheduleSpark = $derived(sparklinePath(stats.scheduleTrend ?? [0, 0, 0, 0, 0], 2));
-	const expenseSpark = $derived(sparklinePath(stats.expenseTrend ?? [0, 0, 0, 0, 0], 5000));
-	const bars = $derived(priorityBars(stats.pendingPriorities ?? {}, baTheme));
-	const trend = $derived(priceTrendChart(expenses));
-	const donut = $derived(donutChart(breakdown, total, baTheme));
-	const urgent = $derived(buildUrgentItems(schedules, pendingTasks));
-	const highExpense = $derived(highestExpense(expenses));
-	const highCategory = $derived(highestCategory(breakdown));
-	const avgExpense = $derived(averageExpense(total, expenses));
+let {
+	stats,
+	total,
+	expenses,
+	breakdown,
+	schedules,
+	pendingTasks,
+	baTheme,
+}: Props = $props();
+
+const scheduleSpark = $derived(
+	sparklinePath(stats.scheduleTrend ?? [0, 0, 0, 0, 0], 2),
+);
+const expenseSpark = $derived(
+	sparklinePath(stats.expenseTrend ?? [0, 0, 0, 0, 0], 5000),
+);
+const bars = $derived(priorityBars(stats.pendingPriorities ?? {}, baTheme));
+const trend = $derived(priceTrendChart(expenses));
+const donut = $derived(donutChart(breakdown, total, baTheme));
+const urgent = $derived(buildUrgentItems(schedules, pendingTasks));
+const highExpense = $derived(highestExpense(expenses));
+const highCategory = $derived(highestCategory(breakdown));
+const avgExpense = $derived(averageExpense(total, expenses));
 </script>
 
 <!-- スタッツカード -->

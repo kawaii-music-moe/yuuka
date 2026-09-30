@@ -28,9 +28,9 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { get } from "svelte/store";
+import { currentRoute, goto, isPublicPath, page } from "$lib/router";
 import { activeBot } from "$lib/stores/activeBot";
 import { currentUser } from "$lib/stores/session";
-import { goto, isPublicPath, currentRoute, page } from "$lib/router";
 
 /** scope:'bot' は botId 注入必須、'user' は絶対に注入しない。 */
 export type Scope = "bot" | "user";
@@ -91,7 +91,9 @@ async function request<T>(
 		if (botId) url.searchParams.set("botId", botId);
 		finalBody = undefined;
 	} else {
-		const base = (opts.body as Record<string, unknown> | undefined) ?? (botId ? {} : undefined);
+		const base =
+			(opts.body as Record<string, unknown> | undefined) ??
+			(botId ? {} : undefined);
 		const merged = base && botId ? { ...base, botId } : base;
 		if (merged !== undefined) {
 			finalBody = JSON.stringify(merged);
@@ -113,7 +115,10 @@ async function request<T>(
 		if (!opts.isBootstrap && !isPublicPath(here)) {
 			// #34 症状4: returnTo を付けてログイン後に元の画面へ戻れるようにする
 			// （currentRoute はアプリ相対パス・query/hash は page ストアの URL から補う）。
-			const dest = here === "/login" ? "/login" : `/login?returnTo=${encodeURIComponent(here + get(page).search + get(page).hash)}`;
+			const dest =
+				here === "/login"
+					? "/login"
+					: `/login?returnTo=${encodeURIComponent(here + get(page).search + get(page).hash)}`;
 			goto(dest);
 		}
 		throw new ApiError(401, "認証が必要です");
@@ -132,8 +137,10 @@ async function request<T>(
 }
 
 export const api = {
-	get: <T>(path: string, opts: NoBodyOpts) => request<T>("GET", path, opts as RequestOpts),
+	get: <T>(path: string, opts: NoBodyOpts) =>
+		request<T>("GET", path, opts as RequestOpts),
 	post: <T>(path: string, body?: unknown, opts?: NoBodyOpts) =>
 		request<T>("POST", path, { ...(opts as RequestOpts), body }),
-	del: <T>(path: string, opts: NoBodyOpts) => request<T>("DELETE", path, opts as RequestOpts),
+	del: <T>(path: string, opts: NoBodyOpts) =>
+		request<T>("DELETE", path, opts as RequestOpts),
 };

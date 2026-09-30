@@ -1,336 +1,340 @@
 <script lang="ts">
-	// ─────────────────────────────────────────────────────────────────────────
-	// 全体管理（Admin）オーバービュー（旧 app.js: fetchAdminData 一式 + #tab-admin）。
-	//
-	// 移植方針:
-	//   - 8 セクションを $effect で並列取得（旧 fetchAdminData の Promise.all）。
-	//   - テーブル行は createElement 全廃 → {#each}。ロール/ステータス/招待バッジは既存クラス再利用。
-	//   - confirm()/alert() → confirmDialog / pushToast。
-	//   - 自己保護（自分の行は操作ボタンを出さず「自分」表示）は旧仕様どおり currentUser.discordId で判定。
-	//   - 監査ログは直近5件をインライン、全件は AuditModal（自前ページング）。
-	// ─────────────────────────────────────────────────────────────────────────
-	import { adminApi, personaApi } from "$lib/api/services";
-	import { ApiError } from "$lib/api/client";
-	import { pushToast } from "$lib/stores/toast";
-	import { confirmDialog } from "$lib/components/ui";
-	import { Button, Icon } from "$lib/components/ui";
-	import { currentUser } from "$lib/stores/session";
-	import ManagementOverlayShell from "./ManagementOverlayShell.svelte";
-	import type {
-		AdminStats,
-		AdminUserView,
-		AdminBotView,
-		InviteCode,
-		AuditLogEntry,
-		PublicPersonaView,
-	} from "$lib/api/types";
+// ─────────────────────────────────────────────────────────────────────────
+// 全体管理（Admin）オーバービュー（旧 app.js: fetchAdminData 一式 + #tab-admin）。
+//
+// 移植方針:
+//   - 8 セクションを $effect で並列取得（旧 fetchAdminData の Promise.all）。
+//   - テーブル行は createElement 全廃 → {#each}。ロール/ステータス/招待バッジは既存クラス再利用。
+//   - confirm()/alert() → confirmDialog / pushToast。
+//   - 自己保護（自分の行は操作ボタンを出さず「自分」表示）は旧仕様どおり currentUser.discordId で判定。
+//   - 監査ログは直近5件をインライン、全件は AuditModal（自前ページング）。
+// ─────────────────────────────────────────────────────────────────────────
 
-	import RoleBadge from "./admin/RoleBadge.svelte";
-	import AuditModal from "./admin/AuditModal.svelte";
-	import { maskDiscordId } from "./admin/adminUtils";
+import { ApiError } from "$lib/api/client";
+import { adminApi, personaApi } from "$lib/api/services";
+import type {
+	AdminBotView,
+	AdminStats,
+	AdminUserView,
+	AuditLogEntry,
+	InviteCode,
+	PublicPersonaView,
+} from "$lib/api/types";
+import { Button, confirmDialog, Icon } from "$lib/components/ui";
+import { currentUser } from "$lib/stores/session";
+import { pushToast } from "$lib/stores/toast";
+import AuditModal from "./admin/AuditModal.svelte";
+import { maskDiscordId } from "./admin/adminUtils";
+import RoleBadge from "./admin/RoleBadge.svelte";
+import ManagementOverlayShell from "./ManagementOverlayShell.svelte";
 
-	const AUDIT_PREVIEW_LIMIT = 5;
+const AUDIT_PREVIEW_LIMIT = 5;
 
-	let stats = $state<AdminStats | null>(null);
-	let users = $state<AdminUserView[]>([]);
-	let botsList = $state<AdminBotView[]>([]);
-	let inviteCodes = $state<InviteCode[]>([]);
-	let auditPreview = $state<AuditLogEntry[]>([]);
-	let personas = $state<PublicPersonaView[]>([]);
+let stats = $state<AdminStats | null>(null);
+let users = $state<AdminUserView[]>([]);
+let botsList = $state<AdminBotView[]>([]);
+let inviteCodes = $state<InviteCode[]>([]);
+let auditPreview = $state<AuditLogEntry[]>([]);
+let personas = $state<PublicPersonaView[]>([]);
 
-	// フォーム state
-	let defaultBotToken = $state("");
-	let privacyUrl = $state("");
-	let termsUrl = $state("");
-	let presetSecretary = $state("");
-	let presetMcp = $state("");
-	let rateUserMin = $state<number | "">("");
-	let rateUserDay = $state<number | "">("");
-	let rateGuildDay = $state<number | "">("");
-	let inviteCodeInput = $state("");
+// フォーム state
+let defaultBotToken = $state("");
+let privacyUrl = $state("");
+let termsUrl = $state("");
+let presetSecretary = $state("");
+let presetMcp = $state("");
+let rateUserMin = $state<number | "">("");
+let rateUserDay = $state<number | "">("");
+let rateGuildDay = $state<number | "">("");
+let inviteCodeInput = $state("");
 
-	let auditOpen = $state(false);
+let auditOpen = $state(false);
 
-	const selfId = $derived($currentUser?.discordId ?? "");
+const selfId = $derived($currentUser?.discordId ?? "");
 
-	function reportError(e: unknown) {
-		pushToast(e instanceof ApiError ? e.message : "エラーが発生しました", "error");
-	}
+function reportError(e: unknown) {
+	pushToast(
+		e instanceof ApiError ? e.message : "エラーが発生しました",
+		"error",
+	);
+}
 
-	// ── 各セクション取得 ──
-	async function loadStats() {
-		try {
-			stats = (await adminApi.stats()).stats;
-		} catch (e) {
-			reportError(e);
-		}
+// ── 各セクション取得 ──
+async function loadStats() {
+	try {
+		stats = (await adminApi.stats()).stats;
+	} catch (e) {
+		reportError(e);
 	}
-	async function loadUsers() {
-		try {
-			users = (await adminApi.users()).users ?? [];
-		} catch (e) {
-			reportError(e);
-		}
+}
+async function loadUsers() {
+	try {
+		users = (await adminApi.users()).users ?? [];
+	} catch (e) {
+		reportError(e);
 	}
-	async function loadBots() {
-		try {
-			botsList = (await adminApi.bots()).bots ?? [];
-		} catch (e) {
-			reportError(e);
-		}
+}
+async function loadBots() {
+	try {
+		botsList = (await adminApi.bots()).bots ?? [];
+	} catch (e) {
+		reportError(e);
 	}
-	async function loadInvites() {
-		try {
-			inviteCodes = (await adminApi.inviteCodes()).codes ?? [];
-		} catch (e) {
-			reportError(e);
-		}
+}
+async function loadInvites() {
+	try {
+		inviteCodes = (await adminApi.inviteCodes()).codes ?? [];
+	} catch (e) {
+		reportError(e);
 	}
-	async function loadSystemSettings() {
-		try {
-			const s = await adminApi.systemSettings();
-			privacyUrl = s.privacyPolicyUrl || "";
-			termsUrl = s.termsUrl || "";
-		} catch (e) {
-			reportError(e);
-		}
+}
+async function loadSystemSettings() {
+	try {
+		const s = await adminApi.systemSettings();
+		privacyUrl = s.privacyPolicyUrl || "";
+		termsUrl = s.termsUrl || "";
+	} catch (e) {
+		reportError(e);
 	}
-	async function loadAuditPreview() {
-		try {
-			const res = await adminApi.auditLogs({ limit: AUDIT_PREVIEW_LIMIT });
-			auditPreview = res.logs ?? [];
-		} catch (e) {
-			reportError(e);
-		}
+}
+async function loadAuditPreview() {
+	try {
+		const res = await adminApi.auditLogs({ limit: AUDIT_PREVIEW_LIMIT });
+		auditPreview = res.logs ?? [];
+	} catch (e) {
+		reportError(e);
 	}
-	async function loadPersonas() {
-		try {
-			personas = (await personaApi.marketplace()).personas ?? [];
-		} catch (e) {
-			reportError(e);
-		}
+}
+async function loadPersonas() {
+	try {
+		personas = (await personaApi.marketplace()).personas ?? [];
+	} catch (e) {
+		reportError(e);
 	}
-	async function loadBotAttrSettings() {
-		try {
-			const res = await adminApi.botAttributeSettings();
-			const byId = new Map(res.presets.map((p) => [p.id, p]));
-			presetSecretary = byId.get("secretary")?.displayName ?? "";
-			presetMcp = byId.get("mcp_assistant")?.displayName ?? "";
-			const rl = res.rate_limits ?? {};
-			rateUserMin = rl.userPerMinute ?? 5;
-			rateUserDay = rl.userPerDay ?? 100;
-			rateGuildDay = rl.guildPerDay ?? 1000;
-		} catch (e) {
-			reportError(e);
-		}
+}
+async function loadBotAttrSettings() {
+	try {
+		const res = await adminApi.botAttributeSettings();
+		const byId = new Map(res.presets.map((p) => [p.id, p]));
+		presetSecretary = byId.get("secretary")?.displayName ?? "";
+		presetMcp = byId.get("mcp_assistant")?.displayName ?? "";
+		const rl = res.rate_limits ?? {};
+		rateUserMin = rl.userPerMinute ?? 5;
+		rateUserDay = rl.userPerDay ?? 100;
+		rateGuildDay = rl.guildPerDay ?? 1000;
+	} catch (e) {
+		reportError(e);
 	}
+}
 
-	// 初回に全セクションを並列取得（旧 fetchAdminData）。
-	$effect(() => {
-		void loadStats();
-		void loadUsers();
-		void loadBots();
-		void loadInvites();
-		void loadSystemSettings();
-		void loadAuditPreview();
-		void loadPersonas();
-		void loadBotAttrSettings();
+// 初回に全セクションを並列取得（旧 fetchAdminData）。
+$effect(() => {
+	void loadStats();
+	void loadUsers();
+	void loadBots();
+	void loadInvites();
+	void loadSystemSettings();
+	void loadAuditPreview();
+	void loadPersonas();
+	void loadBotAttrSettings();
+});
+
+// ── ユーザー: ロール変更 / 削除 ──
+async function toggleRole(user: AdminUserView) {
+	const newRole = user.role === "admin" ? "user" : "admin";
+	const ok = await confirmDialog({
+		message:
+			newRole === "admin"
+				? `ユーザー「${user.username}」を Admin に昇格しますか？`
+				: `ユーザー「${user.username}」の Admin 権限を解除しますか？`,
+		confirmLabel: newRole === "admin" ? "昇格" : "降格",
 	});
+	if (!ok) return;
+	try {
+		await adminApi.setUserRole({
+			targetUserId: user.discord_id,
+			role: newRole,
+		});
+		await loadUsers();
+		await loadStats();
+	} catch (e) {
+		reportError(e);
+	}
+}
+async function deleteUser(user: AdminUserView) {
+	const ok = await confirmDialog({
+		message: `ユーザー「${user.username}」を完全に削除しますか？\nタスク・家計簿・ペルソナ等の関連データも全て削除され、元に戻せません。`,
+		danger: true,
+		confirmLabel: "削除",
+	});
+	if (!ok) return;
+	try {
+		const res = await adminApi.deleteUser(user.discord_id);
+		if (res.message) pushToast(res.message, "success");
+		await loadUsers();
+		await loadStats();
+		await loadBots();
+	} catch (e) {
+		reportError(e);
+	}
+}
 
-	// ── ユーザー: ロール変更 / 削除 ──
-	async function toggleRole(user: AdminUserView) {
-		const newRole = user.role === "admin" ? "user" : "admin";
-		const ok = await confirmDialog({
-			message:
-				newRole === "admin"
-					? `ユーザー「${user.username}」を Admin に昇格しますか？`
-					: `ユーザー「${user.username}」の Admin 権限を解除しますか？`,
-			confirmLabel: newRole === "admin" ? "昇格" : "降格",
-		});
-		if (!ok) return;
-		try {
-			await adminApi.setUserRole({ targetUserId: user.discord_id, role: newRole });
-			await loadUsers();
-			await loadStats();
-		} catch (e) {
-			reportError(e);
-		}
+// ── Bot: 差し押さえ / 解除 ──
+async function suspendBot(bot: AdminBotView) {
+	const ok = await confirmDialog({
+		message: `Bot「${bot.name}」を差し押さえますか？\nDiscordクライアントが停止され、所有者は再起動できなくなります。`,
+		danger: true,
+		confirmLabel: "差し押さえ",
+	});
+	if (!ok) return;
+	try {
+		await adminApi.suspendBot(bot.id);
+		await loadBots();
+		await loadStats();
+	} catch (e) {
+		reportError(e);
 	}
-	async function deleteUser(user: AdminUserView) {
-		const ok = await confirmDialog({
-			message: `ユーザー「${user.username}」を完全に削除しますか？\nタスク・家計簿・ペルソナ等の関連データも全て削除され、元に戻せません。`,
-			danger: true,
-			confirmLabel: "削除",
-		});
-		if (!ok) return;
-		try {
-			const res = await adminApi.deleteUser(user.discord_id);
-			if (res.message) pushToast(res.message, "success");
-			await loadUsers();
-			await loadStats();
-			await loadBots();
-		} catch (e) {
-			reportError(e);
-		}
+}
+async function unsuspendBot(bot: AdminBotView) {
+	const ok = await confirmDialog({
+		message: `Bot「${bot.name}」の差し押さえを解除しますか？`,
+		confirmLabel: "解除",
+	});
+	if (!ok) return;
+	try {
+		await adminApi.unsuspendBot(bot.id);
+		await loadBots();
+		await loadStats();
+	} catch (e) {
+		reportError(e);
 	}
+}
 
-	// ── Bot: 差し押さえ / 解除 ──
-	async function suspendBot(bot: AdminBotView) {
-		const ok = await confirmDialog({
-			message: `Bot「${bot.name}」を差し押さえますか？\nDiscordクライアントが停止され、所有者は再起動できなくなります。`,
-			danger: true,
-			confirmLabel: "差し押さえ",
-		});
-		if (!ok) return;
-		try {
-			await adminApi.suspendBot(bot.id);
-			await loadBots();
-			await loadStats();
-		} catch (e) {
-			reportError(e);
-		}
+// ── 招待コード: 作成 / 無効化 / 削除 ──
+async function createInvite(e: SubmitEvent) {
+	e.preventDefault();
+	const code = inviteCodeInput.trim();
+	if (!code) return;
+	try {
+		await adminApi.createInviteCode(code);
+		inviteCodeInput = "";
+		await loadInvites();
+		await loadStats();
+	} catch (err) {
+		reportError(err);
 	}
-	async function unsuspendBot(bot: AdminBotView) {
-		const ok = await confirmDialog({
-			message: `Bot「${bot.name}」の差し押さえを解除しますか？`,
-			confirmLabel: "解除",
-		});
-		if (!ok) return;
-		try {
-			await adminApi.unsuspendBot(bot.id);
-			await loadBots();
-			await loadStats();
-		} catch (e) {
-			reportError(e);
-		}
+}
+async function revokeInvite(code: InviteCode) {
+	const ok = await confirmDialog({
+		message: `招待コード「${code.code}」を無効化しますか？\n記録は残りますが、登録には使用できなくなります。`,
+		confirmLabel: "無効化",
+	});
+	if (!ok) return;
+	try {
+		await adminApi.revokeInviteCode(code.code);
+		await loadInvites();
+		await loadStats();
+	} catch (e) {
+		reportError(e);
 	}
+}
+async function deleteInvite(code: InviteCode) {
+	const ok = await confirmDialog({
+		message: `招待コード「${code.code}」を完全に削除しますか？\nこの操作は元に戻せません。`,
+		danger: true,
+		confirmLabel: "削除",
+	});
+	if (!ok) return;
+	try {
+		await adminApi.deleteInviteCode(code.code);
+		await loadInvites();
+		await loadStats();
+	} catch (e) {
+		reportError(e);
+	}
+}
 
-	// ── 招待コード: 作成 / 無効化 / 削除 ──
-	async function createInvite(e: SubmitEvent) {
-		e.preventDefault();
-		const code = inviteCodeInput.trim();
-		if (!code) return;
-		try {
-			await adminApi.createInviteCode(code);
-			inviteCodeInput = "";
-			await loadInvites();
-			await loadStats();
-		} catch (err) {
-			reportError(err);
-		}
+// ── ペルソナ: 非公開化 / 削除 ──
+async function unpublishPersona(p: PublicPersonaView) {
+	const ok = await confirmDialog({
+		message: `ペルソナ「${p.name}」を非公開化しますか？`,
+		confirmLabel: "非公開化",
+	});
+	if (!ok) return;
+	try {
+		await adminApi.unpublishPersona(p.id);
+		await loadPersonas();
+	} catch (e) {
+		reportError(e);
 	}
-	async function revokeInvite(code: InviteCode) {
-		const ok = await confirmDialog({
-			message: `招待コード「${code.code}」を無効化しますか？\n記録は残りますが、登録には使用できなくなります。`,
-			confirmLabel: "無効化",
-		});
-		if (!ok) return;
-		try {
-			await adminApi.revokeInviteCode(code.code);
-			await loadInvites();
-			await loadStats();
-		} catch (e) {
-			reportError(e);
-		}
+}
+async function deletePersona(p: PublicPersonaView) {
+	const ok = await confirmDialog({
+		message: `ペルソナ「${p.name}」を完全に削除しますか？`,
+		danger: true,
+		confirmLabel: "削除",
+	});
+	if (!ok) return;
+	try {
+		await adminApi.deletePersona(p.id);
+		await loadPersonas();
+	} catch (e) {
+		reportError(e);
 	}
-	async function deleteInvite(code: InviteCode) {
-		const ok = await confirmDialog({
-			message: `招待コード「${code.code}」を完全に削除しますか？\nこの操作は元に戻せません。`,
-			danger: true,
-			confirmLabel: "削除",
-		});
-		if (!ok) return;
-		try {
-			await adminApi.deleteInviteCode(code.code);
-			await loadInvites();
-			await loadStats();
-		} catch (e) {
-			reportError(e);
-		}
-	}
+}
 
-	// ── ペルソナ: 非公開化 / 削除 ──
-	async function unpublishPersona(p: PublicPersonaView) {
-		const ok = await confirmDialog({
-			message: `ペルソナ「${p.name}」を非公開化しますか？`,
-			confirmLabel: "非公開化",
+// ── フォーム: デフォルトBotトークン / システム設定 / Bot属性設定 ──
+async function submitDefaultBotToken(e: SubmitEvent) {
+	e.preventDefault();
+	const token = defaultBotToken.trim();
+	if (!token) return;
+	try {
+		await adminApi.setDefaultBotToken({ token });
+		defaultBotToken = "";
+		pushToast("システムデフォルト Bot のトークンを更新しました！", "success");
+	} catch (err) {
+		reportError(err);
+	}
+}
+async function submitSystemSettings(e: SubmitEvent) {
+	e.preventDefault();
+	try {
+		await adminApi.saveSystemSettings({
+			privacyPolicyUrl: privacyUrl.trim(),
+			termsUrl: termsUrl.trim(),
 		});
-		if (!ok) return;
-		try {
-			await adminApi.unpublishPersona(p.id);
-			await loadPersonas();
-		} catch (e) {
-			reportError(e);
-		}
+		pushToast("システム設定を保存しました。", "success");
+	} catch (err) {
+		reportError(err);
 	}
-	async function deletePersona(p: PublicPersonaView) {
-		const ok = await confirmDialog({
-			message: `ペルソナ「${p.name}」を完全に削除しますか？`,
-			danger: true,
-			confirmLabel: "削除",
+}
+async function submitBotAttr(e: SubmitEvent) {
+	e.preventDefault();
+	try {
+		await adminApi.saveBotAttributeSettings({
+			displayNames: {
+				secretary: presetSecretary.trim(),
+				mcp_assistant: presetMcp.trim(),
+			},
+			rateLimits: {
+				userPerMinute: Number(rateUserMin),
+				userPerDay: Number(rateUserDay),
+				guildPerDay: Number(rateGuildDay),
+			},
 		});
-		if (!ok) return;
-		try {
-			await adminApi.deletePersona(p.id);
-			await loadPersonas();
-		} catch (e) {
-			reportError(e);
-		}
+		pushToast("Bot属性設定を保存しました。", "success");
+		await loadBotAttrSettings();
+	} catch (err) {
+		reportError(err);
 	}
+}
 
-	// ── フォーム: デフォルトBotトークン / システム設定 / Bot属性設定 ──
-	async function submitDefaultBotToken(e: SubmitEvent) {
-		e.preventDefault();
-		const token = defaultBotToken.trim();
-		if (!token) return;
-		try {
-			await adminApi.setDefaultBotToken({ token });
-			defaultBotToken = "";
-			pushToast("システムデフォルト Bot のトークンを更新しました！", "success");
-		} catch (err) {
-			reportError(err);
-		}
-	}
-	async function submitSystemSettings(e: SubmitEvent) {
-		e.preventDefault();
-		try {
-			await adminApi.saveSystemSettings({
-				privacyPolicyUrl: privacyUrl.trim(),
-				termsUrl: termsUrl.trim(),
-			});
-			pushToast("システム設定を保存しました。", "success");
-		} catch (err) {
-			reportError(err);
-		}
-	}
-	async function submitBotAttr(e: SubmitEvent) {
-		e.preventDefault();
-		try {
-			await adminApi.saveBotAttributeSettings({
-				displayNames: {
-					secretary: presetSecretary.trim(),
-					mcp_assistant: presetMcp.trim(),
-				},
-				rateLimits: {
-					userPerMinute: Number(rateUserMin),
-					userPerDay: Number(rateUserDay),
-					guildPerDay: Number(rateGuildDay),
-				},
-			});
-			pushToast("Bot属性設定を保存しました。", "success");
-			await loadBotAttrSettings();
-		} catch (err) {
-			reportError(err);
-		}
-	}
-
-	function botStatus(bot: AdminBotView): { label: string; tone: string } {
-		if (bot.suspended)
-			return { label: "差し押さえ中", tone: "status-suspended" };
-		if (bot.hasCustomToken)
-			return { label: bot.isRunning ? "起動中" : "停止", tone: "status-active" };
-		return { label: "デフォルト", tone: "status-default" };
-	}
+function botStatus(bot: AdminBotView): { label: string; tone: string } {
+	if (bot.suspended) return { label: "差し押さえ中", tone: "status-suspended" };
+	if (bot.hasCustomToken)
+		return { label: bot.isRunning ? "起動中" : "停止", tone: "status-active" };
+	return { label: "デフォルト", tone: "status-default" };
+}
 </script>
 
 <ManagementOverlayShell id="admin-overlay" icon="admin_panel_settings" title="管理者設定">

@@ -3,10 +3,10 @@
 // で SPA 経路ではないため提供しない。
 import { api } from "../client";
 import type {
-	WebhooksResponse,
+	ApiResponse,
 	WebhookCreateResponse,
 	WebhookDeliveriesResponse,
-	ApiResponse,
+	WebhooksResponse,
 } from "../types";
 
 const USER = { scope: "user" } as const;
@@ -32,7 +32,8 @@ export const webhookApi = {
 		api.post<WebhookCreateResponse>("/api/webhooks/update", body, USER),
 
 	/** POST /api/webhooks/delete */
-	delete: (id: number) => api.post<ApiResponse>("/api/webhooks/delete", { id }, USER),
+	delete: (id: number) =>
+		api.post<ApiResponse>("/api/webhooks/delete", { id }, USER),
 
 	/** GET /api/webhooks/deliveries?endpointId= — 受信履歴（直近50件） */
 	deliveries: (endpointId?: number) =>

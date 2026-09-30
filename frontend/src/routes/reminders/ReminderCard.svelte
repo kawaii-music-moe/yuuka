@@ -1,14 +1,14 @@
 <script lang="ts">
-	// 単一リマインダーカード（旧 app.js fetchRemindersList のカード生成を移植）。
-	import type { ReminderRecord } from "$lib/api/types";
-	import { reminderStatusLabel, reminderTargetText } from "./reminderUtils";
+// 単一リマインダーカード（旧 app.js fetchRemindersList のカード生成を移植）。
+import type { ReminderRecord } from "$lib/api/types";
+import { reminderStatusLabel, reminderTargetText } from "./reminderUtils";
 
-	interface Props {
-		reminder: ReminderRecord;
-		oncancel: (id: number) => void;
-	}
+interface Props {
+	reminder: ReminderRecord;
+	oncancel: (id: number) => void;
+}
 
-	let { reminder, oncancel }: Props = $props();
+let { reminder, oncancel }: Props = $props();
 </script>
 
 <div class="card-item glass reminder-card">

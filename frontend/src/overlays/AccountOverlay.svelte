@@ -1,115 +1,119 @@
 <script lang="ts">
-	// ─────────────────────────────────────────────────────────────────────────
-	// AccountOverlay — アカウント管理（Bot 非依存のアカウント共通設定）。
-	// 旧 index.html #account-overlay #tab-account + app.js の各 config フォーム
-	// （profile / gemini / password / delete-account）と fetchAccountSettings を移植。
-	//
-	// - 表示名の初期値は currentUser ストア（旧: /api/status → data.user.username）。
-	// - テーマは theme ストア（3ボタン。旧 .theme-option）。
-	// - 保存は settingsApi（scope:'user'）。確認は confirmDialog、通知は pushToast。
-	// ─────────────────────────────────────────────────────────────────────────
-	import { settingsApi } from "$lib/api/services";
-	import { ApiError } from "$lib/api/client";
-	import { pushToast } from "$lib/stores/toast";
-	import { confirmDialog, Icon } from "$lib/components/ui";
-	import { currentUser } from "$lib/stores/session";
-	import { selectBot } from "$lib/stores/activeBot";
-	import { theme, setTheme, type Theme } from "$lib/stores/theme";
-	import { navigateTo } from "$lib/router";
-	import ManagementOverlayShell from "./ManagementOverlayShell.svelte";
+// ─────────────────────────────────────────────────────────────────────────
+// AccountOverlay — アカウント管理（Bot 非依存のアカウント共通設定）。
+// 旧 index.html #account-overlay #tab-account + app.js の各 config フォーム
+// （profile / gemini / password / delete-account）と fetchAccountSettings を移植。
+//
+// - 表示名の初期値は currentUser ストア（旧: /api/status → data.user.username）。
+// - テーマは theme ストア（3ボタン。旧 .theme-option）。
+// - 保存は settingsApi（scope:'user'）。確認は confirmDialog、通知は pushToast。
+// ─────────────────────────────────────────────────────────────────────────
 
-	// ── Gemini 設定 ──
-	let geminiApiKey = $state("");
-	let geminiModel = $state("gemini-3.1-flash-lite");
+import { ApiError } from "$lib/api/client";
+import { settingsApi } from "$lib/api/services";
+import { confirmDialog, Icon } from "$lib/components/ui";
+import { navigateTo } from "$lib/router";
+import { selectBot } from "$lib/stores/activeBot";
+import { currentUser } from "$lib/stores/session";
+import { setTheme, type Theme, theme } from "$lib/stores/theme";
+import { pushToast } from "$lib/stores/toast";
+import ManagementOverlayShell from "./ManagementOverlayShell.svelte";
 
-	// ── 表示名 ──
-	// 初期値は現在のセッションユーザー名（旧 fetchAccountSettings）。
-	let username = $state("");
-	$effect(() => {
-		// currentUser 変化に追従（未編集時のみ埋める。空文字なら未初期化とみなす）。
-		if (!username && $currentUser?.username) username = $currentUser.username;
-	});
+// ── Gemini 設定 ──
+let geminiApiKey = $state("");
+let geminiModel = $state("gemini-3.1-flash-lite");
 
-	// ── パスワード変更 ──
-	let currentPassword = $state("");
-	let newPassword = $state("");
+// ── 表示名 ──
+// 初期値は現在のセッションユーザー名（旧 fetchAccountSettings）。
+let username = $state("");
+$effect(() => {
+	// currentUser 変化に追従（未編集時のみ埋める。空文字なら未初期化とみなす）。
+	if (!username && $currentUser?.username) username = $currentUser.username;
+});
 
-	// ── アカウント削除 ──
-	let deletePassword = $state("");
+// ── パスワード変更 ──
+let currentPassword = $state("");
+let newPassword = $state("");
 
-	const THEMES: { value: Theme; label: string; preview: string }[] = [
-		{ value: "dark", label: "ダーク", preview: "dark-preview" },
-		{ value: "light", label: "ライト", preview: "light-preview" },
-		{ value: "blue-archive", label: "BA", preview: "ba-preview" },
-	];
+// ── アカウント削除 ──
+let deletePassword = $state("");
 
-	function reportError(e: unknown): void {
-		pushToast(e instanceof ApiError ? e.message : "通信エラーが発生しました。", "error");
-	}
+const THEMES: { value: Theme; label: string; preview: string }[] = [
+	{ value: "dark", label: "ダーク", preview: "dark-preview" },
+	{ value: "light", label: "ライト", preview: "light-preview" },
+	{ value: "blue-archive", label: "BA", preview: "ba-preview" },
+];
 
-	// ── Gemini 設定保存（旧 geminiConfigForm submit） ──
-	async function saveGemini(e: SubmitEvent): Promise<void> {
-		e.preventDefault();
-		try {
-			await settingsApi.updateGemini({
-				apiKey: geminiApiKey.trim() || undefined,
-				model: geminiModel,
-			});
-			geminiApiKey = "";
-			pushToast("Gemini 設定を更新しました。", "success");
-		} catch (e) {
-			reportError(e);
-		}
-	}
+function reportError(e: unknown): void {
+	pushToast(
+		e instanceof ApiError ? e.message : "通信エラーが発生しました。",
+		"error",
+	);
+}
 
-	// ── 表示名保存（旧 profileConfigForm submit） ──
-	async function saveProfile(e: SubmitEvent): Promise<void> {
-		e.preventDefault();
-		try {
-			await settingsApi.updateProfile({ username: username.trim() });
-			// セッション上の表示名も即時反映（旧 initAppSession 再取得の代替）。
-			currentUser.update((u) => (u ? { ...u, username: username.trim() } : u));
-			pushToast("プロフィールを更新しました。", "success");
-		} catch (e) {
-			reportError(e);
-		}
-	}
-
-	// ── パスワード変更（旧 passwordConfigForm submit） ──
-	async function savePassword(e: SubmitEvent): Promise<void> {
-		e.preventDefault();
-		if (!currentPassword || !newPassword) return;
-		try {
-			await settingsApi.changePassword({ currentPassword, newPassword });
-			pushToast("パスワードを変更しました。", "success");
-			currentPassword = "";
-			newPassword = "";
-		} catch (e) {
-			reportError(e);
-		}
-	}
-
-	// ── アカウント削除（旧 deleteAccountForm submit。confirm → confirmDialog） ──
-	async function deleteAccount(e: SubmitEvent): Promise<void> {
-		e.preventDefault();
-		if (!deletePassword) return;
-		const ok = await confirmDialog({
-			message:
-				"本当にアカウントを削除しますか？\n所有するBotや秘書業務データを含むすべての関連データが削除され、この操作は取り消せません。",
-			danger: true,
-			confirmLabel: "削除する",
+// ── Gemini 設定保存（旧 geminiConfigForm submit） ──
+async function saveGemini(e: SubmitEvent): Promise<void> {
+	e.preventDefault();
+	try {
+		await settingsApi.updateGemini({
+			apiKey: geminiApiKey.trim() || undefined,
+			model: geminiModel,
 		});
-		if (!ok) return;
-		try {
-			const res = await settingsApi.deleteAccount({ password: deletePassword });
-			pushToast(res.message ?? "アカウントを削除しました。", "success");
-			selectBot(null);
-			currentUser.set(null);
-			navigateTo("/login");
-		} catch (e) {
-			reportError(e);
-		}
+		geminiApiKey = "";
+		pushToast("Gemini 設定を更新しました。", "success");
+	} catch (e) {
+		reportError(e);
 	}
+}
+
+// ── 表示名保存（旧 profileConfigForm submit） ──
+async function saveProfile(e: SubmitEvent): Promise<void> {
+	e.preventDefault();
+	try {
+		await settingsApi.updateProfile({ username: username.trim() });
+		// セッション上の表示名も即時反映（旧 initAppSession 再取得の代替）。
+		currentUser.update((u) => (u ? { ...u, username: username.trim() } : u));
+		pushToast("プロフィールを更新しました。", "success");
+	} catch (e) {
+		reportError(e);
+	}
+}
+
+// ── パスワード変更（旧 passwordConfigForm submit） ──
+async function savePassword(e: SubmitEvent): Promise<void> {
+	e.preventDefault();
+	if (!currentPassword || !newPassword) return;
+	try {
+		await settingsApi.changePassword({ currentPassword, newPassword });
+		pushToast("パスワードを変更しました。", "success");
+		currentPassword = "";
+		newPassword = "";
+	} catch (e) {
+		reportError(e);
+	}
+}
+
+// ── アカウント削除（旧 deleteAccountForm submit。confirm → confirmDialog） ──
+async function deleteAccount(e: SubmitEvent): Promise<void> {
+	e.preventDefault();
+	if (!deletePassword) return;
+	const ok = await confirmDialog({
+		message:
+			"本当にアカウントを削除しますか？\n所有するBotや秘書業務データを含むすべての関連データが削除され、この操作は取り消せません。",
+		danger: true,
+		confirmLabel: "削除する",
+	});
+	if (!ok) return;
+	try {
+		const res = await settingsApi.deleteAccount({ password: deletePassword });
+		pushToast(res.message ?? "アカウントを削除しました。", "success");
+		selectBot(null);
+		currentUser.set(null);
+		navigateTo("/login");
+	} catch (e) {
+		reportError(e);
+	}
+}
 </script>
 
 <ManagementOverlayShell id="account-overlay" icon="manage_accounts" title="アカウント管理">

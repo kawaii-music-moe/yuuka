@@ -1,25 +1,25 @@
 <script lang="ts">
-	import {
-		toasts,
-		removeToast,
-		type Toast as ToastData,
-		type ToastKind,
-	} from "$lib/stores/toast";
-	import Icon from "./Icon.svelte";
+import {
+	removeToast,
+	type Toast as ToastData,
+	type ToastKind,
+	toasts,
+} from "$lib/stores/toast";
+import Icon from "./Icon.svelte";
 
-	// stores/toast を購読して画面右下にトースト群を表示。
-	// 統合担当が App のルートに一度だけ設置する。alert() 置換用。
-	// §11.4: message は文字列補間のみ（{@html} 禁止）。
+// stores/toast を購読して画面右下にトースト群を表示。
+// 統合担当が App のルートに一度だけ設置する。alert() 置換用。
+// §11.4: message は文字列補間のみ（{@html} 禁止）。
 
-	const ICONS: Record<ToastKind, string> = {
-		info: "info",
-		success: "check_circle",
-		error: "error",
-		warning: "warning",
-	};
+const ICONS: Record<ToastKind, string> = {
+	info: "info",
+	success: "check_circle",
+	error: "error",
+	warning: "warning",
+};
 
-	let list = $state<ToastData[]>([]);
-	toasts.subscribe((v) => (list = v));
+let list = $state<ToastData[]>([]);
+toasts.subscribe((v) => (list = v));
 </script>
 
 <div class="toast-container" role="region" aria-live="polite" aria-label="通知">

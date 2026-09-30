@@ -3,12 +3,20 @@
 /**
  * クライアントへ返す連絡先（クリーンビュー・snake_case）。
  */
-export type Contact = { id: bigint, name: string, 
-/**
- * `'YYYY-MM-DD'` または `'--MM-DD'`（年不明）。
- */
-birthday: string | null, relationship: string | null, contact_info: string | null, notes: string | null, 
-/**
- * パース済みタグ（DB は JSON 文字列 `tags` で保持）。
- */
-tags: Array<string>, created_at: string, updated_at: string, };
+export type Contact = {
+	id: bigint;
+	name: string;
+	/**
+	 * `'YYYY-MM-DD'` または `'--MM-DD'`（年不明）。
+	 */
+	birthday: string | null;
+	relationship: string | null;
+	contact_info: string | null;
+	notes: string | null;
+	/**
+	 * パース済みタグ（DB は JSON 文字列 `tags` で保持）。
+	 */
+	tags: Array<string>;
+	created_at: string;
+	updated_at: string;
+};
