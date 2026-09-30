@@ -74,11 +74,15 @@ deploy/instance.sh dev  up -d          # 開発インスタンス（ホスト :7
 本番イメージは Rust バイナリ単独（CMD `./yuuka`）。旧 Node 実装・systemd 運用・nginx strangler・
 カットオーバースクリプトは撤去済み（最後に残っていたコミット: `bb97bae`）。
 
-### DB は起動前に必ず存在させる（P0-4）
-Rust は**存在しない DB を作らない**（`open_conn` は `SQLITE_OPEN_CREATE` を付けず、無ければ即エラー
-で起動失敗）。まっさらなインスタンスを立ち上げる前に `DATA_DIR/yuuka.db` を用意する必要がある。
-Node 撤去により「一度 Node で起動して DB を生成」する手順は使えないため、当面は `bb97bae` を
-別 worktree にチェックアウトして旧 Node で DB を生成する（Rust 側での新規 DB 作成は #55）。
+### DB は既定では起動前に必ず存在させる（P0-4 / issue #55）
+Rust は**既定では存在しない DB を作らない**（`open_conn` は `SQLITE_OPEN_CREATE` を付けず、無ければ
+即エラーで起動失敗）。`DATA_DIR` のパス誤設定で意図せず空 DB を作ってしまう事故を防ぐための挙動。
+- 既存インスタンスの移行: 既存の `data/yuuka.db` をそのまま `DATA_DIR` に置く。
+- **新規インスタンス**: 初回起動のみ `YUUKA_INIT_DB=1` を明示設定する（`instance.env` に追記、また
+  は `docker run -e YUUKA_INIT_DB=1`）。`DATA_DIR/yuuka.db` が無ければ新規作成し、baseline（V17）
+  から migrations を適用してすぐ使える状態にする（既存 DB があれば何もしない・上書きしない）。
+  起動確認後は `instance.env` から `YUUKA_INIT_DB` を外して次回以降の起動に戻す（誤ってパスを
+  変更した場合に空 DB を再生成させないため）。
 
 ### cron を回すプロセスは厳密に 1 つ（P0-2）
 `Dockerfile` は `ENV YUUKA_RUST_CRON=1` を焼き込むため、**コンテナ内 Rust が cron の所有者**になる。
