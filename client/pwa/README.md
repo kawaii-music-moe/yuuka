@@ -13,12 +13,12 @@ pnpm dev:client:mock
 Starts the Vue Client at `http://localhost:5173`, the mock API at
 `http://localhost:8787`, and the shared-login admin dev server (`frontend`)
 at `http://localhost:5174` pointed at the same mock API. The Vite proxy is
-automatically configured for the mock API, and `/login`/`/admin` redirect to
-the admin dev server (`http://localhost:5174/admin/...`; the admin SPA is only
-served under `/admin/`). Unauthenticated users are sent to `/admin/login` with
-a `returnTo` of the current page, and after signing in the admin dev server
-redirects that path back to the Client. In mock mode sign in with
-`admin` / `pass`.
+automatically configured for the mock API, `/admin/...` is proxied to the admin
+dev server (the admin SPA is only served under `/admin/`), and `/login`
+redirects to `/admin/login`. Everything stays on the Client's origin, so it also
+works when the Client is opened through a tunnel hostname. Unauthenticated users
+are sent to `/admin/login` with a `returnTo` of the current page and come back
+to the Client after signing in. In mock mode sign in with `admin` / `pass`.
 
 ```bash
 pnpm dev
@@ -48,7 +48,7 @@ VITE_API_TARGET=http://localhost:8787 VITE_PWA_DEV_SERVER=http://localhost:5173 
 
 `http://localhost:5173` を開くと `/admin/login` へ送られ、`admin` / `pass` でログインすると PWA へ戻ります。
 
-開発サーバーは `/api` を `VITE_API_PROXY_TARGET`（未設定時は `http://localhost:3000`。`client/pwa/vite.config.ts`）へプロキシし、`/login`・`/admin` を `VITE_ADMIN_DEV_SERVER`（未設定時は `http://localhost:5174`）へリダイレクトします。`VITE_API_PROXY_TARGET` を付けない `npm run dev` はモックに接続しません。
+開発サーバーは `/api` を `VITE_API_PROXY_TARGET`（未設定時は `http://localhost:3000`。`client/pwa/vite.config.ts`）へプロキシし、`/admin` 配下を `VITE_ADMIN_DEV_SERVER`（未設定時は `http://localhost:5174`）へプロキシし、`/login` を同一オリジンの `/admin/login` へリダイレクトします。`VITE_API_PROXY_TARGET` を付けない `npm run dev` はモックに接続しません。
 
 - モックに接続する: 上記のとおり `VITE_API_PROXY_TARGET=http://localhost:8787` を指定します（`pnpm dev:client:mock` はこれを自動設定します）。
 - ローカルのバックエンド（`cargo run --bin yuuka`）に接続する: `config.yaml` の `PORT` に合わせて指定します（`example.yaml` の既定は 7854）。例: `VITE_API_PROXY_TARGET=http://localhost:7854 npm run dev`。

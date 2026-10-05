@@ -34,7 +34,7 @@ start("Client", npm, ["run", "dev:client"], {
 	VITE_API_PROXY_TARGET: "http://localhost:8787",
 });
 // 共有ログイン/管理画面（frontend の Svelte dev server・/admin/ 配下）。Client の
-// /login・/admin はここ（/admin/login・/admin/...）へリダイレクトされる
+// /admin/... はここへプロキシされ、/login は /admin/login へリダイレクトされる
 // （client/pwa/vite.config.ts 参照）。ログイン後の returnTo が Client のパスなら
 // 逆に Client へ戻される（frontend/vite.config.ts の VITE_PWA_DEV_SERVER）。Client(5173) と衝突しない
 // ポートに固定し、/api はこの mock API へ向ける（#44: 撤去済み src/public を見て 500 に

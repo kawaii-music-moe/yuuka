@@ -156,7 +156,9 @@ export default defineConfig({
 	},
 	server: {
 		port: 5173,
-		allowedHosts: ["yuuka-dev.kawaii-music.moe"],
+		// dev を Cloudflare Tunnel 経由の公開ホスト名（https）で開くため Host ヘッダ検証を外す。
+		// ホスト名をハードコードしないよう true にしている（dev server 専用・本番ビルドには影響しない）。
+		allowedHosts: true,
 		// 真に必要なのは /api と /ws/chat のみ（§5.6 参照）
 		proxy: {
 			"/api": { target: API, changeOrigin: false },
