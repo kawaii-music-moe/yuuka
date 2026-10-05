@@ -54,13 +54,10 @@ async function submit(e: SubmitEvent) {
 }
 </script>
 
-<details class="config-card card">
-	<summary class="column-header">
+<section class="config-card card">
+	<div class="column-header">
 		<h3><span class="material-symbols-outlined header-icon-symbol">tune</span>アシスタント設定</h3>
-	</summary>
-	<p class="description-text">
-		Discord上でのアシスタントの応答スタイルや通知先の既定値を設定します。
-	</p>
+	</div>
 	<form onsubmit={submit} class="user-form">
 		<div class="form-group checkbox-inline">
 			<input type="checkbox" id="user-rich-reply" bind:checked={richReply} />
@@ -91,7 +88,7 @@ async function submit(e: SubmitEvent) {
 		</div>
 		<Button type="submit" variant="primary">アシスタント設定を保存</Button>
 	</form>
-</details>
+</section>
 
 <style>
 	.user-form {

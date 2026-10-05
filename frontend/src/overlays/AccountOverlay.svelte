@@ -12,6 +12,7 @@
 import { ApiError } from "$lib/api/client";
 import { settingsApi } from "$lib/api/services";
 import { confirmDialog, Icon } from "$lib/components/ui";
+import { ACCOUNT_SECTIONS } from "$lib/managementSections";
 import { navigateTo } from "$lib/router";
 import { selectBot } from "$lib/stores/activeBot";
 import { currentUser } from "$lib/stores/session";
@@ -116,15 +117,15 @@ async function deleteAccount(e: SubmitEvent): Promise<void> {
 }
 </script>
 
-<ManagementOverlayShell id="account-overlay" icon="manage_accounts" title="アカウント管理">
-	<section id="tab-account">
-				<p class="description-text" style="margin-bottom: 16px;">
-					表示名・外観テーマ・ログインパスワードなど、特定のBotに依存しないアカウント共通の設定です。
-				</p>
-
-				<!-- Gemini AI 個別設定 -->
-				<details class="card collapsible-group" name="acc-acc" style="margin-bottom:16px;padding:20px;">
-					<summary>Gemini AI 個別設定（秘書モード用）</summary>
+<ManagementOverlayShell
+	id="account-overlay"
+	title="アカウント管理"
+	base="/account"
+	sections={ACCOUNT_SECTIONS}
+>
+	{#snippet children(section)}
+<section id="tab-account">
+				{#if section === "gemini"}
 					<p class="description-text" style="margin-top:12px;">
 						あなた個人（アカウント共通）の Gemini API Key とモデルです。秘書モードで使用します。
 					</p>
@@ -151,11 +152,10 @@ async function deleteAccount(e: SubmitEvent): Promise<void> {
 						</div>
 						<button type="submit" class="btn btn-primary">Gemini 設定を保存</button>
 					</form>
-				</details>
+				{/if}
 
 				<!-- 表示名（プロフィール） -->
-				<details class="card collapsible-group" name="acc-acc" style="margin-bottom:16px;padding:20px;">
-					<summary>表示名（プロフィール）</summary>
+				{#if section === "profile"}
 					<p class="description-text" style="margin-top:12px;">ご自身の表示名を設定できます。</p>
 					<form onsubmit={saveProfile} style="display: flex; gap: 12px; margin-top: 16px;">
 						<input
@@ -168,11 +168,10 @@ async function deleteAccount(e: SubmitEvent): Promise<void> {
 						/>
 						<button type="submit" class="btn btn-primary" style="white-space: nowrap;">保存</button>
 					</form>
-				</details>
+				{/if}
 
 				<!-- テーマ設定 -->
-				<details class="card collapsible-group" name="acc-acc" style="margin-bottom:16px;padding:20px;">
-					<summary>テーマ設定</summary>
+				{#if section === "theme"}
 					<p class="description-text" style="margin-top:12px;">
 						管理画面の外観テーマを選択します。設定はブラウザに保存されます。
 					</p>
@@ -196,11 +195,10 @@ async function deleteAccount(e: SubmitEvent): Promise<void> {
 							</button>
 						{/each}
 					</div>
-				</details>
+				{/if}
 
 				<!-- パスワード変更 -->
-				<details class="card collapsible-group" name="acc-acc" style="margin-bottom:16px;padding:20px;">
-					<summary>パスワード変更</summary>
+				{#if section === "password"}
 					<p class="description-text" style="margin-top:12px;">
 						管理画面ログイン用パスワードを変更します。変更すると他端末のセッションは無効化されます。
 					</p>
@@ -233,11 +231,10 @@ async function deleteAccount(e: SubmitEvent): Promise<void> {
 							>パスワードを変更</button
 						>
 					</form>
-				</details>
+				{/if}
 
 				<!-- アカウント削除 -->
-				<details class="card collapsible-group" name="acc-acc" style="margin-bottom:16px;padding:20px;">
-					<summary>アカウントの削除</summary>
+				{#if section === "delete"}
 					<p class="description-text" style="margin-top:12px;">
 						アカウントを削除すると、あなたが所有するBotや秘書業務データ（ToDo・予定・経費など）を含む関連データがすべて削除されます。<strong
 							>この操作は取り消せません。</strong
@@ -259,8 +256,10 @@ async function deleteAccount(e: SubmitEvent): Promise<void> {
 							<Icon name="delete_forever" class="icon-button-left" /> アカウントを削除する
 						</button>
 					</form>
-				</details>
-	</section>
+				{/if}
+	
+</section>
+	{/snippet}
 </ManagementOverlayShell>
 
 <style>

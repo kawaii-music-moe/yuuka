@@ -19,8 +19,9 @@ export function botPreset(
 export interface SettingsHubItem {
 	tab: BotTab;
 	label: string;
-	icon: string;
 	desc: string;
+	/** 設定ハブ上でまとめるカテゴリ名。 */
+	category?: string;
 	/** 表示プリセット限定（未指定は両方）。 */
 	only?: BotPreset;
 }
@@ -30,54 +31,49 @@ export const SETTINGS_HUB_ITEMS: SettingsHubItem[] = [
 	{
 		tab: "config",
 		label: "Bot 基本設定",
-		icon: "smart_toy",
 		desc: "トークン・モデル・基本動作などのシステム設定",
 	},
 	{
 		tab: "personas",
 		label: "ペルソナ",
-		icon: "theater_comedy",
 		desc: "口調・性格など応答スタイルの管理",
 	},
 	{
 		tab: "playbooks",
 		label: "Playbook 管理",
-		icon: "description",
 		desc: "自動化手順書と定期実行スケジュール",
 		only: "secretary",
 	},
 	{
 		tab: "mcp",
 		label: "MCPサーバー",
-		icon: "extension",
 		desc: "MCP サーバーの接続とツール利用設定",
+		category: "外部接続",
 	},
 	{
 		tab: "delivery",
 		label: "配信設定",
-		icon: "campaign",
 		desc: "活動サマリーなどの定期配信設定",
-		only: "secretary",
-	},
-	{
-		tab: "webhooks",
-		label: "Webhook",
-		icon: "webhook",
-		desc: "外部サービスからの Webhook 連携",
 		only: "secretary",
 	},
 	{
 		tab: "discord",
 		label: "Discord連携",
-		icon: "forum",
 		desc: "Discord Bot の連携設定",
 		only: "mcp_assistant",
 	},
 	{
+		tab: "webhooks",
+		label: "Webhook連携",
+		desc: "外部サービスからの Webhook 連携",
+		category: "外部接続",
+		only: "secretary",
+	},
+	{
 		tab: "devices",
 		label: "接続端末",
-		icon: "devices",
 		desc: "ログイン中の接続端末の確認・管理",
+		category: "外部接続",
 	},
 ];
 

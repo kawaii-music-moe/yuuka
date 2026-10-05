@@ -232,9 +232,6 @@ async function deleteSchedule(s: PlaybookScheduleRecord) {
 			<div class="column-header">
 				<h3><Icon name="edit_note" class="header-icon-symbol" />Playbook の登録・編集</h3>
 			</div>
-			<p class="description-text">
-				AIエージェントに実行させたい操作手順（ブラウザ操作など）のプレイブックを登録・更新します。
-			</p>
 			<form class="pb-form" onsubmit={savePlaybook}>
 				<div class="form-row">
 					<div class="form-group">

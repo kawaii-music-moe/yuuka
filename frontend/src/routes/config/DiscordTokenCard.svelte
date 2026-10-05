@@ -48,14 +48,11 @@ async function submit(e: SubmitEvent) {
 }
 </script>
 
-<details class="config-card card">
-	<summary class="column-header badge-right">
+<section class="config-card card">
+	<div class="column-header badge-right">
 		<h3><span class="material-symbols-outlined header-icon-symbol">robot_2</span>Discord 独自Bot 設定</h3>
 		<span class="badge badge-accent">任意設定</span>
-	</summary>
-	<p class="description-text">
-		独自の Discord Bot Token を設定できます。未設定の場合はシステムデフォルトのボットが適用されます。
-	</p>
+	</div>
 	<form onsubmit={submit} class="token-form">
 		<div class="form-group">
 			<label for="discord-token">Discord Bot Token (任意)</label>
@@ -70,7 +67,7 @@ async function submit(e: SubmitEvent) {
 		</div>
 		<Button type="submit" variant="primary">Discord 設定を保存</Button>
 	</form>
-</details>
+</section>
 
 <style>
 	.token-form {

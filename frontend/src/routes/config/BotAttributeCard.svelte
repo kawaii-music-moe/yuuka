@@ -71,11 +71,11 @@ async function save() {
 }
 </script>
 
-<details class="config-card card">
-	<summary class="column-header badge-right">
+<section class="config-card card">
+	<div class="column-header badge-right">
 		<h3><span class="material-symbols-outlined header-icon-symbol">category</span>Bot属性（プリセット）</h3>
 		{#if currentBadge}<span class="badge badge-accent">{currentBadge}</span>{/if}
-	</summary>
+	</div>
 	<p class="description-text">
 		このBotの機能セットを選択します。変更は次のメッセージ処理から即時反映されます。
 	</p>
@@ -90,7 +90,7 @@ async function save() {
 	<span class="field-sub">
 		※「汎用モード」はサーバー常駐の簡易Bot（MCP接続 + ペルソナ + メモリ）です。タスク・家計などの秘書機能は無効になります。
 	</span>
-</details>
+</section>
 
 <style>
 	.attr-row {

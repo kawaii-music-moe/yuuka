@@ -11,11 +11,12 @@
 // ─────────────────────────────────────────────────────────────────────────
 
 import { ApiError } from "$lib/api/client";
-import { reminderApi } from "$lib/api/services";
+import { reminderApi, settingsApi } from "$lib/api/services";
 import type { ReminderRecord } from "$lib/api/types";
 import { confirmDialog, EmptyState } from "$lib/components/ui";
 import { activeBot } from "$lib/stores/activeBot";
 import { pushToast } from "$lib/stores/toast";
+import type { StatusConfigResponse } from "./config/configTypes";
 
 import ReminderCard from "./reminders/ReminderCard.svelte";
 import { toTriggerAt } from "./reminders/reminderUtils";
@@ -30,6 +31,7 @@ let triggerAt = $state("");
 let repeatRule = $state("");
 let targetType = $state<"" | "dm" | "channel">("");
 let targetId = $state("");
+let defaultTargetType = $state<"dm" | "channel" | null>(null);
 let submitting = $state(false);
 
 function reportError(e: unknown) {
@@ -50,11 +52,27 @@ async function loadReminders() {
 	}
 }
 
+async function loadDefaultTarget() {
+	defaultTargetType = null;
+	try {
+		const res = (await settingsApi.status()) as StatusConfigResponse;
+		defaultTargetType =
+			res.config?.notifyTarget?.type === "channel" ? "channel" : "dm";
+	} catch {
+		defaultTargetType = null;
+	}
+}
+
 // activeBot（bot-scoped）変更 or showAll 変更で再取得。
 $effect(() => {
 	void $activeBot?.id;
 	void showAll;
 	void loadReminders();
+});
+
+$effect(() => {
+	void $activeBot?.id;
+	void loadDefaultTarget();
 });
 
 async function onSubmit(e: SubmitEvent) {
@@ -68,7 +86,9 @@ async function onSubmit(e: SubmitEvent) {
 			trigger_at: toTriggerAt(triggerAt),
 			...(repeatRule.trim() ? { repeat_rule: repeatRule.trim() } : {}),
 			...(targetType ? { target_type: targetType } : {}),
-			...(targetId.trim() ? { target_id: targetId.trim() } : {}),
+			...(targetType === "channel" && targetId.trim()
+				? { target_id: targetId.trim() }
+				: {}),
 		});
 		// フォームリセット（旧 reminderForm.reset()）
 		message = "";
@@ -150,20 +170,24 @@ async function onCancel(id: number) {
 					<div class="form-group">
 						<label for="reminder-target-type">送信先</label>
 						<select id="reminder-target-type" bind:value={targetType}>
-							<option value="">既定 (ユーザー設定に従う)</option>
-							<option value="dm">DM</option>
-							<option value="channel">チャンネル</option>
+							<option value="">既定（ユーザー設定に従う）</option>
+							<option value="dm">DM{defaultTargetType === "dm" ? "（既定）" : ""}</option>
+							<option value="channel">
+								チャンネル{defaultTargetType === "channel" ? "（既定）" : ""}
+							</option>
 						</select>
 					</div>
-					<div class="form-group">
-						<label for="reminder-target-id">チャンネルID (チャンネル選択時)</label>
-						<input
-							type="text"
-							id="reminder-target-id"
-							placeholder="例: 123456789012345678"
-							bind:value={targetId}
-						/>
-					</div>
+					{#if targetType === "channel"}
+						<div class="form-group">
+							<label for="reminder-target-id">チャンネルID</label>
+							<input
+								type="text"
+								id="reminder-target-id"
+								placeholder="例: 123456789012345678"
+								bind:value={targetId}
+							/>
+						</div>
+					{/if}
 				</div>
 				<button type="submit" class="btn btn-primary btn-block" disabled={submitting}
 					>リマインダーを登録</button

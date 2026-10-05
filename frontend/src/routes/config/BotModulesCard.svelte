@@ -68,14 +68,11 @@ function saveSelected() {
 </script>
 
 {#if visible}
-	<details class="config-card card" open>
-		<summary class="column-header badge-right">
+	<section class="config-card card">
+		<div class="column-header badge-right">
 			<h3><span class="material-symbols-outlined header-icon-symbol">tune</span>有効な機能（あなた専用）</h3>
 			<span class="badge badge-accent">{onCount} / {modules.length}</span>
-		</summary>
-		<p class="description-text">
-			あなたがこのBotで使う機能だけを選べます（この設定はあなた個人にのみ適用されます）。オフにした機能はAIに渡されず、左メニューの該当タブも非表示になります。変更は次のメッセージ処理から反映されます。
-		</p>
+		</div>
 		<div class="modules-grid">
 			{#each modules as m (m.id)}
 				<label class="module-toggle">
@@ -91,7 +88,7 @@ function saveSelected() {
 			<Button variant="primary" onclick={saveSelected}>機能を保存</Button>
 			<Button variant="secondary" onclick={() => save("all")}>既定に戻す</Button>
 		</div>
-	</details>
+	</section>
 {/if}
 
 <style>

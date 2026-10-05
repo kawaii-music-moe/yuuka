@@ -261,6 +261,7 @@ body {
 		"opsz" 24;
 	vertical-align: middle;
 	line-height: 1;
+	user-select: none;
 }
 
 /* Sidebar navigation adjustments */
@@ -3130,48 +3131,7 @@ details.admin-section[open] > summary > .admin-section-title::before {
 	transform: rotate(90deg);
 }
 
-/* 設定タブ：config-card を details 化したアコーディオン。
-   summary（.column-header）をクリック行にし、タイトル左にシェブロンを付ける。
-   閉時は説明文・本文が隠れ、同時に1つだけ展開（name="config-acc"）。 */
-details.config-card > summary.column-header {
-	cursor: pointer;
-	user-select: none;
-	list-style: none; /* Firefox の三角を消す */
-}
-details.config-card > summary.column-header::-webkit-details-marker {
-	display: none; /* WebKit/Blink の三角を消す */
-}
-details.config-card:not([open]) > summary.column-header {
-	margin-bottom: 0;
-}
-/* h3 の左にシェブロン（開閉で回転）。h3 内の material icon の前に出る */
-details.config-card > summary.column-header > h3::before {
-	content: "▸";
-	display: inline-block;
-	font-size: 0.85rem;
-	line-height: 1;
-	margin-right: 6px;
-	color: var(--text-secondary);
-	transition: transform 0.18s ease;
-	vertical-align: middle;
-}
-details.config-card[open] > summary.column-header > h3::before {
-	transform: rotate(90deg);
-}
-/* バッジをヘッダ右端（タイトルの反対側）へ寄せるバリアント */
-summary.column-header.badge-right {
-	display: flex;
-	align-items: center;
-	gap: 8px;
-	flex-wrap: wrap;
-}
-summary.column-header.badge-right > .badge {
-	margin-left: auto;
-}
-summary.column-header.badge-right > h3 {
-	margin: 0;
-}
-/* バッジをヘッダ右端へ寄せるバリアント（div.column-header でも有効） */
+/* 個別設定ページの見出し。バッジはタイトルの反対側へ寄せる。 */
 .column-header.badge-right {
 	display: flex;
 	align-items: center;

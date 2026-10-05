@@ -20,7 +20,7 @@ import { derived } from "svelte/store";
 import { authApi } from "$lib/api/services";
 import { botPreset, SETTINGS_CHILD_TABS } from "$lib/botTabs";
 import { Icon } from "$lib/components/ui";
-import { type BotTab, DEFAULT_BOT_TAB, navigateTo } from "$lib/router";
+import { type BotTab, DEFAULT_BOT_TAB, navigateTo, page } from "$lib/router";
 import { activeBot, selectBot } from "$lib/stores/activeBot";
 import { currentUser } from "$lib/stores/session";
 import { theme, toggleTheme } from "$lib/stores/theme";
@@ -146,6 +146,24 @@ const modulePromise = $derived(
 // パンくず時の「Bot設定 ›」プレフィックスはテンプレート側でリンク付き分割描画する。
 const inSettingsChild = $derived(SETTINGS_CHILD_TABS.includes(tab));
 const title = $derived(TAB_TITLES[tab] ?? "ダッシュボード");
+const CONFIG_SECTION_TITLES: Record<string, string> = {
+	"bot-profile": "Bot登録名・属性",
+	"bot-name": "Bot登録名・属性",
+	"discord-token": "Discord 独自Bot",
+	"bot-invite": "招待リンク・プロフィール",
+	"bot-attributes": "Bot登録名・属性",
+	modules: "有効な機能",
+	"assistant-mode": "汎用モード設定",
+	"assistant-settings": "アシスタント設定",
+	sharing: "Bot共有管理",
+	backup: "Google Drive バックアップ",
+	credentials: "AI認証情報",
+};
+const configSectionTitle = $derived(
+	tab === "config"
+		? CONFIG_SECTION_TITLES[$page.searchParams.get("section") ?? ""]
+		: undefined,
+);
 
 // Bot ブランディング（旧 updateSidebarBotBranding）。
 const botName = $derived($activeBot?.name ?? "システムデフォルト");
@@ -274,7 +292,18 @@ const themeTitle = $derived(
 							onclick={() => go("settings")}>Bot設定</button
 						>
 						<span class="breadcrumb-sep">›</span>
-						{title}
+						{#if configSectionTitle}
+							<button
+								type="button"
+								class="breadcrumb-link"
+								title="システム設定情報に戻る"
+								onclick={() => go("config")}>{title}</button
+							>
+							<span class="breadcrumb-sep">›</span>
+							<span aria-current="page">{configSectionTitle}</span>
+						{:else}
+							{title}
+						{/if}
 					{:else}
 						{title}
 					{/if}

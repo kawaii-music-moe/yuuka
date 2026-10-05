@@ -46,14 +46,10 @@ async function sync() {
 }
 </script>
 
-<details class="config-card card">
-	<summary class="column-header">
+<section class="config-card card">
+	<div class="column-header">
 		<h3><span class="material-symbols-outlined header-icon-symbol">link</span>Bot 招待リンク・プロフィール</h3>
-	</summary>
-	<p class="description-text">
-		このBotをサーバーへ追加するための導入リンクと、Discordプロフィールへのリンクです。
-	</p>
-
+	</div>
 	{#if appId}
 		<div class="invite-fields">
 			<CopyField
@@ -73,7 +69,7 @@ async function sync() {
 			</Button>
 		</div>
 	{/if}
-</details>
+</section>
 
 <style>
 	.invite-fields {

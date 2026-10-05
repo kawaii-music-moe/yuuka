@@ -92,14 +92,11 @@ async function trigger() {
 }
 </script>
 
-<details class="config-card card">
-	<summary class="column-header badge-right">
+<section class="config-card card">
+	<div class="column-header badge-right">
 		<h3><span class="material-symbols-outlined header-icon-symbol">cloud_sync</span>Google Drive バックアップ</h3>
 		<span class="badge badge-accent">Beta</span>
-	</summary>
-	<p class="description-text">
-		データベースや設定ファイル、プレイブックのデータをGoogle Driveへ安全にバックアップします。
-	</p>
+	</div>
 	<form onsubmit={submit} class="backup-form">
 		<div class="form-group checkbox-inline">
 			<input type="checkbox" id="backup-enable" bind:checked={enabled} />
@@ -132,7 +129,7 @@ async function trigger() {
 			</Button>
 		</div>
 	</form>
-</details>
+</section>
 
 <style>
 	.backup-form {
