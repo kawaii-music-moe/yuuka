@@ -18,6 +18,9 @@ let transactions = [
 const events = [
   { id: '1', title: 'チーム定例', startsAt: '2026-08-13T10:00:00+09:00', endsAt: '2026-08-13T11:00:00+09:00', calendar: '仕事', color: '#126a57' },
   { id: '2', title: '歯科検診', startsAt: '2026-08-15T15:30:00+09:00', endsAt: '2026-08-15T16:30:00+09:00', calendar: '個人', color: '#ad5f00' },
+  // 本番と同じく calendar に生の Google カレンダー ID、calendarName に表示名が入るケース。
+  { id: '3', title: 'IV AKIHABARA (仕事)', startsAt: '2026-08-13T23:00:00+09:00', endsAt: '2026-08-14T05:00:00+09:00', calendar: '8fd1586a3fe4629dc96574b5220ceede3128a4ef749b8e5891cb6682d4e7eab0@group.calendar.google.com', calendarName: 'Google カレンダー', color: '#155eef' },
+  { id: '4', title: 'Stella出勤', startsAt: '2026-08-20T12:00:00+09:00', endsAt: '2026-08-20T18:00:00+09:00', calendar: '8fd1586a3fe4629dc96574b5220ceede3128a4ef749b8e5891cb6682d4e7eab0@group.calendar.google.com', calendarName: 'Google カレンダー', color: '#155eef' },
 ]
 // 本番と同じ契約（issue #41）: 送信は 202 `{status:'pending', sinceId}` を即返し、応答はバックグラウンドで
 // 生成される。クライアントは GET /api/client/chat/messages を sinceId 起点でポーリングする。

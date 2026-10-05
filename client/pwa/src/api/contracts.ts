@@ -7,7 +7,7 @@ export type AgentSettings = {
 }
 export type SharedNote = { id: string; title: string; body: string; updatedAt: string }
 export type Todo = { id: string; title: string; dueDate?: string; completed: boolean; list: string }
-export type CalendarEvent = { id: string; title: string; startsAt: string; endsAt: string; calendar: string; color: string }
+export type CalendarEvent = { id: string; title: string; startsAt: string; endsAt: string; calendar: string; calendarName?: string; color: string }
 export type Transaction = { id: string; date: string; category: string; description: string; amount: number; kind: 'income' | 'expense' }
 export type FinanceSummary = { income: number; expense: number; balance: number; month: string }
 export type ChatReference = {
