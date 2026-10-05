@@ -1,0 +1,31 @@
+[package]
+name = "yuuka-integrated"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "yuuka 統合設定 API（/api/integrated/*: overview / bot lifecycle / google accounts / grants）— Node integratedRoutes.ts パリティ"
+
+[dependencies]
+yuuka-core.workspace = true
+yuuka-db.workspace = true
+yuuka-web.workspace = true
+yuuka-auth.workspace = true
+yuuka-admin.workspace = true
+yuuka-google.workspace = true
+axum.workspace = true
+rusqlite.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+async-trait.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+tower = { workspace = true, features = ["util"] }
+# route テスト（oneshot + FakeAuth）で `SessionUser`/`Role` を構築するため。yuuka-credential テスト
+# ハーネスと同方針（AuthBackend の戻り型を名指しできるように）。
+yuuka-types.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,64 @@
+name: バグ報告
+description: 不具合・想定外の挙動を報告する
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        報告ありがとうございます。再現に必要な情報をできるだけ具体的にご記入ください。
+        秘密情報（トークン・APIキー・個人情報）は貼り付けないでください。
+  - type: textarea
+    id: summary
+    attributes:
+      label: 概要
+      description: 何が起きたか・何が問題かを簡潔に。
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: 再現手順
+      description: 問題を再現するための手順。
+      placeholder: |
+        1. ...
+        2. ...
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期待する挙動
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: 実際の挙動 / ログ
+      description: エラーメッセージやログがあれば貼り付けてください（秘密情報はマスクすること）。
+    validations:
+      required: false
+  - type: dropdown
+    id: area
+    attributes:
+      label: 影響範囲
+      options:
+        - Discord Bot
+        - Web ダッシュボード
+        - 家計簿 (finance)
+        - ToDo / リマインド
+        - MCP 連携
+        - Webhook
+        - Synapse エンジン
+        - デプロイ / インフラ
+        - その他 / 不明
+    validations:
+      required: false
+  - type: input
+    id: env
+    attributes:
+      label: 環境
+      description: 例) prod / dev、Docker タグ、Node バージョンなど。
+    validations:
+      required: false

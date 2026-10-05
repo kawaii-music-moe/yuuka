@@ -1,0 +1,3 @@
+Confirmed key facts: sqlx 0.9.0 released 2026-05-21, and the repo shows both launchbadge and transact-rs references (the project appears to have moved to a community org `transact-rs` while crates.io metadata still points to launchbadge). This is a meaningful recency/governance signal. My independent check corroborates the agent's expected findings. 
+
+Now I'll wait for the four background agents to complete. Let me check whether any have finished yet by monitoring.

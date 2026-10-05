@@ -5,54 +5,46 @@
   "license": "MIT",
   "private": true,
   "type": "module",
-  "main": "dist/index.js",
   "engines": {
     "node": ">=20"
   },
   "scripts": {
-    "dev": "tsx watch src/index.ts",
-    "build": "cargo build --release --manifest-path src/rust_crawler/Cargo.toml && mkdir -p dist/bin dist/assets && cp src/rust_crawler/target/release/yuuka-crawler dist/bin/ && cp -r src/assets/. dist/assets/ && tsgo",
-    "start": "node dist/index.js",
-    "lint": "biome check src/",
-    "lint:fix": "biome check --write src/",
-    "format": "biome format --write src/",
-    "typecheck": "tsgo --noEmit",
-    "check": "pnpm typecheck && pnpm lint"
+    "dev": "vite --config frontend/vite.config.ts",
+    "build:front": "vite build --config frontend/vite.config.ts",
+    "typecheck:front": "svelte-check --tsconfig frontend/tsconfig.json",
+    "test:front": "vitest run --config frontend/vitest.config.ts",
+    "dev:client:mock": "node scripts/dev-client-mock.mjs",
+    "build:pwa": "node scripts/build-pwa.mjs",
+    "build": "cargo build --release --bin yuuka && pnpm build:front && pnpm build:pwa",
+    "lint": "biome check frontend/src scripts",
+    "lint:fix": "biome check --write frontend/src scripts",
+    "check": "pnpm typecheck:front && pnpm lint",
+    "deploy": "deploy/instance.sh prod update",
+    "deploy:rollback": "deploy/instance.sh prod rollback",
+    "deploy:verify": "deploy/instance.sh prod verify",
+    "deploy:logs": "deploy/instance.sh prod logs -f",
+    "deploy:logs:dev": "deploy/instance.sh dev logs -f",
+    "deploy:down": "deploy/instance.sh prod down",
+    "deploy:ps": "deploy/instance.sh prod ps"
   },
   "dependencies": {
-    "@google/generative-ai": "^0.24.1",
-    "@napi-rs/canvas": "^1.0.0",
-    "@node-rs/argon2": "^2.0.2",
-    "archiver": "^8.0.0",
-    "bcryptjs": "^3.0.3",
-    "better-sqlite3": "^11.10.0",
-    "chart.js": "^4.5.1",
-    "cron-parser": "^5.5.0",
-    "discord.js": "^14.26.4",
-    "dotenv": "^16.6.1",
-    "googleapis": "^144.0.0",
-    "node-cron": "^3.0.3",
-    "puppeteer": "^25.1.0",
-    "redis": "^4.7.1",
-    "rss-parser": "^3.13.0",
-    "zod": "^4.4.3"
+    "chart.js": "^4.5.1"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.0",
-    "@types/archiver": "^7.0.0",
-    "@types/bcryptjs": "^3.0.0",
-    "@types/better-sqlite3": "^7.6.13",
+    "@sveltejs/vite-plugin-svelte": "^7.1.2",
+    "@tsconfig/svelte": "^5.0.8",
     "@types/node": "^22.19.19",
-    "@types/node-cron": "^3.0.11",
-    "@typescript/native-preview": "7.0.0-dev.20260615.1",
-    "tsx": "^4.22.3",
-    "typescript": "^5.9.3"
+    "svelte": "^5.56.4",
+    "svelte-check": "^4.7.1",
+    "typescript": "^5.9.3",
+    "vite": "^8.1.2",
+    "vite-plugin-pwa": "^1.3.0",
+    "vitest": "^4.1.9"
   },
   "pnpm": {
-    "comment": "推移的依存の既知脆弱性をパッチ版へ固定。互換性維持のため undici は discord.js が前提とする 6.x 系内の修正版に留める（メジャー跨ぎを避ける）。uuid も修正版直近の系統に固定。",
+    "comment": "推移的依存の既知脆弱性をパッチ版へ固定。",
     "overrides": {
-      "undici@<6.27.0": "^6.27.0",
-      "uuid@<11.1.1": "^11.1.1",
       "esbuild@<0.28.1": ">=0.28.1"
     }
   }

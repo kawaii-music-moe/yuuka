@@ -1,0 +1,25 @@
+[package]
+name = "yuuka-core"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "yuuka foundation: 層別エラー・config・secrets・telemetry・UserId・Tool/Repo 契約トレイト"
+
+[dependencies]
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+secrecy.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+async-trait.workspace = true
+chrono.workspace = true              # 操作履歴レコーダーの記録時刻（Node `new Date().toISOString()`）
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

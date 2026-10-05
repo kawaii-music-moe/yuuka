@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: ドキュメント / 設計資料
+    url: https://github.com/Suki-9/yuuka/blob/main/docs/index.md
+    about: セットアップ・仕様・アーキテクチャはまずこちらを参照してください。
+  - name: セキュリティ上の問題
+    url: https://github.com/Suki-9/yuuka/security/advisories/new
+    about: 脆弱性は公開 issue ではなく非公開のセキュリティアドバイザリで報告してください。

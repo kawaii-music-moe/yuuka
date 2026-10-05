@@ -1,0 +1,37 @@
+# ==============================================================================
+# Yuuka 開発(dev) インスタンス設定 — Docker 運用版（テンプレート）
+#   cp config.yaml.example config.yaml して編集する。config.yaml は .gitignore 済。
+#   本番とは別の Discord Bot Token / 別の暗号化シークレット / 別データで動かす隔離環境。
+# ==============================================================================
+
+# DB（/app/data はホストの deploy/dev/data を bind マウント＝空から新規作成）
+DB_PATH: "./data/yuuka.db"
+
+# dev 専用 Redis コンテナへ接続
+REDIS_URL: "redis://redis:6379"
+
+REMINDER_CRON: "* * * * *"
+
+# 管理画面（コンテナ内待受は固定。ホスト公開は instance.env の HOST_PORT=7856）
+PORT: 7854
+HOST: "0.0.0.0"
+
+# dev 専用の招待コード
+INVITE_CODES:
+  - "yuuka-dev-001"
+  - "yuuka-dev-002"
+
+# Google OAuth2（dev は http://localhost のため既定で無効。必要時に dev 用クライアントを設定）
+GOOGLE_CLIENT_ID: ""
+GOOGLE_CLIENT_SECRET: ""
+
+# ローカルアクセス時のベースURL（ブラウザの入口は Vite dev server＝ホスト 7855）。
+# 公開トンネル経由で使う場合は、実際の HTTPS URL（例: https://yuuka-dev.kawaii-music.moe）に
+# 変更すること。Cookie 認証の状態変更 API は Origin と BASE_URL のホストを照合するため、
+# localhost のままだとトンネル経由の POST/PUT/PATCH/DELETE が 403 になる。
+# Vite を使わず API へ直接アクセスする場合は HOST_PORT（既定 7856）に合わせる。
+BASE_URL: "http://localhost:7855"
+
+PRIVACY_POLICY_URL: "/privacy"
+TERMS_URL: "/terms"
+GOOGLE_SITE_VERIFICATION: ""

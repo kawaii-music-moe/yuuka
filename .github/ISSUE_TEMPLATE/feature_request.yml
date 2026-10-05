@@ -1,0 +1,39 @@
+name: 機能要望 / 改善提案
+description: 新機能・改善・リファクタの提案をする
+title: "[enhancement] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: 提案ありがとうございます。背景（なぜ必要か）と受け入れ条件を明記すると着手しやすくなります。
+  - type: textarea
+    id: background
+    attributes:
+      label: 背景 / 解決したい課題
+      description: 現状の何が問題で、なぜこの変更が必要か。
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 提案内容
+      description: どう変えたいか。代替案があれば併記。
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: 受け入れ条件
+      description: 完了の判断基準（チェックリスト推奨）。
+      placeholder: |
+        - [ ] ...
+        - [ ] `pnpm check` が exit 0
+    validations:
+      required: false
+  - type: textarea
+    id: notes
+    attributes:
+      label: 補足 / 依存関係
+      description: 関連 issue、ブロッカー、デプロイ影響など。
+    validations:
+      required: false

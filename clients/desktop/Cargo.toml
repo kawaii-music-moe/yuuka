@@ -1,0 +1,111 @@
+[package]
+name = "yuuka-desktop"
+version = "0.1.0"
+edition = "2021"
+description = "Yuuka Desktop — Windows 常駐オーバーレイ型チャットクライアント"
+license = "MIT"
+publish = false
+
+# ---------------------------------------------------------------------------
+# 設計資料: docs/design/desktop_client/client_design.md §2（依存クレート）
+# 方針: とにかく軽量（単一 exe・低 RAM）。TLS は rustls で OS 非依存。
+# ---------------------------------------------------------------------------
+
+[dependencies]
+# --- GUI（egui / eframe）-------------------------------------------------
+# 描画バックエンドは glow(OpenGL) を採用（wgpu より軽量・依存が薄い。§2 備考）。
+# default-features を切って必要 feature のみ有効化する。
+eframe = { version = "0.29", default-features = false, features = [
+    "glow",          # OpenGL バックエンド（軽量重視）
+    "default_fonts", # 既定フォント（日本語は後フェーズで差し替え）
+    "persistence",   # ウィンドウ状態の保存（egui memory）
+    "wayland",       # Linux ビルド時の互換性確保（Windows では無視される）
+    "x11",
+] }
+egui = "0.29"
+# Markdown レンダリング（assistant 返答）。
+egui_commonmark = "0.18"
+# 画像ローダ（受信画像・グラフ PNG・添付サムネ）。
+egui_extras = { version = "0.29", features = ["image"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
+# フォント読込前の事前検証に使う（egui/epaint が内部で使うのと同じ ab_glyph）。
+# 不正なフォントを set_fonts へ渡すと epaint が panic するため、ロード前に
+# try_from_vec_and_index で必ず検証してから差し込む（install_fonts）。
+ab_glyph = "0.2"
+
+# --- 非同期 / WS / HTTP --------------------------------------------------
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net"] }
+# rustls-tls-webpki-roots で OS 非依存 TLS（§2）。
+tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+reqwest = { version = "0.12", default-features = false, features = [
+    "rustls-tls",
+    "json",
+] }
+
+# --- シリアライズ（WS/REST プロトコル）---------------------------------
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+# base64 添付（画像/音声の encode/decode）。
+base64 = "0.22"
+
+# --- OS 統合 ------------------------------------------------------------
+tray-icon = "0.19"        # トレイ常駐メニュー
+global-hotkey = "0.6"     # グローバルホットキー（呼び出し）
+keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
+arboard = "3"             # クリップボード（画像貼り付け）。クロスプラットフォーム
+# 画像添付のファイル選択ダイアログ。Windows=ネイティブ / Linux=GTK3（バックエンドは
+# OS 別で常にコンパイルされ、gtk3 feature は Linux のみ有効）。
+rfd = { version = "0.15", default-features = false, features = ["gtk3"] }
+open = "5"                # 既定ブラウザ起動（OAuth verification_uri）
+directories = "5"         # 設定保存ディレクトリ（非機微設定のみ）
+
+# --- 雑多 ---------------------------------------------------------------
+log = "0.4"
+env_logger = "0.11"
+thiserror = "2"
+
+# Windows 固有（クリック透過・最前面・単一インスタンス Mutex の細部）。
+# 設計 §4.2 / §4.4。windows-rs は Windows ターゲットのみリンクする。
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_Security",               # SECURITY_ATTRIBUTES（CreateMutexW のゲート要件）
+    "Win32_System_Threading",       # CreateMutexW（単一インスタンス）
+    "Win32_UI_WindowsAndMessaging",  # SetWindowPos / WS_EX_LAYERED 等
+    "Win32_Graphics_Gdi",
+] }
+
+# --- 音声入力。`audio` feature の裏に隔離。------------------------------
+# feature OFF でもクレートはコンパイルできること（要件 §10）。録音は cpal で取り込み
+# hound で WAV(PCM16) 化して送る（Gemini ネイティブ音声対応。OGG/Opus 最適化は将来）。
+[dependencies.cpal]
+version = "0.15"
+optional = true
+[dependencies.hound]
+version = "3"
+optional = true
+# 将来の OGG/Opus 圧縮用（現状の WAV 実装では未使用）。
+[dependencies.opus]
+version = "0.3"
+optional = true
+[dependencies.ogg]
+version = "0.9"
+optional = true
+
+[features]
+# 既定は音声 OFF（cpal は Linux で libasound を要求し、開発機に無いとビルド不可な
+# ため）。Windows 配布ビルドはマイク録音を含めるべく `--features audio` でビルドする
+# （WAV のみ＝cpal + hound。opus/ogg は将来の圧縮用に optional のまま）。
+default = []
+audio = ["dep:cpal", "dep:hound"]
+
+# ---------------------------------------------------------------------------
+# リリースビルドのバイナリ最小化（設計 §1 / NFR-1: 単一 exe ≤ 20MB 目標）。
+# ---------------------------------------------------------------------------
+[profile.release]
+opt-level = "z"      # サイズ最優先
+lto = true           # リンク時最適化
+codegen-units = 1    # 最適化単位を 1 に（サイズ↓・ビルド時間↑）
+strip = true         # シンボル除去
+panic = "abort"      # パニック巻き戻しコードを削除（exe 縮小）

@@ -1,0 +1,25 @@
+[package]
+name = "yuuka-crypto"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "yuuka 保存時暗号化（Argon2id 鍵導出 + AES-256-GCM）— Node src/utils/crypto.ts パリティ・P1-5"
+
+[dependencies]
+yuuka-core.workspace = true
+aes-gcm.workspace = true
+scrypt.workspace = true
+argon2.workspace = true
+hex.workspace = true
+getrandom.workspace = true
+secrecy.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+rusqlite.workspace = true
+
+[dev-dependencies]
+
+[lints]
+workspace = true

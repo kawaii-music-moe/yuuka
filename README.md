@@ -1,164 +1,35 @@
-# Yuuka - Discord Gemini Secretary Bot & Admin Dashboard
+# Yuuka — Discord Gemini Secretary Bot & Admin Dashboard
 
----
+『Yuuka』は Google の **Gemini API** を活用した Discord 秘書ボットと Web 管理ダッシュボードのハイブリッドな統合管理ソフトウェアです。全ユーザーデータは **Discord ユーザーID 単位で完全分離** され、Bot を共有しても会話履歴・家計・パスワード等が他ユーザーから見えることはありません。
 
-## ✨ 主な機能（できること一覧）
+タスク管理・予定（Google カレンダー同期）・家計・リマインド・ブラウザ自動操作・パスワードマネージャ・MCP 拡張などを自然な会話から扱えます。
 
-『Yuuka』は、Google の **Gemini API** を活用した Discord 秘書ボットと Web 管理ダッシュボードのハイブリッドな統合管理ソフトウェアです（仕様書: `docs/spec/discordbot_spec.md` v0.6.1 準拠）。
+## ドキュメント
 
-全ユーザーデータは **DiscordユーザーID単位で完全分離** されており、Botを共有していても会話履歴・家計・パスワード等が他ユーザーから見えることはありません。
+| 目的 | ページ |
+|---|---|
+| できること一覧（機能） | [docs/guide/features.md](docs/guide/features.md) |
+| セットアップ・設定（ローカル / 開発） | [docs/guide/setup.md](docs/guide/setup.md) |
+| Docker 本番デプロイ・複数インスタンス運用 | [docs/guide/deployment.md](docs/guide/deployment.md) |
+| 設計・仕様・アーキテクチャ（開発者 / AI 向け） | [docs/index.md](docs/index.md) |
 
-### 🤖 Discord 秘書 Bot 機能
-
-*   **🎭 ペルソナ（人格）のカスタマイズとマーケットプレイス**
-    *   ユーザーごとに独立したペルソナ（システムプロンプト、最大20,000字）を作成・適用できます。
-    *   公開設定したペルソナはマーケットプレイスに並び、他ユーザーが独立コピーとしてインポートできます。Bot作成者は「推奨ペルソナ」を設定可能です。
-*   **📋 タスク管理 (ToDo) + タグ自動付与・優先度整理**
-    *   タスクの追加・一覧・完了・削除を自然な会話から。期限・優先度（高/中/低）に対応。
-    *   登録・更新のたびに **LLMがタグを自動付与** してグルーピング。「タスクを整理して」で優先順位の分析・提案（承認後に確定）も行えます。
-*   **📅 予定管理 (Google カレンダー双方向同期)**
-    *   予定の登録・一覧・削除。ユーザーごとの OAuth 連携でGoogleカレンダーと双方向同期されます。
-*   **⏰ リマインド機能**
-    *   時刻指定・cron式による繰り返しリマインド、ToDo期限の自動通知、予定前リマインド、連絡先の誕生日前日通知。
-*   **💰 家計管理（収入・支出・予算・支払い予定の消込）**
-    *   「〇〇に1200円使った」で自動記帳。収入にも対応。カテゴリ別月次予算と消化率を管理。
-    *   家賃・サブスク等の繰り返し支払い予定（cron式）を登録し、実支払いと自動照合して**消込**。予定からToDo・リマインドの同時生成も可能です。
-*   **📷 レシート解析 (OCR & 自動家計簿登録)** — 画像を貼るだけでGeminiが解析・分類・記帳し、消込候補も提示します。
-*   **🎤 音声メモの文字起こし** — ボイスメッセージや音声ファイルを文字起こしし、内容に応じてToDo変換やクリップボード保存を提案します。
-*   **🧠 メモ機能の使い分け**
-    *   **コンテキストノート**: 長期的な背景知識（毎会話でLLMに注入、最大10,000字）
-    *   **クリップボード**: TTL付きの揮発メモ（デフォルト24時間で自動削除）
-    *   **連絡先**: 人物ごとの誕生日・関係性・メモ（言及時にのみ動的注入）
-*   **🔎 会話ログ検索・要約** — 全会話はSQLiteに永続保存され、FTS5全文検索で「先週の〇〇の話」を検索・要約できます。
-*   **🌐 ブラウザ自動操作 + 🔐 パスワードマネージャ**
-    *   Rust製クローラーデーモン + Puppeteer による高速・堅牢なWeb検索/ページ取得/スクリーンショット/インタラクティブ操作（数値IDアノテーション方式）。
-    *   認証情報は **Argon2id によるユーザー固有鍵 + AES-256-GCM** で暗号化保存。自動ログイン時は復号値をブラウザへ直接注入し、**LLMにはパスワードを一切渡しません**。全アクセスは監査ログに記録されます。
-*   **📚 操作記憶（マクロ / Playbook）**
-    *   手順の説明、または「今の操作を覚えておいて」（直近のツール実行履歴から抽出）でマクロを登録。短いフレーズで呼び出し、確認後に実行。cron式での定期自動実行にも対応します。
-*   **🌅 朝報・📋 日報・週報の自動配信**
-    *   朝報: Open-Meteoの天気予報 + 登録RSSフィードのニュースをLLMが要約して毎朝配信。
-    *   日報・週報: 完了タスク・予定・支払い・収支・会話トピックをLLMが集約して定期配信（失敗時は生データへフォールバック）。
-*   **🪝 外部Webhook受信** — ユーザー固有のURLでGitHub等のWebhookを受信し、LLMが内容を解釈してDiscordへ通知。HMAC署名検証・キーワードフィルタ・ToDo/リマインド自動変換に対応。
-*   **🧩 MCPサーバー拡張** — 任意のMCP (Model Context Protocol) サーバーを登録すると、そのToolがLLMのFunction Callとして動的に追加されます（実行前確認フラグ付き。Adminはシステムレベル登録も可能）。
-*   **📊 リッチ返信** — Discord Embed（仕様準拠のカラー規約）と Chart.js によるグラフ画像（円/棒/折れ線/ドーナツ/予算プログレス）で視覚的に返信。ユーザー設定でオフにもできます。
-
-### 🌐 Web 管理ダッシュボード
-
-*   **🔒 セキュアな認証**: bcrypt(cost 12) + パスワードポリシー（8文字以上・文字種2種以上・よくあるパスワード1万件チェック）、Redisセッション（7日間スライディングウィンドウ、パスワード変更で全端末即時失効）、ログインレート制限。
-*   **🤖 複数Bot管理とBot共有**: ユーザーが独自Botを作成・起動。共有はDiscord DMの招待ボタンで承認するフロー（§5.2）。推奨ペルソナの案内にも対応。
-*   **👮 Adminパネル**: ユーザー・ロール管理、Bot停止処分、招待コード、ペルソナMP管理、**監査ログ閲覧**（パスワードマネージャアクセス・認証イベント・管理操作）。
-*   **📝 各機能の管理UI**: ペルソナ / リマインダー / コンテキストノート・クリップボード・連絡先 / 朝報・日報設定 / Webhook / MCPサーバー / パスワードマネージャ / マクロ(Playbook) + cronスケジュール。
-*   **💾 ユーザー単位バックアップ**: 自分のデータだけを抽出したSQLiteをZIP化し、**自分のGoogle Drive** へ世代管理付き（デフォルト7世代）で定期アップロード（間隔は1時間〜30日で設定可）。
-
----
-
-## 📦 動作要件
-
-*   **Node.js 20 以上** / **pnpm**
-*   **Rust ツールチェイン (stable)** — 検索クローラー (`src/rust_crawler`) のビルドに `cargo` を使用します（[rustup](https://rustup.rs/) でインストール可）
-*   **Redis** — 会話コンテキスト・セッション管理に使用します
-*   **Chromium 実行環境** — ブラウザ自動操作用。`pnpm install` 時に Puppeteer が Chromium を自動ダウンロードします。ヘッドレスな Linux サーバーでは Chromium の依存共有ライブラリが別途必要になる場合があります（システムにインストール済みの `/usr/bin/chromium` 等があればそちらも自動検出されます）。
-
----
-
-## 🚀 セットアップ手順
-
-### 1. 依存関係のインストール
+## クイックスタート（Docker）
 
 ```bash
-pnpm install
+# 1. 設定を用意（インスタンスごと。詳細は deployment.md）
+cp deploy/prod/instance.env.example deploy/prod/instance.env
+cp deploy/prod/config.yaml.example  deploy/prod/config.yaml
+openssl rand -base64 48 | tr -d '\n' > deploy/prod/secret.key && chmod 600 deploy/prod/secret.key
+# deploy/prod/instance.env と config.yaml を環境に合わせて編集
+
+# 2. ビルドして起動（以後の更新もこれだけ）
+pnpm run deploy
 ```
 
-### 2. 設定ファイルの作成
+Docker を使わないローカル実行は [docs/guide/setup.md](docs/guide/setup.md) を参照してください。
 
-テンプレートファイルをコピーして、`config.yaml`（一般設定）と `.env`（機密設定）を作成します。どちらも git 管理外です。
+## ライセンス・免責（ファンメイド作品）
 
-```bash
-cp example.yaml config.yaml
-cp .env.example .env
-```
+本プロジェクトは、株式会社 Yostar および Nexon Games 社のゲーム『ブルーアーカイブ -Blue Archive-』の非公式ファンメイド作品です。キャラクター「早瀬ユウカ」、意匠、世界観等の著作権その他の知的財産権は、すべて原著作者（Nexon Games / Yostar 等）に帰属します。本プロジェクトは非営利目的のファン創作物であり、公式の二次創作ガイドラインに準拠して公開されています（v2 ではペルソナがユーザー設定制となり、デフォルトは汎用アシスタントです）。
 
-`.env`（環境変数）の設定項目：
-*   **`YUUKA_ENCRYPTION_SECRET`** 【必須】: 保存時暗号化（APIキー・トークン・パスワードマネージャ）のマスターシークレット。未設定の場合は起動しません。十分に長いランダム文字列を設定してください（生成例: `openssl rand -base64 48`）。ローテーションは `YUUKA_ENCRYPTION_SECRET_NEW` を併設して起動（手順は .env.example 参照）。
-*   `.env` ファイルの代わりに、systemd の `Environment=` 等で直接環境変数として渡すこともできます。
-
-`config.yaml` の主な設定項目：
-*   **`INVITE_CODES`**: ユーザー登録に必須の招待コード。推測されにくい独自の値に変更してください。
-*   **`DB_PATH`**: SQLite データベースファイルの保存パス（デフォルト: `./data/yuuka.db`）。
-*   **`REDIS_URL`**: 会話コンテキスト・セッション管理用の Redis 接続 URL。
-*   **`PORT` / `HOST`**: 管理画面サーバーがリスンするポートとホスト名。デフォルトはローカル接続のみ (`127.0.0.1`)。リバースプロキシ経由で公開する場合は `"0.0.0.0"` に変更します。
-*   **`GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`**: Google OAuth 認証情報（カレンダー/Drive連携用のシステム共通設定、任意）。
-*   **`BASE_URL`**: 外部公開HTTPSベースURL（OAuthリダイレクト・Webhook URLの生成に使用）。
-*   **`ADMIN_DISCORD_IDS`**: 初期Adminに昇格するDiscordユーザーID（任意。未設定なら最初の登録者がAdmin）。
-
-> ⚠️ **プレリリース版（v1スキーマ）からの移行について**: 現行バージョンはデータベーススキーマを全面再構築しています。旧スキーマを検出すると自動で再作成され、**旧データは破棄されます**。また、プレリリース版を `YUUKA_ENCRYPTION_SECRET` なしで運用していた場合は、環境変数 `YUUKA_ENCRYPTION_SECRET_NEW` に新しい鍵を設定して一度起動すると、既存の暗号化データが新しい鍵で再暗号化されます。
-
-### 3. ビルド・起動
-
-開発モード（ホットリロード）:
-
-```bash
-pnpm dev
-```
-
-プロダクション:
-
-```bash
-# Rustクローラーのビルド + アセットコピー + TypeScriptコンパイル
-pnpm build
-
-# 本番サーバーの起動
-pnpm start
-```
-
-起動後、ブラウザで `http://localhost:7854`（設定したポート）にアクセスします。
-
-1.  **初期セットアップ**: 最初のユーザーとして管理者アカウントを登録します。
-2.  **デフォルトBotのトークン設定**: システム全体のデフォルトBotトークンを入力して起動します。
-3.  **個人設定**: 各ユーザーは自分の Gemini API キー（必須）、Google OAuth連携、ペルソナ等を管理画面から設定します。
-
----
-
-## ⚙️ systemd による常時稼働 (Linux環境)
-
-同梱されている `yuuka.service.example` テンプレートを利用して、Linuxサーバー上でサービスとしてデーモン化できます。
-
-1.  テンプレートをコピーし、お使いの環境に合わせて編集します (`User`、`WorkingDirectory`、`ExecStart` のNode.jsパスなど)：
-    ```bash
-    cp yuuka.service.example yuuka.service
-    ```
-2.  サービスファイルを配置します：
-    ```bash
-    sudo cp yuuka.service /etc/systemd/system/yuuka.service
-    ```
-3.  デーモンをリロードしてサービスを有効化・起動します：
-    ```bash
-    sudo systemctl daemon-reload
-    sudo systemctl enable yuuka.service
-    sudo systemctl start yuuka.service
-    ```
-4.  ステータスの確認：
-    ```bash
-    sudo systemctl status yuuka.service
-    ```
-
----
-
-## 🏗️ アーキテクチャ
-
-*   仕様書: [docs/spec/discordbot_spec.md](docs/spec/discordbot_spec.md)
-*   実装規範（モジュール構成・コントラクト・スキーマ）: [docs/architecture/architecture_v2.md](docs/architecture/architecture_v2.md)
-*   検索クロールスキル: [docs/skills/search_skills.md](docs/skills/search_skills.md)（システムプロンプトへ自動インライン注入されます）
-
----
-
-## 📄 免責事項とライセンス（ファンメイド作品）
-
-### ⚠️ 二次創作に関する免責事項
-本プロジェクトは、株式会社YostarおよびNexon Games社が提供するスマートフォン向けゲーム『ブルーアーカイブ -Blue Archive-』の非公式ファンメイド作品です。
-使用されているキャラクター「早瀬ユウカ」、意匠、世界観等の著作権およびその他一切の知的財産権は、すべて原著作者（Nexon Games / Yostar等）に帰属します。
-本プロジェクトはファンによる非営利目的の創作物であり、公式の「ブルーアーカイブ 二次創作ガイドライン」を尊重し、それに準拠する形で公開されています。
-（v2ではペルソナがユーザー設定制となり、デフォルトは汎用アシスタントです。早瀬ユウカのペルソナはマーケットプレイス等で任意に適用できます。）
-
-### ⚖️ ソフトウェアライセンス
-このプロジェクトのプログラムコード自体は [MIT License](LICENSE) の下で公開されています。
+プログラムコード自体は [MIT License](LICENSE) の下で公開されています。

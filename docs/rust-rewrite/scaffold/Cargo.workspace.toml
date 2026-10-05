@@ -1,0 +1,72 @@
+# workspace ルート Cargo.toml テンプレート（抜粋）。実装開始時に新規 workspace ルートへコピー。
+# 絶対制約1（anyhow等の握り潰し禁止）の機械強制。検証: ../verification/rpt-clippy-cargodeny.md
+
+[workspace]
+resolver = "2"
+members = [
+    "crates/yuuka-core",
+    "crates/yuuka-db",
+    "crates/yuuka-web",
+    "crates/yuuka-discord",
+    "crates/yuuka-gemini",
+    "crates/yuuka-tools",
+    "crates/yuuka-services",
+    "crates/yuuka-supervisor",
+    "crates/yuuka-synapse",   # 既存 src/rust_synapse を取り込み
+    "crates/yuuka-crawler",   # 既存 src/rust_crawler を取り込み
+    "xtask",
+]
+
+[workspace.package]
+edition = "2021"            # ※オープン決定事項#4: 2021 か 2024 か
+rust-version = "1.96"
+
+# ── 自己復帰の前提: パニックは unwind（abort にしない） ──
+# tokio がタスク境界でパニックを隔離できるのは unwind のときだけ。
+# 検証: ../verification/rpt-resilience-tokio-backon-recloser.md §1
+[profile.release]
+panic = "unwind"
+[profile.dev]
+panic = "unwind"
+
+# ── 絶対制約1: 握り潰し系 lint を workspace 全体で deny ──
+# restriction グループは一括有効化禁止（相互矛盾を含むため個別列挙が必須）。
+# 各メンバー crate は member-Cargo.toml.snippet の [lints] workspace = true を書くこと。
+[workspace.lints.clippy]
+unwrap_used        = "deny"
+expect_used        = "deny"
+panic              = "deny"
+todo               = "deny"
+unimplemented      = "deny"
+unreachable        = "deny"
+indexing_slicing   = "deny"
+panic_in_result_fn = "deny"
+
+# ── 共有依存（バージョンは 2026-07-01 実測。../00-decisions.md に整合） ──
+[workspace.dependencies]
+tokio                    = { version = "1.52", features = ["full"] }
+thiserror                = "2.0.18"
+axum                     = { version = "0.8.9", features = ["ws", "macros"] }
+tower                    = "0.5"
+tower-http               = { version = "0.6", features = ["fs", "compression-br", "compression-gzip", "set-header"] }  # 0.7 は axum 0.8.9 未対応の恐れ→0.6 固定
+hyper                    = "1"
+rusqlite                 = { version = "0.40", features = ["bundled"] }         # bundled SQLite 3.53.2
+deadpool-sqlite          = "0.13"
+refinery                 = { version = "0.9", features = ["rusqlite"] }
+backon                   = "1.6"                                                # backoff は RUSTSEC-2025-0012 で禁止
+tokio-graceful-shutdown  = "0.19"
+recloser                 = "1.4"
+twilight-gateway         = "0.17"
+twilight-http            = "0.17"
+twilight-model           = "0.17"
+twilight-cache-inmemory  = "0.17"
+twilight-util            = "0.17"
+reqwest                  = { version = "0.13", features = ["json", "stream", "rustls-tls"] }
+eventsource-stream       = "0.2"
+serde                    = { version = "1", features = ["derive"] }
+serde_json               = "1"
+secrecy                  = "0.10"
+ts-rs                    = "12"                                                 # ※オープン決定#1: utoipa 5.5 + openapi-typescript 代替
+rmcp                     = { version = "2.0", features = ["client"] }
+extism                   = "1.30"
+redis                    = { version = "0.27", features = ["tokio-comp"] }      # or fred

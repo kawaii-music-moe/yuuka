@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="ja" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>404 Not Found — yuuka</title>
+  <link rel="stylesheet" href="/styles.css">
+  <style>
+    body {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      margin: 0;
+      background: var(--bg-base);
+      color: var(--text-high);
+      font-family: var(--font-family-base);
+    }
+    .error-box {
+      text-align: center;
+      padding: 48px 32px;
+    }
+    .error-code {
+      font-size: 5rem;
+      font-weight: 700;
+      color: var(--color-primary);
+      line-height: 1;
+      margin-bottom: 16px;
+    }
+    .error-title {
+      font-size: 1.25rem;
+      font-weight: 600;
+      margin-bottom: 8px;
+    }
+    .error-sub {
+      font-size: 0.9rem;
+      color: var(--color-zinc-muted);
+      margin-bottom: 32px;
+    }
+    .btn-home {
+      display: inline-block;
+      padding: 10px 24px;
+      background: var(--color-primary);
+      color: #fff;
+      border-radius: var(--radius);
+      text-decoration: none;
+      font-size: 0.9rem;
+      transition: opacity 0.15s;
+    }
+    .btn-home:hover { opacity: 0.85; }
+  </style>
+</head>
+<body>
+  <div class="error-box">
+    <div class="error-code">404</div>
+    <div class="error-title">ページが見つかりません</div>
+    <div class="error-sub">お探しのページは存在しないか、移動した可能性があります。</div>
+    <a href="/" class="btn-home">ホームへ戻る</a>
+  </div>
+</body>
+</html>

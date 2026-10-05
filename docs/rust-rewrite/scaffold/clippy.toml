@@ -1,0 +1,11 @@
+# clippy.toml テンプレート。workspace ルートへコピー。
+# unwrap_used / expect_used / indexing_slicing はテストコードでも発火するため、
+# テスト内に限り緩和する（本番コードは deny のまま）。
+# 検証: ../verification/rpt-clippy-cargodeny.md §1（設定項目の実在を確認済み）
+
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-indexing-slicing-in-tests = true
+
+# 注意: doctest 内の unwrap は --all-targets では拾われない。
+# doctest も塞ぐなら別途 RUSTDOCFLAGS / `cargo test --doc` を検討（R-18 参照）。

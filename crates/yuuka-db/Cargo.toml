@@ -1,0 +1,30 @@
+[package]
+name = "yuuka-db"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "yuuka DB 層（rusqlite 単一writer actor + read pool + schema 互換ガード）"
+
+# 注: refinery（前方専用マイグレーションランナー）と backon（SQLITE_BUSY リトライ）は
+# Phase H / Phase 1 で導入する。移行期は Rust が DDL を一切発行せず、schema.rs の
+# 互換ガード（schema_version == "17"）で fail-fast するのみ（R-1/R-4・§11.4）。
+
+[dependencies]
+yuuka-core.workspace = true
+rusqlite.workspace = true          # bundled SQLite 3.53.2（ADR アンカー）
+tokio.workspace = true             # writer actor の mpsc/oneshot・read pool の Semaphore/spawn_blocking
+tracing.workspace = true
+refinery.workspace = true
+
+# 逸脱: deadpool-sqlite 0.13 は rusqlite ^0.38 で頭打ち（libsqlite3-sys の links 衝突で
+# rusqlite 0.40 と両立不可）。ADR は rusqlite 0.40 を優先（synapse 統一・SQLite 3.53.2）する
+# ため、read pool は Phase 0 では内製（tokio Semaphore + コネクション freelist + spawn_blocking）
+# とする。deadpool/r2d2 が rusqlite 0.40 対応版を出したら Phase 1 で差し替え可（内部実装のみ）。
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

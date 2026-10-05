@@ -1,0 +1,33 @@
+# ==============================================================================
+# Yuuka 本番(prod) インスタンス設定 — Docker 運用版（テンプレート）
+#   cp config.yaml.example config.yaml して編集する。config.yaml は .gitignore 済。
+#   暗号化シークレットはここに書かず deploy/prod/secret.key（環境変数注入）に置く。
+# ==============================================================================
+
+# DB（コンテナ内パス。/app/data はホストの実 data/ を bind マウント）
+DB_PATH: "./data/yuuka.db"
+
+# Redis はインスタンス専用コンテナ（compose の service 名 "redis"）へ接続
+REDIS_URL: "redis://redis:6379"
+
+REMINDER_CRON: "* * * * *"
+
+# 管理画面（コンテナ内待受。ホスト公開ポートは instance.env の HOST_PORT）
+PORT: 7854
+HOST: "0.0.0.0"
+
+# ユーザー登録用の招待コード（環境に合わせて変更）
+INVITE_CODES:
+  - "change-me-invite-1"
+  - "change-me-invite-2"
+
+# Google OAuth2 システム共通設定（取得した値を設定。Secret は機密）
+GOOGLE_CLIENT_ID: "your-google-oauth-client-id.apps.googleusercontent.com"
+GOOGLE_CLIENT_SECRET: "your-google-oauth-client-secret"
+
+# 外部公開ベースURL（Cloudflare Tunnel 等で公開する本番ドメイン）
+BASE_URL: "https://yuuka.example.com"
+
+PRIVACY_POLICY_URL: "/privacy"
+TERMS_URL: "/terms"
+GOOGLE_SITE_VERIFICATION: ""

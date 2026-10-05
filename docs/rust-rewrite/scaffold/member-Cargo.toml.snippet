@@ -1,0 +1,8 @@
+# 各メンバー crate の Cargo.toml へ追記するスニペット。
+# これを書かないと workspace の [workspace.lints.clippy] deny は「継承されない」（絶対制約1の穴になる）。
+# 検証: ../verification/rpt-clippy-cargodeny.md §2（メンバーは自動継承しない）
+#
+# 注意: 同一 [lints] テーブルで workspace = true と個別 lint の併記はハードエラー。
+
+[lints]
+workspace = true

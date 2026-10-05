@@ -10,6 +10,23 @@ config.yaml
 *.db-journal
 *.db-wal
 *.db-shm
-yuuka.service
 
 *.code-workspace
+
+# Docker インスタンスの機密・環境依存設定（*.example はテンプレートとして追跡する）
+# config.yaml / data/ は上のパターンで既に除外
+# instance.env* で手動バックアップ（instance.env.bak-YYYYMMDD 等）も含めて無視し、
+# .example だけ明示的に再許可する（#48: バックアップの誤コミット防止）。
+deploy/*/instance.env*
+!deploy/*/instance.env.example
+deploy/*/secret.key
+deploy/*/secret.key.new
+deploy/*/data/
+node_modules
+
+# Rust 移行ワークスペース（Phase 0〜）のビルド成果物
+/target
+
+# PWA（client/pwa）のビルド成果物は追跡しない（#46）。出力先は dist/public/pwa（dist/ で除外済み）。
+# 旧 Node 時代の出力先だった src/public/pwa も、古いブランチ等から再生成されて誤コミットされないよう明示的に除外する。
+/src/public/pwa/

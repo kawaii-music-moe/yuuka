@@ -1,0 +1,638 @@
+//! P1-2 会話オーケストレーションの end-to-end 統合テスト（fake Gemini backend・実 SQLite）。
+//!
+//! 検証: ユーザー発言の永続化 → 直近履歴ロード → システムプロンプト組立 → 暗号化済みユーザー鍵の
+//! 復号 → FC ループ（tools 無し）→ アシスタント応答の永続化 → [`TurnReply`]。ネットワーク不要。
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
+use std::sync::{Arc, Mutex};
+
+use async_trait::async_trait;
+use secrecy::SecretString;
+use serde_json::json;
+use yuuka_core::{BotId, GeminiError, UserId};
+use yuuka_crypto::SystemCrypto;
+use yuuka_discord::{BotStatus, IncomingChat, StatusSink};
+use yuuka_gemini::{
+    Content, FunctionDeclaration, GenerateBackend, GenerateContentResponse, ToolConfig,
+};
+use yuuka_orchestrator::{message_log, ChatEngine, GeminiFactory};
+use yuuka_tools::ToolRegistry;
+use yuuka_web::Db;
+
+static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// migrations 適用済みの一時 DB（本番 open は CREATE しないので先にファイルを作る）。
+fn fresh_db() -> (Db, std::path::PathBuf) {
+    let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let path =
+        std::env::temp_dir().join(format!("yuuka_orch_it_{}_{n}.sqlite", std::process::id()));
+    {
+        rusqlite::Connection::open(&path).expect("seed file");
+    }
+    let db = Db::open(&path).expect("open db");
+    (db, path)
+}
+
+/// 固定テキストを 1 度だけ返す fake backend（tools 無しの単発ターン）。
+struct FakeBackend {
+    responses: Mutex<std::collections::VecDeque<GenerateContentResponse>>,
+}
+
+#[async_trait]
+impl GenerateBackend for FakeBackend {
+    async fn generate(
+        &self,
+        _system_instruction: Option<&str>,
+        _declarations: &[FunctionDeclaration],
+        _contents: &[Content],
+        _tool_config: Option<ToolConfig>,
+    ) -> Result<GenerateContentResponse, GeminiError> {
+        Ok(self
+            .responses
+            .lock()
+            .unwrap()
+            .pop_front()
+            .expect("fake backend ran out of responses"))
+    }
+}
+
+/// 固定テキストを返す backend を生成するファクトリ。
+struct FakeFactory {
+    text: String,
+}
+
+impl GeminiFactory for FakeFactory {
+    fn build(
+        &self,
+        _model: &str,
+        _api_key: SecretString,
+    ) -> Result<Arc<dyn GenerateBackend>, GeminiError> {
+        let resp: GenerateContentResponse = serde_json::from_value(json!({
+            "candidates": [ { "content": { "role": "model", "parts": [ { "text": self.text } ] } } ]
+        }))
+        .expect("valid response");
+        let mut q = std::collections::VecDeque::new();
+        q.push_back(resp);
+        Ok(Arc::new(FakeBackend {
+            responses: Mutex::new(q),
+        }))
+    }
+}
+
+/// システム鍵 crypto を作り、ユーザーの Gemini キーを暗号化して users 行を seed する。
+fn seed_user_with_key(path: &std::path::Path, crypto: &SystemCrypto, discord_id: &str) {
+    let enc = crypto.encrypt_text("fake-gemini-key").expect("encrypt");
+    let conn = rusqlite::Connection::open(path).expect("open seed");
+    conn.execute(
+        "INSERT INTO users (discord_id, username, password_hash, salt, role, \
+         gemini_api_key_encrypted, gemini_api_key_iv, gemini_api_key_tag, gemini_model) \
+         VALUES (?1, 'yuu', 'x', '00', 'user', ?2, ?3, ?4, 'gemini-3.1-flash-lite')",
+        rusqlite::params![discord_id, enc.encrypted, enc.iv, enc.auth_tag],
+    )
+    .expect("seed user");
+}
+
+/// users 行だけ seed（Gemini キー無し）。
+fn seed_user_no_key(path: &std::path::Path, discord_id: &str) {
+    let conn = rusqlite::Connection::open(path).expect("open seed");
+    conn.execute(
+        "INSERT INTO users (discord_id, username, password_hash, salt, role) \
+         VALUES (?1, 'yuu', 'x', '00', 'user')",
+        rusqlite::params![discord_id],
+    )
+    .expect("seed user");
+}
+
+fn count_logs(path: &std::path::Path, user_id: &str, role: &str) -> i64 {
+    let conn = rusqlite::Connection::open(path).expect("open");
+    conn.query_row(
+        "SELECT COUNT(*) FROM message_logs WHERE user_id = ?1 AND role = ?2",
+        rusqlite::params![user_id, role],
+        |r| r.get(0),
+    )
+    .expect("count")
+}
+
+/// 保存済みログ本文を古い順で返す（#36: 空文字保存の回帰検証に使う）。
+fn log_contents(path: &std::path::Path, user_id: &str, role: &str) -> Vec<String> {
+    let conn = rusqlite::Connection::open(path).expect("open");
+    let mut stmt = conn
+        .prepare("SELECT content FROM message_logs WHERE user_id = ?1 AND role = ?2 ORDER BY id")
+        .expect("prepare");
+    stmt.query_map(rusqlite::params![user_id, role], |r| r.get(0))
+        .expect("query")
+        .collect::<Result<Vec<String>, _>>()
+        .expect("rows")
+}
+
+fn engine_with(db: Db, crypto: Option<Arc<SystemCrypto>>, text: &str) -> ChatEngine {
+    ChatEngine::new(
+        db,
+        crypto,
+        ToolRegistry::new(),
+        Arc::new(FakeFactory {
+            text: text.to_owned(),
+        }),
+        None,
+        Arc::new(yuuka_mcp::NullMcpClient),
+        None,
+    )
+}
+
+fn null_sink() -> StatusSink {
+    Arc::new(|_: BotStatus| {})
+}
+
+#[tokio::test]
+async fn secretary_turn_persists_and_replies() {
+    let (db, path) = fresh_db();
+    let crypto =
+        Arc::new(SystemCrypto::new(SecretString::from("orch-test-secret".to_owned())).unwrap());
+    seed_user_with_key(&path, &crypto, "u1");
+
+    let engine = engine_with(db, Some(crypto), "こんにちは！ご用件をどうぞ。");
+    let reply = engine
+        .secretary_turn(
+            &BotId::system_default(),
+            &UserId::new("u1"),
+            IncomingChat {
+                text: "こんにちは".to_owned(),
+                ..IncomingChat::default()
+            },
+            &null_sink(),
+        )
+        .await
+        .expect("turn ok");
+
+    assert_eq!(reply.text, "こんにちは！ご用件をどうぞ。");
+    // ユーザー発言 + アシスタント応答が両方永続化される。
+    assert_eq!(count_logs(&path, "u1", "user"), 1, "user 発言が保存される");
+    assert_eq!(
+        count_logs(&path, "u1", "assistant"),
+        1,
+        "assistant 応答が保存される"
+    );
+}
+
+/// #36: モデルの返信が Embed 形 JSON ブロックだけのとき、復元後の本文が空文字のまま
+/// 会話ログに保存されてはいけない（「空でも fallback を保存」不変条件が復元後にも効く）。
+#[tokio::test]
+async fn embed_only_reply_does_not_persist_empty_string() {
+    let (db, path) = fresh_db();
+    let crypto =
+        Arc::new(SystemCrypto::new(SecretString::from("orch-test-secret".to_owned())).unwrap());
+    seed_user_with_key(&path, &crypto, "u6");
+
+    let engine = engine_with(
+        db,
+        Some(crypto),
+        "```json\n{\"title\":\"天気\",\"description\":\"晴れ\"}\n```",
+    );
+    let reply = engine
+        .secretary_turn(
+            &BotId::system_default(),
+            &UserId::new("u6"),
+            IncomingChat {
+                text: "天気教えて".to_owned(),
+                ..IncomingChat::default()
+            },
+            &null_sink(),
+        )
+        .await
+        .expect("turn ok");
+
+    assert_eq!(reply.embeds.len(), 1, "Embed は復元される");
+    assert!(
+        !reply.text.trim().is_empty(),
+        "reply.text が空文字: {:?}",
+        reply.text
+    );
+
+    let saved = log_contents(&path, "u6", "assistant");
+    assert_eq!(saved.len(), 1);
+    assert!(
+        !saved[0].trim().is_empty(),
+        "会話ログに空文字が保存されてはいけない: {saved:?}"
+    );
+}
+
+#[tokio::test]
+async fn second_turn_sees_prior_history() {
+    let (db, path) = fresh_db();
+    let crypto =
+        Arc::new(SystemCrypto::new(SecretString::from("orch-test-secret".to_owned())).unwrap());
+    seed_user_with_key(&path, &crypto, "u2");
+    let engine = engine_with(db, Some(crypto), "了解しました。");
+
+    for _ in 0..2 {
+        engine
+            .secretary_turn(
+                &BotId::system_default(),
+                &UserId::new("u2"),
+                IncomingChat {
+                    text: "メモして".to_owned(),
+                    ..IncomingChat::default()
+                },
+                &null_sink(),
+            )
+            .await
+            .expect("turn");
+    }
+    // 2 ターンで user/assistant 各 2 行（履歴ロードが落ちていないこと＝クエリ健全）。
+    assert_eq!(count_logs(&path, "u2", "user"), 2);
+    assert_eq!(count_logs(&path, "u2", "assistant"), 2);
+}
+
+#[tokio::test]
+async fn missing_gemini_key_returns_warning_reply() {
+    let (db, path) = fresh_db();
+    seed_user_no_key(&path, "u3");
+    // crypto は Some でもキー行が無ければ ⚠️ 応答（Node processMessage の catch パリティ）。
+    let crypto =
+        Arc::new(SystemCrypto::new(SecretString::from("orch-test-secret".to_owned())).unwrap());
+    let engine = engine_with(db, Some(crypto), "unused");
+
+    let reply = engine
+        .secretary_turn(
+            &BotId::system_default(),
+            &UserId::new("u3"),
+            IncomingChat {
+                text: "やあ".to_owned(),
+                ..IncomingChat::default()
+            },
+            &null_sink(),
+        )
+        .await
+        .expect("turn ok");
+    assert!(
+        reply.text.contains("Gemini API Keyが設定されていません"),
+        "reply={}",
+        reply.text
+    );
+    // ⚠️ 定型応答は履歴に保存しない（Node processMessage catch パリティ）。ユーザー発言は保存済み。
+    assert_eq!(
+        count_logs(&path, "u3", "user"),
+        1,
+        "ユーザー発言は保存される"
+    );
+    assert_eq!(
+        count_logs(&path, "u3", "assistant"),
+        0,
+        "⚠️ 応答は履歴を汚染しない"
+    );
+}
+
+/// `message_logs` を破壊して非 LLM（DB）エラーを誘発する。
+fn break_message_logs(path: &std::path::Path) {
+    rusqlite::Connection::open(path)
+        .expect("open")
+        .execute_batch("ALTER TABLE message_logs RENAME TO message_logs_broken")
+        .expect("break table");
+}
+
+#[tokio::test]
+async fn non_llm_error_returns_persona_styled_reply() {
+    let (db, path) = fresh_db();
+    let crypto =
+        Arc::new(SystemCrypto::new(SecretString::from("orch-test-secret".to_owned())).unwrap());
+    seed_user_with_key(&path, &crypto, "u4");
+    break_message_logs(&path);
+    let engine = engine_with(
+        db,
+        Some(crypto),
+        "ごめんなさい、うまく処理できませんでした…！",
+    );
+
+    let reply = engine
+        .secretary_turn(
+            &BotId::system_default(),
+            &UserId::new("u4"),
+            IncomingChat {
+                text: "やあ".to_owned(),
+                ..IncomingChat::default()
+            },
+            &null_sink(),
+        )
+        .await
+        .expect("persona error reply");
+    // 固定の GENERIC_ERROR ではなく、LLM（fake）が生成したペルソナ入りエラー報告が返る。
+    assert_eq!(reply.text, "ごめんなさい、うまく処理できませんでした…！");
+}
+
+#[tokio::test]
+async fn non_llm_error_without_key_falls_back_to_fixed_error() {
+    let (db, path) = fresh_db();
+    seed_user_no_key(&path, "u5");
+    break_message_logs(&path);
+    let crypto =
+        Arc::new(SystemCrypto::new(SecretString::from("orch-test-secret".to_owned())).unwrap());
+    let engine = engine_with(db, Some(crypto), "unused");
+
+    let result = engine
+        .secretary_turn(
+            &BotId::system_default(),
+            &UserId::new("u5"),
+            IncomingChat {
+                text: "やあ".to_owned(),
+                ..IncomingChat::default()
+            },
+            &null_sink(),
+        )
+        .await;
+    // キー無し＝ペルソナ応答も生成不能 → Err（呼び出し側の固定文フォールバックへ）。
+    assert!(
+        result.is_err(),
+        "生成不能時は Err で固定文経路へ: {result:?}"
+    );
+}
+
+// ─── issue #41: PWA チャット送信（`secretary_turn_pwa`）の source 分離 ───
+
+fn count_logs_by_source(path: &std::path::Path, user_id: &str, role: &str, source: &str) -> i64 {
+    let conn = rusqlite::Connection::open(path).expect("open");
+    conn.query_row(
+        "SELECT COUNT(*) FROM message_logs WHERE user_id = ?1 AND role = ?2 AND source = ?3",
+        rusqlite::params![user_id, role, source],
+        |r| r.get(0),
+    )
+    .expect("count")
+}
+
+/// `secretary_turn_pwa` は `secretary_turn`（Discord）と同じ応答生成経路を通りつつ、
+/// 会話ログを `source='pwa'` として永続化する（issue #41）。
+#[tokio::test]
+async fn secretary_turn_pwa_persists_under_pwa_source() {
+    let (db, path) = fresh_db();
+    let crypto =
+        Arc::new(SystemCrypto::new(SecretString::from("orch-test-secret".to_owned())).unwrap());
+    seed_user_with_key(&path, &crypto, "u6");
+    let engine = engine_with(
+        db.clone(),
+        Some(crypto),
+        "PWAからのご用件ですね、承知しました。",
+    );
+
+    // #77: PWA のユーザー発言は呼び出し側（`chat_send`）が `202` の前に保存する。ターンは保存しない。
+    message_log::accept_pwa_user_message(&db, "u6", "system_default", "PWAから送信")
+        .await
+        .expect("accept");
+
+    let reply = engine
+        .secretary_turn_pwa(
+            &BotId::system_default(),
+            &UserId::new("u6"),
+            IncomingChat {
+                text: "PWAから送信".to_owned(),
+                ..IncomingChat::default()
+            },
+            &null_sink(),
+        )
+        .await
+        .expect("pwa turn ok");
+
+    assert_eq!(reply.text, "PWAからのご用件ですね、承知しました。");
+    assert_eq!(
+        count_logs_by_source(&path, "u6", "user", "pwa"),
+        1,
+        "PWA のユーザー発言が source='pwa' で（受理時に 1 度だけ）保存される・ターンは再保存しない"
+    );
+    assert_eq!(
+        count_logs_by_source(&path, "u6", "assistant", "pwa"),
+        1,
+        "PWA のアシスタント応答が source='pwa' で保存される"
+    );
+    assert_eq!(
+        count_logs(&path, "u6", "user"),
+        1,
+        "Discord 側（既定 source）には漏れない"
+    );
+}
+
+/// `secretary_turn`（Discord）と `secretary_turn_pwa` は同じ `(bot_id, user_id)` でも
+/// 互いのコンテキストを読まない（#38 と同種のキー不一致の再発防止・issue #41）。
+#[tokio::test]
+async fn secretary_turn_pwa_context_is_isolated_from_discord() {
+    let (db, path) = fresh_db();
+    let crypto =
+        Arc::new(SystemCrypto::new(SecretString::from("orch-test-secret".to_owned())).unwrap());
+    seed_user_with_key(&path, &crypto, "u7");
+    let engine = engine_with(db.clone(), Some(crypto), "了解しました。");
+
+    // Discord 経路で 1 ターン。
+    engine
+        .secretary_turn(
+            &BotId::system_default(),
+            &UserId::new("u7"),
+            IncomingChat {
+                text: "discord発言".to_owned(),
+                ..IncomingChat::default()
+            },
+            &null_sink(),
+        )
+        .await
+        .expect("discord turn");
+
+    // PWA 経路で 1 ターン（同じ user_id/bot_id）。発言は受理時に保存済み（#77）。
+    message_log::accept_pwa_user_message(&db, "u7", "system_default", "pwa発言")
+        .await
+        .expect("accept");
+    engine
+        .secretary_turn_pwa(
+            &BotId::system_default(),
+            &UserId::new("u7"),
+            IncomingChat {
+                text: "pwa発言".to_owned(),
+                ..IncomingChat::default()
+            },
+            &null_sink(),
+        )
+        .await
+        .expect("pwa turn");
+
+    // 双方 1 件ずつ、互いの source には漏れない。
+    assert_eq!(count_logs_by_source(&path, "u7", "user", "discord"), 1);
+    assert_eq!(count_logs_by_source(&path, "u7", "user", "pwa"), 1);
+    assert_eq!(count_logs(&path, "u7", "user"), 2, "合計は両方の和");
+}
+
+/// `generate()` 呼び出しごとの `contents`（role と結合テキストの列）の記録。
+type SeenContents = Arc<Mutex<Vec<Vec<(String, String)>>>>;
+
+/// `generate()` へ渡された `contents`（role と結合テキスト）を記録し、固定テキストを返す backend。
+struct RecordingBackend {
+    seen: SeenContents,
+    text: String,
+}
+
+#[async_trait]
+impl GenerateBackend for RecordingBackend {
+    async fn generate(
+        &self,
+        _system_instruction: Option<&str>,
+        _declarations: &[FunctionDeclaration],
+        contents: &[Content],
+        _tool_config: Option<ToolConfig>,
+    ) -> Result<GenerateContentResponse, GeminiError> {
+        let rendered = contents
+            .iter()
+            .map(|c| {
+                let role = serde_json::to_value(c.role)
+                    .ok()
+                    .and_then(|v| v.as_str().map(str::to_owned))
+                    .unwrap_or_default();
+                let text = c
+                    .parts
+                    .iter()
+                    .filter_map(|p| p.text.clone())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                (role, text)
+            })
+            .collect();
+        self.seen.lock().unwrap().push(rendered);
+        Ok(serde_json::from_value(json!({
+            "candidates": [ { "content": { "role": "model", "parts": [ { "text": self.text } ] } } ]
+        }))
+        .expect("valid response"))
+    }
+}
+
+struct RecordingFactory {
+    seen: SeenContents,
+    text: String,
+}
+
+impl GeminiFactory for RecordingFactory {
+    fn build(
+        &self,
+        _model: &str,
+        _api_key: SecretString,
+    ) -> Result<Arc<dyn GenerateBackend>, GeminiError> {
+        Ok(Arc::new(RecordingBackend {
+            seen: self.seen.clone(),
+            text: self.text.clone(),
+        }))
+    }
+}
+
+/// issue #77: PWA のユーザー発言は受理時に永続化され、ターンは再保存しない（履歴に二重に入らない）。
+/// 保存済みの発言は LLM への `contents` にちょうど 1 回だけ現れる（persist-before-load は維持）。
+#[tokio::test]
+async fn secretary_turn_pwa_does_not_resave_the_accepted_user_message() {
+    let (db, path) = fresh_db();
+    let crypto =
+        Arc::new(SystemCrypto::new(SecretString::from("orch-test-secret".to_owned())).unwrap());
+    seed_user_with_key(&path, &crypto, "u10");
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let engine = ChatEngine::new(
+        db.clone(),
+        Some(crypto),
+        ToolRegistry::new(),
+        Arc::new(RecordingFactory {
+            seen: seen.clone(),
+            text: "承知しました。".to_owned(),
+        }),
+        None,
+        Arc::new(yuuka_mcp::NullMcpClient),
+        None,
+    );
+
+    let accepted =
+        message_log::accept_pwa_user_message(&db, "u10", "system_default", "受理済みの発言")
+            .await
+            .expect("accept");
+    assert_eq!(count_logs_by_source(&path, "u10", "user", "pwa"), 1);
+
+    engine
+        .secretary_turn_pwa(
+            &BotId::system_default(),
+            &UserId::new("u10"),
+            IncomingChat {
+                text: "受理済みの発言".to_owned(),
+                ..IncomingChat::default()
+            },
+            &null_sink(),
+        )
+        .await
+        .expect("pwa turn ok");
+
+    assert_eq!(
+        count_logs_by_source(&path, "u10", "user", "pwa"),
+        1,
+        "ターン完了後もユーザー発言は 1 件のまま（二重保存しない）"
+    );
+    assert_eq!(count_logs_by_source(&path, "u10", "assistant", "pwa"), 1);
+    // 履歴上の順序は user → assistant（受理時の id が先頭のまま）。
+    let history = message_log::list_pwa_messages(&db, "u10", "system_default", 50)
+        .await
+        .unwrap();
+    assert_eq!(history.len(), 2);
+    assert_eq!(history[0].id, accepted.message_id);
+    assert_eq!(history[0].role, "user");
+    assert_eq!(history[1].role, "assistant");
+
+    // LLM へは、受理時に保存した発言が user ターンとして 1 回だけ渡る。
+    let calls = seen.lock().unwrap();
+    assert_eq!(calls.len(), 1);
+    let user_turns: Vec<&(String, String)> =
+        calls[0].iter().filter(|(role, _)| role == "user").collect();
+    assert_eq!(user_turns.len(), 1, "contents={:?}", calls[0]);
+    assert_eq!(user_turns[0].1, "受理済みの発言");
+}
+
+/// issue #77 の回帰防止: Discord/WS の秘書ターン（`secretary_turn`）は従来どおり、ユーザー発言を
+/// ターン内で **ちょうど 1 度**保存する（PWA 側の保存移動の影響を受けない）。
+#[tokio::test]
+async fn secretary_turn_discord_saves_the_user_message_exactly_once() {
+    let (db, path) = fresh_db();
+    let crypto =
+        Arc::new(SystemCrypto::new(SecretString::from("orch-test-secret".to_owned())).unwrap());
+    seed_user_with_key(&path, &crypto, "u11");
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let engine = ChatEngine::new(
+        db,
+        Some(crypto),
+        ToolRegistry::new(),
+        Arc::new(RecordingFactory {
+            seen: seen.clone(),
+            text: "了解です。".to_owned(),
+        }),
+        None,
+        Arc::new(yuuka_mcp::NullMcpClient),
+        None,
+    );
+
+    engine
+        .secretary_turn(
+            &BotId::system_default(),
+            &UserId::new("u11"),
+            IncomingChat {
+                text: "discordからの発言".to_owned(),
+                ..IncomingChat::default()
+            },
+            &null_sink(),
+        )
+        .await
+        .expect("discord turn ok");
+
+    assert_eq!(
+        count_logs_by_source(&path, "u11", "user", "discord"),
+        1,
+        "Discord/WS のユーザー発言はターン内で 1 度だけ保存される"
+    );
+    assert_eq!(count_logs_by_source(&path, "u11", "user", "pwa"), 0);
+    assert_eq!(
+        count_logs_by_source(&path, "u11", "assistant", "discord"),
+        1
+    );
+    assert_eq!(
+        log_contents(&path, "u11", "user"),
+        vec!["discordからの発言".to_owned()]
+    );
+    // LLM へも当該発言が user ターンとして 1 回だけ渡る。
+    let calls = seen.lock().unwrap();
+    let user_turns: Vec<&(String, String)> =
+        calls[0].iter().filter(|(role, _)| role == "user").collect();
+    assert_eq!(user_turns.len(), 1, "contents={:?}", calls[0]);
+    assert_eq!(user_turns[0].1, "discordからの発言");
+}

@@ -1,0 +1,29 @@
+[package]
+name = "yuuka-synapse"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "yuuka シナプス認知エンジン（in-process・HashNgram 埋め込み + RAM ベクトル索引 + KNN 想起）— 旧 rust_synapse daemon をライブラリ吸収（Phase H）"
+
+[lib]
+name = "yuuka_synapse"
+path = "src/lib.rs"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+rusqlite.workspace = true
+base64.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+
+[features]
+# 将来 ONNX 埋め込みモデル（bge-micro INT8）を差し込むための空フィーチャ。
+# 現フェーズでは ort/candle を依存に加えない（軽量・依存ゼロを維持）。
+onnx = []
+
+[lints]
+workspace = true

@@ -1,0 +1,20 @@
+[package]
+name = "yuuka-tools"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "yuuka ツール/プラグイン基盤（ToolProvider 中央レジストリ + NativeProvider）"
+
+[dependencies]
+yuuka-core = { workspace = true }
+async-trait = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+
+[lints]
+workspace = true

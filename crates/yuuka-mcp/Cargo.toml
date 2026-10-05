@@ -1,0 +1,38 @@
+[package]
+name = "yuuka-mcp"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "yuuka MCP サーバー管理 + ダッシュボードプロキシ API（/api/mcp-servers*, /proxy/mcp/:id/mcp）— Node mcpRoutes.ts パリティ"
+
+[dependencies]
+yuuka-core.workspace = true
+yuuka-db.workspace = true
+yuuka-web.workspace = true
+yuuka-auth.workspace = true
+yuuka-crypto.workspace = true
+axum.workspace = true
+rusqlite.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+async-trait.workspace = true
+getrandom.workspace = true
+hex.workspace = true
+sha1 = "0.10"                       # 動的ツール名の衝突退避に使う決定的短ハッシュ（Node createHash("sha1") パリティ・lockfile 既存版）
+# 実 MCP HTTP クライアント（HttpMcpClient）: tools/list JSON-RPC + SSE + ダッシュボード取得 + プロキシ中継。
+reqwest.workspace = true            # 外部 MCP サーバーへの HTTP（json/stream/rustls・workspace 固定）
+url = "2"                           # endpoint_url の origin 抽出・SSRF ガードの scheme/host/userinfo パース
+tokio.workspace = true              # SSRF ガードの DNS 解決（lookup_host・workspace は features=full）
+tracing.workspace = true            # 復号失敗等の縮退ログ（Node console.error パリティ）
+
+[dev-dependencies]
+tokio.workspace = true
+tower = { workspace = true, features = ["util"] }
+# ルート統合テストの FakeAuth（AuthBackend 実装）が返す SessionUser/Role のため（テスト専用・
+# 実行時依存は増やさない）。
+yuuka-types.workspace = true
+
+[lints]
+workspace = true

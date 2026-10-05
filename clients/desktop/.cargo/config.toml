@@ -1,0 +1,12 @@
+# 開発時の既定環境。
+#
+# 公開 URL（YUUKA_API_BASE）はビルド時に焼き込まれる（config.rs の option_env!）。
+# ここで未設定なら config.rs の既定 http://127.0.0.1:7854（ローカル backend）が使われる。
+# 本番ビルドは環境変数で上書きする:
+#   YUUKA_API_BASE=https://yuuka.kawaii-music.moe cargo build --release
+#
+# ローカル backend を別ポートで動かす場合だけ、下の env を有効化して上書きする。
+[env]
+# YUUKA_API_BASE = "http://127.0.0.1:7854"
+
+# 注意: ここに RUSTFLAGS 等は置かない（CI / 各開発機の差異を避けるため）。
