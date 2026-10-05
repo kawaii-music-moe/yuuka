@@ -367,7 +367,7 @@ async fn set_gemini_key(
     // 形式検証。
     if !is_likely_gemini_key(api_key.trim()) {
         return bad_request(
-            "Gemini APIキーの形式が正しくありません。Google AI Studio で取得したキーをそのまま入力してください。",
+            "Gemini APIキーの形式が正しくありません。Google AI Studio で取得したキー（「AIzaSy」または「AQ.」で始まるもの）をそのまま入力してください。",
         );
     }
     // 暗号化して保存。
@@ -396,14 +396,17 @@ async fn set_gemini_key(
     ok_message("Bot専用のGemini APIキーを保存しました。")
 }
 
-/// Gemini API キーらしさ（Node `isLikelyGeminiKey` = `^[0-9A-Za-z_.-]{20,256}$`）。
-/// 旧形式（`AIza…`）以外のキー形式も通すため接頭辞は問わず、誤値保存の防止に必要な
-/// 「空白・制御文字・非 ASCII を含まない 20〜256 文字」だけを検証する。
+/// Gemini API キーの形式検証（`^(AIzaSy[A-Za-z0-9_-]{33}|AQ\.[A-Za-z0-9_-]{35,})$`）。
+/// 旧形式（`AIzaSy` + 33 文字）と新形式（`AQ.` + 35 文字以上）の両方を受け付ける。
 fn is_likely_gemini_key(value: &str) -> bool {
-    (20..=256).contains(&value.len())
-        && value
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.'))
+    let is_key_char = |b: u8| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-');
+    if let Some(rest) = value.strip_prefix("AIzaSy") {
+        rest.len() == 33 && rest.bytes().all(is_key_char)
+    } else if let Some(rest) = value.strip_prefix("AQ.") {
+        rest.len() >= 35 && rest.bytes().all(is_key_char)
+    } else {
+        false
+    }
 }
 
 fn ok_message(message: &str) -> Response {
@@ -2161,8 +2164,19 @@ mod tests {
         .await;
         assert_eq!(st, StatusCode::OK);
         assert_eq!(j["message"], "APIキーは変更されていません。");
-        // 正規キー → 保存。
-        let key = format!("AIza{}", "a".repeat(35));
+        // 新形式（AQ.…）→ 保存。
+        let (st, j) = send(
+            &app,
+            "POST",
+            "/api/bots/assistant/gemini-key",
+            "owner",
+            r#"{"botId":"b1","apiKey":"AQ.Ab8RN6Lx3kQ9vT2mP7wZ4yH1cF5jD0sG8nB"}"#,
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(j["message"], "Bot専用のGemini APIキーを保存しました。");
+        // 旧形式（AIzaSy…）→ 保存。
+        let key = format!("AIzaSy{}", "a".repeat(33));
         let (st, j) = send(
             &app,
             "POST",
