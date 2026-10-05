@@ -25,12 +25,12 @@ INVITE_CODES:
 GOOGLE_CLIENT_ID: ""
 GOOGLE_CLIENT_SECRET: ""
 
-# ローカルアクセス時のベースURL（ブラウザの入口は Vite dev server＝ホスト 7855）。
+# ローカルアクセス時のベースURL（ブラウザの入口は PWA Client の Vite dev server＝ホスト 5173）。
 # 公開トンネル経由で使う場合は、実際の HTTPS URL（例: https://yuuka-dev.kawaii-music.moe）に
 # 変更すること。Cookie 認証の状態変更 API は Origin と BASE_URL のホストを照合するため、
 # localhost のままだとトンネル経由の POST/PUT/PATCH/DELETE が 403 になる。
 # Vite を使わず API へ直接アクセスする場合は HOST_PORT（既定 7856）に合わせる。
-BASE_URL: "http://localhost:7855"
+BASE_URL: "http://localhost:5173"
 
 PRIVACY_POLICY_URL: "/privacy"
 TERMS_URL: "/terms"

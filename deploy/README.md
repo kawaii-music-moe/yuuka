@@ -17,7 +17,7 @@ deploy/
     config.yaml         システム共通設定（:ro マウント）※gitignore
   dev/
     instance.env / secret.key / config.yaml / data/
-    vite.compose.yml    dev フロント（Vite dev server・HMR）用 compose（API とは別プロジェクト yuuka-dev-vite）
+    vite.compose.yml    dev フロント（PWA Client + 管理画面の Vite dev server・HMR）用 compose（API とは別プロジェクト yuuka-dev-vite）
     .env                vite.compose.yml のパラメータ（.env.example をコピー）※gitignore
 ```
 
@@ -126,22 +126,29 @@ deploy/instance.sh dev logs -f     # = pnpm run deploy:logs:dev
 > （#56 / #70）前の回避策で、現在は不要。`pnpm run deploy:dev` / `deploy:rollback:dev` は
 > package.json から撤去済みなので、上記の `deploy/instance.sh dev …` を直接使う。
 
-`HOST_PORT` は 7856 にする（7855 は下記の Vite dev server が使う）。
+`HOST_PORT` は 7856 にする（5173・7855 は下記の Vite dev server が使う）。
 
 ### フロント（Vite dev server・HMR）— `deploy/dev/vite.compose.yml`
 
-フロント開発用の Vite を Docker で常駐させる compose テンプレート（#57）。API コンテナ
-（`instance.sh dev …`）とは**別の compose プロジェクト `yuuka-dev-vite`** なので、互いの
-`up` / `down` / `update` に影響しない。
+フロント開発用の Vite を Docker で常駐させる compose テンプレート（#57）。PWA Client
+（`client/pwa`・`client` サービス）と管理画面（`frontend`・`vite` サービス）の 2 つの Vite を動かし、
+外向きの入口は PWA Client の **5173 だけ**にまとめる（本番の Rust と同じく、同一オリジンの `/` に
+PWA、`/admin` に管理画面が載る）。API コンテナ（`instance.sh dev …`）とは**別の compose
+プロジェクト `yuuka-dev-vite`** なので、互いの `up` / `down` / `update` に影響しない。
 
 ```
-ブラウザ / トンネル(公開ホスト) ─→ 127.0.0.1:7855 (Vite) ─ /api・/ws/chat ─→ 127.0.0.1:7856 (dev API)
+ブラウザ / トンネル(公開ホスト) ─→ 127.0.0.1:5173 (client: PWA Client の Vite)
+                                     ├─ /            PWA Client
+                                     ├─ /admin/...  ─→ 127.0.0.1:7855 (vite: 管理画面の Vite・内部用)
+                                     ├─ /login       → /admin/login へ redirect
+                                     └─ /api        ─→ 127.0.0.1:7856 (dev API)
 ```
 
 - `node:24-bookworm` + `corepack pnpm@9.15.0`（Dockerfile / CI と同じ。pnpm 11 系は lockfile 不一致になる）
-- `network_mode: host`。Vite は既定で `127.0.0.1:7855` にのみ待受（外部公開はトンネル/プロキシ経由）
+- `network_mode: host`。Vite は既定で `127.0.0.1:5173`（PWA Client）と `127.0.0.1:7855`（管理画面）にのみ待受（外部公開はトンネル/プロキシ経由で 5173 へ）
 - ソース（と `node_modules`）はホストのディレクトリを bind マウント。既定はこのリポジトリのルート
-- 起動のたびに `pnpm install --frozen-lockfile` を実行してから Vite を起動（lockfile 不変なら即終了）
+- 起動のたびに依存を入れてから Vite を起動（管理画面は `pnpm install --frozen-lockfile`、pnpm workspace 外の
+  `client/pwa` は `npm install`。lockfile 不変なら即終了）
 - 前提: dev API（`deploy/instance.sh dev update`）が `HOST_PORT`（7856）で起動していること
 
 **パラメータ**（`deploy/dev/.env`。`cp deploy/dev/.env.example deploy/dev/.env` で作る。未設定なら既定値）:
@@ -150,19 +157,22 @@ deploy/instance.sh dev logs -f     # = pnpm run deploy:logs:dev
 |---|---|---|
 | `VITE_SRC_DIR` | `../..`（リポジトリルート） | Vite を動かすソースツリー。別 worktree / clone を使うときだけ絶対パスで指定 |
 | `VITE_UID` / `VITE_GID` | `1000` / `1000` | コンテナ内の実行ユーザー。ソースツリーの所有者（`id -u` / `id -g`）に合わせる |
-| `VITE_BIND_ADDR` / `VITE_PORT` | `127.0.0.1` / `7855` | Vite の待受アドレス / ポート（`--strictPort`。使用中なら起動失敗） |
-| `VITE_API_TARGET` | `http://127.0.0.1:7856` | `/api`・`/ws/chat` の proxy 先。dev の `HOST_PORT` に合わせる |
-| `VITE_ALLOWED_HOST` | `yuuka-dev.kawaii-music.moe` | トンネル経由の公開ホスト名（Vite の `allowedHosts` に追加。カンマ区切り可。`VITE_ALLOWED_HOST=` と空で明示すると localhost のみ） |
+| `VITE_CLIENT_BIND_ADDR` / `VITE_CLIENT_PORT` | `127.0.0.1` / `5173` | 外向きの入口（PWA Client の Vite）の待受アドレス / ポート（`--strictPort`。使用中なら起動失敗） |
+| `VITE_BIND_ADDR` / `VITE_PORT` | `127.0.0.1` / `7855` | 管理画面の Vite の待受アドレス / ポート（PWA Client からの proxy 先・内部用） |
+| `VITE_API_TARGET` | `http://127.0.0.1:7856` | `/api`・`/ws/chat` の proxy 先（両 Vite 共通）。dev の `HOST_PORT` に合わせる |
+
+Host ヘッダ検証は両 `vite.config.ts` の `server.allowedHosts: true` で外してある（dev server 専用）ため、
+トンネルの公開ホスト名を設定する必要はない。
 
 ```bash
 # 起動（初回）
 cp deploy/dev/.env.example deploy/dev/.env      # 必要なら編集
 docker compose -f deploy/dev/vite.compose.yml up -d
-docker compose -f deploy/dev/vite.compose.yml logs -f vite
+docker compose -f deploy/dev/vite.compose.yml logs -f client vite
 
 # 更新: ソースの変更は HMR で即反映される（操作不要）。
-#       pull 等で lockfile / 依存が変わったときだけ再起動する（起動時の pnpm install が走る）
-docker compose -f deploy/dev/vite.compose.yml restart vite
+#       pull 等で lockfile / 依存が変わったときだけ再起動する（起動時の install が走る）
+docker compose -f deploy/dev/vite.compose.yml restart client vite
 
 # 状態確認 / 停止
 docker compose -f deploy/dev/vite.compose.yml ps
@@ -172,18 +182,18 @@ docker compose -f deploy/dev/vite.compose.yml down     # 停止・撤去
 
 公開トンネルから使う場合は、`deploy/dev/config.yaml` の `BASE_URL` をブラウザで開く HTTPS URL
 （例: `https://yuuka-dev.kawaii-music.moe`）に変更し、dev API を再起動する。
-`BASE_URL: "http://localhost:7855"` のままでは、Cookie 認証の状態変更リクエストで
+`BASE_URL: "http://localhost:5173"` のままでは、Cookie 認証の状態変更リクエストで
 `Origin` が CSRF 許可ホストと一致せず 403 になる。ローカル専用利用なら既定値のままでよい。
 
 `restart: unless-stopped` のため、ホスト / Docker デーモンの再起動後は自動で立ち上がる
-（`stop` / `down` した場合は立ち上がらない）。トンネル（公開ホスト → `127.0.0.1:7855`）の設定は
+（`stop` / `down` した場合は立ち上がらない）。トンネル（公開ホスト → `127.0.0.1:5173`）の設定は
 このリポジトリの管理外。
 
 > **デバッグ用の一時プロキシ**: API リクエストを覗きたいときは、リポジトリ外（または未コミットの
 > 一時ファイル）で `127.0.0.1:7857` 等に待ち受けるリクエストロガー（リクエストを `7856` へ中継するだけの
 > 小さな HTTP プロキシ。値は記録しない）を立て、`deploy/dev/.env` の `VITE_API_TARGET` を一時的にその
-> ポートへ向けて `restart vite` する。調査後は `VITE_API_TARGET` の行を消して（既定 7856 に戻る）
-> `restart vite`。恒久的なロガーはこのリポジトリには含めない（#57）。
+> ポートへ向けて `restart client vite` する。調査後は `VITE_API_TARGET` の行を消して（既定 7856 に戻る）
+> `restart client vite`。恒久的なロガーはこのリポジトリには含めない（#57）。
 
 ホストで直接 `pnpm dev`（Vite）を動かす場合も `VITE_API_TARGET` で proxy 先を指定する
 （未指定の既定は `http://127.0.0.1:7855`。dev API へ向けるなら `VITE_API_TARGET=http://127.0.0.1:7856 pnpm dev`）。

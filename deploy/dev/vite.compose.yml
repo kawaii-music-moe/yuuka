@@ -1,9 +1,15 @@
 # ==============================================================================
 # dev フロント: Vite dev server（HMR）— docker compose テンプレート（issue #57）
 #
-#   ブラウザ / トンネル(yuuka-dev.kawaii-music.moe) ─→ 127.0.0.1:7855 (Vite・HMR)
-#                                                        └─ /api・/ws/chat を dev API へ proxy
-#                                                           = 127.0.0.1:7856（instance.env の HOST_PORT）
+#   ブラウザ / トンネル(yuuka-dev.kawaii-music.moe)
+#     └─→ 127.0.0.1:5173 (client: PWA Client の Vite・HMR) ＝ 外向きの入口はここだけ
+#           ├─ /            PWA Client（client/pwa・Vue）
+#           ├─ /admin/...   → 127.0.0.1:7855 (vite: 管理画面 frontend の Vite・HMR) へ proxy
+#           ├─ /login       → /admin/login へ redirect
+#           └─ /api         → 127.0.0.1:7856 (dev API・instance.env の HOST_PORT) へ proxy
+#
+#   本番（Rust が同一オリジンで / に PWA、/admin に管理画面を配信）と同じ URL 構成になる。
+#   7855 は client からの proxy 先（内部用）で、トンネルは 5173 へ向ける。
 #
 #   dev API コンテナ（deploy/instance.sh dev …）とは別 compose プロジェクト（yuuka-dev-vite）。
 #   API 側の操作に影響しない／されない。
@@ -17,12 +23,14 @@
 #   - image: node:24-bookworm — Dockerfile の frontend-builder・CI と同じ Node。
 #   - pnpm は Dockerfile と同じ 9.15.0 に固定（11 系は pnpm.overrides を読まず lockfile 不一致になる）。
 #   - network_mode: host — Vite から dev API の 127.0.0.1:${HOST_PORT} へ届かせ、
-#     トンネル（cloudflared 等）からも 127.0.0.1:VITE_PORT で受けられるようにするため。
-#   - ソースは bind マウント。node_modules も同じディレクトリ（ホスト側 pnpm と共有）に作られる。
+#     トンネル（cloudflared 等）からも 127.0.0.1:VITE_CLIENT_PORT で受けられるようにするため。
+#   - ソースは bind マウント。node_modules も同じディレクトリ（ホスト側 pnpm / npm と共有）に作られる。
+#   - Host ヘッダ検証は両 vite.config.ts の `server.allowedHosts: true` で外してある（dev 専用）。
 # ==============================================================================
 name: yuuka-dev-vite
 
 services:
+  # 管理画面（frontend・Svelte）。base "/admin/" で配信し、client から /admin/... を proxy される。
   vite:
     image: node:24-bookworm
     # ソースツリー（node_modules 含む）の所有者に合わせる。root で書くとホスト側が root 所有になる。
@@ -39,10 +47,6 @@ services:
       CI: "true"
       # proxy 先 dev API（instance.env の HOST_PORT に合わせる）。
       VITE_API_TARGET: "${VITE_API_TARGET:-http://127.0.0.1:7856}"
-      # Vite の Host ヘッダ検証（DNS rebinding 対策）を、トンネル経由の公開ホスト名に対して通す。
-      # カンマ区切りで複数指定可。`VITE_ALLOWED_HOST=`（空で明示）にすると localhost 系のみ許可
-      # （`-` 形式の既定値は「未設定」のときだけ効く。`:-` だと空でも既定に戻ってしまう）。
-      __VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS: "${VITE_ALLOWED_HOST-yuuka-dev.kawaii-music.moe}"
     command:
       - sh
       - -c
@@ -52,6 +56,40 @@ services:
         corepack pnpm@9.15.0 install --frozen-lockfile &&
         exec corepack pnpm@9.15.0 exec vite --config frontend/vite.config.ts
         --host ${VITE_BIND_ADDR:-127.0.0.1} --port ${VITE_PORT:-7855} --strictPort
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # PWA Client（client/pwa・Vue）。外向きの入口（トンネルの向き先）。
+  # client/pwa は pnpm workspace 外で npm（package-lock.json）管理のため npm で入れる。
+  client:
+    image: node:24-bookworm
+    user: "${VITE_UID:-1000}:${VITE_GID:-1000}"
+    network_mode: host
+    working_dir: /src/client/pwa
+    volumes:
+      - "${VITE_SRC_DIR:-../..}:/src"
+    environment:
+      HOME: /tmp
+      CI: "true"
+      # /api の proxy 先 = dev API（client/pwa/vite.config.ts）。
+      VITE_API_PROXY_TARGET: "${VITE_API_TARGET:-http://127.0.0.1:7856}"
+      # /admin/... の proxy 先 = 上の vite サービス（client/pwa/vite.config.ts）。
+      VITE_ADMIN_DEV_SERVER: "http://127.0.0.1:${VITE_PORT:-7855}"
+    command:
+      - sh
+      - -c
+      # `npm ci` は node_modules を毎回作り直すため、差分だけ入れる install にする
+      # （package-lock.json が変わっていなければ数秒で終わる no-op）。
+      - >-
+        npm install --no-audit --no-fund &&
+        exec npx vite
+        --host ${VITE_CLIENT_BIND_ADDR:-127.0.0.1} --port ${VITE_CLIENT_PORT:-5173} --strictPort
+    depends_on:
+      - vite
     restart: unless-stopped
     logging:
       driver: json-file
