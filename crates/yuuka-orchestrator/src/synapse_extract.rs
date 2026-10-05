@@ -460,6 +460,16 @@ mod tests {
             "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abcd1234"
         ));
         assert!(contains_secret_value("sk-abcdef0123456789ABCDEF")); // 既知接頭辞 sk-
+
+        // Gemini APIキーは旧形式（AIza…・既知接頭辞）も新形式（AQ.…・高エントロピー塊）も秘匿扱い。
+        // `AQ.` は「FAQ.」等の通常文に部分一致するため接頭辞には入れない。
+        assert!(contains_secret_value(
+            "AIzaSyA0bC1dE2fG3hI4jK5lM6nO7pQ8rS9tU"
+        ));
+        assert!(contains_secret_value(
+            "AQ.Ab8RN6Lx3kQ9vT2mP7wZ4yH1cF5jD0sG8nB"
+        ));
+        assert!(!contains_secret_value("詳しくは FAQ.md を見てね"));
         assert!(!contains_secret_value("好きな食べ物はカレーです")); // 通常文は非秘匿
     }
 

@@ -353,7 +353,7 @@ async function submitBotSetup(e: SubmitEvent): Promise<void> {
 									type="password"
 									id="reg-gemini-key"
 									required
-									placeholder="AIzaSy..."
+									placeholder="AIzaSy… または AQ.…"
 									autocomplete="new-password"
 									bind:value={regGeminiKey}
 								/>
@@ -451,7 +451,7 @@ async function submitBotSetup(e: SubmitEvent): Promise<void> {
 								type="password"
 								id="setup-gemini-key"
 								required
-								placeholder="AIzaSy..."
+								placeholder="AIzaSy… または AQ.…"
 								autocomplete="new-password"
 								bind:value={setupGeminiKey}
 							/>

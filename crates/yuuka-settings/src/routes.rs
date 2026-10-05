@@ -224,7 +224,7 @@ pub(crate) async fn gemini(
         let key = api_key.trim();
         if !is_likely_gemini_key(key) {
             return Ok(bad_request(
-                "Gemini APIキーの形式が正しくありません。Google AI Studio で取得したキーをそのまま入力してください。",
+                "Gemini APIキーの形式が正しくありません。Google AI Studio で取得したキー（「AIzaSy」または「AQ.」で始まるもの）をそのまま入力してください。",
             ));
         }
         let Some(crypto) = rt.crypto.as_ref() else {
@@ -362,14 +362,17 @@ fn js_number(value: &Value) -> f64 {
     }
 }
 
-/// Gemini API キーらしさ（Node `isLikelyGeminiKey` = `^[0-9A-Za-z_.-]{20,256}$`）。
-/// 旧形式（`AIza…`）以外のキー形式も通すため接頭辞は問わず、誤値保存の防止に必要な
-/// 「空白・制御文字・非 ASCII を含まない 20〜256 文字」だけを検証する。
+/// Gemini API キーの形式検証（`^(AIzaSy[A-Za-z0-9_-]{33}|AQ\.[A-Za-z0-9_-]{35,})$`）。
+/// 旧形式（`AIzaSy` + 33 文字）と新形式（`AQ.` + 35 文字以上）の両方を受け付ける。
 fn is_likely_gemini_key(value: &str) -> bool {
-    (20..=256).contains(&value.len())
-        && value
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.'))
+    let is_key_char = |b: u8| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-');
+    if let Some(rest) = value.strip_prefix("AIzaSy") {
+        rest.len() == 33 && rest.bytes().all(is_key_char)
+    } else if let Some(rest) = value.strip_prefix("AQ.") {
+        rest.len() >= 35 && rest.bytes().all(is_key_char)
+    } else {
+        false
+    }
 }
 
 /// Google Drive のフォルダ ID を抽出する（Node `extractDriveFolderId`）。フォルダ ID 単体、
@@ -423,19 +426,23 @@ mod tests {
 
     #[test]
     fn gemini_key_shape() {
-        // 旧形式（AIza…）。
-        assert!(is_likely_gemini_key("AIza0123456789012345678901234567890"));
-        assert!(is_likely_gemini_key(&format!("AIza{}", "a".repeat(35))));
-        // 接頭辞は問わない（新形式のキー）。`.` も可。
-        assert!(is_likely_gemini_key(&format!("BIza{}", "a".repeat(35))));
-        assert!(is_likely_gemini_key(&format!("AQ.{}", "a_-.".repeat(10))));
-        // 短すぎ・長すぎ。
-        assert!(!is_likely_gemini_key("AIzaShort"));
-        assert!(!is_likely_gemini_key(&"a".repeat(257)));
-        // 空白・非 ASCII・その他記号は不可（コピペ事故の検出）。
-        assert!(!is_likely_gemini_key(&format!("AIza{} x", "a".repeat(30))));
-        assert!(!is_likely_gemini_key(&format!("{}あ", "a".repeat(30))));
-        assert!(!is_likely_gemini_key(&format!("{}/+=", "a".repeat(30))));
+        let old = format!("AIzaSy{}", "A0b_-".repeat(6) + "c1d");
+        let new = format!("AQ.{}", "Ab8_-".repeat(7));
+        // 旧形式（AIzaSy + 33 文字ちょうど）。
+        assert!(is_likely_gemini_key(&old));
+        assert!(!is_likely_gemini_key(&format!("{old}x")));
+        assert!(!is_likely_gemini_key(&old[..old.len() - 1]));
+        // 新形式（AQ. + 35 文字以上）。
+        assert!(is_likely_gemini_key(&new));
+        assert!(is_likely_gemini_key(&format!("{new}{}", "z".repeat(100))));
+        assert!(!is_likely_gemini_key(&new[..new.len() - 1]));
+        // 接頭辞違い・本体に `.` や空白・非 ASCII を含むものは不可（コピペ事故の検出）。
+        assert!(!is_likely_gemini_key(&format!("AIzaSz{}", &old[6..])));
+        assert!(!is_likely_gemini_key(&format!("BQ.{}", &new[3..])));
+        assert!(!is_likely_gemini_key(&format!("AQ.{}.", &new[3..])));
+        assert!(!is_likely_gemini_key(&format!("AQ.{} x", &new[3..])));
+        assert!(!is_likely_gemini_key(&format!("AQ.{}あ", &new[3..])));
+        assert!(!is_likely_gemini_key(""));
     }
 
     #[test]
