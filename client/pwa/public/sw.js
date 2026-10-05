@@ -32,7 +32,12 @@ function isAdminPath(pathname) {
 self.addEventListener('fetch', (event) => {
   const { request } = event;
   if (request.method !== 'GET') return;
-  const { pathname } = new URL(request.url);
+  const url = new URL(request.url);
+  // Let the browser handle cross-origin resources directly. Fetches initiated
+  // by this worker are governed by the worker script's connect-src CSP, which
+  // may be stricter than the page's img-src/font-src/style-src policies.
+  if (url.origin !== self.location.origin) return;
+  const { pathname } = url;
   if (pathname.startsWith('/api/') || isAdminPath(pathname)) return;
 
   if (request.mode === 'navigate') {
