@@ -31,15 +31,26 @@ only need the admin UI and don't need the Client mock stack above.
 
 ## 起動（`client/pwa` 単体）
 
+通常は repo ルートの `pnpm dev:client:mock` を使ってください（モック API・PWA・共有ログイン用の管理画面 dev server をまとめて起動します）。個別に起動する場合は、次の 3 つをそれぞれ別のターミナルで起動します。
+
 ```bash
+# 1. モック API（http://localhost:8787）— client/pwa で
 npm install
-npm run mock  # 別のターミナルで起動: http://localhost:8787
-npm run dev   # http://localhost:5173
+npm run mock
+
+# 2. PWA dev server（http://localhost:5173）— client/pwa で。/api をモックへ向ける
+VITE_API_PROXY_TARGET=http://localhost:8787 npm run dev
+
+# 3. 共有ログイン/管理画面 dev server（http://localhost:5174/admin/）— repo ルートで
+VITE_API_TARGET=http://localhost:8787 VITE_PWA_DEV_SERVER=http://localhost:5173 \
+  pnpm exec vite --config frontend/vite.config.ts --port 5174 --strictPort
 ```
 
-開発サーバーは `/api` を `VITE_API_PROXY_TARGET`（未設定時は `http://localhost:3000`。`client/pwa/vite.config.ts`）へプロキシします。`npm run dev` 単体ではモックには接続しません。
+`http://localhost:5173` を開くと `/admin/login` へ送られ、`admin` / `pass` でログインすると PWA へ戻ります。
 
-- モックに接続する: `VITE_API_PROXY_TARGET=http://localhost:8787 npm run dev`（repo ルートの `pnpm dev:client:mock` はこれを自動設定します）。
+開発サーバーは `/api` を `VITE_API_PROXY_TARGET`（未設定時は `http://localhost:3000`。`client/pwa/vite.config.ts`）へプロキシし、`/login`・`/admin` を `VITE_ADMIN_DEV_SERVER`（未設定時は `http://localhost:5174`）へリダイレクトします。`VITE_API_PROXY_TARGET` を付けない `npm run dev` はモックに接続しません。
+
+- モックに接続する: 上記のとおり `VITE_API_PROXY_TARGET=http://localhost:8787` を指定します（`pnpm dev:client:mock` はこれを自動設定します）。
 - ローカルのバックエンド（`cargo run --bin yuuka`）に接続する: `config.yaml` の `PORT` に合わせて指定します（`example.yaml` の既定は 7854）。例: `VITE_API_PROXY_TARGET=http://localhost:7854 npm run dev`。
 - 別ホストの実サーバーを検証する: `VITE_API_PROXY_TARGET=https://your-agent.example` を設定します。バックエンドに CORS 設定はなく、Cookie 認証の状態変更リクエストは CSRF チェック（`Origin`/`Referer` のホストが `BASE_URL` 由来の許可ホストと一致すること。`BASE_URL` 未設定時は localhost のみ）を受けます。
 
