@@ -30,6 +30,24 @@ jobs:
       - run: pnpm typecheck:front
       - run: pnpm build:front
 
+  pwa:
+    name: PWA (vue-tsc / test / vite build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: client/pwa
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: client/pwa/package-lock.json
+      - run: npm ci
+      - run: npm run check
+      - run: npm test
+      - run: npm run build
+
   lint:
     name: Lint (biome)
     runs-on: ubuntu-latest
