@@ -27,6 +27,7 @@ import type {
 } from "$lib/api/types";
 import type { ChipStatus } from "$lib/components/ui";
 import { Button, confirmDialog, Icon, StatusChip } from "$lib/components/ui";
+import { INTEGRATED_SECTIONS } from "$lib/managementSections";
 import { isAdmin } from "$lib/stores/session";
 import { pushToast } from "$lib/stores/toast";
 import McpDashboardModal from "../routes/mcp/McpDashboardModal.svelte";
@@ -364,17 +365,15 @@ async function connectGoogle() {
 
 <svelte:window onclick={() => (openMenuId = null)} />
 
-<ManagementOverlayShell id="integrated-overlay" icon="dashboard_customize" title="Bot統合管理">
+<ManagementOverlayShell
+	id="integrated-overlay"
+	title="Bot統合管理"
+	base="/integrated"
+	sections={INTEGRATED_SECTIONS}
+>
+	{#snippet children(section)}
 <section id="tab-integrated" class="tab-view">
-	<p class="description-text int-intro">
-		あなたのBotのヘルス確認・起動停止と、認証情報・MCP・Googleアカウントの<strong>登録</strong
-		>および<strong>Bot別の利用許可</strong
-		>を一括管理します。リソースの登録はこのページから行います（個別タブは状況確認のみ）。
-	</p>
-
-	<!-- Bots: health + start/stop -->
-	<details class="card collapsible-group int-section" name="int-acc" open>
-		<summary>Bot ヘルス / 起動・停止</summary>
+	{#if section === "health"}
 		<div class="int-refresh-row">
 			<Button variant="secondary" small onclick={loadOverview}>
 				<Icon name="refresh" size={16} /> 更新
@@ -457,11 +456,10 @@ async function connectGoogle() {
 				</div>
 			{/each}
 		</div>
-	</details>
+	{/if}
 
 	<!-- Credentials -->
-	<details class="card collapsible-group int-section" name="int-acc">
-		<summary>認証情報（パスワードマネージャ）</summary>
+	{#if section === "credentials"}
 		<div class="expense-actions-columns int-cols">
 			<div class="action-column">
 				<p class="description-text int-col-note">
@@ -542,11 +540,10 @@ async function connectGoogle() {
 				</div>
 			</div>
 		</div>
-	</details>
+	{/if}
 
 	<!-- MCP servers -->
-	<details class="card collapsible-group int-section" name="int-acc">
-		<summary>MCPサーバー</summary>
+	{#if section === "mcp"}
 		<div class="expense-actions-columns int-cols">
 			<div class="action-column">
 				<p class="description-text int-col-note">
@@ -637,11 +634,10 @@ async function connectGoogle() {
 				</div>
 			</div>
 		</div>
-	</details>
+	{/if}
 
 	<!-- Google accounts -->
-	<details class="card collapsible-group int-section" name="int-acc">
-		<summary>Googleアカウント連携（複数可）</summary>
+	{#if section === "google"}
 		<div class="int-google-body">
 			<Button variant="primary" onclick={connectGoogle}>
 				<Icon name="add" size={16} /> Googleアカウントを連携
@@ -703,21 +699,15 @@ async function connectGoogle() {
 				{/if}
 			</div>
 		</div>
-	</details>
+	{/if}
 </section>
+	{/snippet}
 </ManagementOverlayShell>
 
 <IntCalendarsModal bind:open={calOpen} account={calAccount} onsave={saveCalendars} />
 <McpDashboardModal bind:open={dashOpen} server={dashServer} />
 
 <style>
-	.int-intro {
-		margin-bottom: 16px;
-	}
-	.int-section {
-		margin-bottom: 16px;
-		padding: 20px;
-	}
 	.int-refresh-row {
 		display: flex;
 		justify-content: flex-end;

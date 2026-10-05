@@ -35,11 +35,11 @@ function updatedOf(c: CredentialRow): string {
 }
 </script>
 
-<details class="config-card card">
-	<summary class="column-header badge-right">
+<section class="config-card card">
+	<div class="column-header badge-right">
 		<h3><span class="material-symbols-outlined header-icon-symbol">lock</span>利用可能なAI認証情報</h3>
 		<span class="badge badge-accent">読み取り専用</span>
-	</summary>
+	</div>
 	<p class="description-text">
 		このBotがAIエージェントの自動ブラウジング等で利用できる認証情報の一覧です。パスワードはAES-256-GCMで暗号化保存され、ここには表示されません。認証情報の登録・管理は「Bot統合管理」で行います。
 	</p>
@@ -79,7 +79,7 @@ function updatedOf(c: CredentialRow): string {
 		<span class="field-sub">認証情報の登録・管理は「Bot統合管理」で行います。</span>
 		<a href={withBasePath("/integrated")} class="btn btn-secondary btn-sm">Bot統合管理へ</a>
 	</div>
-</details>
+</section>
 
 <style>
 	.table-responsive {

@@ -224,15 +224,17 @@ $effect(() => {
 						<option value="channel">チャンネル</option>
 					</select>
 				</div>
-				<div class="form-group">
-					<label for="briefing-target-id">チャンネルID (チャンネル選択時)</label>
-					<input
-						id="briefing-target-id"
-						type="text"
-						placeholder="例: 123456789012345678"
-						bind:value={bTargetId}
-					/>
-				</div>
+				{#if bTargetType === "channel"}
+					<div class="form-group">
+						<label for="briefing-target-id">チャンネルID</label>
+						<input
+							id="briefing-target-id"
+							type="text"
+							placeholder="例: 123456789012345678"
+							bind:value={bTargetId}
+						/>
+					</div>
+				{/if}
 			</div>
 			<div class="form-row">
 				<div class="form-group">

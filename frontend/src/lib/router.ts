@@ -275,9 +275,15 @@ export function resolveRoute(input: URL | string): ResolvedRoute {
 
 	// 認証・独立オーバーレイ
 	if (cp === "/login") return { view: "login" };
-	if (cp === "/integrated") return { view: "integrated" };
-	if (cp === "/admin") return { view: "admin" };
-	if (cp === "/account") return { view: "account" };
+	// 全体管理ページ: ハブ（/integrated 等）と個別セクション（/integrated/<key> 等）。
+	// セクションの解決は ManagementOverlayShell が currentRoute から行う。
+	const mgmt = cp.match(/^\/(integrated|admin|account)(?:\/([\w-]+))?$/);
+	if (mgmt) {
+		return {
+			view: mgmt[1] as "integrated" | "admin" | "account",
+			params: mgmt[2] ? { section: mgmt[2] } : {},
+		};
+	}
 	if (cp === "/device") {
 		const code = url.searchParams.get("code");
 		return { view: "device", params: code ? { code } : {} };

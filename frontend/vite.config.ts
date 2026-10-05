@@ -23,9 +23,7 @@ function resolveWorkboxWindow(): string | undefined {
 	// 2) .pnpm ストア内をバージョン非依存でグロブ
 	try {
 		const pnpmDir = path.resolve(__dirname, "../node_modules/.pnpm");
-		const dir = fs
-			.readdirSync(pnpmDir)
-			.find((d) => /^workbox-window@/.test(d));
+		const dir = fs.readdirSync(pnpmDir).find((d) => /^workbox-window@/.test(d));
 		if (dir) {
 			const pkgJson = path.join(
 				pnpmDir,
@@ -158,6 +156,7 @@ export default defineConfig({
 	},
 	server: {
 		port: 5173,
+		allowedHosts: ["yuuka-dev.kawaii-music.moe"],
 		// 真に必要なのは /api と /ws/chat のみ（§5.6 参照）
 		proxy: {
 			"/api": { target: API, changeOrigin: false },

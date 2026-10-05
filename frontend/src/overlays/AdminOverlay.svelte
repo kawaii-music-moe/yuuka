@@ -21,6 +21,7 @@ import type {
 	PublicPersonaView,
 } from "$lib/api/types";
 import { Button, confirmDialog, Icon } from "$lib/components/ui";
+import { ADMIN_SECTIONS } from "$lib/managementSections";
 import { currentUser } from "$lib/stores/session";
 import { pushToast } from "$lib/stores/toast";
 import AuditModal from "./admin/AuditModal.svelte";
@@ -337,9 +338,13 @@ function botStatus(bot: AdminBotView): { label: string; tone: string } {
 }
 </script>
 
-<ManagementOverlayShell id="admin-overlay" icon="admin_panel_settings" title="管理者設定">
-<section id="tab-admin" class="tab-view">
-	<!-- KPI Row -->
+<ManagementOverlayShell
+	id="admin-overlay"
+	title="管理者設定"
+	base="/admin"
+	sections={ADMIN_SECTIONS}
+>
+	{#snippet hubHeader()}
 	<div class="admin-kpi-row">
 		<div class="admin-kpi">
 			<span class="admin-kpi-value">{stats?.totalUsers ?? 0}</span>
@@ -364,12 +369,12 @@ function botStatus(bot: AdminBotView): { label: string; tone: string } {
 		</div>
 	</div>
 
-	<!-- Default Bot -->
-	<details class="admin-section" name="admin-acc">
-		<summary class="admin-section-header">
-			<span class="admin-section-title"><Icon name="smart_toy" />システムデフォルト Bot</span>
-			<span class="hud-tag admin-tag-system">SYSTEM</span>
-		</summary>
+	
+	{/snippet}
+
+	{#snippet children(section)}
+<section id="tab-admin" class="tab-view">
+	{#if section === "default-bot"}
 		<p class="description-text">
 			システム共通で動作するデフォルトBotのDiscordトークンを更新します。トークンは安全に暗号化されて保存されます。
 		</p>
@@ -393,14 +398,10 @@ function botStatus(bot: AdminBotView): { label: string; tone: string } {
 				>
 			</div>
 		</form>
-	</details>
+	{/if}
 
 	<!-- System Settings -->
-	<details class="admin-section" name="admin-acc">
-		<summary class="admin-section-header">
-			<span class="admin-section-title"><Icon name="settings" />システム全体設定</span>
-			<span class="hud-tag admin-tag-system">SYSTEM</span>
-		</summary>
+	{#if section === "system"}
 		<p class="description-text">システム全体の共通設定を行います。</p>
 		<form class="admin-form-top" onsubmit={submitSystemSettings}>
 			<div class="form-group">
@@ -431,14 +432,10 @@ function botStatus(bot: AdminBotView): { label: string; tone: string } {
 			</div>
 			<Button variant="primary" type="submit" class="admin-mt">設定を更新</Button>
 		</form>
-	</details>
+	{/if}
 
 	<!-- Bot Attribute Settings -->
-	<details class="admin-section" name="admin-acc">
-		<summary class="admin-section-header">
-			<span class="admin-section-title"><Icon name="category" />Bot属性設定</span>
-			<span class="hud-tag admin-tag-system">SYSTEM</span>
-		</summary>
+	{#if section === "bot-attributes"}
 		<p class="description-text">
 			Botプリセットのユーザー向け表示名と、汎用モード（MCPアシスタント）のレート制限既定値を設定します。内部IDは固定です。
 		</p>
@@ -481,14 +478,10 @@ function botStatus(bot: AdminBotView): { label: string; tone: string } {
 			</div>
 			<Button variant="primary" type="submit" class="admin-mt">Bot属性設定を保存</Button>
 		</form>
-	</details>
+	{/if}
 
 	<!-- User Management -->
-	<details class="admin-section" name="admin-acc">
-		<summary class="admin-section-header">
-			<span class="admin-section-title"><Icon name="manage_accounts" />ユーザー管理</span>
-			<span class="hud-tag">ADMIN</span>
-		</summary>
+	{#if section === "users"}
 		<p class="description-text">
 			登録済みユーザーの一覧とロール管理を行います。個人情報（パスワード等）は表示されません。
 		</p>
@@ -538,14 +531,10 @@ function botStatus(bot: AdminBotView): { label: string; tone: string } {
 				</tbody>
 			</table>
 		</div>
-	</details>
+	{/if}
 
 	<!-- Bot Moderation -->
-	<details class="admin-section" name="admin-acc">
-		<summary class="admin-section-header">
-			<span class="admin-section-title"><Icon name="security" />Bot モデレーション</span>
-			<span class="hud-tag">MODERATION</span>
-		</summary>
+	{#if section === "moderation"}
 		<p class="description-text">
 			システム上の全Botの管理・差し押さえを行います。差し押さえるとBotのDiscordクライアントが停止され、所有者は再起動できなくなります。
 		</p>
@@ -594,16 +583,10 @@ function botStatus(bot: AdminBotView): { label: string; tone: string } {
 				</tbody>
 			</table>
 		</div>
-	</details>
+	{/if}
 
 	<!-- Persona Marketplace Moderation -->
-	<details class="admin-section" name="admin-acc">
-		<summary class="admin-section-header">
-			<span class="admin-section-title"
-				><Icon name="storefront" />ペルソナ マーケットプレイス管理</span
-			>
-			<span class="hud-tag">MODERATION</span>
-		</summary>
+	{#if section === "personas"}
 		<p class="description-text">
 			マーケットプレイスに公開されている全ペルソナの非公開化・削除を行います。
 		</p>
@@ -648,14 +631,10 @@ function botStatus(bot: AdminBotView): { label: string; tone: string } {
 				</tbody>
 			</table>
 		</div>
-	</details>
+	{/if}
 
 	<!-- Audit Logs -->
-	<details class="admin-section" name="admin-acc">
-		<summary class="admin-section-header">
-			<span class="admin-section-title"><Icon name="receipt_long" />監査ログ</span>
-			<span class="hud-tag">AUDIT</span>
-		</summary>
+	{#if section === "audit"}
 		<p class="description-text">
 			セキュリティ関連の操作履歴です。直近の数件を表示しています。全件の閲覧・絞り込みは「すべて表示」から行えます。
 		</p>
@@ -692,13 +671,10 @@ function botStatus(bot: AdminBotView): { label: string; tone: string } {
 				<Icon name="open_in_full" />すべて表示
 			</Button>
 		</div>
-	</details>
+	{/if}
 
 	<!-- Invite Codes -->
-	<details class="admin-section admin-section-last" name="admin-acc">
-		<summary class="admin-section-header">
-			<span class="admin-section-title"><Icon name="confirmation_number" />招待コード管理</span>
-		</summary>
+	{#if section === "invites"}
 		<p class="description-text">新規ユーザー登録に必要な招待コードの管理を行います。</p>
 		<form class="admin-invite-form" onsubmit={createInvite}>
 			<input
@@ -767,8 +743,9 @@ function botStatus(bot: AdminBotView): { label: string; tone: string } {
 				</tbody>
 			</table>
 		</div>
-	</details>
+	{/if}
 </section>
+	{/snippet}
 </ManagementOverlayShell>
 
 <AuditModal bind:open={auditOpen} />

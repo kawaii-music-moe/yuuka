@@ -8,18 +8,18 @@
 // - Bot 選択は activeBot ストア（selectBot）へ委譲 → /bot/config へ遷移。
 // - 作成は共通 Modal。プリセット表示名は botApi.presets() で上書き。
 // - Discord 同期 / プロフィール編集 / 削除（デフォルト Bot 以外）。
-// - 統合管理 / アカウント管理 / 管理者設定（admin のみ）への遷移。
+// - 統合管理 / アカウント管理 / 管理者設定（admin のみ）への遷移は HomeSidebar（共通）。
 // ─────────────────────────────────────────────────────────────────────────
 import { onMount } from "svelte";
 import { ApiError } from "$lib/api/client";
-import { authApi, botApi } from "$lib/api/services";
+import { botApi } from "$lib/api/services";
 import type { BotView, PresetOption } from "$lib/api/types";
 import { confirmDialog, Icon, Modal } from "$lib/components/ui";
 import { navigateTo } from "$lib/router";
 import { selectBot } from "$lib/stores/activeBot";
-import { currentUser, isAdmin } from "$lib/stores/session";
-import { theme, toggleTheme } from "$lib/stores/theme";
+import { currentUser } from "$lib/stores/session";
 import { pushToast } from "$lib/stores/toast";
+import HomeSidebar from "./HomeSidebar.svelte";
 
 let bots = $state<BotView[]>([]);
 let presets = $state<PresetOption[]>([]);
@@ -189,122 +189,12 @@ async function submitCreate(e: SubmitEvent): Promise<void> {
 	}
 }
 
-// ── ログアウト（旧 btnBotLogout） ──
-async function logout(): Promise<void> {
-	try {
-		await authApi.logout();
-	} catch {
-		/* ローカル破棄を優先 */
-	}
-	selectBot(null);
-	currentUser.set(null);
-	navigateTo("/login");
-}
-
 // スマホ用ドロワー開閉（BotShell と同規約。PC はサイドバー常設）。
 let sidebarOpen = $state(false);
-
-// サイドバー下部ユーザーパネル表示（BotShell と同一フォーマット）。
-const userDisplay = $derived(
-	$currentUser
-		? `${$currentUser.username} (${$currentUser.discordId})`
-		: "ロード中...",
-);
-const themeIcon = $derived($theme === "dark" ? "light_mode" : "dark_mode");
-const themeTitle = $derived(
-	$theme === "dark" ? "ライトテーマに切り替え" : "ダークテーマに切り替え",
-);
 </script>
 
-<svelte:window
-	onkeydown={(e) => {
-		if (e.key === "Escape") sidebarOpen = false;
-	}}
-/>
-
 <div class="app-container">
-	<!-- サイドバー（PC 常設 / スマホはドロワー。BotShell と同じ構造・クラスを流用） -->
-	<aside class="sidebar" class:open={sidebarOpen}>
-		<div class="home-nav-brand home-sidebar-brand">
-			<span class="material-symbols-outlined home-nav-logo">calculate</span>
-			<span class="home-nav-title">Yuuka</span>
-		</div>
-
-		<nav class="sidebar-menu">
-			<button
-				type="button"
-				class="menu-item active"
-				onclick={() => (sidebarOpen = false)}
-			>
-				<Icon name="home" class="menu-icon-symbol" />
-				<span class="menu-text">ホーム（Bot一覧）</span>
-			</button>
-			<button
-				type="button"
-				class="menu-item"
-				onclick={() => navigateTo("/integrated")}
-			>
-				<Icon name="hub" class="menu-icon-symbol" />
-				<span class="menu-text">統合管理</span>
-			</button>
-			<button
-				type="button"
-				class="menu-item"
-				onclick={() => navigateTo("/account")}
-			>
-				<Icon name="manage_accounts" class="menu-icon-symbol" />
-				<span class="menu-text">アカウント管理</span>
-			</button>
-			{#if $isAdmin}
-				<button
-					type="button"
-					class="menu-item"
-					onclick={() => navigateTo("/admin")}
-				>
-					<Icon name="admin_panel_settings" class="menu-icon-symbol" />
-					<span class="menu-text">管理者設定</span>
-				</button>
-			{/if}
-		</nav>
-
-		<!-- サイドバー最下部ユーザーパネル（BotShell と共通クラス） -->
-		<div class="sidebar-user-panel">
-			<div class="sidebar-user-info" title={userDisplay}>
-				<Icon name="person" class="icon-small" />
-				<span class="sidebar-user-name">{userDisplay}</span>
-			</div>
-			<div class="sidebar-user-actions">
-				<button
-					type="button"
-					class="btn-icon"
-					title={themeTitle}
-					aria-label={themeTitle}
-					onclick={toggleTheme}
-				>
-					<Icon name={themeIcon} />
-				</button>
-				<button
-					type="button"
-					class="btn-icon"
-					title="ログアウト"
-					aria-label="ログアウト"
-					onclick={logout}
-				>
-					<Icon name="logout" />
-				</button>
-			</div>
-		</div>
-	</aside>
-
-	<!-- ドロワー背面オーバーレイ（スマホのみ） -->
-	{#if sidebarOpen}
-		<button
-			type="button"
-			class="sidebar-backdrop"
-			aria-label="メニューを閉じる"
-			onclick={() => (sidebarOpen = false)}
-		></button>
-	{/if}
+	<HomeSidebar bind:open={sidebarOpen} />
 
 	<main class="main-content">
 		<!-- スマホ専用バー（☰ + ブランド） -->
@@ -453,18 +343,6 @@ const themeTitle = $derived(
 	.app-container {
 		display: flex;
 		min-height: 100vh;
-	}
-	.menu-item {
-		background: none;
-		border: none;
-		width: 100%;
-		cursor: pointer;
-		font: inherit;
-		text-align: left;
-	}
-	/* サイドバー内ブランド行 */
-	.home-sidebar-brand {
-		margin: 4px 4px 20px;
 	}
 	/* スマホ専用バー（PC ではサイドバー常設のため非表示） */
 	.home-mobile-bar {

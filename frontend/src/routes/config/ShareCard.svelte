@@ -84,11 +84,11 @@ async function revoke(share: BotShare) {
 </script>
 
 {#if visible}
-	<details class="config-card card">
-		<summary class="column-header badge-right">
+	<section class="config-card card">
+		<div class="column-header badge-right">
 			<h3><span class="material-symbols-outlined header-icon-symbol">group_add</span>Bot 共有管理</h3>
 			<span class="badge badge-accent">オーナー専用</span>
-		</summary>
+		</div>
 		<p class="description-text">
 			このBotを他のユーザーと共有できます。招待DMが送信され、相手が承認するとアクセスが有効になります。
 		</p>
@@ -126,7 +126,7 @@ async function revoke(share: BotShare) {
 			/>
 			<Button type="submit" variant="primary">招待を送信</Button>
 		</form>
-	</details>
+	</section>
 {/if}
 
 <style>

@@ -87,11 +87,11 @@ async function saveKey() {
 }
 </script>
 
-<details class="config-card card">
-	<summary class="column-header badge-right">
+<section class="config-card card">
+	<div class="column-header badge-right">
 		<h3><span class="material-symbols-outlined header-icon-symbol">extension</span>汎用モード設定</h3>
 		<span class="badge badge-accent">OWNER専用</span>
-	</summary>
+	</div>
 	<p class="description-text">
 		サーバー常駐アシスタントの動作設定です。応答には「Bot専用のGemini APIキー」「独自Discordトークン」「応答許可ギルド」の設定が必要です。
 	</p>
@@ -159,7 +159,7 @@ async function saveKey() {
 		</div>
 		{#if rateText}<span class="field-sub">{rateText}</span>{/if}
 	</details>
-</details>
+</section>
 
 <style>
 	.warnings {

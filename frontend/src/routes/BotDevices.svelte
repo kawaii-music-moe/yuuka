@@ -88,7 +88,7 @@ async function revoke(id: number) {
 </script>
 
 <section class="tab-view">
-	<div class="view-actions-card card">
+	<div class="view-actions-card card desktop-download-card">
 		<div class="header-title">
 			<h2 class="section-title">デスクトップアプリ</h2>
 			<p class="field-sub section-desc">
@@ -99,7 +99,7 @@ async function revoke(id: number) {
 			<button type="button" class="btn btn-primary" disabled={!downloadAvailable} onclick={download}>
 				<span class="material-symbols-outlined">download</span> Windows版をダウンロード
 			</button>
-			<span class="field-sub">{downloadMeta}</span>
+			<span class="field-sub download-meta">{downloadMeta}</span>
 		</div>
 	</div>
 
@@ -137,11 +137,23 @@ async function revoke(id: number) {
 		margin-top: 4px;
 	}
 	.download-row {
-		margin-top: 12px;
+		margin-top: 2px;
 		display: flex;
 		align-items: center;
-		gap: 12px;
+		gap: 16px;
 		flex-wrap: wrap;
+	}
+	.desktop-download-card {
+		flex-direction: column;
+		align-items: stretch;
+		gap: 10px;
+	}
+	.download-row .btn {
+		min-height: 44px;
+		padding-inline: 18px;
+	}
+	.download-meta {
+		line-height: 1.5;
 	}
 	.load-error {
 		padding: 16px;

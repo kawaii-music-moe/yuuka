@@ -35,6 +35,7 @@ docs/
 
 | 知りたいこと | 読む文書 |
 |---|---|
+| **現行アーキテクチャを図で把握する（HTML）** | [architecture-current.html](architecture-current.html) |
 | プロジェクト全体像・どのファイルを触ればよいか | [project_overview.md](project_overview.md) |
 | 現行の実装（バックエンド）・DB スキーマ | `crates/`（クレート一覧は [../Cargo.toml](../Cargo.toml)）/ `crates/yuuka-db/migrations/`（V17 baseline〜V22） |
 | ローカルセットアップ・Docker デプロイ・機能一覧 | [guide/setup.md](guide/setup.md) / [guide/deployment.md](guide/deployment.md) / [guide/features.md](guide/features.md) |

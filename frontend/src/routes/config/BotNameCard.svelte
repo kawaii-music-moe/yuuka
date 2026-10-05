@@ -42,10 +42,10 @@ async function submit(e: SubmitEvent) {
 }
 </script>
 
-<details class="config-card card" open>
-	<summary class="column-header">
+<section class="config-card card">
+	<div class="column-header">
 		<h3><span class="material-symbols-outlined header-icon-symbol">badge</span>Bot登録名</h3>
-	</summary>
+	</div>
 	<p class="description-text">
 		このBotの登録名（管理画面・Bot選択画面で表示される名前）を変更します。Discord上の表示名とは別です。
 	</p>
@@ -60,7 +60,7 @@ async function submit(e: SubmitEvent) {
 		/>
 		<Button type="submit" variant="primary">登録名を保存</Button>
 	</form>
-</details>
+</section>
 
 <style>
 	.name-form {
