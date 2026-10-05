@@ -93,6 +93,18 @@ Rust は**既定では存在しない DB を作らない**（`open_conn` は `SQ
 
 ## dev インスタンス
 
+### dev データの初期化
+
+dev API を停止し、`deploy/dev/data` を空にしてから起動し直す場合は次を使う。
+
+```bash
+pnpm dev:reset                 # 既存の yuuka:dev イメージで起動（ビルドなし）
+pnpm dev:reset -- --re-build   # イメージを --no-cache で再ビルドして起動
+```
+
+どちらも新しい空の SQLite DB を初期化する。再ビルド指定がないとき、`yuuka:dev` イメージが
+存在しなければデータ削除前に終了する。prod のデータやイメージは操作しない。
+
 ### API（Rust バイナリ + SPA 配信）
 
 dev は prod と同じ `docker-compose.yml` を使い、**インスタンス専用のイメージタグ**
