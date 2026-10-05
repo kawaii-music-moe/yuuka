@@ -11,12 +11,13 @@
 
 use std::sync::Arc;
 
-use axum::extract::{Extension, State};
+use axum::extract::{Extension, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use base64::Engine as _;
+use serde::Deserialize;
 use serde_json::{json, Value};
 use yuuka_core::CapabilitySet;
 use yuuka_crypto::SystemCrypto;
@@ -182,14 +183,27 @@ async fn create_bot(
 
 // ─── DELETE /api/bots ────────────────────────────────────────────────────────
 
+/// `DELETE /api/bots` の query（管理画面は `?botId=` で送り、body は付けない）。
+#[derive(Deserialize)]
+struct DeleteBotQuery {
+    #[serde(default, rename = "botId")]
+    bot_id: Option<String>,
+}
+
 async fn delete_bot(
     user: AuthenticatedUser,
     State(db): State<Db>,
     Extension(rt): Extension<Arc<dyn BotViewRuntime>>,
-    Json(body): Json<Value>,
+    Query(q): Query<DeleteBotQuery>,
+    body: Option<Json<Value>>,
 ) -> Response {
     let uid = user.0.discord_id;
-    let bot_id = str_field(&body, "botId");
+    // botId は body 優先・無ければ query（Content-Type 無しの DELETE を 415 にしない）。
+    let bot_id = body
+        .map(|Json(b)| str_field(&b, "botId"))
+        .filter(|id| !id.is_empty())
+        .or_else(|| q.bot_id.map(|id| id.trim().to_owned()))
+        .unwrap_or_default();
     if bot_id.is_empty() {
         return bad_request("Bot IDが必要です。");
     }
@@ -656,16 +670,24 @@ mod tests {
         )
         .await;
         assert_eq!(st, StatusCode::FORBIDDEN);
-        // 所有者削除。
-        let (st, j) = send(
-            &app,
-            "DELETE",
-            "/api/bots",
-            "owner",
-            &format!(r#"{{"botId":"{bot_id}"}}"#),
-        )
-        .await;
-        assert_eq!(st, StatusCode::OK);
+        // 所有者削除（管理画面と同じ `?botId=`・body/Content-Type 無し）。
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/api/bots?botId={bot_id}"))
+                    .header("cookie", "__Host-yuuka-session=owner")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let j: Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(j["success"], true);
         // 一覧は 1 件に。
         let (_st, j) = send(&app, "GET", "/api/bots", "owner", "").await;
