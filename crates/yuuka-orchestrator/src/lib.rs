@@ -23,6 +23,7 @@ pub mod message_log;
 pub mod module_catalog;
 pub mod persona;
 pub mod preset;
+pub mod receipt_extract;
 pub mod share_routes;
 pub mod synapse_extract;
 pub mod synapse_recall;
@@ -43,6 +44,7 @@ pub use engine::{ChatEngine, GeminiFactory, RealGeminiFactory};
 pub use member_routes::{
     routes as member_request_routes, routes_with as member_request_routes_with, NullMemberDmSender,
 };
+pub use receipt_extract::{ReceiptDraft, ReceiptExtractError};
 pub use share_routes::{
     routes as bot_share_routes, routes_with as bot_share_routes_with, NullShareInviteDm,
 };

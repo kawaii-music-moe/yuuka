@@ -37,6 +37,7 @@ use crate::context_note;
 use crate::embed_recover;
 use crate::guild_prompt::{self, GuildScope};
 use crate::message_log::{self, ContextEntry};
+use crate::receipt_extract::{ReceiptDraft, ReceiptExtractError};
 use crate::synapse_extract::{self, ExtractScope};
 use crate::synapse_recall;
 use crate::{bot_repo, persona, system_prompt, user};
@@ -217,6 +218,37 @@ impl ChatEngine {
     /// 発話ユーザーが Gemini キーを設定済みか（WS の事前チェック `error/no_gemini_key` 用）。
     pub async fn user_has_gemini_key(&self, user_id: &str) -> bool {
         matches!(user::user_gemini(&self.db, user_id).await, Ok(Some(_)))
+    }
+
+    /// レシート画像から家計簿フォームの下書きを読み取る（PWA の家計画面・登録はしない）。Gemini キーは
+    /// 発話ユーザー自身のもの。`today` は `YYYY-MM-DD`（年の省略された日付の解釈に使う）。
+    ///
+    /// # Errors
+    /// [`crate::receipt_extract::extract`] と同じ。キー未設定は [`ReceiptExtractError::NoGeminiKey`]、
+    /// 暗号シークレット未設定・復号失敗は [`ReceiptExtractError::Unavailable`]。
+    pub async fn extract_receipt(
+        &self,
+        user_id: &UserId,
+        image_base64: &str,
+        mime_type: &str,
+        today: &str,
+    ) -> Result<ReceiptDraft, ReceiptExtractError> {
+        let cfg = user::user_gemini(&self.db, user_id.as_str())
+            .await
+            .map_err(|_| ReceiptExtractError::Unavailable)?
+            .ok_or(ReceiptExtractError::NoGeminiKey)?;
+        let crypto = self
+            .crypto
+            .as_ref()
+            .ok_or(ReceiptExtractError::Unavailable)?;
+        let key = crypto
+            .decrypt_text(&cfg.encrypted, &cfg.iv, &cfg.tag)
+            .map_err(|_| ReceiptExtractError::Unavailable)?;
+        let backend = self
+            .factory
+            .build(&cfg.model, SecretString::from(key))
+            .map_err(ReceiptExtractError::Llm)?;
+        crate::receipt_extract::extract(backend.as_ref(), image_base64, mime_type, today).await
     }
 
     /// 会話コンテキストをリセットする（WS `reset` フレーム・Node `clearContext`）。

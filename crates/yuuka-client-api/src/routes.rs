@@ -25,7 +25,7 @@ use axum::extract::{FromRequestParts, Path, Query, State};
 use axum::http::request::Parts;
 use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, patch};
+use axum::routing::{get, patch, post};
 use axum::{Extension, Json, Router};
 use serde::Deserialize;
 use serde_json::json;
@@ -35,7 +35,9 @@ use yuuka_discord::{rate_limit_message, IncomingChat, RateLimiter, RichEmbed, St
 use yuuka_finance::dto::{Expense, NewExpense};
 use yuuka_finance::repo::ExpenseRepo;
 use yuuka_gemini::ALLOWED_MODELS;
-use yuuka_orchestrator::{context_note, message_log, ChatEngine};
+use yuuka_orchestrator::{
+    context_note, message_log, ChatEngine, ReceiptDraft, ReceiptExtractError,
+};
 use yuuka_persona::dto::{SavePersona, PERSONA_MAX_LENGTH};
 use yuuka_persona::repo::PersonaRepo;
 use yuuka_schedule::dto::Schedule;
@@ -51,8 +53,8 @@ use crate::date_util::{
 use crate::dto::{
     CalendarEventView, ChatEmbedFieldView, ChatEmbedView, ChatFileView, ChatMessageView,
     ChatSendAccepted, ChatSendInput, FinanceSummaryView, NewCalendarEventInput, NewTodoInput,
-    NewTransactionInput, SettingsUpdate, SettingsView, SharedNoteUpdate, SharedNoteView,
-    StatusView, TodoPatch, TodoView, TransactionView,
+    NewTransactionInput, ReceiptScanInput, SettingsUpdate, SettingsView, SharedNoteUpdate,
+    SharedNoteView, StatusView, TodoPatch, TodoView, TransactionView,
 };
 use crate::error::ClientApiError;
 use crate::references::infer_reference;
@@ -106,6 +108,7 @@ pub fn routes_with(
             "/api/client/finance/transactions",
             get(finance_transactions).post(finance_add),
         )
+        .route("/api/client/finance/receipt", post(finance_receipt))
         .route(
             "/api/client/chat/messages",
             get(chat_history).post(chat_send),
@@ -913,6 +916,93 @@ async fn finance_add(
 }
 
 // ─── chat（履歴・送信・添付） ───────────────────────────────────────────────────
+
+/// レシート画像として受け付ける形式（`upload-receipt` と同じ・LLM に渡せる画像形式）。
+const RECEIPT_MIME_TYPES: [&str; 7] = [
+    "image/png",
+    "image/jpeg",
+    "image/jpg",
+    "image/webp",
+    "image/heic",
+    "image/heif",
+    "image/gif",
+];
+
+/// レシート画像を読み取り、家計簿フォームの下書き（[`ReceiptDraft`]）を返す。**登録はしない**
+/// （ユーザーが PWA のフォームで内容を直してから `POST /api/client/finance/transactions` で登録する）。
+/// LLM を呼ぶので、チャット送信と同じレート制限を消費する。
+async fn finance_receipt(
+    ClientScope(scope): ClientScope,
+    Extension(engine): Extension<Arc<ChatEngine>>,
+    Extension(rate_limiter): Extension<Arc<dyn RateLimiter>>,
+    Json(body): Json<ReceiptScanInput>,
+) -> Result<Json<ReceiptDraft>, ClientApiError> {
+    let image = body.image_base64.unwrap_or_default();
+    let mime = body
+        .mime_type
+        .unwrap_or_default()
+        .to_lowercase()
+        .split(';')
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_owned();
+    if image.is_empty() || mime.is_empty() {
+        return Err(ClientApiError::bad_request(
+            "画像データ(base64)とMIMEタイプが必要です。",
+        ));
+    }
+    if !RECEIPT_MIME_TYPES.contains(&mime.as_str()) {
+        return Err(ClientApiError::bad_request(
+            "対応していない画像形式です（png/jpeg/webp/heic/gif）。",
+        ));
+    }
+    if !engine.user_has_gemini_key(scope.user_id().as_str()).await {
+        return Err(ClientApiError::bad_request(
+            "Gemini APIキーが未設定です。管理画面から設定してください。",
+        ));
+    }
+    let decision = rate_limiter
+        .consume(
+            scope.bot_id(),
+            &GuildId::new(PWA_RATE_LIMIT_GUILD),
+            scope.user_id(),
+        )
+        .await;
+    if let Some(exceeded) = decision.exceeded {
+        return Err(ClientApiError {
+            status: StatusCode::TOO_MANY_REQUESTS,
+            message: rate_limit_message(exceeded),
+        });
+    }
+
+    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+    match engine
+        .extract_receipt(scope.user_id(), &image, &mime, &today)
+        .await
+    {
+        Ok(draft) => Ok(Json(draft)),
+        Err(ReceiptExtractError::NoGeminiKey) => Err(ClientApiError::bad_request(
+            "Gemini APIキーが未設定です。管理画面から設定してください。",
+        )),
+        Err(ReceiptExtractError::Unreadable) => Err(ClientApiError {
+            status: StatusCode::UNPROCESSABLE_ENTITY,
+            message: "レシートを読み取れませんでした。別の写真でお試しください。".to_owned(),
+        }),
+        Err(ReceiptExtractError::Llm(e)) => {
+            tracing::warn!(error = %e, "client-api: receipt extraction failed");
+            Err(ClientApiError {
+                status: StatusCode::BAD_GATEWAY,
+                message: "AI サーバーが混み合っています。しばらくしてからお試しください。"
+                    .to_owned(),
+            })
+        }
+        Err(ReceiptExtractError::Unavailable) => Err(ClientApiError {
+            status: StatusCode::SERVICE_UNAVAILABLE,
+            message: "レシートの読み取りを利用できません。".to_owned(),
+        }),
+    }
+}
 
 /// `GET /api/client/chat/messages`（チャット履歴・issue #41）。
 ///

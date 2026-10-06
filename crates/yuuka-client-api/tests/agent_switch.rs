@@ -299,3 +299,40 @@ async fn calendar_event_can_be_added_from_the_pwa() {
         assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
     }
 }
+
+#[tokio::test]
+async fn receipt_scan_validates_input_before_calling_the_llm() {
+    let (db, _path) = fresh_db();
+    let app = app(db);
+    let image = "aGVsbG8=";
+
+    // 画像・形式の検証。
+    for body in [
+        json!({ "mimeType": "image/jpeg" }),
+        json!({ "imageBase64": image }),
+        json!({ "imageBase64": image, "mimeType": "application/pdf" }),
+    ] {
+        let (status, _) = call(
+            &app,
+            "POST",
+            "/api/client/finance/receipt",
+            Some(body.clone()),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    }
+
+    // Gemini キー未設定は案内文付きの 400（LLM は呼ばない）。
+    let (status, body) = call(
+        &app,
+        "POST",
+        "/api/client/finance/receipt",
+        Some(json!({ "imageBase64": image, "mimeType": "image/jpeg; charset=binary" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(
+        body["message"].as_str().unwrap().contains("Gemini APIキー"),
+        "{body}"
+    );
+}

@@ -144,6 +144,15 @@ pub struct TransactionView {
     pub kind: String,
 }
 
+/// `POST /api/client/finance/receipt` の body（レシート画像の読み取り・登録はしない）。
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct ReceiptScanInput {
+    #[serde(default, rename = "imageBase64")]
+    pub image_base64: Option<String>,
+    #[serde(default, rename = "mimeType")]
+    pub mime_type: Option<String>,
+}
+
 /// `POST /api/client/finance/transactions` の body。
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct NewTransactionInput {
