@@ -23,6 +23,7 @@ use yuuka_core::tool::FunctionDeclaration;
 use yuuka_core::{DbError, Tool, ToolContext, ToolError, ToolName, ToolOutcome, UserScope};
 use yuuka_web::Db;
 
+use crate::datetime::normalize_local_datetime;
 use crate::dto::NewSchedule;
 use crate::repo::ScheduleRepo;
 
@@ -131,6 +132,17 @@ impl Tool for AddScheduleTool {
         else {
             return Ok(fail_payload("title と start_at は必須です。"));
         };
+        // 解釈できない日時はそのまま保存せず、エージェントに書式を直させる。
+        if normalize_local_datetime(&start_at).is_none() {
+            return Ok(fail_payload(
+                "start_at の日時を解釈できません。ISO 8601（例: 2026-05-28T10:00:00）で指定してください。",
+            ));
+        }
+        if arg_str(&args, "end_at").is_some_and(|end| normalize_local_datetime(&end).is_none()) {
+            return Ok(fail_payload(
+                "end_at の日時を解釈できません。ISO 8601（例: 2026-05-28T11:00:00）で指定してください。",
+            ));
+        }
 
         let new = NewSchedule {
             title,
@@ -407,6 +419,40 @@ mod tests {
             .unwrap();
         assert_eq!(out.payload["success"], true);
         assert_eq!(out.payload["schedule"]["remind_before_minutes"], 30);
+    }
+
+    #[tokio::test]
+    async fn add_normalizes_iso_datetimes_and_rejects_unparsable() {
+        let db = seed_db();
+        let tools = tools(db).unwrap();
+        let add = find(&tools, "addSchedule");
+
+        // Gemini が返す ISO 8601（T 区切り・オフセット付き）は保存形式へ揃える。
+        let out = add
+            .call(
+                &ctx(),
+                json!({"title": "歯医者", "start_at": "2026-05-28T10:00:00", "end_at": "2026-05-28T02:00:00Z"}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(out.payload["success"], true);
+        assert_eq!(out.payload["schedule"]["start_at"], "2026-05-28 10:00:00");
+        assert_eq!(out.payload["schedule"]["end_at"], "2026-05-28 11:00:00");
+
+        // 解釈できない日時は保存せずに fail（エージェントに書式を直させる）。
+        let out = add
+            .call(&ctx(), json!({"title": "x", "start_at": "明日の10時"}))
+            .await
+            .unwrap();
+        assert_eq!(out.payload["success"], false);
+        let out = add
+            .call(
+                &ctx(),
+                json!({"title": "x", "start_at": "2026-05-28T10:00:00", "end_at": "そのうち"}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(out.payload["success"], false);
     }
 
     #[tokio::test]

@@ -43,6 +43,16 @@ pub fn next_day_start(date: NaiveDate) -> String {
     day_start(next)
 }
 
+/// ブラウザのローカル日時（`YYYY-MM-DDTHH:MM`、秒付きも可）を SQLite の `'YYYY-MM-DD HH:MM:SS'`
+/// （ローカル暦）へ変換する。書式違反・存在しない日時は `None`（呼び出し側で 400 に倒す）。
+pub fn parse_local_datetime(s: &str) -> Option<String> {
+    let s = s.trim();
+    let naive = NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M")
+        .or_else(|_| NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S"))
+        .ok()?;
+    Some(naive.format("%Y-%m-%d %H:%M:%S").to_string())
+}
+
 /// SQLite の `'YYYY-MM-DD HH:MM:SS'`（ローカル・本番は JST）を UTC の ISO8601（`Z` 終端・
 /// ミリ秒 3 桁）へ変換する（Node `new Date(value.replace(" ","T")).toISOString()` パリティ:
 /// Node はタイムゾーン無し日時文字列をサーバーのローカル TZ で解釈してから UTC の
@@ -68,6 +78,24 @@ mod tests {
         assert!(parse_local_date("not-a-date").is_none());
         assert!(parse_local_date("2026-13-01").is_none(), "月が範囲外");
         assert!(parse_local_date("").is_none());
+    }
+
+    #[test]
+    fn parse_local_datetime_converts_to_sqlite_format() {
+        assert_eq!(
+            parse_local_datetime("2026-10-06T09:30").as_deref(),
+            Some("2026-10-06 09:30:00")
+        );
+        assert_eq!(
+            parse_local_datetime("2026-10-06T09:30:15").as_deref(),
+            Some("2026-10-06 09:30:15")
+        );
+        assert!(
+            parse_local_datetime("2026-02-30T09:00").is_none(),
+            "存在しない日付"
+        );
+        assert!(parse_local_datetime("2026-10-06").is_none(), "時刻なし");
+        assert!(parse_local_datetime("").is_none());
     }
 
     #[test]

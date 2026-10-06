@@ -28,8 +28,9 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, patch};
 use axum::{Extension, Json, Router};
 use serde::Deserialize;
+use serde_json::json;
 use tokio::time::timeout;
-use yuuka_core::{BotId, GuildId, UserId, UserScope};
+use yuuka_core::{BotId, GuildId, ToolContext, UserId, UserScope};
 use yuuka_discord::{rate_limit_message, IncomingChat, RateLimiter, RichEmbed, StatusSink};
 use yuuka_finance::dto::{Expense, NewExpense};
 use yuuka_finance::repo::ExpenseRepo;
@@ -37,19 +38,21 @@ use yuuka_gemini::ALLOWED_MODELS;
 use yuuka_orchestrator::{context_note, message_log, ChatEngine};
 use yuuka_persona::dto::{SavePersona, PERSONA_MAX_LENGTH};
 use yuuka_persona::repo::PersonaRepo;
+use yuuka_schedule::dto::Schedule;
 use yuuka_schedule::repo::ScheduleRepo;
 use yuuka_todo::dto::{NewTodo, Todo, TodoUpdate};
 use yuuka_todo::repo::TodoRepo;
 use yuuka_web::{resolve_scope, AppState, AuthenticatedUser, Db};
 
 use crate::date_util::{
-    day_start, local_to_utc_iso, next_day_start, parse_local_date, parse_local_month,
+    day_start, local_to_utc_iso, next_day_start, parse_local_date, parse_local_datetime,
+    parse_local_month,
 };
 use crate::dto::{
     CalendarEventView, ChatEmbedFieldView, ChatEmbedView, ChatFileView, ChatMessageView,
-    ChatSendAccepted, ChatSendInput, FinanceSummaryView, NewTodoInput, NewTransactionInput,
-    SettingsUpdate, SettingsView, SharedNoteUpdate, SharedNoteView, StatusView, TodoPatch,
-    TodoView, TransactionView,
+    ChatSendAccepted, ChatSendInput, FinanceSummaryView, NewCalendarEventInput, NewTodoInput,
+    NewTransactionInput, SettingsUpdate, SettingsView, SharedNoteUpdate, SharedNoteView,
+    StatusView, TodoPatch, TodoView, TransactionView,
 };
 use crate::error::ClientApiError;
 use crate::references::infer_reference;
@@ -94,7 +97,10 @@ pub fn routes_with(
         .route("/api/client/shared-note", get(note_get).put(note_put))
         .route("/api/client/todos", get(todos_list).post(todos_add))
         .route("/api/client/todos/{id}", patch(todos_patch))
-        .route("/api/client/calendar/events", get(calendar_events))
+        .route(
+            "/api/client/calendar/events",
+            get(calendar_events).post(calendar_add),
+        )
         .route("/api/client/finance/summary", get(finance_summary))
         .route(
             "/api/client/finance/transactions",
@@ -663,33 +669,139 @@ async fn calendar_events(
     let mut out = Vec::with_capacity(rows.len());
     for row in rows {
         // issue #47: 解釈できない start_at が 1 件あっても全体を 500 にせず、その行だけ除外する。
-        let Some(starts_at) = local_to_utc_iso(&row.start_at) else {
+        let id = row.id;
+        let Some(event) = map_calendar_event(
+            id,
+            row.title,
+            &row.start_at,
+            row.end_at.as_deref(),
+            row.google_calendar_id,
+        ) else {
             tracing::warn!(
-                schedule_id = row.id,
+                schedule_id = id,
                 "start_at をパースできないため calendar events から除外"
             );
             continue;
         };
-        let ends_at = row
-            .end_at
-            .as_deref()
-            .and_then(local_to_utc_iso)
-            .unwrap_or_else(|| starts_at.clone());
-        let (calendar, calendar_name) = match row.google_calendar_id.filter(|s| !s.is_empty()) {
-            Some(id) => (id, "Google カレンダー".to_owned()),
-            None => ("Personal".to_owned(), "Personal".to_owned()),
-        };
-        out.push(CalendarEventView {
-            id: row.id.to_string(),
-            title: row.title,
-            starts_at,
-            ends_at,
-            calendar,
-            calendar_name,
-            color: "#155eef",
-        });
+        out.push(event);
     }
     Ok(Json(out))
+}
+
+/// 予定 1 件を PWA の `CalendarEvent` へ変換する（`start_at` が解釈できなければ `None`）。
+fn map_calendar_event(
+    id: i64,
+    title: String,
+    start_at: &str,
+    end_at: Option<&str>,
+    google_calendar_id: Option<String>,
+) -> Option<CalendarEventView> {
+    let starts_at = local_to_utc_iso(start_at)?;
+    let ends_at = end_at
+        .and_then(local_to_utc_iso)
+        .unwrap_or_else(|| starts_at.clone());
+    let (calendar, calendar_name) = match google_calendar_id.filter(|s| !s.is_empty()) {
+        Some(id) => (id, "Google カレンダー".to_owned()),
+        None => ("Personal".to_owned(), "Personal".to_owned()),
+    };
+    Some(CalendarEventView {
+        id: id.to_string(),
+        title,
+        starts_at,
+        ends_at,
+        calendar,
+        calendar_name,
+        color: "#155eef",
+    })
+}
+
+/// `addSchedule` ツールの成功応答（`{success, message, schedule}`）。
+#[derive(Debug, Deserialize)]
+struct AddScheduleOutcome {
+    success: bool,
+    #[serde(default)]
+    message: Option<String>,
+    #[serde(default)]
+    schedule: Option<Schedule>,
+}
+
+/// Discord（エージェント）と共通の `addSchedule` ツールで予定を登録し、作成された予定を返す。
+async fn call_add_schedule_tool(
+    db: &Db,
+    scope: &UserScope,
+    args: serde_json::Value,
+) -> Result<Schedule, ClientApiError> {
+    let tools = yuuka_schedule::tools(db.clone())
+        .map_err(|e| ClientApiError::internal(format!("schedule tools: {e}")))?;
+    let tool = tools
+        .iter()
+        .find(|t| t.declaration().name.as_str() == "addSchedule")
+        .ok_or_else(|| ClientApiError::internal("addSchedule tool is not available"))?;
+    let ctx = ToolContext::new(scope.bot_id().clone(), scope.user_id().clone());
+    let outcome = tool
+        .call(&ctx, args)
+        .await
+        .map_err(|e| ClientApiError::internal(format!("addSchedule: {e}")))?;
+    let result: AddScheduleOutcome = serde_json::from_value(outcome.payload)
+        .map_err(|e| ClientApiError::internal(format!("addSchedule payload: {e}")))?;
+    match (result.success, result.schedule) {
+        (true, Some(schedule)) => Ok(schedule),
+        (true, None) => Err(ClientApiError::internal("addSchedule returned no schedule")),
+        (false, _) => Err(ClientApiError::bad_request(
+            result
+                .message
+                .unwrap_or_else(|| "addSchedule failed".to_owned()),
+        )),
+    }
+}
+
+/// PWA のカレンダー画面からの予定追加。日時はブラウザのローカル暦（`YYYY-MM-DDTHH:MM`）で受け、
+/// 一覧（[`calendar_events`]）と同じローカル暦文字列で `schedules` に保存する。
+async fn calendar_add(
+    ClientScope(scope): ClientScope,
+    State(db): State<Db>,
+    Json(body): Json<NewCalendarEventInput>,
+) -> Result<(StatusCode, Json<CalendarEventView>), ClientApiError> {
+    let title = body.title.as_deref().unwrap_or_default().trim().to_owned();
+    if title.is_empty() {
+        return Err(ClientApiError::bad_request("title is required"));
+    }
+    let start_at = body
+        .starts_at
+        .as_deref()
+        .and_then(parse_local_datetime)
+        .ok_or_else(|| ClientApiError::bad_request("startsAt must be YYYY-MM-DDTHH:MM"))?;
+    let end_at = match body.ends_at.as_deref().filter(|s| !s.trim().is_empty()) {
+        Some(raw) => Some(
+            parse_local_datetime(raw)
+                .ok_or_else(|| ClientApiError::bad_request("endsAt must be YYYY-MM-DDTHH:MM"))?,
+        ),
+        None => None,
+    };
+    // 同じ書式の文字列なので辞書順比較がそのまま時刻の比較になる。
+    if end_at.as_deref().is_some_and(|end| end < start_at.as_str()) {
+        return Err(ClientApiError::bad_request(
+            "endsAt must not be before startsAt",
+        ));
+    }
+    // 保存は Discord（エージェント）と同じ `addSchedule` ツールに任せ、登録経路を 1 本にする
+    // （リマインド既定・今後の Google カレンダー同期などもツール側の挙動がそのまま効く）。
+    let args = json!({
+        "title": title,
+        "start_at": start_at,
+        "end_at": end_at,
+        "description": body.description.filter(|s| !s.trim().is_empty()),
+    });
+    let created = call_add_schedule_tool(&db, &scope, args).await?;
+    let event = map_calendar_event(
+        created.id,
+        created.title,
+        &created.start_at,
+        created.end_at.as_deref(),
+        None,
+    )
+    .ok_or_else(|| ClientApiError::internal("addSchedule stored an unparsable start_at"))?;
+    Ok((StatusCode::CREATED, Json(event)))
 }
 
 // ─── finance ─────────────────────────────────────────────────────────────────

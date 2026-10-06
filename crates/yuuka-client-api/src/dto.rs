@@ -87,6 +87,20 @@ pub struct NewTodoInput {
     pub list: Option<String>,
 }
 
+/// `POST /api/client/calendar/events` の body。日時はブラウザのローカル暦（`YYYY-MM-DDTHH:MM`・
+/// `<input type="datetime-local">` の値そのまま）。
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct NewCalendarEventInput {
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default, rename = "startsAt")]
+    pub starts_at: Option<String>,
+    #[serde(default, rename = "endsAt")]
+    pub ends_at: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+}
+
 /// `PATCH /api/client/todos/:id` の body。
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct TodoPatch {

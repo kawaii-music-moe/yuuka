@@ -10,6 +10,7 @@ use yuuka_core::{DbError, UserScope};
 use yuuka_db::{map_sqlite, ReadPool, WriterHandle};
 use yuuka_web::Db;
 
+use crate::datetime::normalize_local_datetime;
 use crate::dto::{NewSchedule, Schedule};
 
 /// 返却列（クリーンビュー・内部列 user_id/bot_id/reminded/google_* は含めない）。
@@ -117,6 +118,12 @@ impl<'a> ScheduleRepo<'a> {
         let remind = input
             .remind_before_minutes
             .unwrap_or(DEFAULT_REMIND_BEFORE_MINUTES);
+        // 一覧・リマインド・PWA カレンダーが前提にするローカル暦の保存形式へ揃える
+        // （解釈できない値は呼び出し側の検証を通った前提でそのまま保存する）。
+        let start_at = normalize_local_datetime(&input.start_at).unwrap_or(input.start_at);
+        let end_at = input
+            .end_at
+            .map(|end| normalize_local_datetime(&end).unwrap_or(end));
         let id = self
             .writer
             .transaction(move |tx| {
@@ -130,8 +137,8 @@ impl<'a> ScheduleRepo<'a> {
                         bid,
                         input.title,
                         input.description,
-                        input.start_at,
-                        input.end_at,
+                        start_at,
+                        end_at,
                         remind,
                     ],
                 )

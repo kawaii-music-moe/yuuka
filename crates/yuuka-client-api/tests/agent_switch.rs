@@ -245,3 +245,57 @@ async fn shared_note_and_persona_follow_the_selected_agent() {
     let (_, secretary) = call(&app, "GET", "/api/client/settings", None).await;
     assert_eq!(secretary["persona"], "");
 }
+
+#[tokio::test]
+async fn calendar_event_can_be_added_from_the_pwa() {
+    let (db, _path) = fresh_db();
+    let app = app(db);
+
+    let (status, created) = call(
+        &app,
+        "POST",
+        "/api/client/calendar/events?botId=mybot",
+        Some(json!({ "title": "歯医者", "startsAt": "2026-10-06T09:30", "endsAt": "2026-10-06T10:00" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    assert_eq!(created["title"], "歯医者");
+    // ローカル暦（JST）09:30 は UTC 00:30。
+    assert_eq!(created["startsAt"], "2026-10-06T00:30:00.000Z");
+    assert_eq!(created["endsAt"], "2026-10-06T01:00:00.000Z");
+
+    // 選択中エージェントの一覧にだけ出る。
+    let (_, mine) = call(
+        &app,
+        "GET",
+        "/api/client/calendar/events?botId=mybot&from=2026-10-01&to=2026-10-31",
+        None,
+    )
+    .await;
+    assert_eq!(mine.as_array().unwrap().len(), 1, "{mine}");
+    let (_, secretary) = call(
+        &app,
+        "GET",
+        "/api/client/calendar/events?from=2026-10-01&to=2026-10-31",
+        None,
+    )
+    .await;
+    assert_eq!(secretary.as_array().unwrap().len(), 0, "{secretary}");
+
+    // 入力不足・不正は 400。
+    for body in [
+        json!({ "title": "", "startsAt": "2026-10-06T09:30" }),
+        json!({ "title": "x" }),
+        json!({ "title": "x", "startsAt": "2026-02-30T09:30" }),
+        json!({ "title": "x", "startsAt": "2026-10-06T09:30", "endsAt": "2026-10-06T09:00" }),
+    ] {
+        let (status, _) = call(
+            &app,
+            "POST",
+            "/api/client/calendar/events",
+            Some(body.clone()),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    }
+}

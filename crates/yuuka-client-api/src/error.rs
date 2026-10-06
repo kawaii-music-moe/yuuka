@@ -41,6 +41,15 @@ impl ClientApiError {
             message: message.into(),
         }
     }
+
+    /// 想定外の内部エラー。詳細はログにだけ残し、クライアントには `internal` だけ返す。
+    pub fn internal(detail: impl std::fmt::Display) -> Self {
+        tracing::warn!(error = %detail, "client-api: internal error");
+        Self {
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+            message: "internal".to_owned(),
+        }
+    }
 }
 
 impl IntoResponse for ClientApiError {
