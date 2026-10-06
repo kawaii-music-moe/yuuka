@@ -1,6 +1,6 @@
 import type { ChatPollOptions } from './chatPolling'
 import type { ReceiptImage } from '../utils/receiptImage'
-import type { AgentSettings, CalendarEvent, ChatMessage, NewCalendarEvent, FinanceSummary, HealthStatus, SharedNote, Todo, Transaction } from './contracts'
+import type { AgentSettings, CalendarEvent, ChatMessage, NewCalendarEvent, FinanceSummary, HealthStatus, ReceiptDraft, SharedNote, Todo, Transaction } from './contracts'
 
 /** UI が依存する唯一の API 契約。バックエンド仕様変更時は adapter だけを変更する。 */
 export interface AgentGateway {
@@ -19,10 +19,10 @@ export interface AgentGateway {
   listTransactions(month: string): Promise<Transaction[]>
   createTransaction(transaction: Omit<Transaction, 'id'>): Promise<Transaction>
   /**
-   * レシート画像をエージェントに読み取らせ、家計簿へ記帳させる。戻り値はエージェントの報告文。
-   * 形式不正（400）・レート制限（429）は `ApiError`（`serverMessage` に案内文）で失敗する。
+   * レシート画像を読み取り、取引の下書きを返す（登録はしない。フォームで確認してから createTransaction する）。
+   * 形式不正・キー未設定（400）・読み取れない（422）・レート制限（429）等は `ApiError`（`serverMessage` に案内文）で失敗する。
    */
-  scanReceipt(image: ReceiptImage): Promise<{ response: string }>
+  scanReceipt(image: ReceiptImage): Promise<ReceiptDraft>
   listChatMessages(): Promise<ChatMessage[]>
   /**
    * メッセージを送り、エージェントの応答が届くまで待って返す。サーバーは重いターンを非同期実行する

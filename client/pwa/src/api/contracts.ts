@@ -11,6 +11,8 @@ export type Todo = { id: string; title: string; dueDate?: string; completed: boo
 export type NewCalendarEvent = { title: string; startsAt: string; endsAt?: string; description?: string }
 export type CalendarEvent = { id: string; title: string; startsAt: string; endsAt: string; calendar: string; calendarName?: string; color: string }
 export type Transaction = { id: string; date: string; category: string; description: string; amount: number; kind: 'income' | 'expense' }
+/** レシートから読み取った取引の下書き。読み取れなかった欄は null。 */
+export type ReceiptDraft = { date: string | null; kind: 'income' | 'expense'; category: string; description: string; amount: number | null }
 export type FinanceSummary = { income: number; expense: number; balance: number; month: string }
 export type ChatReference = {
   type: 'todo' | 'calendar' | 'finance' | 'note'

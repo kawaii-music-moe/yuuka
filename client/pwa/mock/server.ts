@@ -149,12 +149,11 @@ createServer(async (req, res) => {
     return json(res, events)
   }
   if (req.method === 'GET' && apiPath === '/api/finance/summary') { const income = transactions.filter(x => x.kind === 'income').reduce((n, x) => n + x.amount, 0); const expense = transactions.filter(x => x.kind === 'expense').reduce((n, x) => n + x.amount, 0); return json(res, { income, expense, balance: income - expense, month: url.searchParams.get('month') }) }
-  if (req.method === 'POST' && url.pathname === '/api/expenses/upload-receipt') {
+  if (req.method === 'POST' && apiPath === '/api/finance/receipt') {
+    // 本番と同じ契約: 読み取った下書きを返すだけで登録はしない。
     const { imageBase64, mimeType } = await read(req)
-    if (!imageBase64 || !mimeType) return json(res, { success: false, message: '画像データ(base64)とMIMEタイプが必要です。' }, 400)
-    const entry = { id: crypto.randomUUID(), date: new Date().toISOString().slice(0, 10), category: '食費', description: 'レシート（モック）', amount: 1280, kind: 'expense' }
-    transactions.unshift(entry)
-    return json(res, { success: true, response: 'レシートを読み取りました。\n食費 ¥1,280 を記録しました。' })
+    if (!imageBase64 || !mimeType) return json(res, { message: '画像データ(base64)とMIMEタイプが必要です。' }, 400)
+    return json(res, { date: new Date().toISOString().slice(0, 10), kind: 'expense', category: '食費', description: 'サミット: 卵, 牛乳', amount: 1280 })
   }
   if (apiPath === '/api/finance/transactions') { if (req.method === 'POST') { const entry = { ...await read(req), id: crypto.randomUUID() }; transactions.unshift(entry); return json(res, entry, 201) }; return json(res, transactions) }
   if (req.method === 'GET' && apiPath.startsWith('/api/chat/attachments/')) {
