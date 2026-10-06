@@ -1,7 +1,10 @@
 //! `/api/client/*` ルートハンドラ（PWA・全ルート `auth:"user"`・Node `clientRoutes.ts` パリティ）。
 //!
-//! PWA は常に秘書 Bot（`system_default`）に束縛される（Node `const BOT_ID = "system_default"`）。
-//! `?botId=` は存在しない（一般ダッシュボードの `resolve_scope`/`ScopedJson` は使わない）。
+//! 既定は秘書 Bot（`system_default`・Node `const BOT_ID = "system_default"`）。PWA のエージェント
+//! 切り替えでは全ルートが任意の `?botId=` を受け付け、[`ClientScope`] が [`resolve_scope`] で
+//! アクセス権（オーナー本人 or `active` 共有）を検証して `UserScope` を組み立てる。ダッシュボードと
+//! 違い、アクセスできない `botId` は秘書 Bot へ黙ってフォールバックせず 404 にする（画面が示す
+//! エージェントと実際に読み書きする Bot が食い違わないように）。
 //!
 //! チャット送信（`POST /api/client/chat/messages`・issue #41）は事前チェック（Gemini キー・
 //! 同時ターン・レート制限）を同期で行った後、ターン本体（[`ChatEngine::secretary_turn_pwa`]・
@@ -18,9 +21,10 @@ use std::sync::{Arc, Mutex as StdMutex, PoisonError};
 use std::time::Duration;
 
 use axum::body::Body;
-use axum::extract::{Path, Query, State};
+use axum::extract::{FromRequestParts, Path, Query, State};
+use axum::http::request::Parts;
 use axum::http::{header, StatusCode};
-use axum::response::Response;
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, patch};
 use axum::{Extension, Json, Router};
 use serde::Deserialize;
@@ -36,7 +40,7 @@ use yuuka_persona::repo::PersonaRepo;
 use yuuka_schedule::repo::ScheduleRepo;
 use yuuka_todo::dto::{NewTodo, Todo, TodoUpdate};
 use yuuka_todo::repo::TodoRepo;
-use yuuka_web::{AppState, AuthenticatedUser, Db};
+use yuuka_web::{resolve_scope, AppState, AuthenticatedUser, Db};
 
 use crate::date_util::{
     day_start, local_to_utc_iso, next_day_start, parse_local_date, parse_local_month,
@@ -51,7 +55,9 @@ use crate::error::ClientApiError;
 use crate::references::infer_reference;
 use crate::users;
 
-/// PWA が束縛される Bot（Node `const BOT_ID = "system_default"`）。
+/// `?botId=` 未指定時の Bot（Node `const BOT_ID = "system_default"`）。本体は [`resolve_scope`] が
+/// 既定として扱うため、テストでのみ直接参照する。
+#[cfg(test)]
 const BOT_ID: &str = "system_default";
 /// チャット履歴取得の上限（`message_log::list_pwa_messages` が内部で `[1,200]` にクランプする）。
 const CHAT_HISTORY_LIMIT: i64 = 200;
@@ -106,8 +112,8 @@ pub fn routes_with(
 
 // ─── 同時ターン防止（issue #41 PR #75 レビュー・P1: 非同期配信） ──────────────────
 
-/// 同一ユーザーにつき同時に 1 ターンだけを許可するゲート。PWA は常に `BOT_ID` 固定（`system_default`）
-/// なので user_id のみで足りる（`bot_id × user_id` の複合キーにする必要が無い）。
+/// 同一ユーザー × 同一 Bot につき同時に 1 ターンだけを許可するゲート（エージェント切り替えで別 Bot の
+/// 会話は独立に進められる・会話ログも `user_id × bot_id` 単位）。
 ///
 /// **設計選択: 直列化ではなく即時 409 拒否。** [`yuuka_discord::TurnGate`]（Discord 経路の
 /// bot×channel 直列化・待って後で実行する）とは異なり、ここでは待たせず即座に拒否する。
@@ -183,11 +189,13 @@ impl InFlightTurns {
         }
     }
 
-    /// `key`（= user_id）のターンを開始できるか試みる。空いていれば枠を確保して [`InFlightGuard`] を返す
+    /// `user_id × bot_id` のターンを開始できるか試みる。空いていれば枠を確保して [`InFlightGuard`] を返す
     /// （drop で自動的に解放される・成功・失敗・タイムアウト・panic のいずれの終了経路でも解放を保証する）。
     /// 枠が埋まっていても、保持するターンが既に終端行を永続化済みなら引き継ぐ（型のドキュメント参照）。
     /// 保持者が実行中・受理前・確認の読み取り失敗のときは `None`（呼び出し側は 409 を返す）。
-    async fn acquire(&self, db: &Db, key: &str) -> Option<InFlightGuard> {
+    async fn acquire(&self, db: &Db, user_id: &str, bot_id: &str) -> Option<InFlightGuard> {
+        // 改行は Discord ID / Bot ID に現れないため、区切りとして衝突しない。
+        let key = &format!("{bot_id}\n{user_id}");
         let (holder_token, since_id) = {
             let mut state = self.lock();
             match state.slots.get(key) {
@@ -202,7 +210,7 @@ impl InFlightTurns {
         // ロックを跨いで await しない。確認後に再ロックし、枠が「確認した保持者のまま」か「その間に保持者の
         // ガードが drop されて空になった」場合だけ確保する。別のリクエストが先に引き継いでいれば
         // （トークンが変わっている）負けなので、同時に複数のリクエストが引き継ごうとしても勝てるのは 1 つだけ。
-        match message_log::has_pwa_assistant_reply_after(db, key, BOT_ID, since_id).await {
+        match message_log::has_pwa_assistant_reply_after(db, user_id, bot_id, since_id).await {
             Ok(true) => {
                 let mut state = self.lock();
                 let still_ours = state
@@ -221,7 +229,8 @@ impl InFlightTurns {
             Err(e) => {
                 tracing::warn!(
                     error = %e,
-                    user_id = key,
+                    user_id,
+                    bot_id,
                     "client-api: 進行中ターンの終端確認に失敗（409 として扱う）"
                 );
                 None
@@ -269,8 +278,51 @@ impl Drop for InFlightGuard {
     }
 }
 
-fn scope_for(user_id: &str) -> UserScope {
-    UserScope::new(UserId::new(user_id.to_owned()), BotId::new(BOT_ID))
+// ─── エージェント（Bot）スコープ ───────────────────────────────────────────────
+
+/// `?botId=`（PWA のエージェント切り替え）。他のクエリ（`from`/`month` 等）とは別に読む。
+#[derive(Debug, Deserialize)]
+struct BotQuery {
+    #[serde(default, rename = "botId")]
+    bot_id: Option<String>,
+}
+
+/// 認証済みユーザー + 検証済みの `?botId=` から組み立てた PWA のスコープ（未認証は 401）。
+struct ClientScope(UserScope);
+
+impl FromRequestParts<AppState> for ClientScope {
+    type Rejection = Response;
+
+    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Response> {
+        let user = AuthenticatedUser::from_request_parts(parts, state)
+            .await
+            .map_err(IntoResponse::into_response)?;
+        let Query(q) = Query::<BotQuery>::from_request_parts(parts, state)
+            .await
+            .map_err(IntoResponse::into_response)?;
+        client_scope(&state.db, &user, q.bot_id.as_deref())
+            .await
+            .map(Self)
+            .map_err(IntoResponse::into_response)
+    }
+}
+
+/// `botId` を [`resolve_scope`] で解決する。未指定・空は秘書 Bot。指定した Bot にアクセスできない
+/// （未知・他人の未共有 Bot）場合、[`resolve_scope`] は秘書 Bot へフォールバックするが、PWA では
+/// 選択中のエージェントと違う Bot を黙って読み書きしないよう 404 にする。
+async fn client_scope(
+    db: &Db,
+    user: &AuthenticatedUser,
+    raw_bot_id: Option<&str>,
+) -> Result<UserScope, ClientApiError> {
+    let requested = raw_bot_id.map(str::trim).filter(|b| !b.is_empty());
+    let scope = resolve_scope(&user.0, db, requested).await?;
+    if let Some(bot_id) = requested {
+        if scope.bot_id().as_str() != bot_id {
+            return Err(ClientApiError::not_found("agent not found"));
+        }
+    }
+    Ok(scope)
 }
 
 // ─── status ──────────────────────────────────────────────────────────────────
@@ -290,12 +342,11 @@ fn now_iso() -> String {
 // ─── settings ────────────────────────────────────────────────────────────────
 
 async fn settings_get(
-    user: AuthenticatedUser,
+    ClientScope(scope): ClientScope,
     State(db): State<Db>,
 ) -> Result<Json<SettingsView>, ClientApiError> {
-    let uid = user.0.discord_id.as_str();
-    let current = users::get_agent_settings(&db, uid).await?;
-    Ok(Json(settings_view(&db, uid, current).await?))
+    let current = users::get_agent_settings(&db, scope.user_id().as_str()).await?;
+    Ok(Json(settings_view(&db, &scope, current).await?))
 }
 
 /// 永続化済みの状態から [`SettingsView`] を組み立てる（GET/PUT 共通・issue #39）。
@@ -305,7 +356,7 @@ async fn settings_get(
 /// 行が無い場合（GET のみ）は既定値・未連携として返す。
 async fn settings_view(
     db: &Db,
-    uid: &str,
+    scope: &UserScope,
     current: Option<users::UserAgentSettings>,
 ) -> Result<SettingsView, ClientApiError> {
     let model = current
@@ -314,7 +365,7 @@ async fn settings_view(
         .filter(|m| !m.is_empty())
         .unwrap_or_else(|| yuuka_gemini::DEFAULT_MODEL.to_owned());
     let google_connected = current.map(|c| c.google_connected).unwrap_or(false);
-    let persona = active_persona_prompt(db, uid).await?;
+    let persona = active_persona_prompt(db, scope).await?;
     Ok(SettingsView {
         google_connected,
         // issue #47: Node はここに生の calendarId を返していた。人間可読な代替（連携先の表示名）が
@@ -342,11 +393,11 @@ fn user_settings_not_found() -> ClientApiError {
 /// 検証（400）→ 行の存在確認（404）→ 書き込み → DB 再読込の応答、の順で、いずれかで失敗した場合に
 /// 部分更新（モデルだけ保存・persona だけ失敗等）や未保存値の報告が起きない。
 async fn settings_put(
-    user: AuthenticatedUser,
+    ClientScope(scope): ClientScope,
     State(db): State<Db>,
     Json(body): Json<SettingsUpdate>,
 ) -> Result<Json<SettingsView>, ClientApiError> {
-    let uid = user.0.discord_id.clone();
+    let uid = scope.user_id().as_str().to_owned();
 
     let requested_model = match body
         .model
@@ -393,45 +444,43 @@ async fn settings_put(
         }
     }
     if let Some(persona_text) = &body.persona {
-        save_active_persona_prompt(&db, &uid, persona_text).await?;
+        save_active_persona_prompt(&db, &scope, persona_text).await?;
     }
 
     // 応答は入力のエコーではなく、書き込み後の永続状態から組み立てる。
     let after = users::get_agent_settings(&db, &uid)
         .await?
         .ok_or_else(user_settings_not_found)?;
-    Ok(Json(settings_view(&db, &uid, Some(after)).await?))
+    Ok(Json(settings_view(&db, &scope, Some(after)).await?))
 }
 
-/// 秘書 Bot の適用中ペルソナ本文（未設定は空文字・Node `getPersonaPrompt`）。
-async fn active_persona_prompt(db: &Db, user_id: &str) -> Result<String, ClientApiError> {
-    let scope = scope_for(user_id);
+/// 選択中エージェントの適用中ペルソナ本文（未設定は空文字・Node `getPersonaPrompt`）。
+async fn active_persona_prompt(db: &Db, scope: &UserScope) -> Result<String, ClientApiError> {
     let repo = PersonaRepo::new(db);
-    let Some(id) = repo.active_persona_id(&scope).await? else {
+    let Some(id) = repo.active_persona_id(scope).await? else {
         return Ok(String::new());
     };
     Ok(repo
-        .get(&scope, id)
+        .get(scope, id)
         .await?
         .map(|p| p.prompt)
         .unwrap_or_default())
 }
 
-/// 秘書 Bot の適用中ペルソナへ `prompt` を保存する（Node `savePersonaPrompt`）。
+/// 選択中エージェントの適用中ペルソナへ `prompt` を保存する（Node `savePersonaPrompt`）。
 ///
 /// 適用中ペルソナがあれば `name` は据え置きで `prompt` のみ更新、無ければ `prompt` が空でない
 /// 場合のみ新規ペルソナ（`"PWA persona"`）を作って適用する。
 async fn save_active_persona_prompt(
     db: &Db,
-    user_id: &str,
+    scope: &UserScope,
     prompt: &str,
 ) -> Result<(), ClientApiError> {
-    let scope = scope_for(user_id);
     let repo = PersonaRepo::new(db);
-    if let Some(id) = repo.active_persona_id(&scope).await? {
-        if let Some(existing) = repo.get(&scope, id).await? {
+    if let Some(id) = repo.active_persona_id(scope).await? {
+        if let Some(existing) = repo.get(scope, id).await? {
             repo.update(
-                &scope,
+                scope,
                 id,
                 SavePersona {
                     id: None,
@@ -446,7 +495,7 @@ async fn save_active_persona_prompt(
     if !prompt.trim().is_empty() {
         let created = repo
             .add(
-                &scope,
+                scope,
                 SavePersona {
                     id: None,
                     name: "PWA persona".to_owned(),
@@ -454,7 +503,7 @@ async fn save_active_persona_prompt(
                 },
             )
             .await?;
-        repo.set_active(&scope, Some(created.id)).await?;
+        repo.set_active(scope, Some(created.id)).await?;
     }
     Ok(())
 }
@@ -462,11 +511,11 @@ async fn save_active_persona_prompt(
 // ─── shared-note ─────────────────────────────────────────────────────────────
 
 async fn note_get(
-    user: AuthenticatedUser,
+    ClientScope(scope): ClientScope,
     State(db): State<Db>,
 ) -> Result<Json<SharedNoteView>, ClientApiError> {
-    let uid = user.0.discord_id.as_str();
-    match context_note::get_note(&db, uid, BOT_ID).await? {
+    let (uid, bid) = (scope.user_id().as_str(), scope.bot_id().as_str());
+    match context_note::get_note(&db, uid, bid).await? {
         Some(note) => Ok(Json(SharedNoteView {
             id: "shared-note",
             title: note.title,
@@ -483,11 +532,11 @@ async fn note_get(
 }
 
 async fn note_put(
-    user: AuthenticatedUser,
+    ClientScope(scope): ClientScope,
     State(db): State<Db>,
     Json(body): Json<SharedNoteUpdate>,
 ) -> Result<Json<SharedNoteView>, ClientApiError> {
-    let uid = user.0.discord_id.as_str();
+    let (uid, bid) = (scope.user_id().as_str(), scope.bot_id().as_str());
     let body_text = body.body.unwrap_or_default();
     if body_text.encode_utf16().count() > context_note::CONTEXT_NOTE_MAX_LENGTH {
         return Err(ClientApiError::bad_request(format!(
@@ -497,8 +546,8 @@ async fn note_put(
     }
     let title = body.title.unwrap_or_default();
     // issue #47: Node は body.title を受け取りながら永続化せずエコーするだけだった。
-    context_note::set_note(&db, uid, BOT_ID, &title, &body_text).await?;
-    let note = context_note::get_note(&db, uid, BOT_ID)
+    context_note::set_note(&db, uid, bid, &title, &body_text).await?;
+    let note = context_note::get_note(&db, uid, bid)
         .await?
         .ok_or_else(|| ClientApiError {
             status: StatusCode::INTERNAL_SERVER_ERROR,
@@ -525,17 +574,16 @@ fn map_todo(t: Todo) -> TodoView {
 }
 
 async fn todos_list(
-    user: AuthenticatedUser,
+    ClientScope(scope): ClientScope,
     State(db): State<Db>,
 ) -> Result<Json<Vec<TodoView>>, ClientApiError> {
-    let scope = scope_for(&user.0.discord_id);
     // issue #33: PWA の一覧は open/done を問わず全件（Node `listTodos({status:"all"})`）。
     let items = TodoRepo::new(&db).list_all_flat(&scope).await?;
     Ok(Json(items.into_iter().map(map_todo).collect()))
 }
 
 async fn todos_add(
-    user: AuthenticatedUser,
+    ClientScope(scope): ClientScope,
     State(db): State<Db>,
     Json(body): Json<NewTodoInput>,
 ) -> Result<(StatusCode, Json<TodoView>), ClientApiError> {
@@ -543,7 +591,6 @@ async fn todos_add(
     if title.is_empty() {
         return Err(ClientApiError::bad_request("title is required"));
     }
-    let scope = scope_for(&user.0.discord_id);
     let new = NewTodo {
         title,
         due_date: body.due_date.filter(|s| !s.is_empty()),
@@ -556,7 +603,7 @@ async fn todos_add(
 }
 
 async fn todos_patch(
-    user: AuthenticatedUser,
+    ClientScope(scope): ClientScope,
     State(db): State<Db>,
     Path(id): Path<String>,
     Json(body): Json<TodoPatch>,
@@ -564,7 +611,6 @@ async fn todos_patch(
     let Ok(id) = id.parse::<i64>() else {
         return Err(ClientApiError::not_found("Not found"));
     };
-    let scope = scope_for(&user.0.discord_id);
     let status = if body.completed == Some(true) {
         "done"
     } else {
@@ -592,7 +638,7 @@ struct CalendarQuery {
 }
 
 async fn calendar_events(
-    user: AuthenticatedUser,
+    ClientScope(scope): ClientScope,
     State(db): State<Db>,
     Query(q): Query<CalendarQuery>,
 ) -> Result<Json<Vec<CalendarEventView>>, ClientApiError> {
@@ -610,7 +656,6 @@ async fn calendar_events(
         None => today + chrono::Duration::days(31),
     };
 
-    let scope = scope_for(&user.0.discord_id);
     let rows = ScheduleRepo::new(&db)
         .list_in_range(&scope, &day_start(from), &next_day_start(to))
         .await?;
@@ -669,12 +714,11 @@ fn resolve_month(raw: Option<&str>) -> Result<(i64, i64), ClientApiError> {
 }
 
 async fn finance_summary(
-    user: AuthenticatedUser,
+    ClientScope(scope): ClientScope,
     State(db): State<Db>,
     Query(q): Query<MonthQuery>,
 ) -> Result<Json<FinanceSummaryView>, ClientApiError> {
     let (year, month) = resolve_month(q.month.as_deref())?;
-    let scope = scope_for(&user.0.discord_id);
     let repo = ExpenseRepo::new(&db);
     let income = repo.monthly_total(&scope, "income", year, month).await?;
     let expense = repo.monthly_total(&scope, "expense", year, month).await?;
@@ -698,13 +742,12 @@ fn map_transaction(e: Expense) -> TransactionView {
 }
 
 async fn finance_transactions(
-    user: AuthenticatedUser,
+    ClientScope(scope): ClientScope,
     State(db): State<Db>,
     Query(q): Query<MonthQuery>,
 ) -> Result<Json<Vec<TransactionView>>, ClientApiError> {
     // issue #47: Node は month を無視し常に直近 100 件を返していた。
     let (year, month) = resolve_month(q.month.as_deref())?;
-    let scope = scope_for(&user.0.discord_id);
     let rows = ExpenseRepo::new(&db)
         .list_by_month(&scope, year, month)
         .await?;
@@ -725,7 +768,7 @@ fn json_positive_i64(value: Option<&serde_json::Value>) -> Option<i64> {
 }
 
 async fn finance_add(
-    user: AuthenticatedUser,
+    ClientScope(scope): ClientScope,
     State(db): State<Db>,
     Json(body): Json<NewTransactionInput>,
 ) -> Result<(StatusCode, Json<TransactionView>), ClientApiError> {
@@ -740,7 +783,6 @@ async fn finance_add(
             "amount and category are required",
         ));
     };
-    let scope = scope_for(&user.0.discord_id);
     let kind = if body.kind.as_deref() == Some("income") {
         "income"
     } else {
@@ -767,11 +809,11 @@ async fn finance_add(
 /// 応答には埋め込み（`embeds`）とファイル添付（`files`・実体は `GET .../chat/attachments/:id`）を
 /// 含める（issue #41 PR #75 レビュー・P2）。
 async fn chat_history(
-    user: AuthenticatedUser,
+    ClientScope(scope): ClientScope,
     State(db): State<Db>,
 ) -> Result<Json<Vec<ChatMessageView>>, ClientApiError> {
-    let uid = user.0.discord_id.as_str();
-    let rows = message_log::list_pwa_messages(&db, uid, BOT_ID, CHAT_HISTORY_LIMIT).await?;
+    let (uid, bid) = (scope.user_id().as_str(), scope.bot_id().as_str());
+    let rows = message_log::list_pwa_messages(&db, uid, bid, CHAT_HISTORY_LIMIT).await?;
     let mut out = Vec::with_capacity(rows.len());
     for row in rows {
         let is_assistant = row.role == "assistant";
@@ -878,7 +920,7 @@ fn parse_stored_embeds(raw: Option<&str>) -> Vec<ChatEmbedView> {
 /// （[`crate::recover_orphaned_chat_turns`]）が「最新行がユーザー発言のまま」の会話へ通知行を書き、
 /// クライアントのポーリングを終端させる。クライアントの契約（`202` + `sinceId` + ポーリング）は不変。
 async fn chat_send(
-    user: AuthenticatedUser,
+    ClientScope(scope): ClientScope,
     Extension(engine): Extension<Arc<ChatEngine>>,
     Extension(rate_limiter): Extension<Arc<dyn RateLimiter>>,
     Extension(in_flight): Extension<InFlightTurns>,
@@ -895,7 +937,7 @@ async fn chat_send(
         return Err(ClientApiError::bad_request("content is required"));
     }
 
-    let uid = user.0.discord_id.as_str();
+    let (uid, bid) = (scope.user_id().as_str(), scope.bot_id().as_str());
     // 事前チェック 1/3: Gemini キー未設定（WS `error/no_gemini_key` と同じ判定・Node には無かった）。
     if !engine.user_has_gemini_key(uid).await {
         return Err(ClientApiError {
@@ -905,14 +947,14 @@ async fn chat_send(
     }
 
     // 事前チェック 2/3: 同時ターン防止（[`InFlightTurns`] の doc 参照）。
-    let Some(guard) = in_flight.acquire(&db, uid).await else {
+    let Some(guard) = in_flight.acquire(&db, uid, bid).await else {
         return Err(ClientApiError::conflict(
             "前のメッセージへの応答がまだ処理中です。応答が届いてから送信してください。",
         ));
     };
 
-    let bot_id = BotId::new(BOT_ID);
-    let user_id = UserId::new(uid.to_owned());
+    let bot_id = scope.bot_id().clone();
+    let user_id = scope.user_id().clone();
 
     // 事前チェック 3/3: レート制限。
     let decision = rate_limiter
@@ -932,7 +974,7 @@ async fn chat_send(
     // （エンジンのターンはユーザー発言を保存しない・[`ChatEngine::secretary_turn_pwa`] の前提）。
     // `since_id` は保存の直前の直近 `message_logs.id`（同一トランザクションで読む）なので、以後
     // id > since_id の行はすべてこのターンに属する。
-    let accepted = message_log::accept_pwa_user_message(&db, uid, BOT_ID, &content).await?;
+    let accepted = message_log::accept_pwa_user_message(&db, uid, bid, &content).await?;
     let since_id = accepted.since_id;
     // 枠へ `sinceId` を記録する。以後、`since_id` より後の終端行がコミットされた時点でこの枠は
     // 「完了済み」と判定され、ガードの drop を待たずに次の送信へ引き継げる（[`InFlightTurns`] の doc 参照）。
@@ -1227,7 +1269,7 @@ mod tests {
 
         let in_flight = InFlightTurns::default();
         let guard = in_flight
-            .acquire(&db, "u1")
+            .acquire(&db, "u1", BOT_ID)
             .await
             .expect("first acquire succeeds");
 
@@ -1280,7 +1322,7 @@ mod tests {
 
         // 関数を抜けた時点で guard は解放されている（新規ターンを開始できる）。
         assert!(
-            in_flight.acquire(&db, "u1").await.is_some(),
+            in_flight.acquire(&db, "u1", BOT_ID).await.is_some(),
             "run_pwa_turn_in_background を抜けると in-flight から解放される"
         );
     }
@@ -1290,7 +1332,7 @@ mod tests {
     /// `chat_send` と同じ手順（枠の確保 → 発言の受理 → `sinceId` の記録）で 1 ターンを「進行中」にする。
     async fn start_turn(in_flight: &InFlightTurns, db: &Db) -> (InFlightGuard, i64) {
         let guard = in_flight
-            .acquire(db, "u1")
+            .acquire(db, "u1", BOT_ID)
             .await
             .expect("slot is free for a new turn");
         let since_id = message_log::accept_pwa_user_message(db, "u1", BOT_ID, "hi")
@@ -1326,8 +1368,11 @@ mod tests {
         drop(prev);
 
         // 受理前（`sinceId` 未確定）: 以前の応答があっても、枠は進行中として扱う。
-        let guard = in_flight.acquire(&db, "u1").await.expect("free");
-        assert!(in_flight.acquire(&db, "u1").await.is_none(), "受理前は 409");
+        let guard = in_flight.acquire(&db, "u1", BOT_ID).await.expect("free");
+        assert!(
+            in_flight.acquire(&db, "u1", BOT_ID).await.is_none(),
+            "受理前は 409"
+        );
 
         // 受理後・終端行なし: `since_id` より後の応答が無いので進行中のまま（以前の応答は数えない）。
         let since_id = message_log::accept_pwa_user_message(&db, "u1", BOT_ID, "next")
@@ -1336,13 +1381,15 @@ mod tests {
             .since_id;
         guard.mark_accepted(since_id);
         assert!(
-            in_flight.acquire(&db, "u1").await.is_none(),
+            in_flight.acquire(&db, "u1", BOT_ID).await.is_none(),
             "終端行が無いターンは引き継げない"
         );
         assert!(guard.is_current());
 
         // 別ユーザーの枠とは独立。
-        assert!(in_flight.acquire(&db, "u2").await.is_some());
+        assert!(in_flight.acquire(&db, "u2", BOT_ID).await.is_some());
+        // 同じユーザーでも別エージェント（Bot）の枠とは独立（エージェント切り替え）。
+        assert!(in_flight.acquire(&db, "u1", "mybot").await.is_some());
     }
 
     /// 回帰: 応答（終端行）がコミット済みなら、ガードが drop される前でも次の送信は枠を得られる
@@ -1357,7 +1404,7 @@ mod tests {
         persist_reply(&db).await;
 
         let new_guard = in_flight
-            .acquire(&db, "u1")
+            .acquire(&db, "u1", BOT_ID)
             .await
             .expect("応答が見える状態では次の送信は 409 にならない");
         assert!(!old_guard.is_current(), "旧ターンの枠は引き継がれた");
@@ -1366,13 +1413,13 @@ mod tests {
         // 旧ターンのガードが後から drop されても、引き継がれた新しい枠は解放されない。
         drop(old_guard);
         assert!(
-            in_flight.acquire(&db, "u1").await.is_none(),
+            in_flight.acquire(&db, "u1", BOT_ID).await.is_none(),
             "新しいターンはまだ進行中（受理前）なので 409"
         );
 
         // 新しいターンの枠は自分のガードでだけ解放される。
         drop(new_guard);
-        assert!(in_flight.acquire(&db, "u1").await.is_some());
+        assert!(in_flight.acquire(&db, "u1", BOT_ID).await.is_some());
     }
 
     /// 通知行（失敗/タイムアウト/⚠️ 定型応答のフォールバック）も終端行として同様に扱う。
@@ -1383,7 +1430,7 @@ mod tests {
         let (old_guard, _) = start_turn(&in_flight, &db).await;
         persist_notice(&db).await;
 
-        assert!(in_flight.acquire(&db, "u1").await.is_some());
+        assert!(in_flight.acquire(&db, "u1", BOT_ID).await.is_some());
         assert!(!old_guard.is_current());
     }
 
@@ -1398,7 +1445,7 @@ mod tests {
         let tasks: Vec<_> = (0..16)
             .map(|_| {
                 let (in_flight, db) = (in_flight.clone(), db.clone());
-                tokio::spawn(async move { in_flight.acquire(&db, "u1").await })
+                tokio::spawn(async move { in_flight.acquire(&db, "u1", BOT_ID).await })
             })
             .collect();
         let mut winners = 0;

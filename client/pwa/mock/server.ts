@@ -105,6 +105,14 @@ createServer(async (req, res) => {
         has_token: true,
         is_system_default: true,
         discord_username: 'yuuka-mock',
+      }, {
+        // PWA のエージェント切り替え欄を出すための 2 つ目の Bot（モックのデータは Bot で分けない）。
+        id: 'bot_mock_assistant',
+        name: 'アシスタント',
+        preset: 'mcp_assistant',
+        has_token: false,
+        is_system_default: false,
+        discord_username: null,
       }],
     })
   }
