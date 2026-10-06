@@ -100,11 +100,14 @@ dev API + Redis と、PWA Client / 管理画面の Vite（下記 `vite.compose.y
 ```bash
 pnpm dev:start             # 停止中なら起動。起動済みなら確認のうえ全コンテナを作り直して再起動
 pnpm dev:start -- --yes    # 確認なしで再起動（端末以外から実行するときは必須）
-pnpm dev:help             # dev 用コマンドと構成（ポート・入口）の早見表
+pnpm dev:update            # yuuka:dev イメージをビルドして dev API を作り直す（-- --no-cache でフル再ビルド）
+pnpm dev:stop              # dev API・Redis と Vite dev server を停止
+pnpm dev:logs              # dev API のログを追う（Vite は pnpm dev:logs:vite）
+pnpm dev:help              # dev 用コマンドと構成（ポート・入口）の早見表（-- --ja で日本語）
 ```
 
 既存の `yuuka:dev` イメージで起動する（ビルドしない。イメージが無ければ
-`deploy/instance.sh dev update` を案内して終了）。API のヘルスチェックの後、入口
+`pnpm dev:update` を案内して終了）。API のヘルスチェックの後、入口
 （`127.0.0.1:5173`）が `/`・`/admin/`・`/api` を返すまで待つ。
 
 ### dev データの初期化

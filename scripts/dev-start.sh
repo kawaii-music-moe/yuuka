@@ -40,7 +40,7 @@ fi
 vite_compose() { env -u COMPOSE_PROJECT_NAME docker compose -f "$VITE_COMPOSE" "$@"; }
 
 if ! docker image inspect "yuuka:${YUUKA_IMAGE_TAG:-latest}" >/dev/null 2>&1; then
-  echo "Dev image yuuka:${YUUKA_IMAGE_TAG:-latest} is missing; build it with: deploy/instance.sh dev update" >&2
+  echo "Dev image yuuka:${YUUKA_IMAGE_TAG:-latest} is missing; build it with: pnpm dev:update" >&2
   exit 1
 fi
 
