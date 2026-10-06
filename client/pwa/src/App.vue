@@ -36,7 +36,7 @@ onMounted(checkSession)
 </script>
 
 <template>
-  <div v-if="checkingSession" class="session-loading">Loading…</div>
+  <div v-if="checkingSession" class="session-loading">読み込み中…</div>
   <div v-else-if="sessionError" class="session-loading session-error">
     <p>セッションを確認できませんでした。</p>
     <UiButton variant="secondary" @click="checkSession">再試行</UiButton>

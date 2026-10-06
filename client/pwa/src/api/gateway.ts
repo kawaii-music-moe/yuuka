@@ -1,5 +1,6 @@
 import type { ChatPollOptions } from './chatPolling'
-import type { AgentSettings, CalendarEvent, ChatMessage, FinanceSummary, HealthStatus, SharedNote, Todo, Transaction } from './contracts'
+import type { ReceiptImage } from '../utils/receiptImage'
+import type { AgentSettings, CalendarEvent, ChatMessage, NewCalendarEvent, FinanceSummary, HealthStatus, SharedNote, Todo, Transaction } from './contracts'
 
 /** UI が依存する唯一の API 契約。バックエンド仕様変更時は adapter だけを変更する。 */
 export interface AgentGateway {
@@ -13,9 +14,15 @@ export interface AgentGateway {
   createTodo(todo: Pick<Todo, 'title' | 'dueDate' | 'list'>): Promise<Todo>
   updateTodo(id: string, patch: Pick<Todo, 'completed'>): Promise<Todo>
   listCalendarEvents(from: string, to: string): Promise<CalendarEvent[]>
+  createCalendarEvent(event: NewCalendarEvent): Promise<CalendarEvent>
   getFinanceSummary(month: string): Promise<FinanceSummary>
   listTransactions(month: string): Promise<Transaction[]>
   createTransaction(transaction: Omit<Transaction, 'id'>): Promise<Transaction>
+  /**
+   * レシート画像をエージェントに読み取らせ、家計簿へ記帳させる。戻り値はエージェントの報告文。
+   * 形式不正（400）・レート制限（429）は `ApiError`（`serverMessage` に案内文）で失敗する。
+   */
+  scanReceipt(image: ReceiptImage): Promise<{ response: string }>
   listChatMessages(): Promise<ChatMessage[]>
   /**
    * メッセージを送り、エージェントの応答が届くまで待って返す。サーバーは重いターンを非同期実行する

@@ -7,6 +7,8 @@ export type AgentSettings = {
 }
 export type SharedNote = { id: string; title: string; body: string; updatedAt: string }
 export type Todo = { id: string; title: string; dueDate?: string; completed: boolean; list: string }
+/** 予定の追加。日時はローカル暦の `YYYY-MM-DDTHH:MM`（`datetime-local` の値）。 */
+export type NewCalendarEvent = { title: string; startsAt: string; endsAt?: string; description?: string }
 export type CalendarEvent = { id: string; title: string; startsAt: string; endsAt: string; calendar: string; calendarName?: string; color: string }
 export type Transaction = { id: string; date: string; category: string; description: string; amount: number; kind: 'income' | 'expense' }
 export type FinanceSummary = { income: number; expense: number; balance: number; month: string }

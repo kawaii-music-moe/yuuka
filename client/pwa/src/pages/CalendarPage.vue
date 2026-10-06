@@ -2,23 +2,151 @@
 import { computed, onMounted, ref } from 'vue'
 import { agentGateway, type CalendarEvent } from '@/api'
 import PageState from '@/components/PageState.vue'
-import PageTitle from '@/components/PageTitle.vue'
 import UiButton from '@/components/UiButton.vue'
-import { localDateKey, time } from '@/utils/format'
-const today = new Date(); const cursor = ref(new Date(today.getFullYear(), today.getMonth(), 1)); const events = ref<CalendarEvent[]>([]); const error = ref(''); const loading = ref(true)
-const label = computed(() => new Intl.DateTimeFormat('ja-JP', { year: 'numeric', month: 'long' }).format(cursor.value))
-const days = computed(() => { const first = new Date(cursor.value); const offset = first.getDay(); const start = new Date(first); start.setDate(1 - offset); return Array.from({ length: 42 }, (_, i) => { const day = new Date(start); day.setDate(start.getDate() + i); return day }) })
-// ローカル日付（`localDateKey`）で比較する。UTC の `toISOString()` ベースで比較すると、
-// JST の 09:00〜23:59 の予定が翌日の枠に表示されてしまう（issue #43）。
-function key(day: Date) { return localDateKey(day) } function items(day: Date) { return events.value.filter(event => localDateKey(new Date(event.startsAt)) === key(day)) }
-async function load() { loading.value = true; try { const from = key(days.value[0]); const to = key(days.value[41]); events.value = await agentGateway.listCalendarEvents(from, to) } catch { error.value = 'カレンダーを取得できません。' } finally { loading.value = false } }
-// モバイルの一覧は表示中の月だけを日付ごとにまとめる。`calendar` は生の Google カレンダー ID
-// （`…@group.calendar.google.com`）が入り得るので、表示には人間可読の `calendarName` を使う。
-const agenda = computed(() => { const groups = new Map<string, { day: Date; events: CalendarEvent[] }>(); for (const event of [...events.value].sort((a, b) => a.startsAt.localeCompare(b.startsAt))) { const day = new Date(event.startsAt); if (day.getFullYear() !== cursor.value.getFullYear() || day.getMonth() !== cursor.value.getMonth()) continue; const dayKey = key(day); const group = groups.get(dayKey) ?? { day, events: [] }; group.events.push(event); groups.set(dayKey, group) } return [...groups.values()] })
-const weekday = (day: Date) => new Intl.DateTimeFormat('ja-JP', { weekday: 'short' }).format(day)
-const calendarLabel = (event: CalendarEvent) => event.calendarName || (event.calendar.includes('@') ? '' : event.calendar)
-function move(amount: number) { cursor.value = new Date(cursor.value.getFullYear(), cursor.value.getMonth() + amount, 1); load() }
+import CalendarAgenda from '@/components/calendar/CalendarAgenda.vue'
+import CalendarEventModal from '@/components/calendar/CalendarEventModal.vue'
+import CalendarMonthGrid from '@/components/calendar/CalendarMonthGrid.vue'
+import CalendarTimeGrid from '@/components/calendar/CalendarTimeGrid.vue'
+import CalendarViewMenu from '@/components/calendar/CalendarViewMenu.vue'
+import {
+  agendaDays, CALENDAR_VIEWS, containsToday, periodLabel, shiftAnchor, startOfDay, startOfMonth, visibleDays,
+  type CalendarView,
+} from '@/utils/calendar'
+import { localDateKey } from '@/utils/format'
+
+const VIEW_STORAGE_KEY = 'yuuka.pwa.calendarView'
+
+function loadStoredView(): CalendarView {
+  try {
+    const stored = window.localStorage.getItem(VIEW_STORAGE_KEY) as CalendarView | null
+    return stored && CALENDAR_VIEWS.includes(stored) ? stored : 'month'
+  } catch {
+    return 'month'
+  }
+}
+
+function storeView(view: CalendarView) {
+  try {
+    window.localStorage.setItem(VIEW_STORAGE_KEY, view)
+  } catch {
+    // 保存できなくても、このタブの中では切り替わったまま動く。
+  }
+}
+
+const today = new Date()
+const view = ref<CalendarView>(loadStoredView())
+// 表示の基準日。月表示はこの日を含む月、週表示はこの日を含む週（日曜始まり）、日表示はこの日。
+const anchor = ref(startOfDay(today))
+const events = ref<CalendarEvent[]>([])
+const loading = ref(true)
+const error = ref('')
+
+const days = computed(() => visibleDays(view.value, anchor.value))
+const label = computed(() => periodLabel(view.value, anchor.value))
+const isCurrentPeriod = computed(() => containsToday(view.value, anchor.value, today))
+const agenda = computed(() => agendaDays(view.value, anchor.value, events.value))
+
+// 素早く期間を移動したとき、古い応答で新しい表示を上書きしないよう最新の読み込みだけを反映する。
+let loadSeq = 0
+async function load() {
+  const seq = ++loadSeq
+  loading.value = true
+  error.value = ''
+  try {
+    const range = days.value
+    const result = await agentGateway.listCalendarEvents(localDateKey(range[0]), localDateKey(range[range.length - 1]))
+    if (seq === loadSeq) events.value = result
+  } catch {
+    if (seq === loadSeq) error.value = 'カレンダーを取得できません。'
+  } finally {
+    if (seq === loadSeq) loading.value = false
+  }
+}
+
+function setView(next: CalendarView) {
+  view.value = next
+  storeView(next)
+  // 表示を切り替えたら、どの表示でもページの先頭から見せる。
+  window.scrollTo({ top: 0 })
+  load()
+}
+function move(amount: number) {
+  anchor.value = shiftAnchor(view.value, anchor.value, amount)
+  load()
+}
+function goToday() {
+  anchor.value = startOfDay(today)
+  load()
+}
+function showDay(day: Date) {
+  anchor.value = day
+  setView('day')
+}
+
+// 予定追加フォームを開く日時（空なら閉じている）。日付だけなら 9 時、日時ならその時刻から。
+// 既定は表示中の期間に今日があれば今日、なければ期間の最初の日。
+const addingDate = ref('')
+function openAdd(target?: Date | string) {
+  if (typeof target === 'string') {
+    addingDate.value = target
+    return
+  }
+  const fallback = isCurrentPeriod.value ? today : view.value === 'month' ? startOfMonth(anchor.value) : anchor.value
+  addingDate.value = localDateKey(target ?? fallback)
+}
+function handleCreated(event: CalendarEvent) {
+  events.value.push(event)
+}
+
 onMounted(load)
 </script>
-<template><section><PageTitle title="カレンダー" description="Google カレンダーとエージェントの予定"><template #actions><UiButton variant="secondary" to="/settings">連携設定</UiButton></template></PageTitle><div class="calendar-controls"><UiButton variant="secondary" @click="move(-1)">前月</UiButton><strong>{{ label }}</strong><UiButton variant="secondary" @click="move(1)">次月</UiButton></div><PageState :loading="loading" :error="error"/><div v-if="!loading" class="calendar"><div v-for="week in ['日','月','火','水','木','金','土']" :key="week" class="weekday">{{ week }}</div><div v-for="day in days" :key="key(day)" class="day" :class="{outside: day.getMonth() !== cursor.getMonth(), today: key(day) === key(today)}"><span class="date-num">{{ day.getDate() }}</span><div v-for="event in items(day)" :key="event.id" class="event" :style="{borderLeftColor:event.color}"><span>{{ time(event.startsAt) }}</span>{{ event.title }}</div></div></div><section v-if="!loading" class="agenda"><h3 class="section-title">{{ label }}の予定</h3><p v-if="!agenda.length" class="agenda-empty">予定はありません</p><div v-for="group in agenda" :key="key(group.day)" class="agenda-day" :class="{today: key(group.day) === key(today), past: key(group.day) < key(today)}"><div class="agenda-date"><strong>{{ group.day.getDate() }}</strong><span>{{ weekday(group.day) }}</span></div><ul><li v-for="event in group.events" :key="event.id" class="agenda-item" :style="{borderLeftColor:event.color}"><time>{{ time(event.startsAt) }}</time><div><strong>{{ event.title }}</strong><small v-if="calendarLabel(event)">{{ calendarLabel(event) }}</small></div></li></ul></div></section></section></template>
-<style scoped>.calendar-controls{display:flex;align-items:center;justify-content:center;gap:20px;margin-bottom:14px}.calendar{display:grid;grid-template-columns:repeat(7,1fr);border-left:1px solid var(--line);border-top:1px solid var(--line);background:#fff}.weekday{font-size:12px;color:#667085;padding:8px;border-right:1px solid var(--line);border-bottom:1px solid var(--line);text-align:center}.day{height:110px;border-right:1px solid var(--line);border-bottom:1px solid var(--line);padding:5px;overflow:hidden}.date-num{font-size:12px}.outside{background:#f5f7fb;color:#98a2b3}.today .date-num{background:var(--primary);color:#fff;padding:1px 5px;border-radius:2px}.event{font-size:11px;margin-top:4px;padding:2px 3px;border-left:3px solid;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;background:#f2f5fb}.event span{color:#667085;margin-right:3px}.agenda{display:none}@media(max-width:640px){.calendar{display:none}.agenda{display:block}.agenda-empty{color:var(--text-medium);font-size:13px;padding:16px 0}.agenda-day{display:flex;gap:12px;padding:12px 0;border-top:1px solid var(--line)}.agenda-day.past{opacity:.55}.agenda-date{width:36px;flex:none;display:grid;justify-items:center;align-content:start;line-height:1.2}.agenda-date strong{font-size:20px}.agenda-date span{font-size:11px;color:var(--text-medium)}.agenda-day.today .agenda-date strong{color:var(--primary)}.agenda-day ul{flex:1;min-width:0;list-style:none;margin:0;padding:0;display:grid;gap:8px}.agenda-item{display:flex;gap:10px;align-items:baseline;min-width:0;padding:8px 10px;background:var(--surface-1);border:1px solid var(--line);border-left:3px solid;border-radius:4px}.agenda-item time{flex:none;font-size:12px;color:var(--text-medium);font-variant-numeric:tabular-nums}.agenda-item div{min-width:0;display:grid;gap:2px}.agenda-item strong{font-size:14px;overflow-wrap:anywhere}.agenda-item small{font-size:11px;color:var(--text-medium);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}</style>
+
+<template>
+  <section class="calendar-page">
+    <div class="calendar-controls">
+      <div class="nav">
+        <UiButton variant="secondary" icon="chevron_left" aria-label="前へ" @click="move(-1)" />
+        <UiButton variant="secondary" :disabled="isCurrentPeriod" @click="goToday">今日</UiButton>
+        <UiButton variant="secondary" icon="chevron_right" aria-label="次へ" @click="move(1)" />
+      </div>
+      <strong class="period-label">{{ label }}</strong>
+      <CalendarViewMenu :model-value="view" class="view-menu" @update:model-value="setView" />
+      <UiButton class="add-button" icon="add" @click="openAdd()">予定を追加</UiButton>
+    </div>
+    <PageState :loading="loading" :error="error" />
+    <template v-if="!loading && !error">
+      <CalendarMonthGrid v-if="view === 'month'" class="desktop-only" :anchor="anchor" :events="events" :today="today" @add="openAdd" @select-day="showDay" />
+      <CalendarTimeGrid
+        v-else
+        :class="{ 'desktop-only': view === 'week' }"
+        :days="days"
+        :events="events"
+        :today="today"
+        :show-header="view === 'week'"
+        @add="openAdd"
+        @select-day="showDay"
+      />
+      <CalendarAgenda v-if="view !== 'day'" class="mobile-only" :days="agenda" :today="today" @add="openAdd" @select-day="showDay" />
+    </template>
+    <CalendarEventModal v-model:date="addingDate" @created="handleCreated" />
+  </section>
+</template>
+
+<style scoped>
+/* PC は 1 行（移動・期間 … 表示切替・追加）、スマホは 2 行（期間・表示切替 / 移動・追加）。 */
+.calendar-controls { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; grid-template-areas: "nav label view add"; align-items: center; gap: 8px 12px; margin-bottom: 14px; }
+.nav { grid-area: nav; display: flex; align-items: center; gap: 6px; }
+.nav .ui-button { padding: 0 10px; }
+.period-label { grid-area: label; font-size: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.view-menu { grid-area: view; }
+.add-button { grid-area: add; }
+/* 月・週の格子は PC だけ、日ごとの一覧はスマホだけ（日表示は両方とも時間軸）。子コンポーネントの
+   display 指定より優先させるため、ページ直下の指定として詳細度を上げる。 */
+.calendar-page > .mobile-only { display: none; }
+@media (max-width: 640px) {
+  .calendar-controls { grid-template-columns: auto minmax(0, 1fr) auto; grid-template-areas: "label label view" "nav . add"; }
+  .period-label { font-size: 18px; }
+  .calendar-page > .desktop-only { display: none; }
+  .calendar-page > .mobile-only { display: block; }
+}
+</style>

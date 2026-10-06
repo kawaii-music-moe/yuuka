@@ -17,7 +17,7 @@ async function load() {
   await run(async () => {
     const result = await agentGateway.getSharedNote()
     note.value = { title: result.title, body: result.body }
-  }, 'Shared note could not be loaded.')
+  }, '共有ノートを取得できません。')
 }
 
 async function save() {
@@ -28,7 +28,7 @@ async function save() {
     note.value = { title: result.title, body: result.body }
     showSaved()
   } catch {
-    saveError.value = 'Could not save the note. Please try again.'
+    saveError.value = '共有ノートを保存できませんでした。もう一度お試しください。'
   }
 }
 
@@ -37,15 +37,14 @@ onMounted(load)
 
 <template>
   <section>
-    <PageTitle title="Shared note" description="Persistent memory shared with the agent.">
-      <template #actions><UiButton :disabled="!note" @click="save">Save</UiButton></template>
+    <PageTitle title="共有ノート" description="エージェントと共有する長期メモです">
+      <template #actions><UiButton :disabled="!note" @click="save">保存</UiButton></template>
     </PageTitle>
     <PageState :loading="loading" :error="error" />
     <form v-if="note" class="note-form" @submit.prevent="save">
-      <p class="notice">Changes are saved to the agent's shared memory.</p>
-      <FormField label="Title"><input v-model="note.title" /></FormField>
-      <FormField label="Markdown"><textarea v-model="note.body" spellcheck="false" /></FormField>
-      <p v-if="saved" class="saved">Saved.</p>
+      <FormField label="タイトル"><input v-model="note.title" /></FormField>
+      <FormField label="本文（Markdown）"><textarea v-model="note.body" spellcheck="false" /></FormField>
+      <p v-if="saved" class="saved">保存しました。</p>
       <p v-if="saveError" class="error save-error">{{ saveError }}</p>
     </form>
   </section>
@@ -53,7 +52,6 @@ onMounted(load)
 
 <style scoped>
 .note-form { max-width: 850px; display: grid; gap: 16px; }
-.notice { font-size: 13px; color: #475467; border-left: 3px solid var(--primary); padding: 9px 12px; margin: 0; background: var(--primary-soft); }
 .note-form textarea { min-height: 430px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 13px; }
 .saved { color: var(--primary); font-size: 13px; margin: 0; }
 .save-error { font-size: 13px; margin: 0; }
