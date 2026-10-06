@@ -12,6 +12,7 @@
     "dev": "vite --config frontend/vite.config.ts",
     "dev:reset": "bash scripts/dev-reset.sh",
     "dev:start": "bash scripts/dev-start.sh",
+    "dev:help": "bash scripts/dev-help.sh",
     "build:front": "vite build --config frontend/vite.config.ts",
     "typecheck:front": "svelte-check --tsconfig frontend/tsconfig.json",
     "test:front": "vitest run --config frontend/vitest.config.ts",

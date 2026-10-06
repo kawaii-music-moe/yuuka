@@ -18,6 +18,8 @@ REBUILD=0
 for arg in "$@"; do
   case "$arg" in
     --re-build) REBUILD=1 ;;
+    # pnpm 10+ は `pnpm dev:xxx -- --opt` の `--` もそのまま渡すので読み飛ばす。
+    --) ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown option: $arg" >&2; usage >&2; exit 2 ;;
   esac

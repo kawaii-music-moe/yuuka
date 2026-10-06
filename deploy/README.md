@@ -100,6 +100,7 @@ dev API + Redis と、PWA Client / 管理画面の Vite（下記 `vite.compose.y
 ```bash
 pnpm dev:start             # 停止中なら起動。起動済みなら確認のうえ全コンテナを作り直して再起動
 pnpm dev:start -- --yes    # 確認なしで再起動（端末以外から実行するときは必須）
+pnpm dev:help             # dev 用コマンドと構成（ポート・入口）の早見表
 ```
 
 既存の `yuuka:dev` イメージで起動する（ビルドしない。イメージが無ければ
