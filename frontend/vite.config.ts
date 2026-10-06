@@ -67,6 +67,24 @@ function pwaDevelopmentRedirectPlugin(): Plugin | null {
 	};
 }
 
+// dev 専用: 本番の Rust は `/admin` も `/admin/` と同じく管理画面を返すが、Vite の dev server は
+// base "/admin/" と完全一致しない `/admin` を 404（"did you mean to visit /admin/"）にするため、
+// `/admin/` へリダイレクトして揃える。クエリは保持する。
+function adminTrailingSlashPlugin(): Plugin {
+	return {
+		name: "yuuka-admin-trailing-slash",
+		configureServer(server) {
+			server.middlewares.use((request, response, next) => {
+				const url = new URL(request.url ?? "/", "http://localhost");
+				if (url.pathname !== "/admin") return next();
+				response.statusCode = 302;
+				response.setHeader("Location", `/admin/${url.search}`);
+				response.end();
+			});
+		},
+	};
+}
+
 export default defineConfig({
 	root: __dirname,
 	// #34: 管理画面 SPA は Rust 側で /admin 配下に nest される
@@ -85,6 +103,7 @@ export default defineConfig({
 		assetsInlineLimit: 0, // CSP script-src 'self' 準拠: inline module/data-URI を出さない
 	},
 	plugins: [
+		adminTrailingSlashPlugin(),
 		pwaDevelopmentRedirectPlugin(),
 		svelte(),
 		// Service Worker は **無効化**（selfDestroying）。

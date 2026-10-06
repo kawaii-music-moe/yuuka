@@ -14,7 +14,17 @@ function adminLoginRedirectPlugin(): Plugin {
     name: 'yuuka-admin-login-redirect',
     configureServer(server) {
       server.middlewares.use((request, response, next) => {
-        const pathname = new URL(request.url ?? '/', 'http://localhost').pathname
+        const url = new URL(request.url ?? '/', 'http://localhost')
+        const pathname = url.pathname
+        if (pathname === '/admin') {
+          // 本番の Rust は `/admin` も `/admin/` と同じく管理画面を返すが、frontend の dev server は
+          // base `/admin/` と完全一致しない `/admin` を 404 にする（クエリ付きは下の proxy にも
+          // 一致せず PWA 側に落ちる）ため、`/admin/` へ寄せる。クエリは保持する。
+          response.statusCode = 302
+          response.setHeader('Location', `/admin/${url.search}`)
+          response.end()
+          return
+        }
         if (pathname !== '/login' && !pathname.startsWith('/login/')) return next()
 
         // 旧共有ログインのパス `/login` は本番の `GET /login` → `/admin/login` 互換
