@@ -93,6 +93,19 @@ Rust は**既定では存在しない DB を作らない**（`open_conn` は `SQ
 
 ## dev インスタンス
 
+### dev 環境の起動
+
+dev API + Redis と、PWA Client / 管理画面の Vite（下記 `vite.compose.yml`）をまとめて起動する。
+
+```bash
+pnpm dev:start             # 停止中なら起動。起動済みなら確認のうえ全コンテナを作り直して再起動
+pnpm dev:start -- --yes    # 確認なしで再起動（端末以外から実行するときは必須）
+```
+
+既存の `yuuka:dev` イメージで起動する（ビルドしない。イメージが無ければ
+`deploy/instance.sh dev update` を案内して終了）。API のヘルスチェックの後、入口
+（`127.0.0.1:5173`）が `/`・`/admin/`・`/api` を返すまで待つ。
+
 ### dev データの初期化
 
 dev API を停止し、`deploy/dev/data` を空にしてから起動し直す場合は次を使う。
