@@ -5,6 +5,7 @@
 // selectBot / createBotForm / btn-open-* 配線を移植。
 //
 // - 一覧取得は botApi.list()（scope:'user'）。統計カードは connected/running で集計。
+//   システム Bot（案内役・個人データを持たない）は選択候補から外す（管理は「管理者設定」）。
 // - Bot 選択は activeBot ストア（selectBot）へ委譲 → /bot/config へ遷移。
 // - 作成は共通 Modal。プリセット表示名は botApi.presets() で上書き。
 // - Discord 同期 / プロフィール編集 / 削除（デフォルト Bot 以外）。
@@ -14,9 +15,9 @@ import { onMount } from "svelte";
 import { ApiError } from "$lib/api/client";
 import { botApi } from "$lib/api/services";
 import type { BotView, PresetOption } from "$lib/api/types";
-import { confirmDialog, Icon, Modal } from "$lib/components/ui";
+import { confirmDialog, EmptyState, Icon, Modal } from "$lib/components/ui";
 import { navigateTo } from "$lib/router";
-import { selectBot } from "$lib/stores/activeBot";
+import { selectableBots, selectBot } from "$lib/stores/activeBot";
 import { currentUser } from "$lib/stores/session";
 import { pushToast } from "$lib/stores/toast";
 import HomeSidebar from "./HomeSidebar.svelte";
@@ -44,14 +45,14 @@ function reportError(e: unknown): void {
 }
 
 function isDefaultBot(id: string): boolean {
-	return id.startsWith("bot_default_") || id === "system_default";
+	return id.startsWith("bot_default_");
 }
 
 async function loadBots(): Promise<void> {
 	loading = true;
 	try {
 		const res = await botApi.list();
-		bots = res.bots ?? [];
+		bots = selectableBots(res.bots ?? []);
 	} catch (e) {
 		reportError(e);
 		bots = [];
@@ -333,6 +334,12 @@ let sidebarOpen = $state(false);
 					</div>
 				{/each}
 			</div>
+			{#if !loading && bots.length === 0}
+				<EmptyState
+					icon="robot_2"
+					message="まだ Bot がありません。「新規作成」から自分の Bot を作成してください。"
+				/>
+			{/if}
 		</div>
 		</div>
 	</main>

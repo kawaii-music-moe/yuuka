@@ -8,9 +8,21 @@ export type Bot = {
 	preset: string;
 } | null;
 
+/**
+ * システム Bot。Yuuka の使い方・設定の案内役で個人データを持たないため、管理画面では選択できない
+ * （Bot 一覧に出さず、以前に選んだまま保存されていても読み込み時に捨てる）。
+ * トークン更新などの管理は「管理者設定」で行う。
+ */
+export const SYSTEM_BOT_ID = "system_default";
+
+/** `/api/bots` の一覧（自分の Bot・共有された Bot・システム Bot）から、選択できる Bot だけを残す。 */
+export function selectableBots<T extends { id: string }>(bots: T[]): T[] {
+	return bots.filter((bot) => bot.id !== SYSTEM_BOT_ID);
+}
+
 const KEY = "currentBot";
 
-function load(): Bot {
+function loadStored(): Bot {
 	if (typeof window === "undefined") return null;
 	const raw = localStorage.getItem(KEY);
 	if (raw) {
@@ -33,6 +45,12 @@ function load(): Bot {
 		return migrated;
 	}
 	return null;
+}
+
+// 以前にシステム Bot を選んでいた場合は未選択に戻す（/bot/* は App のガードで Bot 一覧へ）。
+function load(): Bot {
+	const bot = loadStored();
+	return bot?.id === SYSTEM_BOT_ID ? null : bot;
 }
 
 export const activeBot = writable<Bot>(load());

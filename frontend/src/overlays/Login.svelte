@@ -20,7 +20,6 @@ import {
 	resolveReturnTarget,
 	withBasePath,
 } from "$lib/router";
-import { selectBot } from "$lib/stores/activeBot";
 import { bootstrapSession } from "$lib/stores/session";
 
 type Mode = "login" | "register" | "setup" | "bot-setup";
@@ -186,18 +185,13 @@ async function submitSetup(e: SubmitEvent): Promise<void> {
 }
 
 // ── 初期セットアップ Step2（旧 botSetupForm submit） ──
+// システム Bot は案内役で個人データを持たないため選択しない。続けて自分の Bot を作れるよう Bot 一覧へ。
 async function submitBotSetup(e: SubmitEvent): Promise<void> {
 	e.preventDefault();
 	errorMsg = "";
 	try {
 		await authApi.setDefaultBotToken({ token: botSetupToken.trim() });
-		selectBot({
-			id: "system_default",
-			name: "システムデフォルト",
-			avatar: "",
-			preset: "secretary",
-		});
-		navigateTo("/bot/dashboard");
+		navigateTo("/");
 	} catch (e) {
 		reportError(e);
 	}
