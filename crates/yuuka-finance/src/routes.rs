@@ -19,7 +19,7 @@ use axum::routing::{get, post};
 use axum::{Extension, Json, Router};
 use serde::Deserialize;
 use serde_json::json;
-use yuuka_core::WebError;
+use yuuka_core::{BotId, WebError};
 use yuuka_types::{EmptyData, Envelope};
 use yuuka_web::{
     has_bot_access, resolve_scope, ApiError, AppState, AuthenticatedUser, Db, ScopedJson,
@@ -146,22 +146,27 @@ async fn upload_receipt(
         );
     }
 
-    // resolvedBotId = botId && hasBotAccess ? botId : system_default。
-    let bot_id = match body.bot_id.as_deref() {
-        Some(b) if !b.is_empty() => match has_bot_access(&db, &user.0.discord_id, b).await {
-            Ok(true) => b.to_owned(),
-            Ok(false) => "system_default".to_owned(),
-            Err(_) => {
-                return receipt_error(StatusCode::INTERNAL_SERVER_ERROR, "処理に失敗しました。")
-            }
-        },
-        _ => "system_default".to_owned(),
+    // botId は必須。未指定・空・system_default はシステム Bot 宛てなので 403（システム Bot は
+    // 個人データを持たない・PWA の `client_scope` と同じ方針）。アクセスできない Bot は、選択中と
+    // 違う Bot へ黙って記帳しないよう 404 にする（system_default へはフォールバックしない）。
+    let Some(bot_id) = body
+        .bot_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|b| !b.is_empty() && *b != BotId::SYSTEM_DEFAULT)
+    else {
+        return receipt_error(StatusCode::FORBIDDEN, "Bot を指定してください。");
     };
+    match has_bot_access(&db, &user.0.discord_id, bot_id).await {
+        Ok(true) => {}
+        Ok(false) => return receipt_error(StatusCode::NOT_FOUND, "Bot が見つかりません。"),
+        Err(_) => return receipt_error(StatusCode::INTERNAL_SERVER_ERROR, "処理に失敗しました。"),
+    }
 
     // Node: additionalText || undefined（空文字は None）。
     let additional = body.additional_text.as_deref().filter(|s| !s.is_empty());
     match parser
-        .parse_receipt(&bot_id, &user.0.discord_id, &image, &mime, additional)
+        .parse_receipt(bot_id, &user.0.discord_id, &image, &mime, additional)
         .await
     {
         Ok(response) => (
