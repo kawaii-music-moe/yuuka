@@ -867,4 +867,135 @@ mod tests {
         let j: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(j["success"], serde_json::json!(false));
     }
+
+    // ── レシート読み取り（upload-receipt）の Bot 解決 ─────────────────────────
+
+    /// 受け取った bot_id を記録して成功を返すパーサ（どの Bot で解析されたかの検査用）。
+    #[derive(Default)]
+    struct RecordingParser {
+        bot_ids: std::sync::Mutex<Vec<String>>,
+    }
+
+    #[async_trait]
+    impl crate::ReceiptParser for RecordingParser {
+        async fn parse_receipt(
+            &self,
+            bot_id: &str,
+            _user_id: &str,
+            _image_base64: &str,
+            _mime_type: &str,
+            _additional_text: Option<&str>,
+        ) -> Result<serde_json::Value, crate::ReceiptError> {
+            self.bot_ids.lock().unwrap().push(bot_id.to_owned());
+            Ok(serde_json::json!("ok"))
+        }
+    }
+
+    /// `u` の所有 Bot・`u` へ active 共有された Bot・`u` が触れない Bot を用意した receipt 用アプリ。
+    async fn receipt_app() -> (axum::Router, Arc<RecordingParser>) {
+        let db = seed_db();
+        db.writer
+            .transaction(|tx| {
+                tx.execute_batch(
+                    "INSERT INTO bots (id, user_id, name) VALUES ('mybot', 'u', 'mine');
+                     INSERT INTO bots (id, user_id, name) VALUES ('sharedbot', 'other', 'shared');
+                     INSERT INTO bots (id, user_id, name) VALUES ('otherbot', 'other', 'theirs');
+                     INSERT INTO bot_shares (bot_id, owner_id, shared_user_id, status) \
+                        VALUES ('sharedbot', 'other', 'u', 'active');",
+                )
+                .map_err(yuuka_db::map_sqlite)
+            })
+            .await
+            .expect("seed bots");
+        let auth = Arc::new(FakeAuth {
+            user: SessionUser {
+                discord_id: "u".to_owned(),
+                username: "u".to_owned(),
+                role: Role::User,
+            },
+        });
+        let state = AppState::new(auth, WebConfig::default(), db);
+        let parser = Arc::new(RecordingParser::default());
+        let app = super::routes::routes_with(parser.clone()).with_state(state);
+        (app, parser)
+    }
+
+    async fn post_receipt(app: &axum::Router, bot_id: Option<&str>) -> (StatusCode, String) {
+        let mut body = serde_json::json!({ "imageBase64": "aGVsbG8=", "mimeType": "image/png" });
+        if let Some(b) = bot_id {
+            body["botId"] = serde_json::json!(b);
+        }
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/expenses/upload-receipt")
+                    .header("cookie", "__Host-yuuka-session=good")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = resp.status();
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let j: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        (status, j["message"].as_str().unwrap_or_default().to_owned())
+    }
+
+    #[tokio::test]
+    async fn route_receipt_rejects_missing_or_system_bot() {
+        let (app, parser) = receipt_app().await;
+        // 未指定・空・system_default はシステム Bot 宛てなので 403（解析しない）。
+        for bot_id in [None, Some(""), Some("  "), Some("system_default")] {
+            let (status, _) = post_receipt(&app, bot_id).await;
+            assert_eq!(status, StatusCode::FORBIDDEN, "botId={bot_id:?}");
+        }
+        assert!(parser.bot_ids.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn route_receipt_inaccessible_bot_is_404_without_fallback() {
+        let (app, parser) = receipt_app().await;
+        // 他人の未共有 Bot・未知 Bot は 404（system_default へ黙ってフォールバックしない）。
+        for bot_id in ["otherbot", "ghost"] {
+            let (status, _) = post_receipt(&app, Some(bot_id)).await;
+            assert_eq!(status, StatusCode::NOT_FOUND, "botId={bot_id}");
+        }
+        assert!(parser.bot_ids.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn route_receipt_uses_requested_accessible_bot() {
+        let (app, parser) = receipt_app().await;
+        // 所有 Bot・active 共有 Bot は指定どおりの Bot で解析する。
+        for bot_id in ["mybot", "sharedbot"] {
+            let (status, _) = post_receipt(&app, Some(bot_id)).await;
+            assert_eq!(status, StatusCode::OK, "botId={bot_id}");
+        }
+        assert_eq!(*parser.bot_ids.lock().unwrap(), ["mybot", "sharedbot"]);
+    }
+
+    #[tokio::test]
+    async fn route_receipt_validates_image_before_bot() {
+        let (app, parser) = receipt_app().await;
+        // 画像/MIME の不足は Bot 解決より先に 400。
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/expenses/upload-receipt")
+                    .header("cookie", "__Host-yuuka-session=good")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"botId":"mybot","mimeType":"image/png"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        assert!(parser.bot_ids.lock().unwrap().is_empty());
+    }
 }
