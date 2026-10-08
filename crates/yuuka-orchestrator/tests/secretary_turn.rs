@@ -9,14 +9,16 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use secrecy::SecretString;
 use serde_json::json;
-use yuuka_core::{BotId, GeminiError, UserId};
+use yuuka_core::{
+    BotId, GeminiError, Tool, ToolContext, ToolError, ToolExposure, ToolName, ToolOutcome, UserId,
+};
 use yuuka_crypto::SystemCrypto;
 use yuuka_discord::{BotStatus, IncomingChat, StatusSink};
 use yuuka_gemini::{
     Content, FunctionDeclaration, GenerateBackend, GenerateContentResponse, ToolConfig,
 };
 use yuuka_orchestrator::{message_log, ChatEngine, GeminiFactory};
-use yuuka_tools::ToolRegistry;
+use yuuka_tools::{NativeProvider, ToolRegistry};
 use yuuka_web::Db;
 
 static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -635,4 +637,159 @@ async fn secretary_turn_discord_saves_the_user_message_exactly_once() {
         calls[0].iter().filter(|(role, _)| role == "user").collect();
     assert_eq!(user_turns.len(), 1, "contents={:?}", calls[0]);
     assert_eq!(user_turns[0].1, "discordからの発言");
+}
+
+// ─── システム Bot（system_default）は案内役: 個人向けのツール・プロンプトを使わない ────────────
+
+/// 記録した（systemInstruction, 宣言済みツール名）。
+type Captured = Arc<Mutex<Option<(String, Vec<String>)>>>;
+
+/// 受け取った systemInstruction と宣言済みツール名を記録して固定テキストを返す backend。
+struct CapturingBackend {
+    seen: Captured,
+}
+
+#[async_trait]
+impl GenerateBackend for CapturingBackend {
+    async fn generate(
+        &self,
+        system_instruction: Option<&str>,
+        declarations: &[FunctionDeclaration],
+        _contents: &[Content],
+        _tool_config: Option<ToolConfig>,
+    ) -> Result<GenerateContentResponse, GeminiError> {
+        *self.seen.lock().unwrap() = Some((
+            system_instruction.unwrap_or_default().to_owned(),
+            declarations.iter().map(|d| d.name.clone()).collect(),
+        ));
+        Ok(serde_json::from_value(json!({
+            "candidates": [ { "content": { "role": "model", "parts": [ { "text": "ok" } ] } } ]
+        }))
+        .expect("valid response"))
+    }
+}
+
+struct CapturingFactory {
+    seen: Captured,
+}
+
+impl GeminiFactory for CapturingFactory {
+    fn build(
+        &self,
+        _model: &str,
+        _api_key: SecretString,
+    ) -> Result<Arc<dyn GenerateBackend>, GeminiError> {
+        Ok(Arc::new(CapturingBackend {
+            seen: self.seen.clone(),
+        }))
+    }
+}
+
+/// 宣言だけを持つダミーツール（露出分類の選別を見るため・実行はしない）。
+struct DummyTool {
+    name: &'static str,
+    exposure: ToolExposure,
+}
+
+#[async_trait]
+impl Tool for DummyTool {
+    fn declaration(&self) -> yuuka_core::tool::FunctionDeclaration {
+        yuuka_core::tool::FunctionDeclaration {
+            name: ToolName::checked(self.name.to_owned()).expect("valid name"),
+            description: String::new(),
+            parameters_json_schema: json!({ "type": "object", "properties": {} }),
+            requires_confirmation: false,
+        }
+    }
+
+    fn exposure(&self) -> ToolExposure {
+        self.exposure.clone()
+    }
+
+    async fn call(
+        &self,
+        _ctx: &ToolContext,
+        _args: serde_json::Value,
+    ) -> Result<ToolOutcome, ToolError> {
+        Err(ToolError::Execution("unused".to_owned()))
+    }
+}
+
+/// 秘書ツール（`addTodo`）と core ツール（`showRichContent`）を登録したレジストリ。
+fn registry_with_secretary_and_core_tools() -> ToolRegistry {
+    let core = ToolExposure {
+        capability: None,
+        secretary: true,
+        guild_assistant: true,
+        requires_guild: false,
+    };
+    let provider = NativeProvider::new()
+        .with_tool(Arc::new(DummyTool {
+            name: "addTodo",
+            exposure: ToolExposure::secretary(),
+        }))
+        .and_then(|p| {
+            p.with_tool(Arc::new(DummyTool {
+                name: "showRichContent",
+                exposure: core,
+            }))
+        })
+        .expect("register");
+    ToolRegistry::new().with_provider(Arc::new(provider))
+}
+
+async fn captured_turn(bot_id: &BotId, seed_bot: bool) -> (String, Vec<String>) {
+    let (db, path) = fresh_db();
+    let crypto =
+        Arc::new(SystemCrypto::new(SecretString::from("orch-test-secret".to_owned())).unwrap());
+    seed_user_with_key(&path, &crypto, "u20");
+    if seed_bot {
+        let conn = rusqlite::Connection::open(&path).expect("open seed");
+        conn.execute(
+            "INSERT INTO bots (id, user_id, name) VALUES (?1, 'u20', 'Mine')",
+            rusqlite::params![bot_id.as_str()],
+        )
+        .expect("seed bot");
+    }
+    let seen = Arc::new(Mutex::new(None));
+    let engine = ChatEngine::new(
+        db,
+        Some(crypto),
+        registry_with_secretary_and_core_tools(),
+        Arc::new(CapturingFactory { seen: seen.clone() }),
+        None,
+        Arc::new(yuuka_mcp::NullMcpClient),
+        None,
+    );
+    engine
+        .secretary_turn(
+            bot_id,
+            &UserId::new("u20"),
+            IncomingChat {
+                text: "タスクを追加して".to_owned(),
+                ..IncomingChat::default()
+            },
+            &null_sink(),
+        )
+        .await
+        .expect("turn ok");
+    let captured = seen.lock().unwrap().take();
+    captured.expect("backend called")
+}
+
+#[tokio::test]
+async fn system_bot_turn_uses_the_guide_prompt_and_no_personal_tools() {
+    let (sys, tools) = captured_turn(&BotId::system_default(), false).await;
+    assert!(sys.contains("システム案内役"), "sys={sys}");
+    assert!(!sys.contains("addTodo"), "秘書の機能ルールを含めない");
+    assert_eq!(tools, ["showRichContent"], "core ツールだけ");
+}
+
+#[tokio::test]
+async fn personal_bot_turn_keeps_the_secretary_prompt_and_tools() {
+    let (sys, mut tools) = captured_turn(&BotId::new("bot_mine"), true).await;
+    assert!(!sys.contains("システム案内役"));
+    assert!(sys.contains("addTodo"));
+    tools.sort();
+    assert_eq!(tools, ["addTodo", "showRichContent"]);
 }

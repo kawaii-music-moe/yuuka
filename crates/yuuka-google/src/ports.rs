@@ -112,6 +112,108 @@ impl CalendarPort for NullCalendar {
     fn invalidate_account(&self, _account_id: i64) {}
 }
 
+/// 予定の書き込み先として解決した Google アカウント。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LinkedGoogleAccount {
+    pub account_id: i64,
+    /// 登録先を指定しないときのカレンダー（アカウントの既定・未設定なら `primary`）。
+    pub default_calendar_id: String,
+}
+
+/// Google カレンダーへ登録する予定。日時はローカル暦（`'YYYY-MM-DD HH:MM:SS'`・JST）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GoogleEventInput {
+    pub title: String,
+    pub description: Option<String>,
+    pub start_local: String,
+    /// 省略時は開始の 1 時間後。
+    pub end_local: Option<String>,
+}
+
+/// Google カレンダーから読んだ予定。日時はローカル暦（`'YYYY-MM-DD HH:MM:SS'`・JST）へ換算済み。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GoogleEvent {
+    pub id: String,
+    pub title: String,
+    pub description: String,
+    pub start_local: String,
+    pub end_local: Option<String>,
+}
+
+/// Google カレンダーの予定の読み書き（Yuuka の予定との同期）。
+#[async_trait]
+pub trait CalendarEventsPort: Send + Sync {
+    /// エージェントが予定の書き込みに使うアカウント（連携していなければ `None`）。
+    async fn account_for(&self, user_id: &str, bot_id: &str) -> Option<LinkedGoogleAccount>;
+    /// Google → Yuuka の取り込み対象か。アカウントを明示的に割り当てたエージェントだけが対象。
+    async fn import_account_for(&self, user_id: &str, bot_id: &str) -> Option<i64>;
+    /// アカウントで書き込めるカレンダー一覧（キャッシュ付き）。
+    async fn calendars(&self, account_id: i64) -> Result<Vec<CalendarSummary>, GoogleError>;
+    /// 予定を登録し、Google のイベント ID を返す。
+    async fn insert_event(
+        &self,
+        account_id: i64,
+        calendar_id: &str,
+        event: &GoogleEventInput,
+    ) -> Result<String, GoogleError>;
+    /// 予定を削除する（既に無ければ成功扱い）。
+    async fn delete_event(
+        &self,
+        account_id: i64,
+        calendar_id: &str,
+        event_id: &str,
+    ) -> Result<(), GoogleError>;
+    /// `[from_local, to_local)` に始まる予定を返す（キャンセル済みは除く）。
+    async fn list_events(
+        &self,
+        account_id: i64,
+        calendar_id: &str,
+        from_local: &str,
+        to_local: &str,
+    ) -> Result<Vec<GoogleEvent>, GoogleError>;
+}
+
+/// 未配線時の縮退（どのエージェントも連携していない扱い）。
+pub struct NullCalendarEvents;
+
+#[async_trait]
+impl CalendarEventsPort for NullCalendarEvents {
+    async fn account_for(&self, _user_id: &str, _bot_id: &str) -> Option<LinkedGoogleAccount> {
+        None
+    }
+    async fn import_account_for(&self, _user_id: &str, _bot_id: &str) -> Option<i64> {
+        None
+    }
+    async fn calendars(&self, _account_id: i64) -> Result<Vec<CalendarSummary>, GoogleError> {
+        Err(GoogleError::NotConfigured)
+    }
+    async fn insert_event(
+        &self,
+        _account_id: i64,
+        _calendar_id: &str,
+        _event: &GoogleEventInput,
+    ) -> Result<String, GoogleError> {
+        Err(GoogleError::NotConfigured)
+    }
+    async fn delete_event(
+        &self,
+        _account_id: i64,
+        _calendar_id: &str,
+        _event_id: &str,
+    ) -> Result<(), GoogleError> {
+        Err(GoogleError::NotConfigured)
+    }
+    async fn list_events(
+        &self,
+        _account_id: i64,
+        _calendar_id: &str,
+        _from_local: &str,
+        _to_local: &str,
+    ) -> Result<Vec<GoogleEvent>, GoogleError> {
+        Err(GoogleError::NotConfigured)
+    }
+}
+
 /// 手動バックアップ（Google Drive アップロード）のポート。成功時は Drive のファイル URL を返す。
 #[async_trait]
 pub trait BackupPort: Send + Sync {

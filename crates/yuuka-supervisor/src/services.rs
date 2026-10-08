@@ -92,15 +92,16 @@ mod tests {
     #[test]
     fn builds_all_services_with_cron_prefixed_names() {
         let svcs = build_supervised_services(&ctx());
-        // 実装済み 10（reminder/todo-recurrence/payment-recurrence/birthday/clipboard/metrics/
-        // playbook-schedule/briefing/report/backup）。backup は deferred シームから live へ差し替え済み
-        // （実 Drive アップロードは BackupRunner ポート経由）で総数は据え置き。
-        assert_eq!(svcs.len(), 10);
+        // 実装済み 11（reminder/todo-recurrence/payment-recurrence/birthday/clipboard/metrics/
+        // playbook-schedule/briefing/report/backup/google_calendar_sync）。backup・calendar sync の
+        // 実 Google 通信はそれぞれ BackupRunner / CalendarSyncRunner ポート経由。
+        assert_eq!(svcs.len(), 11);
         let names: Vec<String> = svcs.iter().map(|s| s.name()).collect();
         assert!(names.iter().all(|n| n.starts_with("cron:")));
         assert!(names.contains(&"cron:reminder".to_owned()));
         assert!(names.contains(&"cron:metrics".to_owned()));
         assert!(names.contains(&"cron:backup".to_owned()));
+        assert!(names.contains(&"cron:google_calendar_sync".to_owned()));
     }
 
     #[test]

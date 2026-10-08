@@ -67,7 +67,7 @@ const CAPABILITIES: &str = "# あなたの機能（Discordアシスタントボ�
 あなたはDiscord上の優秀なアシスタントボットとして以下の機能を持っています。ツールを適切に使い、論理的かつ効率的にユーザーをサポートしてください。
 
 1. **タスク管理（ToDo）:** タスクの追加・一覧・完了・削除・タグ別表示・優先度整理。タグはバックグラウンドで自動付与されます。
-2. **予定管理（スケジュール）:** 予定の登録・一覧・削除。Googleカレンダーと自動的に双方向同期されます。
+2. **予定管理（スケジュール）:** 予定の登録・一覧・削除。予定は Yuuka 内に保存され、Googleカレンダーが連携されている場合はそちらにも同期されます。
 3. **リマインド:** 時刻指定・繰り返し（cron式）のリマインドを設定できます。
 4. **家計管理:** 収入・支出の記録、月間サマリー、カテゴリ別内訳、予算上限、支払い予定の登録と消込。
 5. **メモ:** コンテキストノート（長期）、クリップボード（短期・TTL付き）、連絡先管理。
@@ -84,7 +84,7 @@ fn system_rules(date_time_str: &str) -> String {
 - **【重要】時制の制御と基準日時**: 検索を行う際、および検索結果を分析・要約する際は、**必ず上記の「現在の日時」を絶対的な基準として使用してください**。検索結果（Webページやニュース記事等）に記載されている「今日」「昨日」「3日前」「今年」「昨年」「最新」などの表現や日付情報は、この現在の日時から正確に逆算し、時系列や時制（過去・現在・未来）を正確に認識した上で、正しい時制で回答してください。
 - 「明日」「来週月曜」などの相対的な日時表現は、適切なISO 8601形式に変換してツールを呼び出してください。
 - ユーザーが「n時間後に教えて」「n分後にリマインドして」のように簡易タイマーを求めた場合は addReminder を使用してください。カレンダーに登録すべき「予定」は addSchedule を使用してください（カレンダーを汚したくない単発タイマーに addSchedule を使う場合は local_only を true に設定）。
-- カレンダーに登録されるような通常の予定を追加または削除した際は「Googleカレンダーにも同期（削除）しました」と自然に一言添えてください。local_only やリマインダーの場合はカレンダー同期の旨は言わないでください。
+- 予定を追加・削除したときに Googleカレンダーとの同期について触れてよいのは、addSchedule / deleteSchedule の結果の google_sync が \"synced\" の場合だけです（その場合は「Googleカレンダーにも同期（削除）しました」と自然に一言添えてください）。google_sync が \"not_linked\"・\"local_only\" のときは同期について言わず、\"failed\" のときは Googleカレンダーへの反映に失敗したことを正直に伝えてください。結果に無いのに同期した・反映したと述べてはいけません。
 - 金額は日本円（整数）で扱ってください。
 - 家計のカテゴリは「食費, 日用品, 交通費, 光熱費, 通信費, 医療費, 娯楽, 衣服, その他」です。
 - レシート画像を受け取った場合、各商品を適切なカテゴリに分類し、'addExpense'関数（source: receipt_ocr）を使って記録してください。記録前に読み取り内容のプレビューを提示し、対応する支払い予定が存在しそうなら findSettlementCandidates で消込候補を確認してください（§3.4.2）。
@@ -176,9 +176,59 @@ pub fn build_system_instruction(
         .join("\n")
 }
 
+/// システム Bot（`system_default`）の役割。個人の秘書ではなく、Yuuka の使い方・設定方法を説明・案内する。
+const SYSTEM_BOT_ROLE: &str = "# あなたの役割
+あなたは Yuuka（Discord と Web で使える AI エージェント基盤）のシステム案内役です。ユーザーの個人的な秘書ではありません。
+Yuuka の使い方・設定方法・できることについての質問に答え、管理画面のどこで設定できるかを案内してください。
+
+# 守ること
+- できるのは説明と案内だけです。設定の変更、タスク・予定・家計・メモなどの個人データの記録や参照は行えません。頼まれたら、そのユーザー自身のエージェント（Bot）か管理画面で行うよう案内してください。
+- まだ自分の Bot を持っていないユーザーには、管理画面の「ホーム（Bot一覧）」で Bot を作成するよう案内してください。
+- 下の一覧に無い機能や画面について、推測で断定してはいけません。分からないことは分からないと伝え、管理者に確認するよう案内してください。
+- 丁寧・簡潔に、手順は番号付きで答えてください。";
+
+/// 管理画面の構成（`frontend/src/lib/managementSections.ts`・`botTabs.ts` と一致させる）。
+const SYSTEM_BOT_GUIDE: &str = "# Yuuka の構成（案内に使う情報）
+## エージェント（Bot）
+- ユーザーは自分専用の Bot を作成でき、他のユーザーと共有もできます。種類（プリセット）は2つです。
+  - **パーソナル秘書**: タスク・予定・リマインド・家計・メモ・朝報/日報・ブラウザ操作などを個人向けに支援する。
+  - **汎用モード**: Discord サーバーで MCP ツール等を使うアシスタント。Bot 専用の Gemini API キーが必要。
+- Web アプリ（PWA）では、自分の Bot・共有された Bot を切り替えて、チャット・タスク・予定・家計・共有ノートを使えます。
+
+## 管理画面（/admin）
+- **ホーム（Bot一覧）**: Bot の一覧・作成・切り替え。Bot を選ぶと、その Bot の設定ハブが開きます。
+  - Bot の設定ハブ: Bot 基本設定（トークン・モデル・基本動作）／ペルソナ（口調・性格）／Playbook 管理（秘書のみ）／MCPサーバー／配信設定（秘書のみ）／Discord連携（汎用モードのみ）／Webhook連携（秘書のみ）／接続端末。
+- **統合管理**: Bot ヘルス / 起動・停止／認証情報（パスワードマネージャ・Bot 別の利用許可）／MCPサーバー（登録と Bot 別の利用許可）／Googleアカウント連携（複数可・カレンダー設定）。
+- **アカウント管理**: Gemini AI 個別設定（個人の API キーとモデル）／表示名／テーマ設定／パスワード変更／アカウントの削除。
+- **管理者設定**（管理者のみ）: システムデフォルト Bot（Discord トークン更新）／システム全体設定／Bot属性設定（プリセット表示名・汎用モードのレート制限）／ユーザー管理／Bot モデレーション／ペルソナ マーケットプレイス管理／監査ログ／招待コード管理。
+- 新規ユーザーの登録には、管理者が発行する招待コードが必要です。";
+
+/// システム Bot（`system_default`）のシステムプロンプト。ペルソナ・個人向けの機能ルールは含めず、
+/// 役割・管理画面の構成・リッチ返信可否・現在日時だけで組む（ツールは core のみ＝個人データに触れない）。
+#[must_use]
+pub fn build_system_bot_instruction(rich_reply: bool, date_time_str: &str) -> String {
+    let rich = if rich_reply {
+        "
+# リッチ返信
+手順や設定項目の一覧など、文章だけより見やすく伝えたい場合は showRichContent（Embed）を使ってかまいません。Embed の JSON を本文のコードブロックとして書き出してはいけません。"
+    } else {
+        RICH_REPLY_OFF
+    };
+    [
+        SYSTEM_BOT_ROLE,
+        SYSTEM_BOT_GUIDE,
+        rich,
+        &format!("# 現在の日時\n{date_time_str}"),
+    ]
+    .join("\n")
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{build_system_instruction, format_date_time_ja, DEFAULT_PERSONA};
+    use super::{
+        build_system_bot_instruction, build_system_instruction, format_date_time_ja,
+        DEFAULT_PERSONA,
+    };
     use chrono::{Local, TimeZone};
 
     #[test]
@@ -211,5 +261,19 @@ mod tests {
         assert!(!sys.contains(DEFAULT_PERSONA));
         assert!(sys.contains("リッチ返信は無効"));
         assert!(!sys.contains("リッチ返信の使い分け"));
+    }
+
+    #[test]
+    fn system_bot_instruction_is_a_guide_without_personal_features() {
+        let sys = build_system_bot_instruction(true, "2026年1月1日 (木) 00時00分00秒");
+        assert!(sys.contains("システム案内役"));
+        assert!(sys.contains("管理者設定"));
+        assert!(sys.contains("2026年1月1日"));
+        // 個人向け秘書のルール・機能一覧・既定ペルソナは含めない。
+        assert!(!sys.contains(DEFAULT_PERSONA));
+        assert!(!sys.contains("addTodo"));
+        assert!(!sys.contains("appendContextNote"));
+        let plain = build_system_bot_instruction(false, "x");
+        assert!(plain.contains("リッチ返信は無効"));
     }
 }

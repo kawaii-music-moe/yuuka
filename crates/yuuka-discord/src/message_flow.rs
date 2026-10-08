@@ -38,6 +38,9 @@ use crate::turn_gate::TurnGate;
 
 const SECRETARY_DEFAULT_HELP: &str =
     "何かお手伝いできることはありますか？ 📋\n\nタスク管理、予定管理、家計管理、ブラウザ操作ができますよ！";
+/// システム Bot（`system_default`）の既定ヘルプ。個人の秘書ではなく Yuuka の使い方・設定の案内役。
+const SYSTEM_BOT_DEFAULT_HELP: &str =
+    "Yuuka の使い方や設定について質問してください。管理画面のどこで設定できるかをご案内します。\n\nタスク・予定・家計などは、ご自身のエージェント（Bot）でご利用ください。";
 const SECRETARY_AUDIO_PLACEHOLDER: &str = "（音声メッセージを受信しました。内容を正確に文字起こしし、プレビューを提示してください。タスク依頼が含まれる場合はToDoへの変換を提案してください。）";
 const ASSISTANT_AUDIO_PLACEHOLDER: &str =
     "（音声メッセージを受信しました。内容を正確に文字起こしし、内容に沿って応答してください。）";
@@ -130,8 +133,8 @@ pub async fn handle_message(deps: &FlowDeps, rt: &RuntimeBot, message: Message) 
     // Bot 種別でルーティング（現行 `isGuildAssistantBot(botId)`）。
     let bot = match deps.directory.get_bot(&rt.bot_id).await {
         Some(b) => b,
-        // system_default はレコードが無くても常に秘書として応答する（現行はデフォルト Bot の
-        // レコードを引かず secretary 経路にハードコード）。custom はレコード必須（無ければ黙殺）。
+        // system_default はレコードが無くても常に応答する（秘書経路を通り、エンジンがシステム Bot の
+        // 案内役として処理する）。custom はレコード必須（無ければ黙殺）。
         None if rt.bot_id.as_str() == BotId::SYSTEM_DEFAULT => default_secretary_record(),
         None => {
             tracing::debug!(bot_id = %rt.bot_id, "黙殺: Bot レコード無し");
@@ -465,7 +468,12 @@ async fn secretary_flow(deps: &FlowDeps, rt: &RuntimeBot, bot: &BotRecord, messa
             Ok(media) => {
                 // 現行 `const instruction = fullText.trim() || placeholder`（trim 済み）。
                 let instruction = if full_text.trim().is_empty() {
-                    SECRETARY_AUDIO_PLACEHOLDER.to_owned()
+                    if is_custom {
+                        SECRETARY_AUDIO_PLACEHOLDER
+                    } else {
+                        ASSISTANT_AUDIO_PLACEHOLDER
+                    }
+                    .to_owned()
                 } else {
                     full_text.trim().to_owned()
                 };
@@ -516,8 +524,10 @@ async fn secretary_flow(deps: &FlowDeps, rt: &RuntimeBot, bot: &BotRecord, messa
         deps.processor
             .process_secretary(&rt.bot_id, &author, chat, status.clone(), delivery.clone())
             .await
-    } else {
+    } else if is_custom {
         Ok(TurnReply::text(SECRETARY_DEFAULT_HELP))
+    } else {
+        Ok(TurnReply::text(SYSTEM_BOT_DEFAULT_HELP))
     };
 
     drop(typing);

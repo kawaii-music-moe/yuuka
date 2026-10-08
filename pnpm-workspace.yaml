@@ -3,3 +3,8 @@ packages:
 
 allowBuilds:
   esbuild: true
+
+# 推移的依存の既知脆弱性をパッチ版へ固定。pnpm 10+ はここを読む（package.json の
+# "pnpm.overrides" は Docker ビルドの pnpm 9 用に残す。両方を同じ値に保つこと）。
+overrides:
+  esbuild@<0.28.1: '>=0.28.1'

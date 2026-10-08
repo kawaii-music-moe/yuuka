@@ -10,6 +10,7 @@ use yuuka_core::CrossUserAccess;
 use yuuka_web::Db;
 
 use crate::backup::{BackupRunner, NullBackupRunner};
+use crate::calendar_sync::{CalendarSyncRunner, NullCalendarSyncRunner};
 use crate::metrics::MetricsRegistry;
 use crate::notifier::Notifier;
 use crate::turn::PlaybookRunner;
@@ -27,6 +28,8 @@ pub struct ServiceContext {
     pub playbook_runner: Arc<dyn PlaybookRunner>,
     /// 定期バックアップの実行ポート（未配線時は [`NullBackupRunner`]・[`crate::backup::BackupService`] が使う）。
     pub backup: Arc<dyn BackupRunner>,
+    /// Google カレンダーの定期取り込みポート（未配線時は [`NullCalendarSyncRunner`]）。
+    pub calendar_sync: Arc<dyn CalendarSyncRunner>,
     /// 横断（全ユーザー跨ぎ）アクセス証憑。cron の起点はここに限定される。
     pub cross: CrossUserAccess,
 }
@@ -47,6 +50,7 @@ impl ServiceContext {
             metrics,
             playbook_runner,
             backup: Arc::new(NullBackupRunner),
+            calendar_sync: Arc::new(NullCalendarSyncRunner),
             cross: CrossUserAccess::for_scheduled_task(),
         }
     }
@@ -55,6 +59,13 @@ impl ServiceContext {
     #[must_use]
     pub fn with_backup(mut self, backup: Arc<dyn BackupRunner>) -> Self {
         self.backup = backup;
+        self
+    }
+
+    /// Google カレンダーの定期取り込みポートを差し替える（main が Google クライアントのアダプタを注入する）。
+    #[must_use]
+    pub fn with_calendar_sync(mut self, calendar_sync: Arc<dyn CalendarSyncRunner>) -> Self {
+        self.calendar_sync = calendar_sync;
         self
     }
 }

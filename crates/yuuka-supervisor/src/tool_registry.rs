@@ -9,12 +9,14 @@ use std::sync::Arc;
 
 use yuuka_core::{ActionRecorder, Tool, ToolError};
 use yuuka_crypto::SystemCrypto;
+use yuuka_google::CalendarEventsPort;
 use yuuka_tools::{NativeProvider, ToolRegistry};
 use yuuka_web::Db;
 
 /// 全ドメインの Native ツールを登録した [`NativeProvider`] を作る。
 ///
 /// `recorder` は操作履歴レコーダー（`getRecentActionHistory` が読む）。FC ループにも同じ Arc を渡す。
+/// `calendar` は予定の Google カレンダー同期に使う（未配線なら `None`）。
 ///
 /// # Errors
 /// ドメインの `tools(db)` 構築失敗、または名前重複時に [`ToolError`]。
@@ -22,9 +24,10 @@ pub fn build_native_provider(
     db: &Db,
     crypto: Option<Arc<SystemCrypto>>,
     recorder: Option<Arc<ActionRecorder>>,
+    calendar: Option<Arc<dyn CalendarEventsPort>>,
 ) -> Result<NativeProvider, ToolError> {
     let mut provider = NativeProvider::new();
-    for tool in all_domain_tools(db, crypto, recorder)? {
+    for tool in all_domain_tools(db, crypto, recorder, calendar)? {
         provider.register(tool)?;
     }
     Ok(provider)
@@ -38,8 +41,9 @@ pub fn build_tool_registry(
     db: &Db,
     crypto: Option<Arc<SystemCrypto>>,
     recorder: Option<Arc<ActionRecorder>>,
+    calendar: Option<Arc<dyn CalendarEventsPort>>,
 ) -> Result<ToolRegistry, ToolError> {
-    let provider = build_native_provider(db, crypto, recorder)?;
+    let provider = build_native_provider(db, crypto, recorder, calendar)?;
     Ok(ToolRegistry::new().with_provider(Arc::new(provider)))
 }
 
@@ -53,6 +57,7 @@ fn all_domain_tools(
     db: &Db,
     crypto: Option<Arc<SystemCrypto>>,
     recorder: Option<Arc<ActionRecorder>>,
+    calendar: Option<Arc<dyn CalendarEventsPort>>,
 ) -> Result<Vec<Arc<dyn Tool>>, ToolError> {
     // 対話ブラウザの共有マネージャ。browser 対話 6 ツールと credential の browserFillCredential が
     // **同一 chromium セッション**を共有するため、ここで 1 つ作って両方へ注入する。
@@ -61,7 +66,8 @@ fn all_domain_tools(
     let mut all: Vec<Arc<dyn Tool>> = Vec::new();
     all.extend(yuuka_todo::tools(db.clone())?);
     all.extend(yuuka_finance::tools(db.clone())?);
-    all.extend(yuuka_schedule::tools(db.clone())?);
+    // 予定は Google カレンダーと同期する（連携しているエージェントのみ・`calendar` が None なら同期しない）。
+    all.extend(yuuka_schedule::tools_with_calendar(db.clone(), calendar)?);
     all.extend(yuuka_timeline::tools(db.clone())?);
     all.extend(yuuka_reminder::tools(db.clone())?);
     all.extend(yuuka_personal::tools(db.clone())?);
@@ -135,7 +141,7 @@ mod tests {
     fn registry_aggregates_all_domains_without_name_collision() {
         let db = seed_db();
         // build_native_provider が Ok = 全ドメイン横断で重複ツール名が無いことの保証。
-        let provider = build_native_provider(&db, None, None).unwrap();
+        let provider = build_native_provider(&db, None, None, None).unwrap();
         let decls = provider.list(&ctx());
         let names: Vec<String> = decls.iter().map(|d| d.name.to_string()).collect();
 
@@ -190,7 +196,7 @@ mod tests {
         // ★Phase 2 全鎖の統合検証: gemini FC ループ → RegistrySnapshot → NativeProvider →
         //   yuuka-todo の addTodo ツール → TodoRepo → 実 SQLite。
         let db = seed_db();
-        let registry = build_tool_registry(&db, None, None).unwrap();
+        let registry = build_tool_registry(&db, None, None, None).unwrap();
         let snapshot = registry.snapshot(&ctx());
 
         let resp = |v: serde_json::Value| -> GenerateContentResponse {

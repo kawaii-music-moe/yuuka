@@ -1,10 +1,11 @@
 //! `/api/client/*` ルートハンドラ（PWA・全ルート `auth:"user"`・Node `clientRoutes.ts` パリティ）。
 //!
-//! 既定は秘書 Bot（`system_default`・Node `const BOT_ID = "system_default"`）。PWA のエージェント
-//! 切り替えでは全ルートが任意の `?botId=` を受け付け、[`ClientScope`] が [`resolve_scope`] で
-//! アクセス権（オーナー本人 or `active` 共有）を検証して `UserScope` を組み立てる。ダッシュボードと
-//! 違い、アクセスできない `botId` は秘書 Bot へ黙ってフォールバックせず 404 にする（画面が示す
-//! エージェントと実際に読み書きする Bot が食い違わないように）。
+//! PWA は自分の Bot・共有された Bot（エージェント）だけを扱う。全ルートが `?botId=` を必須とし、
+//! [`ClientScope`] が [`resolve_scope`] でアクセス権（オーナー本人 or `active` 共有）を検証して
+//! `UserScope` を組み立てる。システム Bot（`system_default`）はシステムの案内役で個人データを持たない
+//! ため、`botId` 未指定・`system_default` 指定はどちらも 403。アクセスできない `botId` は
+//! システム Bot へ黙ってフォールバックせず 404 にする（画面が示すエージェントと実際に読み書きする Bot
+//! が食い違わないように）。
 //!
 //! チャット送信（`POST /api/client/chat/messages`・issue #41）は事前チェック（Gemini キー・
 //! 同時ターン・レート制限）を同期で行った後、ターン本体（[`ChatEngine::secretary_turn_pwa`]・
@@ -31,7 +32,9 @@ use serde::Deserialize;
 use serde_json::json;
 use tokio::time::timeout;
 use yuuka_core::{BotId, GuildId, ToolContext, UserId, UserScope};
-use yuuka_discord::{rate_limit_message, IncomingChat, RateLimiter, RichEmbed, StatusSink};
+use yuuka_discord::{
+    rate_limit_message, IncomingChat, InlineMedia, RateLimiter, RichEmbed, StatusSink,
+};
 use yuuka_finance::dto::{Expense, NewExpense};
 use yuuka_finance::repo::ExpenseRepo;
 use yuuka_gemini::ALLOWED_MODELS;
@@ -51,17 +54,17 @@ use crate::date_util::{
     parse_local_month,
 };
 use crate::dto::{
-    CalendarEventView, ChatEmbedFieldView, ChatEmbedView, ChatFileView, ChatMessageView,
-    ChatSendAccepted, ChatSendInput, FinanceSummaryView, NewCalendarEventInput, NewTodoInput,
-    NewTransactionInput, ReceiptScanInput, SettingsUpdate, SettingsView, SharedNoteUpdate,
-    SharedNoteView, StatusView, TodoPatch, TodoView, TransactionView,
+    CalendarEventView, ChatAttachmentInput, ChatEmbedFieldView, ChatEmbedView, ChatFileView,
+    ChatMessageView, ChatSendAccepted, ChatSendInput, FinanceSummaryView, NewCalendarEventInput,
+    NewTodoInput, NewTransactionInput, ReceiptScanInput, SettingsUpdate, SettingsView,
+    SharedNoteUpdate, SharedNoteView, StatusView, TodoPatch, TodoView, TransactionView,
 };
 use crate::error::ClientApiError;
 use crate::references::infer_reference;
 use crate::users;
 
-/// `?botId=` 未指定時の Bot（Node `const BOT_ID = "system_default"`）。本体は [`resolve_scope`] が
-/// 既定として扱うため、テストでのみ直接参照する。
+/// 単体テスト（in-flight・ターン本体）で使う Bot id。ルート経由では [`client_scope`] が拒否するが、
+/// ここでは HTTP 層を通さず message_log / [`InFlightTurns`] を直接検証するため任意の id でよい。
 #[cfg(test)]
 const BOT_ID: &str = "system_default";
 /// チャット履歴取得の上限（`message_log::list_pwa_messages` が内部で `[1,200]` にクランプする）。
@@ -316,20 +319,22 @@ impl FromRequestParts<AppState> for ClientScope {
     }
 }
 
-/// `botId` を [`resolve_scope`] で解決する。未指定・空は秘書 Bot。指定した Bot にアクセスできない
-/// （未知・他人の未共有 Bot）場合、[`resolve_scope`] は秘書 Bot へフォールバックするが、PWA では
-/// 選択中のエージェントと違う Bot を黙って読み書きしないよう 404 にする。
+/// `botId` を [`resolve_scope`] で解決する。未指定・空・`system_default` はシステム Bot 宛てなので 403
+/// （PWA はシステム Bot を扱わない）。指定した Bot にアクセスできない（未知・他人の未共有 Bot）場合、
+/// [`resolve_scope`] はシステム Bot へフォールバックするが、PWA では選択中のエージェントと違う Bot を
+/// 黙って読み書きしないよう 404 にする。
 async fn client_scope(
     db: &Db,
     user: &AuthenticatedUser,
     raw_bot_id: Option<&str>,
 ) -> Result<UserScope, ClientApiError> {
-    let requested = raw_bot_id.map(str::trim).filter(|b| !b.is_empty());
-    let scope = resolve_scope(&user.0, db, requested).await?;
-    if let Some(bot_id) = requested {
-        if scope.bot_id().as_str() != bot_id {
-            return Err(ClientApiError::not_found("agent not found"));
-        }
+    let requested = raw_bot_id
+        .map(str::trim)
+        .filter(|b| !b.is_empty() && *b != BotId::SYSTEM_DEFAULT)
+        .ok_or_else(|| ClientApiError::forbidden("agent required"))?;
+    let scope = resolve_scope(&user.0, db, Some(requested)).await?;
+    if scope.bot_id().as_str() != requested {
+        return Err(ClientApiError::not_found("agent not found"));
     }
     Ok(scope)
 }
@@ -731,10 +736,12 @@ struct AddScheduleOutcome {
 /// Discord（エージェント）と共通の `addSchedule` ツールで予定を登録し、作成された予定を返す。
 async fn call_add_schedule_tool(
     db: &Db,
+    engine: &ChatEngine,
     scope: &UserScope,
     args: serde_json::Value,
 ) -> Result<Schedule, ClientApiError> {
-    let tools = yuuka_schedule::tools(db.clone())
+    // Discord と同じく、エージェントに Google カレンダーが連携されていれば同期する。
+    let tools = yuuka_schedule::tools_with_calendar(db.clone(), engine.calendar_events())
         .map_err(|e| ClientApiError::internal(format!("schedule tools: {e}")))?;
     let tool = tools
         .iter()
@@ -762,6 +769,7 @@ async fn call_add_schedule_tool(
 /// 一覧（[`calendar_events`]）と同じローカル暦文字列で `schedules` に保存する。
 async fn calendar_add(
     ClientScope(scope): ClientScope,
+    Extension(engine): Extension<Arc<ChatEngine>>,
     State(db): State<Db>,
     Json(body): Json<NewCalendarEventInput>,
 ) -> Result<(StatusCode, Json<CalendarEventView>), ClientApiError> {
@@ -795,7 +803,7 @@ async fn calendar_add(
         "end_at": end_at,
         "description": body.description.filter(|s| !s.trim().is_empty()),
     });
-    let created = call_add_schedule_tool(&db, &scope, args).await?;
+    let created = call_add_schedule_tool(&db, &engine, &scope, args).await?;
     let event = map_calendar_event(
         created.id,
         created.title,
@@ -1038,10 +1046,19 @@ async fn chat_history(
                 url: format!("/api/client/chat/attachments/{}", a.id),
             })
             .collect();
+        // 添付だけの発言の置き換え文は表示しない（添付そのものを見せる）。
+        let content = if !is_assistant
+            && !row.attachments.is_empty()
+            && row.content == ATTACHMENT_ONLY_CONTENT
+        {
+            String::new()
+        } else {
+            row.content
+        };
         out.push(ChatMessageView {
             id: row.id.to_string(),
             role,
-            content: row.content,
+            content,
             created_at,
             references,
             embeds,
@@ -1082,6 +1099,78 @@ fn parse_stored_embeds(raw: Option<&str>) -> Vec<ChatEmbedView> {
             Vec::new()
         }
     }
+}
+
+/// 本文の無い添付だけの発言を保存するときの本文（LLM 文脈用・履歴表示では空にする）。
+const ATTACHMENT_ONLY_CONTENT: &str = "[添付ファイル]";
+/// 1 回の送信で添付できる数。
+const MAX_CHAT_ATTACHMENTS: usize = 4;
+/// 添付として受け付ける形式（Gemini に inline data で渡せるもの）。
+const CHAT_ATTACHMENT_MIME_PREFIXES: [&str; 3] = ["image/", "audio/", "video/"];
+const CHAT_ATTACHMENT_MIME_TYPES: [&str; 2] = ["application/pdf", "text/plain"];
+
+/// 検証済みの添付 1 件（Gemini へは base64 のまま、保存はバイト列で）。
+struct ChatAttachment {
+    name: String,
+    mime_type: String,
+    data_base64: String,
+    bytes: Vec<u8>,
+}
+
+/// 添付の数・形式・base64 を検証する（リクエスト全体のサイズはボディ上限 10MB で抑えられる）。
+fn validate_chat_attachments(
+    inputs: &[ChatAttachmentInput],
+) -> Result<Vec<ChatAttachment>, ClientApiError> {
+    use base64::Engine as _;
+    if inputs.len() > MAX_CHAT_ATTACHMENTS {
+        return Err(ClientApiError::bad_request(format!(
+            "添付は {MAX_CHAT_ATTACHMENTS} 件までです。"
+        )));
+    }
+    inputs
+        .iter()
+        .enumerate()
+        .map(|(index, input)| {
+            let mime_type = input
+                .mime_type
+                .as_deref()
+                .unwrap_or_default()
+                .split(';')
+                .next()
+                .unwrap_or_default()
+                .trim()
+                .to_lowercase();
+            let supported = CHAT_ATTACHMENT_MIME_PREFIXES
+                .iter()
+                .any(|prefix| mime_type.starts_with(prefix))
+                || CHAT_ATTACHMENT_MIME_TYPES.contains(&mime_type.as_str());
+            if !supported {
+                return Err(ClientApiError::bad_request(
+                    "対応していないファイル形式です（画像・音声・動画・PDF・テキスト）。",
+                ));
+            }
+            let data_base64 = input.data_base64.as_deref().unwrap_or_default().trim();
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(data_base64)
+                .ok()
+                .filter(|b| !b.is_empty())
+                .ok_or_else(|| {
+                    ClientApiError::bad_request("添付ファイルを読み込めませんでした。")
+                })?;
+            let name = input
+                .name
+                .as_deref()
+                .map(str::trim)
+                .filter(|n| !n.is_empty())
+                .map_or_else(|| format!("attachment-{}", index + 1), str::to_owned);
+            Ok(ChatAttachment {
+                name,
+                mime_type,
+                data_base64: data_base64.to_owned(),
+                bytes,
+            })
+        })
+        .collect()
 }
 
 /// `POST /api/client/chat/messages`（チャット送信・issue #41）。
@@ -1135,7 +1224,8 @@ async fn chat_send(
         .unwrap_or_default()
         .trim()
         .to_owned();
-    if content.is_empty() {
+    let attachments = validate_chat_attachments(&body.attachments)?;
+    if content.is_empty() && attachments.is_empty() {
         return Err(ClientApiError::bad_request("content is required"));
     }
 
@@ -1176,7 +1266,24 @@ async fn chat_send(
     // （エンジンのターンはユーザー発言を保存しない・[`ChatEngine::secretary_turn_pwa`] の前提）。
     // `since_id` は保存の直前の直近 `message_logs.id`（同一トランザクションで読む）なので、以後
     // id > since_id の行はすべてこのターンに属する。
-    let accepted = message_log::accept_pwa_user_message(&db, uid, bid, &content).await?;
+    // 本文の無い添付だけの発言は、LLM 文脈で「何か送った」ことが分かる置き換え文で保存する
+    // （履歴表示では空にする・[`chat_history`]）。
+    let stored_content = if content.is_empty() {
+        ATTACHMENT_ONLY_CONTENT.to_owned()
+    } else {
+        content.clone()
+    };
+    let files: Vec<message_log::PwaAttachmentInput> = attachments
+        .iter()
+        .map(|a| message_log::PwaAttachmentInput {
+            name: a.name.clone(),
+            mime_type: a.mime_type.clone(),
+            bytes: a.bytes.clone(),
+        })
+        .collect();
+    let accepted =
+        message_log::accept_pwa_user_message_with_files(&db, uid, bid, &stored_content, &files)
+            .await?;
     let since_id = accepted.since_id;
     // 枠へ `sinceId` を記録する。以後、`since_id` より後の終端行がコミットされた時点でこの枠は
     // 「完了済み」と判定され、ガードの drop を待たずに次の送信へ引き継げる（[`InFlightTurns`] の doc 参照）。
@@ -1184,6 +1291,13 @@ async fn chat_send(
 
     let incoming = IncomingChat {
         text: content,
+        attachments: attachments
+            .into_iter()
+            .map(|a| InlineMedia {
+                data_base64: a.data_base64,
+                mime_type: a.mime_type,
+            })
+            .collect(),
         ..IncomingChat::default()
     };
     tokio::spawn(run_pwa_turn_in_background(PwaTurnJob {
@@ -1327,7 +1441,11 @@ async fn chat_attachment(
     let Some(att) = message_log::get_pwa_attachment_for_user(&db, id, uid).await? else {
         return Err(ClientApiError::not_found("Not found"));
     };
-    let disposition_kind = if att.mime_type.starts_with("image/") {
+    // 画像・音声・動画・PDF はブラウザ内で表示／再生できるよう inline で返す。
+    let disposition_kind = if ["image/", "audio/", "video/", "application/pdf"]
+        .iter()
+        .any(|prefix| att.mime_type.starts_with(prefix))
+    {
         "inline"
     } else {
         "attachment"

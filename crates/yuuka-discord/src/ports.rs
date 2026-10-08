@@ -41,6 +41,9 @@ pub struct IncomingChat {
     pub image: Option<InlineMedia>,
     /// 添付音声（あれば）。
     pub audio: Option<InlineMedia>,
+    /// その他の添付（PWA チャットの画像・音声・動画・PDF 等・複数可）。`image`/`audio` と同じく
+    /// 直近のユーザー発言へ inline data として渡す。
+    pub attachments: Vec<InlineMedia>,
     /// 受信 Discord メッセージ ID（会話ログ永続化用）。
     pub discord_msg_id: Option<String>,
     /// 返信元 Discord メッセージ ID（返信チェーン解決用）。

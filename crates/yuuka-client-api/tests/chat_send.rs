@@ -160,6 +160,20 @@ impl GeminiFactory for GatedFactory {
     }
 }
 
+/// ユーザー本人が所有する Bot の id（seed 関数が作る）。PWA はシステム Bot（`system_default`）を
+/// 扱わないため、送信・履歴はすべてこの Bot に対して行う。
+fn bot_of(discord_id: &str) -> String {
+    format!("bot_{discord_id}")
+}
+
+/// トークン（＝ discord_id）のユーザーが所有する Bot 宛てのチャット URI。
+fn chat_uri(token: Option<&str>) -> String {
+    match token {
+        Some(token) => format!("/api/client/chat/messages?botId={}", bot_of(token)),
+        None => "/api/client/chat/messages".to_owned(),
+    }
+}
+
 /// システム鍵 crypto でユーザーの Gemini キーを暗号化して `users` 行を seed する。
 fn seed_user_with_key(path: &std::path::Path, crypto: &SystemCrypto, discord_id: &str) {
     let enc = crypto.encrypt_text("fake-gemini-key").expect("encrypt");
@@ -171,6 +185,11 @@ fn seed_user_with_key(path: &std::path::Path, crypto: &SystemCrypto, discord_id:
         rusqlite::params![discord_id, enc.encrypted, enc.iv, enc.auth_tag],
     )
     .expect("seed user");
+    conn.execute(
+        "INSERT INTO bots (id, user_id, name) VALUES (?1, ?2, 'Mine')",
+        rusqlite::params![bot_of(discord_id), discord_id],
+    )
+    .expect("seed bot");
 }
 
 /// `users` 行だけ seed（Gemini キー無し）。
@@ -182,6 +201,11 @@ fn seed_user_no_key(path: &std::path::Path, discord_id: &str) {
         rusqlite::params![discord_id],
     )
     .expect("seed user");
+    conn.execute(
+        "INSERT INTO bots (id, user_id, name) VALUES (?1, ?2, 'Mine')",
+        rusqlite::params![bot_of(discord_id), discord_id],
+    )
+    .expect("seed bot");
 }
 
 /// `users` 行を Gemini キーは設定済みだが**復号できない**状態で seed する（crypto=None のエンジンと
@@ -196,6 +220,11 @@ fn seed_user_with_key_but_engine_has_no_crypto(path: &std::path::Path, discord_i
         rusqlite::params![discord_id],
     )
     .expect("seed user");
+    conn.execute(
+        "INSERT INTO bots (id, user_id, name) VALUES (?1, ?2, 'Mine')",
+        rusqlite::params![bot_of(discord_id), discord_id],
+    )
+    .expect("seed bot");
 }
 
 fn engine_with_factory(
@@ -259,7 +288,7 @@ impl RateLimiter for AllowAllRateLimiter {
 async fn post_chat(app: &Router, token: Option<&str>, content: &str) -> (StatusCode, Value) {
     let mut builder = Request::builder()
         .method("POST")
-        .uri("/api/client/chat/messages")
+        .uri(chat_uri(token))
         .header("content-type", "application/json");
     if let Some(token) = token {
         builder = builder.header("cookie", format!("__Host-yuuka-session={token}"));
@@ -289,7 +318,7 @@ async fn get_history(app: &Router, token: &str) -> Vec<Value> {
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/api/client/chat/messages")
+                .uri(chat_uri(Some(token)))
                 .header("cookie", format!("__Host-yuuka-session={token}"))
                 .body(Body::empty())
                 .unwrap(),
@@ -351,6 +380,45 @@ async fn requires_auth() {
     // 無効なトークン（FakeAuth が既知としないもの）→ 401。
     let (status, _) = post_chat(&app, Some("bogus"), "hello").await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn system_default_bot_cannot_be_chatted_with() {
+    let (db, path) = fresh_db();
+    let crypto = Arc::new(
+        SystemCrypto::new(SecretString::from("chat-send-test-secret".to_owned())).unwrap(),
+    );
+    seed_user_with_key(&path, &crypto, "u1");
+    let engine = engine_with(db.clone(), Some(crypto), "unused");
+    let app = app(engine, db);
+
+    // `botId` 未指定（＝システム Bot）も明示指定も 403。送信も履歴取得もできない。
+    for uri in [
+        "/api/client/chat/messages",
+        "/api/client/chat/messages?botId=system_default",
+    ] {
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(uri)
+                    .header("content-type", "application/json")
+                    .header("cookie", "__Host-yuuka-session=u1")
+                    .body(Body::from(json!({ "content": "hello" }).to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN, "uri={uri}");
+        let (status, _, _) = get_raw(&app, Some("u1"), uri).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "GET uri={uri}");
+    }
+    let conn = rusqlite::Connection::open(&path).expect("open");
+    let logs: i64 = conn
+        .query_row("SELECT COUNT(*) FROM message_logs", [], |r| r.get(0))
+        .expect("count");
+    assert_eq!(logs, 0, "拒否した発言は保存されない");
 }
 
 #[tokio::test]
@@ -719,7 +787,7 @@ async fn attachments_are_listed_and_served_only_to_their_owner() {
     yuuka_orchestrator::message_log::add_pwa_assistant_reply(
         &db,
         "u1",
-        "system_default",
+        "bot_u1",
         "グラフです",
         None,
         &[
@@ -829,10 +897,9 @@ async fn unsaved_warning_reply_is_persisted_as_a_notice_so_polling_terminates() 
     );
 
     // 通知行は履歴には出るが、次ターンの LLM コンテキストには入らない。
-    let context =
-        yuuka_orchestrator::message_log::recent_pwa_context(&db, "u1", "system_default", 15)
-            .await
-            .unwrap();
+    let context = yuuka_orchestrator::message_log::recent_pwa_context(&db, "u1", "bot_u1", 15)
+        .await
+        .unwrap();
     assert_eq!(context.len(), 1, "context={context:?}");
     assert_eq!(context[0].role, "user");
     let agent_rows = get_history(&app, "u1")
@@ -934,10 +1001,10 @@ async fn restart_recovery_terminates_polling_for_an_orphaned_turn() {
     let (status, body) = post_chat(&app_1, Some("u1"), "再起動で消える質問").await;
     assert_eq!(status, StatusCode::ACCEPTED);
     let since_id: i64 = body["sinceId"].as_str().unwrap().parse().unwrap();
-    message_log::add_pwa_message_log(&db, "u2", "system_default", "user", "済んだ質問")
+    message_log::add_pwa_message_log(&db, "u2", "bot_u2", "user", "済んだ質問")
         .await
         .unwrap();
-    message_log::add_pwa_assistant_reply(&db, "u2", "system_default", "済んだ返事", None, &[])
+    message_log::add_pwa_assistant_reply(&db, "u2", "bot_u2", "済んだ返事", None, &[])
         .await
         .unwrap();
 
@@ -983,7 +1050,7 @@ async fn restart_recovery_terminates_polling_for_an_orphaned_turn() {
     let since_id_2: i64 = body["sinceId"].as_str().unwrap().parse().unwrap();
     let reply = poll_for_reply_after(&app_2, "u1", since_id_2, 200).await;
     assert_eq!(reply["content"], "再起動後の返事");
-    let context = message_log::recent_pwa_context(&db_2, "u1", "system_default", 15)
+    let context = message_log::recent_pwa_context(&db_2, "u1", "bot_u1", 15)
         .await
         .unwrap();
     assert!(
@@ -992,4 +1059,138 @@ async fn restart_recovery_terminates_polling_for_an_orphaned_turn() {
             .all(|c| !c.content.contains("サーバー再起動")),
         "通知行は文脈から除外される: {context:?}"
     );
+}
+
+/// 受け取った `contents` の inline data（MIME）を記録して固定テキストを返す backend のファクトリ。
+struct InlineCapturingFactory {
+    seen_inline_mimes: Arc<Mutex<Vec<String>>>,
+}
+
+struct InlineCapturingBackend {
+    seen_inline_mimes: Arc<Mutex<Vec<String>>>,
+}
+
+#[async_trait]
+impl GenerateBackend for InlineCapturingBackend {
+    async fn generate(
+        &self,
+        _system_instruction: Option<&str>,
+        _declarations: &[FunctionDeclaration],
+        contents: &[Content],
+        _tool_config: Option<ToolConfig>,
+    ) -> Result<GenerateContentResponse, GeminiError> {
+        let mimes = contents
+            .iter()
+            .flat_map(|c| c.parts.iter())
+            .filter_map(|p| p.inline_data.as_ref().map(|d| d.mime_type.clone()));
+        self.seen_inline_mimes.lock().unwrap().extend(mimes);
+        Ok(text_response("受け取りました"))
+    }
+}
+
+impl GeminiFactory for InlineCapturingFactory {
+    fn build(
+        &self,
+        _model: &str,
+        _api_key: SecretString,
+    ) -> Result<Arc<dyn GenerateBackend>, GeminiError> {
+        Ok(Arc::new(InlineCapturingBackend {
+            seen_inline_mimes: self.seen_inline_mimes.clone(),
+        }))
+    }
+}
+
+async fn post_chat_body(app: &Router, token: &str, body: Value) -> (StatusCode, Value) {
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(chat_uri(Some(token)))
+                .header("content-type", "application/json")
+                .header("cookie", format!("__Host-yuuka-session={token}"))
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = resp.status();
+    let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
+}
+
+#[tokio::test]
+async fn attachments_are_sent_to_the_model_and_shown_in_history() {
+    let (db, path) = fresh_db();
+    let crypto = Arc::new(
+        SystemCrypto::new(SecretString::from("chat-send-test-secret".to_owned())).unwrap(),
+    );
+    seed_user_with_key(&path, &crypto, "u1");
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let engine = engine_with_factory(
+        db.clone(),
+        Some(crypto),
+        Arc::new(InlineCapturingFactory {
+            seen_inline_mimes: seen.clone(),
+        }),
+    );
+    let app = app(engine, db);
+
+    // 本文なし・添付だけでも送れる。
+    let (status, body) = post_chat_body(
+        &app,
+        "u1",
+        json!({ "content": "", "attachments": [
+            { "name": "photo.png", "mimeType": "image/png", "dataBase64": "iVBORw0KGgo=" },
+            { "name": "memo.pdf", "mimeType": "application/pdf", "dataBase64": "JVBERi0=" }
+        ] }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    let since_id: i64 = body["sinceId"].as_str().unwrap().parse().unwrap();
+    poll_for_reply_after(&app, "u1", since_id, 200).await;
+
+    // モデルには添付が inline data で渡る。
+    assert_eq!(
+        *seen.lock().unwrap(),
+        vec!["image/png".to_owned(), "application/pdf".to_owned()]
+    );
+
+    // 履歴ではユーザー発言に添付が付き、置き換え文の本文は出さない。添付は本人だけが取得できる。
+    let history = get_history(&app, "u1").await;
+    let user = &history[0];
+    assert_eq!(user["role"], "user");
+    assert_eq!(user["content"], "");
+    let files = user["files"].as_array().unwrap();
+    assert_eq!(files.len(), 2);
+    assert_eq!(files[0]["name"], "photo.png");
+    assert_eq!(files[0]["mimeType"], "image/png");
+    let (status, _, bytes) = get_raw(&app, Some("u1"), files[0]["url"].as_str().unwrap()).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(bytes, b"\x89PNG\r\n\x1a\n");
+}
+
+#[tokio::test]
+async fn invalid_attachments_are_rejected_with_bad_request() {
+    let (db, path) = fresh_db();
+    let crypto = Arc::new(
+        SystemCrypto::new(SecretString::from("chat-send-test-secret".to_owned())).unwrap(),
+    );
+    seed_user_with_key(&path, &crypto, "u1");
+    let engine = engine_with(db.clone(), Some(crypto), "unused");
+    let app = app(engine, db);
+
+    let attachment =
+        |mime: &str, data: &str| json!({ "name": "f", "mimeType": mime, "dataBase64": data });
+    for body in [
+        json!({ "content": "x", "attachments": [attachment("application/zip", "UEs=")] }),
+        json!({ "content": "x", "attachments": [attachment("image/png", "%%%not-base64%%%")] }),
+        json!({ "content": "x", "attachments": vec![attachment("image/png", "iVBORw0KGgo="); 5] }),
+    ] {
+        let (status, _) = post_chat_body(&app, "u1", body.clone()).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    }
 }

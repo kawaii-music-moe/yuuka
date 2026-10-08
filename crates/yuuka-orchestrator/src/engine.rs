@@ -14,8 +14,8 @@ use async_trait::async_trait;
 use base64::Engine as _;
 use secrecy::SecretString;
 use yuuka_core::{
-    ActionRecorder, BotId, DbError, GeminiError, GuildId, ResponsePart, ToolContext, TurnMode,
-    UserId,
+    ActionRecorder, BotId, CapabilitySet, DbError, GeminiError, GuildId, ResponsePart, ToolContext,
+    TurnMode, UserId,
 };
 use yuuka_crypto::SystemCrypto;
 use yuuka_discord::{
@@ -26,7 +26,7 @@ use yuuka_gemini::{
     run_function_calling_loop, Content, GeminiClient, GenerateBackend, LoopOptions, Part, Role,
     Status, StatusCb,
 };
-use yuuka_google::CalendarPort;
+use yuuka_google::CalendarEventsPort;
 use yuuka_mcp::{McpClient, McpProvider};
 use yuuka_synapse::{Scope as SynapseScope, SynapseEngine};
 use yuuka_tools::ToolRegistry;
@@ -156,9 +156,10 @@ pub struct ChatEngine {
     /// `None` なら現行挙動（直近履歴のみ）へデグレード（想起は `""`・抽出は no-op）。main.rs で
     /// [`SynapseEngine::boot`] して 1 つだけ注入する。`Mutex` は唯一の可変索引を直列化する。
     synapse: Option<Arc<tokio::sync::Mutex<SynapseEngine>>>,
-    /// 連携中 Google カレンダー一覧を systemInstruction へ注入するための CalendarPort（A3・5min キャッシュ）。
-    /// `None` なら非注入（Node `isCalendarEnabled` 相当のデグレード）。main.rs で [`ChatEngine::with_calendar`] 注入。
-    calendar: Option<Arc<dyn CalendarPort>>,
+    /// Google カレンダー（予定の同期先）。連携中のカレンダー一覧を systemInstruction へ注入するのと、
+    /// PWA の予定追加が Discord と同じ同期付きの `addSchedule` を使うのに使う。`None` なら非注入・同期なし。
+    /// main.rs で [`ChatEngine::with_calendar`] 注入。
+    calendar: Option<Arc<dyn CalendarEventsPort>>,
 }
 
 impl ChatEngine {
@@ -186,12 +187,18 @@ impl ChatEngine {
         }
     }
 
-    /// 連携カレンダー一覧の注入に使う `CalendarPort` を後付けする（main.rs で A3 の `google_calendar` を注入・
-    /// P2-E-2）。未注入なら systemInstruction にカレンダー一覧を組み込まない。
+    /// Google カレンダー（予定の同期先）を後付けする。未注入なら systemInstruction にカレンダー一覧を
+    /// 組み込まず、[`Self::calendar_events`] も `None`（予定は Google と同期しない）。
     #[must_use]
-    pub fn with_calendar(mut self, calendar: Arc<dyn CalendarPort>) -> Self {
+    pub fn with_calendar(mut self, calendar: Arc<dyn CalendarEventsPort>) -> Self {
         self.calendar = Some(calendar);
         self
+    }
+
+    /// 予定の Google カレンダー同期に使うポート（未注入なら `None`）。
+    #[must_use]
+    pub fn calendar_events(&self) -> Option<Arc<dyn CalendarEventsPort>> {
+        self.calendar.clone()
     }
 
     /// 本番 `GeminiClient` ファクトリで構築する糖衣。
@@ -390,50 +397,17 @@ impl ChatEngine {
         };
         let mut contents = build_contents(&history, &msg);
 
-        // 3. システムプロンプト（ペルソナ + 固定ルール + 現在日時）。
-        //    共有 bot のペルソナは **owner-canonical**：適用中ペルソナはオーナー（`bots.user_id`）の
-        //    行を読む＝共有相手（A/B）双方で同一ペルソナに同期する。`system_default`（共有秘書）や
-        //    DB 未登録 bot は発話ユーザー単位（従来どおり独立）。bot 行は能力ゲート（後述）でも再利用する。
+        // 3. システムプロンプト。システム Bot（`system_default`）はシステムの案内役なので、ペルソナ・
+        //    カレンダー・コンテキストノート・想起といった個人向けの文脈を入れず、案内用の固定プロンプトで組む。
+        let is_system_bot = bid == BotId::SYSTEM_DEFAULT;
         let bot_row = bot_repo::get_bot(&self.db, bid).await.map_err(db_fail)?;
-        let persona_uid: String = match &bot_row {
-            Some(bot) if bid != "system_default" => bot.owner_id.clone(),
-            _ => uid.to_owned(),
+        let sys = if is_system_bot {
+            system_prompt::build_system_bot_instruction(rich, &system_prompt::now_date_time_ja())
+        } else {
+            self.personal_system_instruction(bot_row.as_ref(), uid, bid, rich, &msg)
+                .await
+                .map_err(db_fail)?
         };
-        let persona_prompt = persona::active_persona_prompt(&self.db, &persona_uid, bid)
-            .await
-            .map_err(db_fail)?;
-        let mut sys = system_prompt::build_system_instruction(
-            persona_prompt.as_deref(),
-            rich,
-            &system_prompt::now_date_time_ja(),
-        );
-
-        // 3.35. 連携中 Google カレンダー一覧を systemInstruction へ注入（Node `gemini.ts:149-166`・P2-E-2・
-        //       秘書モードのみ）。Node 構成順＝ペルソナ→カレンダー→コンテキストノートに合わせ、コンテキスト
-        //       ノートより前へ。未注入/キャッシュ空は "" で不変。
-        if let Some(cal) = &self.calendar {
-            sys.push_str(&calendar_prompt::build_calendar_section(&self.db, cal, uid).await);
-        }
-
-        // 3.4. コンテキストノート（ユーザー登録の背景情報）を systemInstruction 末尾へ注入
-        //      （Node `gemini.ts:170-175`・§3.7.3・構成順=ペルソナ→ルール→コンテキストノート）。
-        //      秘書モードのみ（Node の guild/DM `buildGuildSystemInstruction` は非注入）。未登録/空/失敗は "" で不変。
-        sys.push_str(&context_note::build_context_note_section(&self.db, uid, bid).await);
-
-        // 3.5. L2 連想想起（シナプス）を systemInstruction 末尾へ追記（Node `buildRecallSection`）。
-        //      秘書モードのスコープは (userId, botId)・guild_id なし（DM/秘書利用）。返信チェーンは
-        //      Rust では縮退シーム（空）＝クエリは現発話。エンジン未配線/想起 0 件なら "" で不変。
-        if let Some(engine) = &self.synapse {
-            let scope = SynapseScope {
-                user_id: uid.to_owned(),
-                bot_id: bid.to_owned(),
-                guild_id: None,
-            };
-            let query = synapse_recall::build_recall_query(&msg.text, &[]);
-            let section =
-                synapse_recall::build_recall_section(&self.db, engine, &scope, &query).await;
-            sys.push_str(&section);
-        }
 
         // 4. ユーザーの Gemini キー（未設定は ⚠️ 応答）。⚠️ 定型応答は履歴に**保存しない**
         //    （Node `processMessage` の catch は `saveAssistant` を通らず返すだけ＝キー未設定/レート/
@@ -454,7 +428,9 @@ impl ChatEngine {
 
         // 5. 能力ゲート: この Bot の能力集合を解決（Node `resolveBotCapabilities`・DB 未登録は秘書相当）。
         //    上でロード済みの bot 行を再利用する（二重フェッチを避ける）。
+        //    システム Bot は能力を持たない＝ core ツール（showRichContent）だけで、個人データ・MCP に触れない。
         let caps = match &bot_row {
+            _ if is_system_bot => CapabilitySet::from_granted(Vec::new()),
             Some(bot) => bot.capability_set(),
             None => bot_repo::secretary_full_capabilities(),
         };
@@ -895,6 +871,53 @@ impl ChatEngine {
         })
     }
 
+    /// 個人のエージェント（秘書 Bot）のシステムプロンプト（ペルソナ + 固定ルール + 現在日時 + カレンダー
+    /// + コンテキストノート + シナプス想起）。システム Bot は [`system_prompt::build_system_bot_instruction`]。
+    ///
+    /// 共有 bot のペルソナは **owner-canonical**：適用中ペルソナはオーナー（`bots.user_id`）の行を読む＝
+    /// 共有相手（A/B）双方で同一ペルソナに同期する。DB 未登録 bot は発話ユーザー単位。
+    async fn personal_system_instruction(
+        &self,
+        bot_row: Option<&bot_repo::BotRow>,
+        uid: &str,
+        bid: &str,
+        rich: bool,
+        msg: &IncomingChat,
+    ) -> Result<String, DbError> {
+        let persona_uid = bot_row.map_or(uid, |bot| bot.owner_id.as_str());
+        let persona_prompt = persona::active_persona_prompt(&self.db, persona_uid, bid).await?;
+        let mut sys = system_prompt::build_system_instruction(
+            persona_prompt.as_deref(),
+            rich,
+            &system_prompt::now_date_time_ja(),
+        );
+
+        // このエージェントが予定を書き込む Google カレンダーの一覧（Node `gemini.ts:149-166`）。Node 構成順＝
+        // ペルソナ→カレンダー→コンテキストノートに合わせ、コンテキストノートより前へ。未連携は "" で不変。
+        if let Some(cal) = &self.calendar {
+            sys.push_str(&calendar_prompt::build_calendar_section(cal, uid, bid).await);
+        }
+
+        // コンテキストノート（ユーザー登録の背景情報・Node `gemini.ts:170-175`・§3.7.3）。秘書モードのみ
+        // （Node の guild/DM `buildGuildSystemInstruction` は非注入）。未登録/空/失敗は "" で不変。
+        sys.push_str(&context_note::build_context_note_section(&self.db, uid, bid).await);
+
+        // L2 連想想起（シナプス・Node `buildRecallSection`）。スコープは (userId, botId)・guild_id なし。
+        // 返信チェーンは Rust では縮退シーム（空）＝クエリは現発話。エンジン未配線/想起 0 件なら "" で不変。
+        if let Some(engine) = &self.synapse {
+            let scope = SynapseScope {
+                user_id: uid.to_owned(),
+                bot_id: bid.to_owned(),
+                guild_id: None,
+            };
+            let query = synapse_recall::build_recall_query(&msg.text, &[]);
+            sys.push_str(
+                &synapse_recall::build_recall_section(&self.db, engine, &scope, &query).await,
+            );
+        }
+        Ok(sys)
+    }
+
     /// 非 LLM エラー時のペルソナ入りエラー報告を生成する（best-effort・失敗は `None`＝固定文へ）。
     ///
     /// 秘書経路は発話ユーザーのキー + アクティブペルソナ（無ければ `DEFAULT_PERSONA`）、汎用モードは
@@ -1084,6 +1107,8 @@ fn describe_incoming(msg: &IncomingChat) -> String {
         "[音声メッセージ]".to_owned()
     } else if msg.image.is_some() {
         "[画像]".to_owned()
+    } else if !msg.attachments.is_empty() {
+        "[添付ファイル]".to_owned()
     } else {
         String::new()
     }
@@ -1152,6 +1177,12 @@ fn build_contents(history: &[ContextEntry], msg: &IncomingChat) -> Vec<Content> 
         inline.push(Part::inline_data(
             aud.mime_type.clone(),
             aud.data_base64.clone(),
+        ));
+    }
+    for media in &msg.attachments {
+        inline.push(Part::inline_data(
+            media.mime_type.clone(),
+            media.data_base64.clone(),
         ));
     }
     if !inline.is_empty() {

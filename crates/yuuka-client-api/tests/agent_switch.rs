@@ -1,8 +1,8 @@
 //! PWA のエージェント切り替え（`/api/client/*?botId=`）の HTTP 統合テスト（実 SQLite・実ルータ）。
 //!
-//! 検証: `botId` ごとにデータ（Todo・共有ノート・ペルソナ）が分かれ、未指定・空は秘書 Bot
-//! （`system_default`）と同じ・自分の Bot と `active` 共有の Bot は使える・未知/他人の未共有/共有解除
-//! 済みの Bot は秘書 Bot へフォールバックせず 404（何も書かない）。
+//! 検証: `botId` ごとにデータ（Todo・共有ノート・ペルソナ）が分かれる・自分の Bot と `active` 共有の
+//! Bot は使える・未指定/空/`system_default`（システム Bot）は 403・未知/他人の未共有/共有解除済みの
+//! Bot はシステム Bot へフォールバックせず 404（どちらも何も書かない）。
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -146,14 +146,10 @@ fn todo_count(path: &std::path::Path) -> i64 {
 }
 
 #[tokio::test]
-async fn data_is_separated_per_agent_and_default_is_the_secretary() {
+async fn data_is_separated_per_agent() {
     let (db, _path) = fresh_db();
     let app = app(db);
 
-    assert_eq!(
-        add_todo(&app, "", "secretary task").await,
-        StatusCode::CREATED
-    );
     assert_eq!(
         add_todo(&app, "?botId=mybot", "my bot task").await,
         StatusCode::CREATED
@@ -163,15 +159,30 @@ async fn data_is_separated_per_agent_and_default_is_the_secretary() {
         StatusCode::CREATED
     );
 
-    assert_eq!(todo_titles(&app, "").await, ["secretary task"]);
-    // 空・明示の system_default は未指定と同じ秘書 Bot。
-    assert_eq!(todo_titles(&app, "?botId=").await, ["secretary task"]);
-    assert_eq!(
-        todo_titles(&app, "?botId=system_default").await,
-        ["secretary task"]
-    );
     assert_eq!(todo_titles(&app, "?botId=mybot").await, ["my bot task"]);
     assert_eq!(todo_titles(&app, "?botId=sharedbot").await, ["shared task"]);
+}
+
+#[tokio::test]
+async fn system_bot_is_forbidden() {
+    let (db, path) = fresh_db();
+    let app = app(db);
+
+    // 未指定・空・明示の system_default はすべてシステム Bot 宛て＝ PWA では扱わない。
+    for query in ["", "?botId=", "?botId=%20", "?botId=system_default"] {
+        let (status, _) = call(&app, "GET", &format!("/api/client/todos{query}"), None).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "GET todos {query:?}");
+        assert_eq!(
+            add_todo(&app, query, "leak").await,
+            StatusCode::FORBIDDEN,
+            "POST todos {query:?}"
+        );
+        for uri in ["/api/client/chat/messages", "/api/client/settings"] {
+            let (status, _) = call(&app, "GET", &format!("{uri}{query}"), None).await;
+            assert_eq!(status, StatusCode::FORBIDDEN, "GET {uri}{query:?}");
+        }
+    }
+    assert_eq!(todo_count(&path), 0, "拒否したリクエストは何も書かない");
 }
 
 #[tokio::test]
@@ -229,9 +240,9 @@ async fn shared_note_and_persona_follow_the_selected_agent() {
     .await;
     assert_eq!(status, StatusCode::OK);
     let (_, mine) = call(&app, "GET", "/api/client/shared-note?botId=mybot", None).await;
-    let (_, secretary) = call(&app, "GET", "/api/client/shared-note", None).await;
+    let (_, shared) = call(&app, "GET", "/api/client/shared-note?botId=sharedbot", None).await;
     assert_eq!(mine["body"], "my bot note");
-    assert_eq!(secretary["body"], "");
+    assert_eq!(shared["body"], "");
 
     let (status, saved) = call(
         &app,
@@ -242,8 +253,8 @@ async fn shared_note_and_persona_follow_the_selected_agent() {
     .await;
     assert_eq!(status, StatusCode::OK, "{saved}");
     assert_eq!(saved["persona"], "my bot persona");
-    let (_, secretary) = call(&app, "GET", "/api/client/settings", None).await;
-    assert_eq!(secretary["persona"], "");
+    let (_, shared) = call(&app, "GET", "/api/client/settings?botId=sharedbot", None).await;
+    assert_eq!(shared["persona"], "");
 }
 
 #[tokio::test]
@@ -273,14 +284,14 @@ async fn calendar_event_can_be_added_from_the_pwa() {
     )
     .await;
     assert_eq!(mine.as_array().unwrap().len(), 1, "{mine}");
-    let (_, secretary) = call(
+    let (_, shared) = call(
         &app,
         "GET",
-        "/api/client/calendar/events?from=2026-10-01&to=2026-10-31",
+        "/api/client/calendar/events?botId=sharedbot&from=2026-10-01&to=2026-10-31",
         None,
     )
     .await;
-    assert_eq!(secretary.as_array().unwrap().len(), 0, "{secretary}");
+    assert_eq!(shared.as_array().unwrap().len(), 0, "{shared}");
 
     // 入力不足・不正は 400。
     for body in [
@@ -292,7 +303,7 @@ async fn calendar_event_can_be_added_from_the_pwa() {
         let (status, _) = call(
             &app,
             "POST",
-            "/api/client/calendar/events",
+            "/api/client/calendar/events?botId=mybot",
             Some(body.clone()),
         )
         .await;
@@ -315,7 +326,7 @@ async fn receipt_scan_validates_input_before_calling_the_llm() {
         let (status, _) = call(
             &app,
             "POST",
-            "/api/client/finance/receipt",
+            "/api/client/finance/receipt?botId=mybot",
             Some(body.clone()),
         )
         .await;
@@ -326,7 +337,7 @@ async fn receipt_scan_validates_input_before_calling_the_llm() {
     let (status, body) = call(
         &app,
         "POST",
-        "/api/client/finance/receipt",
+        "/api/client/finance/receipt?botId=mybot",
         Some(json!({ "imageBase64": image, "mimeType": "image/jpeg; charset=binary" })),
     )
     .await;

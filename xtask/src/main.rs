@@ -2,12 +2,17 @@
 //!
 //! - `cargo run -p xtask -- gen-types`         : ts-rs 型を `frontend/src/lib/api/generated/` へ生成。
 //! - `cargo run -p xtask -- gen-types --check` : 生成物が最新か検査（ドリフトあれば非ゼロ終了・R-12）。
+//! - `cargo run -p xtask -- salvage-snapshot ...` : 稼働中の DB のスナップショットを取る（[`salvage`] 参照）。
+//! - `cargo run -p xtask -- salvage-import ...` : そのスナップショットを、初期セットアップし直した
+//!   新環境へ投入する（[`salvage`] 参照）。
 //!
 //! build.rs ではなく xtask パターン（副作用でワークツリーを汚さず再現性を確保）。
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+
+mod salvage;
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -22,9 +27,25 @@ fn main() -> ExitCode {
                 }
             }
         }
+        Some("salvage-snapshot") => match salvage::snapshot(args.get(1..).unwrap_or_default()) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(msg) => {
+                eprintln!("xtask salvage-snapshot failed: {msg}");
+                ExitCode::FAILURE
+            }
+        },
+        Some("salvage-import") => match salvage::run(args.get(1..).unwrap_or_default()) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(msg) => {
+                eprintln!("xtask salvage-import failed: {msg}");
+                ExitCode::FAILURE
+            }
+        },
         other => {
             eprintln!("unknown xtask command: {other:?}");
             eprintln!("usage: cargo run -p xtask -- gen-types [--check]");
+            eprintln!("       {}", salvage::SNAPSHOT_USAGE);
+            eprintln!("       {}", salvage::USAGE);
             ExitCode::FAILURE
         }
     }

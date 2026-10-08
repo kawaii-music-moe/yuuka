@@ -135,8 +135,6 @@ async fn run() -> Result<(), String> {
     //      操作履歴レコーダー（Node actionRecorder の in-memory フォールバック相当）はプロセス内で 1 つ
     //      共有し、FC ループ（書き）とツール `getRecentActionHistory`（読み）へ同じ Arc を渡す。
     let action_recorder = Arc::new(yuuka_core::ActionRecorder::new());
-    let tool_registry = build_tool_registry(&db, crypto.clone(), Some(action_recorder.clone()))
-        .map_err(|e| format!("build tool registry: {e}"))?;
     // Google/MCP の実 HTTP に使う共有 reqwest クライアント（接続プール共有・30s タイムアウト）。MCP 実 HTTP
     // クライアントは ChatEngine（動的ツール探索）と MCP ルート（tools/list・dashboard・proxy）で同一
     // インスタンスを共有し、`Mcp-Session-Id` のプロセス内キャッシュを 1 つに統一する（A4・SSRF ガード付き）。
@@ -144,6 +142,36 @@ async fn run() -> Result<(), String> {
         .timeout(std::time::Duration::from_secs(30))
         .build()
         .unwrap_or_default();
+    // Google OAuth/Calendar クライアント（A3・reqwest）。暗号鍵 + GOOGLE_CLIENT_ID/SECRET があれば
+    // GoogleHttpClient、無ければ Null へ縮退する。ChatEngine の systemInstruction（連携カレンダー一覧・
+    // P2-E-2）と settings/integrated ルートで同一 Arc を共有するため、ツールレジストリ（予定の Google 同期）・ChatEngine 構築前にここで 1 度だけ生成する。
+    let (google_oauth, google_calendar, google_events): (
+        Arc<dyn yuuka_google::GoogleOAuthPort>,
+        Arc<dyn yuuka_google::CalendarPort>,
+        Arc<dyn yuuka_google::CalendarEventsPort>,
+    ) = if let Some(crypto) = crypto.clone() {
+        let client = Arc::new(yuuka_google::GoogleHttpClient::new(
+            cfg.google_client_id.clone().unwrap_or_default(),
+            cfg.google_client_secret.clone().unwrap_or_default(),
+            crypto,
+            db.clone(),
+            http_client.clone(),
+        ));
+        (client.clone(), client.clone(), client)
+    } else {
+        (
+            Arc::new(yuuka_google::NullGoogleOAuth),
+            Arc::new(yuuka_google::NullCalendar),
+            Arc::new(yuuka_google::NullCalendarEvents),
+        )
+    };
+    let tool_registry = build_tool_registry(
+        &db,
+        crypto.clone(),
+        Some(action_recorder.clone()),
+        Some(google_events.clone()),
+    )
+    .map_err(|e| format!("build tool registry: {e}"))?;
     let mcp_client = Arc::new(yuuka_mcp::HttpMcpClient::new(
         crypto.clone(),
         http_client.clone(),
@@ -165,27 +193,6 @@ async fn run() -> Result<(), String> {
         }
         Arc::new(tokio::sync::Mutex::new(engine))
     };
-    // Google OAuth/Calendar クライアント（A3・reqwest）。暗号鍵 + GOOGLE_CLIENT_ID/SECRET があれば
-    // GoogleHttpClient、無ければ Null へ縮退する。ChatEngine の systemInstruction（連携カレンダー一覧・
-    // P2-E-2）と settings/integrated ルートで同一 Arc を共有するため、ChatEngine 構築前にここで 1 度だけ生成する。
-    let (google_oauth, google_calendar): (
-        Arc<dyn yuuka_google::GoogleOAuthPort>,
-        Arc<dyn yuuka_google::CalendarPort>,
-    ) = if let Some(crypto) = crypto.clone() {
-        let client = Arc::new(yuuka_google::GoogleHttpClient::new(
-            cfg.google_client_id.clone().unwrap_or_default(),
-            cfg.google_client_secret.clone().unwrap_or_default(),
-            crypto,
-            db.clone(),
-            http_client.clone(),
-        ));
-        (client.clone(), client)
-    } else {
-        (
-            Arc::new(yuuka_google::NullGoogleOAuth),
-            Arc::new(yuuka_google::NullCalendar),
-        )
-    };
     let chat_engine = Arc::new(
         ChatEngine::with_real_gemini(
             db.clone(),
@@ -195,7 +202,7 @@ async fn run() -> Result<(), String> {
             mcp_client.clone(),
             Some(synapse_engine),
         )
-        .with_calendar(google_calendar.clone()),
+        .with_calendar(google_events.clone()),
     );
     let chat_ws_routes = ws_routes(chat_engine.clone(), cfg.desktop_max_upload_mb);
 
@@ -481,6 +488,12 @@ async fn run() -> Result<(), String> {
         if let Some(client) = google_backup_client.clone() {
             service_ctx = service_ctx.with_backup(Arc::new(BackupRunnerAdapter { client }));
         }
+        // Google カレンダー → Yuuka の定期取り込み（アカウントを明示指定したエージェントのみ）。
+        let calendar_sync = Arc::new(CalendarSyncAdapter {
+            db: service_ctx.db.clone(),
+            calendar: google_events.clone(),
+        });
+        service_ctx = service_ctx.with_calendar_sync(calendar_sync);
         let cron = build_supervised_services(&service_ctx);
         tracing::warn!(
             count = cron.len(),
@@ -504,6 +517,53 @@ async fn run() -> Result<(), String> {
     }
     tracing::info!("yuuka supervisor stopped");
     Ok(())
+}
+
+/// [`yuuka_services::CalendarSyncRunner`] を Google クライアント + 予定の取り込み処理へ橋渡しするアダプタ。
+///
+/// 取り込み対象は Google アカウントを明示的に割り当てたエージェントだけ（既定＝メインアカウントの
+/// ままのエージェントは Yuuka → Google の登録のみ）。取り込んだ予定はアカウント所有者 × エージェントの
+/// データになる。
+struct CalendarSyncAdapter {
+    db: yuuka_web::Db,
+    calendar: Arc<dyn yuuka_google::CalendarEventsPort>,
+}
+
+#[async_trait]
+impl yuuka_services::CalendarSyncRunner for CalendarSyncAdapter {
+    async fn sync_all(&self) {
+        let targets = match yuuka_google::repo::list_explicit_bot_accounts(&self.db).await {
+            Ok(targets) => targets,
+            Err(e) => {
+                tracing::error!(error = %e, "Google カレンダー取り込み対象の取得に失敗しました");
+                return;
+            }
+        };
+        let now = chrono::Local::now().naive_local();
+        for target in targets {
+            let scope = yuuka_core::UserScope::new(
+                yuuka_core::UserId::new(target.user_id.as_str()),
+                yuuka_core::BotId::new(target.bot_id.as_str()),
+            );
+            match yuuka_schedule::google_sync::pull_from_google(
+                &self.db,
+                &self.calendar,
+                &scope,
+                target.account_id,
+                now,
+                yuuka_schedule::google_sync::DEFAULT_SYNC_DAYS,
+            )
+            .await
+            {
+                Ok(summary) => {
+                    tracing::debug!(bot_id = %target.bot_id, ?summary, "Google カレンダーを取り込みました")
+                }
+                Err(e) => {
+                    tracing::warn!(bot_id = %target.bot_id, error = %e, "Google カレンダーの取り込みに失敗しました")
+                }
+            }
+        }
+    }
 }
 
 /// [`yuuka_services::PlaybookRunner`] を [`ChatEngine`] へ橋渡しするアダプタ（マクロ定期実行）。

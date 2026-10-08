@@ -173,6 +173,20 @@ pub struct NewTransactionInput {
 pub struct ChatSendInput {
     #[serde(default)]
     pub content: Option<String>,
+    /// 添付（画像・音声・動画・PDF 等）。本文が空でも添付があれば送信できる。
+    #[serde(default)]
+    pub attachments: Vec<ChatAttachmentInput>,
+}
+
+/// チャット送信の添付 1 件（base64）。
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct ChatAttachmentInput {
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default, rename = "mimeType")]
+    pub mime_type: Option<String>,
+    #[serde(default, rename = "dataBase64")]
+    pub data_base64: Option<String>,
 }
 
 /// `POST /api/client/chat/messages` の応答（issue #41 PR #75 レビュー・P1: 非同期配信）。

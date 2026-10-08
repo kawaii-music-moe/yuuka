@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
-description = "yuuka 開発補助タスク（ts-rs 型生成 gen-types・ドリフト検査）"
+description = "yuuka 開発補助タスク（ts-rs 型生成 gen-types・ドリフト検査・旧環境データの投入 salvage-import）"
 
 [dependencies]
 yuuka-types.workspace = true
@@ -18,6 +18,8 @@ yuuka-personal.workspace = true
 yuuka-credential.workspace = true
 yuuka-playbook.workspace = true
 yuuka-persona.workspace = true
+rusqlite.workspace = true    # salvage-import（旧スナップショット → 新 DB）
+getrandom.workspace = true   # salvage-import（新しい秘書 Bot の id）
 
 [lints]
 workspace = true

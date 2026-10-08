@@ -11,12 +11,13 @@
 pub mod cron;
 pub mod datetime;
 pub mod dto;
+pub mod google_sync;
 pub mod repo;
 pub mod routes;
 pub mod tools;
 
 pub use routes::routes;
-pub use tools::tools;
+pub use tools::{tools, tools_with_calendar};
 
 use std::path::Path;
 

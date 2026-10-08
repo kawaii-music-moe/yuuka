@@ -21,6 +21,7 @@
 use std::sync::Arc;
 
 pub mod backup;
+pub mod calendar_sync;
 pub mod context;
 pub mod cron_util;
 pub mod metrics;
@@ -42,6 +43,7 @@ mod todo_recurrence;
 mod test_support;
 
 pub use backup::{BackupRunner, NullBackupRunner};
+pub use calendar_sync::{CalendarSyncRunner, NullCalendarSyncRunner};
 pub use context::ServiceContext;
 pub use metrics::MetricsRegistry;
 pub use notifier::{Notification, Notifier, NotifyTarget, NullNotifier};
@@ -65,5 +67,6 @@ pub fn build_services() -> Vec<Arc<dyn CronService>> {
         Arc::new(briefing::BriefingService),
         Arc::new(report::ReportService),
         Arc::new(backup::BackupService),
+        Arc::new(calendar_sync::CalendarSyncService),
     ]
 }

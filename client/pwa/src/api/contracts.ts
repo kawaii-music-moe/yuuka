@@ -40,6 +40,8 @@ export type ChatEmbed = {
  * （`GET /api/client/chat/attachments/:id`）から取得する。
  */
 export type ChatFile = { id: string; name: string; mimeType: string; url: string }
+/** チャット送信の添付（base64）。 */
+export type ChatAttachment = { name: string; mimeType: string; dataBase64: string }
 export type ChatMessage = {
   id: string
   role: 'user' | 'agent'

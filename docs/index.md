@@ -23,10 +23,8 @@ docs/
 ├── design/                  ← 設計方針（旧 Node 実装時点の記述を含む。下記「設計文書」の注記参照）
 │   ├── function_modularization.md          ← 機能モジュール化（P1〜P6 実装済み）
 │   ├── synapse_cognitive_architecture.md   ← 設計思想・研究裏付け（R0/R1 実装済み）
-│   ├── architecture_renewal_v3.md          ← 全体アーキテクチャ一新案（Rustエンジン/トポロジ）
 │   └── desktop_client/                     ← 汎用チャットAPI/デスクトップ（Phase 0/1 実装済み）
-├── svelte-migration-plan.md / svelte-migration-remaining-plan.md ← 完了済みの Svelte 移行の計画（旧 Node 前提の履歴資料）
-└── rust-rewrite/            ← バックエンド Rust 全面書き換えの計画・実施記録（実装完了。Node 撤去後の現況は remaining-work.md）
+└── rust-rewrite/            ← Rust 移行の計画・実施記録（2026-07-16 時点のアーカイブ）
 ```
 
 ---
@@ -37,6 +35,7 @@ docs/
 |---|---|
 | **現行アーキテクチャを図で把握する（HTML）** | [architecture-current.html](architecture-current.html) |
 | プロジェクト全体像・どのファイルを触ればよいか | [project_overview.md](project_overview.md) |
+| Node → Rust の機能欠落・重複と全API/会話ツールの対応表 | [機能差分・重複の棚卸し（2026-10-08）](audits/2026-10-08-feature-parity.md) |
 | 現行の実装（バックエンド）・DB スキーマ | `crates/`（クレート一覧は [../Cargo.toml](../Cargo.toml)）/ `crates/yuuka-db/migrations/`（V17 baseline〜V22） |
 | ローカルセットアップ・Docker デプロイ・機能一覧 | [guide/setup.md](guide/setup.md) / [guide/deployment.md](guide/deployment.md) / [guide/features.md](guide/features.md) |
 | PWA クライアント（Vue）の開発手順 | [../client/pwa/README.md](../client/pwa/README.md) |
@@ -47,7 +46,7 @@ docs/
 | 機能モジュールのユーザー×Bot単位ON/OFF（設計・実装済み） | [design/function_modularization.md](design/function_modularization.md) |
 | シナプス認知アーキテクチャ（記憶層 R0/R1 実装済み） | [design/synapse_cognitive_architecture.md](design/synapse_cognitive_architecture.md)（現行実装は `crates/yuuka-synapse`。旧 Node 版の規範は [architecture_v2.md](architecture/architecture_v2.md) §13） |
 | 汎用チャットAPI・デスクトップクライアント（Phase 0/1 実装済み） | [design/desktop_client/](design/desktop_client/index.md)（現行実装は `/ws/chat`＝`crates/yuuka-supervisor/src/ws.rs`、デバイス認証＝`crates/yuuka-auth`。旧 Node 版の規範は [architecture_v2.md](architecture/architecture_v2.md) §15） |
-| **バックエンド Rust 全面書き換え**の計画・経緯（実装完了。実施記録の最終更新は 2026-07-16 で、その後の Node 撤去〔#68〕等は未反映のため、現況はコードと照合） | [rust-rewrite/README.md](rust-rewrite/README.md)（索引）/ [rust-rewrite/remaining-work.md](rust-rewrite/remaining-work.md)（実施記録） |
+| バックエンド Rust 移行の意思決定・実施経緯（履歴資料。2026-07-16 時点） | [rust-rewrite/README.md](rust-rewrite/README.md) |
 
 ---
 
@@ -85,5 +84,4 @@ Rust 移行前（DB schema v16）の不変条件・共有型・DB スキーマ�
 
 - [design/function_modularization.md](design/function_modularization.md) — **機能モジュール化 設計書**（**P1〜P6 実装済み**）。ユーザーが Bot ごとに有効な機能モジュール（todo/finance/…約14）を選び、有効分の宣言のみ LLM へ渡し UI も該当設定のみ表示する。ユーザー×Bot 単位の上書き層（`bot_user_modules`）でデフォルト Bot 含む全 Bot を個別切替。現行の実装は `crates/yuuka-orchestrator/src/module_catalog.rs`（カタログ）と `bot_user_modules` テーブル（`crates/yuuka-db/migrations/V17__baseline.sql`）。旧 Node 版の規範は [architecture_v2.md §14](architecture/architecture_v2.md)（履歴）。
 - [design/synapse_cognitive_architecture.md](design/synapse_cognitive_architecture.md) — **シナプス駆動 認知アーキテクチャ設計方針書**（思想・研究裏付け）。思考補助を「生履歴注入」から「データ層へ外付けしたシナプス記憶＋2-Hop連想」へ刷新。**記憶層 R0/R1（ツール実績記録・Rust エンジン＋L2 想起注入・シナプス抽出）は実装済み**で、現行の実装は `crates/yuuka-synapse`（インプロセス）と `crates/yuuka-orchestrator` の `synapse_*`。旧 Node 版の規範は [architecture_v2.md §13](architecture/architecture_v2.md)（履歴）。R2（2nd Hop 勝率提示）以降は将来フェーズ。
-- [design/architecture_renewal_v3.md](design/architecture_renewal_v3.md) — **全体アーキテクチャ一新案（v3 提案）**（システム実装面）。シナプス関連を **Rust の独立プロセス**（当時 `src/rust_synapse/`）に切り出し、Node(V8)のメモリトラブルを回避する 3 プロセス構成（Node / Rustシナプスエンジン / ローカルSLM）を提案した文書。プロセストポロジ・Rustエンジン設計・メモリ安全設計・Strangler 段階移行を記述。**その後バックエンド全体が Rust 化され Node は撤去済み**で、シナプスエンジンは `crates/yuuka-synapse` としてインプロセスのライブラリに統合されているため、3 プロセス構成の前提は現行と異なる（Rust 移行の経緯は [rust-rewrite/](rust-rewrite/README.md)）。ローカル SLM ハイブリッド等は未実装。
-- [design/desktop_client/](design/desktop_client/index.md) — **Yuuka Desktop / 汎用チャット API 設計資料**。Discord 以外の対話入口として、**クライアント非依存の汎用チャット API**（OAuth デバイスフロー認証 + WebSocket `/ws/chat`）を新設し、会話コア `processMessage()` を**無改修で再利用**する。**バックエンド（Phase 0 認証 / Phase 1 WS チャット）は実装済み**（現行の実装は `crates/yuuka-supervisor/src/ws.rs`〔`/ws/chat`〕と `crates/yuuka-auth`〔デバイス認証〕。旧 Node 版の規範は [architecture_v2.md §15](architecture/architecture_v2.md)〔履歴〕）。Windows 向け egui クライアント本体（Phase 2 以降）は未実装。収録: [index](design/desktop_client/index.md) / [requirements](design/desktop_client/requirements.md) / [architecture](design/desktop_client/architecture.md) / [backend_api](design/desktop_client/backend_api.md) / [client_design](design/desktop_client/client_design.md) / [roadmap](design/desktop_client/roadmap.md)。
+- [design/desktop_client/](design/desktop_client/index.md) — **Yuuka Desktop / 汎用チャット API の設計資料**。OAuth デバイスフロー認証と WebSocket `/ws/chat` の設計経緯を収録。現行コードは `clients/desktop/`、`crates/yuuka-supervisor/src/ws.rs`、`crates/yuuka-auth` を参照してください。Node 版のパスや Phase 計画は履歴情報です。収録: [index](design/desktop_client/index.md) / [requirements](design/desktop_client/requirements.md) / [architecture](design/desktop_client/architecture.md) / [backend_api](design/desktop_client/backend_api.md) / [client_design](design/desktop_client/client_design.md) / [roadmap](design/desktop_client/roadmap.md)。

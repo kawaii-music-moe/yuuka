@@ -22,6 +22,7 @@ axum.workspace = true
 rusqlite.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+base64.workspace = true
 chrono.workspace = true                # JST 日境界・startsAt/endsAt の UTC ISO8601 変換
 tracing.workspace = true
 tokio.workspace = true                 # チャット送信のターン全体タイムアウト（issue #41・§チャット送信の設計）

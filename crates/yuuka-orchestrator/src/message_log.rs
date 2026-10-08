@@ -406,10 +406,8 @@ pub async fn list_pwa_messages(
                      WHERE message_log_id = ?1 ORDER BY id ASC",
                 )
                 .map_err(map_sqlite)?;
+            // アシスタントの添付（グラフ等）とユーザーが送った添付（画像・音声等）の両方を返す。
             for row in &mut rows {
-                if row.role != "assistant" {
-                    continue;
-                }
                 row.attachments = att_stmt
                     .query_map(params![row.id], |r| {
                         Ok(PwaAttachmentRow {
@@ -547,7 +545,23 @@ pub async fn accept_pwa_user_message(
     bot_id: &str,
     content: &str,
 ) -> Result<AcceptedPwaMessage, DbError> {
+    accept_pwa_user_message_with_files(db, user_id, bot_id, content, &[]).await
+}
+
+/// [`accept_pwa_user_message`] の添付付き版。ユーザーが送った添付（画像・音声等）を発言の行と同じ
+/// トランザクションで `message_attachments` へ保存する（履歴表示・`GET /api/client/chat/attachments/:id`）。
+///
+/// # Errors
+/// 書き込み失敗時 [`DbError`]。
+pub async fn accept_pwa_user_message_with_files(
+    db: &Db,
+    user_id: &str,
+    bot_id: &str,
+    content: &str,
+    files: &[PwaAttachmentInput],
+) -> Result<AcceptedPwaMessage, DbError> {
     let (user_id, bot_id, content) = (user_id.to_owned(), bot_id.to_owned(), content.to_owned());
+    let files = files.to_vec();
     db.writer
         .transaction(move |tx| {
             let since_id = tx
@@ -565,8 +579,17 @@ pub async fn accept_pwa_user_message(
                 params![user_id, bot_id, content],
             )
             .map_err(map_sqlite)?;
+            let message_id = tx.last_insert_rowid();
+            for file in &files {
+                tx.execute(
+                    "INSERT INTO message_attachments (message_log_id, name, mime_type, bytes) \
+                     VALUES (?1, ?2, ?3, ?4)",
+                    params![message_id, file.name, file.mime_type, file.bytes],
+                )
+                .map_err(map_sqlite)?;
+            }
             Ok(AcceptedPwaMessage {
-                message_id: tx.last_insert_rowid(),
+                message_id,
                 since_id,
             })
         })

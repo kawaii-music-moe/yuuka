@@ -10,7 +10,7 @@
 //  unigram も併用する。
 //
 //  【将来＝ONNX 実埋め込みモデルの差し込みポイント】
-//  architecture_renewal_v3.md §記憶コア／表(埋め込み)に従い、ここが
+//  Embedder trait を経由し、ここが
 //  `bge-micro` 級（INT8 量子化）を `ort`（ONNX Runtime）もしくは `candle`
 //  で駆動する実埋め込みへ差し替える「唯一の場所」である。
 //  トレイト境界（`embed(&str) -> Vec<f32>` と `dim()` / `model_version()`）と

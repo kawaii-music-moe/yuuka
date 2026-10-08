@@ -1,16 +1,17 @@
 <script setup lang="ts">
 import type { ChatEmbed, ChatFile } from '@/api'
 import AppIcon from './AppIcon.vue'
+import { mediaKind } from '@/utils/chatAttachments'
 import MarkdownContent from './MarkdownContent.vue'
 
 /**
- * エージェント返信のリッチコンテンツ（Discord Embed 相当の埋め込みとファイル添付）。
+ * メッセージのリッチコンテンツ（Discord Embed 相当の埋め込みとファイル添付）。
  * embed の色は 0xRRGGBB の数値で届く。ファイルの実体は認証必須の同一オリジン URL
- * （所有者スコープ）なので、画像はそのまま `<img>`、それ以外はダウンロードリンクにする。
+ * （所有者スコープ）なので、画像は `<img>`、音声・動画はその場で再生、それ以外はダウンロードリンクにする。
  */
 defineProps<{ embeds?: ChatEmbed[]; files?: ChatFile[] }>()
 const accent = (color?: number) => (color === undefined ? undefined : `#${(color & 0xffffff).toString(16).padStart(6, '0')}`)
-const isImage = (file: ChatFile) => file.mimeType.startsWith('image/')
+const kind = (file: ChatFile) => mediaKind(file.mimeType)
 </script>
 <template>
   <div v-if="embeds?.length || files?.length" class="rich-content">
@@ -26,8 +27,10 @@ const isImage = (file: ChatFile) => file.mimeType.startsWith('image/')
       <small v-if="embed.footer" class="embed-footer">{{ embed.footer }}</small>
     </article>
     <ul v-if="files?.length" class="files">
-      <li v-for="file in files" :key="file.id" :class="{ image: isImage(file) }">
-        <a v-if="isImage(file)" :href="file.url" target="_blank" rel="noopener" :title="file.name"><img :src="file.url" :alt="file.name" loading="lazy" /></a>
+      <li v-for="file in files" :key="file.id" :class="kind(file)">
+        <a v-if="kind(file) === 'image'" :href="file.url" target="_blank" rel="noopener" :title="file.name"><img :src="file.url" :alt="file.name" loading="lazy" /></a>
+        <video v-else-if="kind(file) === 'video'" :src="file.url" controls preload="metadata" :title="file.name"></video>
+        <audio v-else-if="kind(file) === 'audio'" :src="file.url" controls preload="metadata" :title="file.name"></audio>
         <a v-else :href="file.url" :download="file.name" class="file-link"><AppIcon name="download" /><span>{{ file.name }}</span></a>
       </li>
     </ul>
@@ -47,6 +50,8 @@ const isImage = (file: ChatFile) => file.mimeType.startsWith('image/')
 .embed-footer { font-size: 11px; color: var(--text-medium); }
 .files { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 8px; }
 .files img { display: block; max-width: 100%; max-height: 320px; border: 1px solid var(--line); border-radius: 2px; background: #fff; }
-.files li.image { max-width: 100%; }
+.files li.image, .files li.video { max-width: 100%; }
+.files video { display: block; max-width: 100%; max-height: 320px; border-radius: 2px; background: #000; }
+.files audio { display: block; width: min(320px, 100%); }
 .file-link { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--primary-border); background: var(--primary-soft); padding: 6px 10px; border-radius: 2px; font-size: 13px; color: var(--primary); }
 </style>

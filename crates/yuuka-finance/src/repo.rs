@@ -11,8 +11,8 @@ use yuuka_db::{map_sqlite, ReadPool, WriterHandle};
 use yuuka_web::Db;
 
 use crate::dto::{
-    BudgetLimit, CategoryTotal, Expense, MonthlyTrendPoint, NewExpense, NewPlannedPayment,
-    PlannedPayment,
+    BudgetLimit, CategoryTotal, Expense, ExpenseUpdate, MonthlyTrendPoint, NewExpense,
+    NewPlannedPayment, PlannedPayment,
 };
 
 /// 返却列（クリーンビュー・内部列 user_id/bot_id は含めない）。
@@ -171,6 +171,52 @@ impl<'a> ExpenseRepo<'a> {
         self.get(scope, id)
             .await?
             .ok_or_else(|| DbError::Operation("inserted expense not found".to_owned()))
+    }
+
+    /// 収支を部分更新し、更新後の行を返す（対象がスコープ内に無ければ `None`）。`None` の項目は変更しない。
+    ///
+    /// # Errors
+    /// 更新失敗・更新後の取得失敗時 [`DbError`]。
+    pub async fn update(
+        &self,
+        scope: &UserScope,
+        id: i64,
+        update: ExpenseUpdate,
+    ) -> Result<Option<Expense>, DbError> {
+        let (uid, bid) = scope_keys(scope);
+        let updated = self
+            .writer
+            .transaction(move |tx| {
+                let n = tx
+                    .execute(
+                        "UPDATE expenses SET \
+                           amount = COALESCE(?4, amount), \
+                           category = COALESCE(?5, category), \
+                           memo = COALESCE(?6, memo), \
+                           date = COALESCE(?7, date), \
+                           time = COALESCE(?8, time), \
+                           type = COALESCE(?9, type) \
+                         WHERE id = ?1 AND user_id = ?2 AND bot_id = ?3",
+                        params![
+                            id,
+                            uid,
+                            bid,
+                            update.amount,
+                            update.category,
+                            update.memo,
+                            update.date,
+                            update.time,
+                            update.r#type,
+                        ],
+                    )
+                    .map_err(map_sqlite)?;
+                Ok(n > 0)
+            })
+            .await?;
+        if !updated {
+            return Ok(None);
+        }
+        self.get(scope, id).await
     }
 
     /// 収支を削除する（削除できたら `true`）。

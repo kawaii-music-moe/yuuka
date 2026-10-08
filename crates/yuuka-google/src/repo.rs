@@ -500,3 +500,184 @@ pub async fn clear_bot_google_account(db: &Db, bot_id: &str) -> Result<(), DbErr
         })
         .await
 }
+
+/// エージェント（Bot）が予定の書き込みに使う Google アカウントを解決する（Node `getAccountForBot`）。
+///
+/// - 設定なし（[`BotGoogleMode::Primary`]）→ 発話ユーザーの primary アカウント。
+/// - 連携なし（[`BotGoogleMode::None`]）→ `None`。
+/// - 特定アカウント → そのアカウント。ただし発話ユーザー本人のものに限る（共有 Bot 経由で他人の
+///   トークンを使わせない）。本人のものでなければ発話ユーザーの primary へフォールバックする。
+///
+/// # Errors
+/// 読み取り失敗時 [`DbError`]。
+pub async fn resolve_account_for_bot(
+    db: &Db,
+    user_id: &str,
+    bot_id: &str,
+) -> Result<Option<PrimaryAccount>, DbError> {
+    match get_bot_google_mode(db, bot_id).await? {
+        BotGoogleMode::None => Ok(None),
+        BotGoogleMode::Primary => get_primary_account(db, user_id).await,
+        BotGoogleMode::Account(id) => match get_account(db, id).await? {
+            Some(acct) if acct.user_id == user_id => Ok(Some(PrimaryAccount {
+                id: acct.id,
+                calendar_id: acct.calendar_id,
+            })),
+            _ => get_primary_account(db, user_id).await,
+        },
+    }
+}
+
+/// Google → Yuuka の取り込み対象（アカウントを明示的に割り当てたエージェント）1 件。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExplicitBotAccount {
+    pub bot_id: String,
+    pub account_id: i64,
+    /// アカウントの所有者（取り込んだ予定はこのユーザー × Bot のデータになる）。
+    pub user_id: String,
+}
+
+/// アカウントを明示的に割り当てたエージェントの一覧（定期取り込みの走査用・全ユーザー横断）。
+///
+/// # Errors
+/// 読み取り失敗時 [`DbError`]。
+pub async fn list_explicit_bot_accounts(db: &Db) -> Result<Vec<ExplicitBotAccount>, DbError> {
+    db.read
+        .read(move |conn| {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT b.bot_id, a.id, a.user_id FROM bot_google_account b \
+                     JOIN user_google_accounts a ON a.id = b.google_account_id \
+                     ORDER BY b.bot_id",
+                )
+                .map_err(map_sqlite)?;
+            let rows = stmt
+                .query_map([], |r| {
+                    Ok(ExplicitBotAccount {
+                        bot_id: r.get(0)?,
+                        account_id: r.get(1)?,
+                        user_id: r.get(2)?,
+                    })
+                })
+                .map_err(map_sqlite)?;
+            rows.collect::<Result<Vec<_>, _>>().map_err(map_sqlite)
+        })
+        .await
+}
+
+/// エージェントにアカウントが明示的に割り当てられていて、それが `user_id` 本人のものならその ID。
+///
+/// # Errors
+/// 読み取り失敗時 [`DbError`]。
+pub async fn explicit_account_for_bot(
+    db: &Db,
+    user_id: &str,
+    bot_id: &str,
+) -> Result<Option<i64>, DbError> {
+    let BotGoogleMode::Account(id) = get_bot_google_mode(db, bot_id).await? else {
+        return Ok(None);
+    };
+    Ok(get_account(db, id)
+        .await?
+        .filter(|acct| acct.user_id == user_id)
+        .map(|acct| acct.id))
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+    use super::*;
+
+    async fn open_db() -> (Db, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("g.db");
+        drop(rusqlite::Connection::open(&path).unwrap());
+        let db = Db::open(&path).unwrap();
+        db.writer
+            .transaction(|tx| {
+                tx.execute_batch(
+                    "INSERT INTO users (discord_id, username, password_hash, salt) VALUES \
+                       ('u1', 'u1', 'x', 'x'), ('u2', 'u2', 'x', 'x');
+                     INSERT INTO bots (id, user_id, name) VALUES \
+                       ('plain', 'u1', 'P'), ('none', 'u1', 'N'), ('mine', 'u1', 'M'), ('others', 'u2', 'O');
+                     INSERT INTO user_google_accounts \
+                       (id, user_id, email, refresh_token_encrypted, refresh_token_iv, refresh_token_tag, calendar_id, is_primary) VALUES \
+                       (1, 'u1', 'main@x', 'x', 'x', 'x', 'main@x', 1), \
+                       (2, 'u1', 'sub@x', 'x', 'x', 'x', 'sub@x', 0), \
+                       (3, 'u2', 'other@x', 'x', 'x', 'x', NULL, 1);
+                     INSERT INTO bot_google_account (bot_id, google_account_id) VALUES \
+                       ('none', NULL), ('mine', 2), ('others', 3);",
+                )
+                .map_err(map_sqlite)
+            })
+            .await
+            .unwrap();
+        (db, dir)
+    }
+
+    #[tokio::test]
+    async fn resolves_the_account_each_agent_writes_to() {
+        let (db, _dir) = open_db().await;
+        let id = |a: Option<PrimaryAccount>| a.map(|a| a.id);
+        // 設定なし → 発話ユーザーのメイン。連携なし → None。明示 → そのアカウント。
+        assert_eq!(
+            id(resolve_account_for_bot(&db, "u1", "plain").await.unwrap()),
+            Some(1)
+        );
+        assert_eq!(
+            id(resolve_account_for_bot(&db, "u1", "none").await.unwrap()),
+            None
+        );
+        assert_eq!(
+            id(resolve_account_for_bot(&db, "u1", "mine").await.unwrap()),
+            Some(2)
+        );
+        // 他人のアカウントが割り当てられた共有エージェントは、発話ユーザー本人のメインを使う。
+        assert_eq!(
+            id(resolve_account_for_bot(&db, "u1", "others").await.unwrap()),
+            Some(1)
+        );
+    }
+
+    #[tokio::test]
+    async fn only_explicitly_assigned_agents_are_import_targets() {
+        let (db, _dir) = open_db().await;
+        assert_eq!(
+            explicit_account_for_bot(&db, "u1", "plain").await.unwrap(),
+            None
+        );
+        assert_eq!(
+            explicit_account_for_bot(&db, "u1", "none").await.unwrap(),
+            None
+        );
+        assert_eq!(
+            explicit_account_for_bot(&db, "u1", "mine").await.unwrap(),
+            Some(2)
+        );
+        assert_eq!(
+            explicit_account_for_bot(&db, "u1", "others").await.unwrap(),
+            None
+        );
+        assert_eq!(
+            explicit_account_for_bot(&db, "u2", "others").await.unwrap(),
+            Some(3)
+        );
+
+        let targets = list_explicit_bot_accounts(&db).await.unwrap();
+        assert_eq!(
+            targets,
+            vec![
+                ExplicitBotAccount {
+                    bot_id: "mine".to_owned(),
+                    account_id: 2,
+                    user_id: "u1".to_owned()
+                },
+                ExplicitBotAccount {
+                    bot_id: "others".to_owned(),
+                    account_id: 3,
+                    user_id: "u2".to_owned()
+                },
+            ]
+        );
+    }
+}

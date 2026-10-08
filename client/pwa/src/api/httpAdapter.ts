@@ -1,5 +1,5 @@
 import type { AgentGateway } from './gateway'
-import type { AgentSettings, ChatMessage, ChatSendAccepted, NewCalendarEvent, SharedNote, Todo, Transaction } from './contracts'
+import type { AgentSettings, ChatAttachment, ChatMessage, ChatSendAccepted, NewCalendarEvent, SharedNote, Todo, Transaction } from './contracts'
 import { pollForChatReply, type ChatPollOptions } from './chatPolling'
 import { withSelectedAgent } from './agents'
 import { request } from './http'
@@ -32,8 +32,8 @@ export const httpAgentGateway: AgentGateway = {
   scanReceipt: (image: ReceiptImage) => clientRequest('/api/client/finance/receipt', { method: 'POST', body: JSON.stringify(image) }),
   listChatMessages,
   // 202 Accepted（応答はバックグラウンド生成）→ 履歴を sinceId 起点でポーリングして完了を検知する。
-  sendChatMessage: async (content: string, options?: Pick<ChatPollOptions, 'onTick' | 'signal'>) => {
-    const accepted = await clientRequest<ChatSendAccepted>('/api/client/chat/messages', { method: 'POST', body: JSON.stringify({ content }), signal: options?.signal })
+  sendChatMessage: async (content: string, attachments: ChatAttachment[], options?: Pick<ChatPollOptions, 'onTick' | 'signal'>) => {
+    const accepted = await clientRequest<ChatSendAccepted>('/api/client/chat/messages', { method: 'POST', body: JSON.stringify({ content, attachments }), signal: options?.signal })
     return pollForChatReply({ listMessages: listChatMessages, sinceId: accepted.sinceId, ...options })
   },
   waitForChatReply: (sinceId: string, options?: Pick<ChatPollOptions, 'onTick' | 'signal'>) => pollForChatReply({ listMessages: listChatMessages, sinceId, ...options }),

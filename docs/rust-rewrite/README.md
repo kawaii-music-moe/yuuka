@@ -1,11 +1,13 @@
 # yuuka バックエンド Rust 移行 — ドキュメント索引
 
-このディレクトリは、yuuka バックエンド（Node.js/TypeScript）を **Rust へ全面書き換え**する計画・実装ドキュメント一式。
-ブランチ `feature/rust-rewrite`（2026-07-01 起票）。**実装フェーズは完了（2026-07-16）**: 機能パリティ 100%（Web ルート **152/152**・LLM ツール **85/85 + MCP 動的**・常駐サービス予約シーム 0・synapse 吸収）・全ゲート緑（build / clippy -D / **test 717** / deny exit 0）・**dev 環境は web/API/cron/Discord すべて Rust で本稼働中**（`yuuka:dev-rust`・:7855）。**残るのは prod カットオーバー（ユーザー最終判断）のみ**。現況・指摘・残オペレーションは **[remaining-work.md](remaining-work.md)** 冒頭の「移行完了宣言（2026-07-16c）」を参照。
+このディレクトリは、yuuka バックエンド（Node.js/TypeScript）を **Rust へ全面書き換え**した際の計画・実施記録です。現在の作業計画や運用状態を示す資料ではありません。
+移行記録は `feature/rust-rewrite`（2026-07-01 起票）で進めた作業を収録しています。個々の進捗・テスト数・デプロイ状態は記録時点の情報です。現在の状態はこの履歴資料から推定せず、コードと運用設定を確認してください。
 
-> **⚠️ 履歴資料（Node 撤去前に書かれた移行記録）:** 本ディレクトリの文書は、Node.js 実装が稼働していた時期の移行計画・実施記録です。`src/*.ts` など Node 実装への参照や `deploy/cutover-dev-rust.sh` 等の移行用スクリプトへのリンクは、Node 実装の撤去（[#68](https://github.com/kawaii-music-moe/yuuka/pull/68)）後は**リンク切れ**です（撤去前のソースは `git show 390df39^:<path>` で参照できます）。「prod は Node のまま」「Node と併走する経路 A」などの現況記述も撤去前のものです。現行の構成は [../project_overview.md](../project_overview.md)・[../guide/deployment.md](../guide/deployment.md) とコードを参照してください。
+> **⚠️ アーカイブ:** 以下の計画・実施記録は主に 2026-07-16 時点のスナップショットです。コンテナ状態、ブランチ状態、テスト数、残作業など時点依存の記述を現在の事実として扱わないでください。本文内の Node 実装パスや撤去済みスクリプトへの参照も当時の記録です。現在の構成・セットアップ・デプロイ方法は [../architecture-current.html](../architecture-current.html)、[../guide/setup.md](../guide/setup.md)、[../guide/deployment.md](../guide/deployment.md) とコードを参照してください。
 
-## 読む順序
+このディレクトリは移行の意思決定と経緯を保存するため維持しています。新しい作業計画の入口には使用しません。
+
+## 履歴を読む場合
 
 1. **[00-decisions.md](00-decisions.md)** — 確定技術選定（ADR）。全バージョン・採用/却下理由の**唯一の基準**。まずここ。
 2. **[PLAN.md](PLAN.md)** — 詳細マスタープラン（§1〜14、結合ビュー）。設計の本体。

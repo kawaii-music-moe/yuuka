@@ -86,6 +86,12 @@ fn seed_user(path: &std::path::Path, discord_id: &str, model: Option<&str>) {
         rusqlite::params![discord_id, model],
     )
     .expect("seed user");
+    // PWA はシステム Bot を扱わないため、設定はユーザー本人の Bot（`bot_<id>`）経由で読み書きする。
+    conn.execute(
+        "INSERT INTO bots (id, user_id, name) VALUES ('bot_' || ?1, ?1, 'Mine')",
+        rusqlite::params![discord_id],
+    )
+    .expect("seed bot");
 }
 
 fn stored_model(path: &std::path::Path, discord_id: &str) -> Option<String> {
@@ -125,9 +131,13 @@ async fn call(
     token: Option<&str>,
     body: Option<Value>,
 ) -> (StatusCode, Value) {
+    let uri = match token {
+        Some(token) => format!("/api/client/settings?botId=bot_{token}"),
+        None => "/api/client/settings".to_owned(),
+    };
     let mut builder = Request::builder()
         .method(method)
-        .uri("/api/client/settings")
+        .uri(uri)
         .header("content-type", "application/json");
     if let Some(token) = token {
         builder = builder.header("cookie", format!("__Host-yuuka-session={token}"));
@@ -377,23 +387,9 @@ async fn put_without_users_row_is_explicit_error_and_writes_nothing() {
         0,
         "persona も作られない"
     );
-    let (status, body) = get(&app, USER_WITHOUT_ROW).await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(
-        body["model"], DEFAULT_MODEL,
-        "要求した model は永続化されていない"
-    );
-    assert_eq!(body["persona"], "");
-    assert_no_generation_fields(&body);
-}
-
-#[tokio::test]
-async fn put_invalid_model_without_users_row_is_still_bad_request() {
-    let (db, _path) = fresh_db();
-    let app = app(db);
-
-    let (status, _) = put(&app, USER_WITHOUT_ROW, json!({ "model": "GPT-4o" })).await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "入力検証は行の有無より先");
+    // `users` 行の無いユーザーは Bot も持てない（外部キー）ため、どの Bot 宛ても 404。
+    let (status, _) = get(&app, USER_WITHOUT_ROW).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
 /// PWA のモデル選択肢（`client/pwa/src/api/models.ts`）がサーバーの許可リストと一致する。

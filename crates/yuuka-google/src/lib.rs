@@ -13,7 +13,10 @@ pub mod repo;
 pub use backup::{read_backup_config, touch_backup_last_run, BackupConfig, GoogleBackupClient};
 pub use http::GoogleHttpClient;
 pub use ports::{
-    BackupPort, CalendarPort, CalendarSummary, GoogleError, GoogleOAuthPort, GoogleTokens,
-    NullBackup, NullCalendar, NullGoogleOAuth, OAuthStateStore,
+    BackupPort, CalendarEventsPort, CalendarPort, CalendarSummary, GoogleError, GoogleEvent,
+    GoogleEventInput, GoogleOAuthPort, GoogleTokens, LinkedGoogleAccount, NullBackup, NullCalendar,
+    NullCalendarEvents, NullGoogleOAuth, OAuthStateStore,
 };
-pub use repo::{AccountOwner, BotGoogleMode, GoogleAccountSafe, PrimaryAccount};
+pub use repo::{
+    AccountOwner, BotGoogleMode, ExplicitBotAccount, GoogleAccountSafe, PrimaryAccount,
+};

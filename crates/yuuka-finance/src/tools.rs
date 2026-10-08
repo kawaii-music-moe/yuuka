@@ -9,7 +9,7 @@
 //! 移植済み: addExpense（収支記録・`ExpenseRepo::add`）/ listRecentExpenses（直近一覧・`ExpenseRepo::list`）。
 //! これらは repo の add/list に素直に対応する。予算・支払い予定・月次集計・消込は対応 repo が
 //! 無いため未移植（deferred）。addExpense の予算消化率・消込候補（他 repo 依存）も同様に落とす。
-//! `ExpenseRepo` の get/delete には対応する Node ツールが無い（settle 内部で使うのみ）ため公開しない。
+//! 記録済みの収支の修正・削除は updateExpense / deleteExpense（Rust 版で追加・Node には無かった）。
 
 use std::sync::Arc;
 
@@ -19,7 +19,7 @@ use yuuka_core::tool::FunctionDeclaration;
 use yuuka_core::{DbError, Tool, ToolContext, ToolError, ToolName, ToolOutcome, UserScope};
 use yuuka_web::Db;
 
-use crate::dto::{NewExpense, NewPlannedPayment};
+use crate::dto::{ExpenseUpdate, NewExpense, NewPlannedPayment};
 use crate::repo::ExpenseRepo;
 
 /// このドメインが公開する Native ツール一式を作る。
@@ -36,6 +36,14 @@ pub fn tools(db: Db) -> Result<Vec<Arc<dyn Tool>>, ToolError> {
         }),
         Arc::new(ListRecentExpensesTool {
             name: ToolName::checked("listRecentExpenses".to_owned())?,
+            db: db.clone(),
+        }),
+        Arc::new(UpdateExpenseTool {
+            name: ToolName::checked("updateExpense".to_owned())?,
+            db: db.clone(),
+        }),
+        Arc::new(DeleteExpenseTool {
+            name: ToolName::checked("deleteExpense".to_owned())?,
             db: db.clone(),
         }),
         Arc::new(GetMonthlySummaryTool {
@@ -309,6 +317,147 @@ impl Tool for AddExpenseTool {
         Ok(ToolOutcome::from_payload(ok_payload(
             message,
             json!({ "expense": expense }),
+        )))
+    }
+}
+
+// ─── updateExpense ───────────────────────────────────────────────────────────
+
+struct UpdateExpenseTool {
+    name: ToolName,
+    db: Db,
+}
+
+#[async_trait]
+impl Tool for UpdateExpenseTool {
+    fn declaration(&self) -> FunctionDeclaration {
+        FunctionDeclaration {
+            name: self.name.clone(),
+            description: "記録済みの収支 1 件を修正する（金額・カテゴリ・収支の種別・メモ・日付・時刻）。\
+                「さっきの記録を3333円に直して」のような修正依頼では、新しく addExpense せずにこれを使う。\
+                変更したい項目だけ指定する。どの記録か分からない時は先に listRecentExpenses で ID を確認する。"
+                .to_owned(),
+            parameters_json_schema: json!({
+                "type": "object",
+                "properties": {
+                    "expense_id": { "type": "number", "description": "修正する記録の ID（addExpense / listRecentExpenses が返す #番号）" },
+                    "amount": { "type": "number", "description": "新しい金額。円単位の1以上の整数（任意）" },
+                    "category": { "type": "string", "description": "新しいカテゴリ（任意）" },
+                    "type": { "type": "string", "description": "'expense'=支出 / 'income'=収入（任意）" },
+                    "memo": { "type": "string", "description": "新しいメモ（任意）" },
+                    "date": { "type": "string", "description": "新しい日付。形式 YYYY-MM-DD（任意）" },
+                    "time": { "type": "string", "description": "新しい時刻。形式 HH:MM:SS（任意）" }
+                },
+                "required": ["expense_id"]
+            }),
+            requires_confirmation: false,
+        }
+    }
+
+    async fn call(&self, ctx: &ToolContext, args: Value) -> Result<ToolOutcome, ToolError> {
+        let Some(id) = arg_i64(&args, "expense_id") else {
+            return Ok(fail_payload("expense_id を指定してください。"));
+        };
+        let amount = arg_i64(&args, "amount");
+        if amount.is_some_and(|n| n <= 0) {
+            return Ok(fail_payload(
+                "amount は1以上の整数（円）で指定してください。",
+            ));
+        }
+        let date = arg_str(&args, "date");
+        if date.as_deref().is_some_and(|d| !is_ymd(d)) {
+            return Ok(fail_payload("date は YYYY-MM-DD 形式で指定してください。"));
+        }
+        let r#type = arg_str(&args, "type");
+        if r#type
+            .as_deref()
+            .is_some_and(|t| t != "expense" && t != "income")
+        {
+            return Ok(fail_payload(
+                "type は 'expense' か 'income' で指定してください。",
+            ));
+        }
+        let update = ExpenseUpdate {
+            amount,
+            category: arg_str(&args, "category"),
+            memo: arg_str(&args, "memo"),
+            date,
+            time: arg_str(&args, "time"),
+            r#type,
+        };
+        if update.is_empty() {
+            return Ok(fail_payload("変更する項目を1つ以上指定してください。"));
+        }
+
+        let Some(expense) = ExpenseRepo::new(&self.db)
+            .update(&scope_of(ctx), id, update)
+            .await
+            .map_err(exec_err)?
+        else {
+            return Ok(fail_payload(format!("ID #{id} の記録が見つかりません。")));
+        };
+        let message = format!(
+            "記録 #{} を {} {}円 ({}) に修正しました",
+            expense.id,
+            type_label(&expense.r#type),
+            expense.amount,
+            expense.category,
+        );
+        Ok(ToolOutcome::from_payload(ok_payload(
+            message,
+            json!({ "expense": expense }),
+        )))
+    }
+}
+
+// ─── deleteExpense ───────────────────────────────────────────────────────────
+
+struct DeleteExpenseTool {
+    name: ToolName,
+    db: Db,
+}
+
+#[async_trait]
+impl Tool for DeleteExpenseTool {
+    fn declaration(&self) -> FunctionDeclaration {
+        FunctionDeclaration {
+            name: self.name.clone(),
+            description: "記録済みの収支 1 件を削除する。ユーザーが削除を求めた時だけ使う。\
+                どの記録か分からない時は先に listRecentExpenses で ID を確認する。"
+                .to_owned(),
+            parameters_json_schema: json!({
+                "type": "object",
+                "properties": {
+                    "expense_id": { "type": "number", "description": "削除する記録の ID（addExpense / listRecentExpenses が返す #番号）" }
+                },
+                "required": ["expense_id"]
+            }),
+            requires_confirmation: false,
+        }
+    }
+
+    async fn call(&self, ctx: &ToolContext, args: Value) -> Result<ToolOutcome, ToolError> {
+        let Some(id) = arg_i64(&args, "expense_id") else {
+            return Ok(fail_payload("expense_id を指定してください。"));
+        };
+        let repo = ExpenseRepo::new(&self.db);
+        let scope = scope_of(ctx);
+        let Some(expense) = repo.get(&scope, id).await.map_err(exec_err)? else {
+            return Ok(fail_payload(format!("ID #{id} の記録が見つかりません。")));
+        };
+        if !repo.delete(&scope, id).await.map_err(exec_err)? {
+            return Ok(fail_payload(format!("ID #{id} の記録が見つかりません。")));
+        }
+        let message = format!(
+            "記録 #{} ({} {}円 {}) を削除しました",
+            expense.id,
+            type_label(&expense.r#type),
+            expense.amount,
+            expense.category,
+        );
+        Ok(ToolOutcome::from_payload(ok_payload(
+            message,
+            json!({ "deleted": expense }),
         )))
     }
 }
@@ -1412,6 +1561,70 @@ mod tests {
             .iter()
             .find(|t| t.declaration().name.as_str() == name)
             .unwrap()
+    }
+
+    #[tokio::test]
+    async fn update_and_delete_expense() {
+        let db = seed_db();
+        let tools = tools(db).unwrap();
+        let add = find(&tools, "addExpense");
+        let update = find(&tools, "updateExpense");
+        let delete = find(&tools, "deleteExpense");
+
+        let out = add
+            .call(
+                &ctx(),
+                json!({"amount": 600, "category": "食費", "memo": "卵"}),
+            )
+            .await
+            .unwrap();
+        let id = out.payload["expense"]["id"].as_i64().unwrap();
+
+        // 指定した項目だけ変わる。
+        let out = update
+            .call(&ctx(), json!({"expense_id": id, "amount": 3333}))
+            .await
+            .unwrap();
+        assert_eq!(out.payload["success"], true, "{}", out.payload);
+        assert_eq!(out.payload["expense"]["amount"], 3333);
+        assert_eq!(out.payload["expense"]["category"], "食費");
+        assert_eq!(out.payload["expense"]["memo"], "卵");
+
+        // 不正な値・変更なし・他人の記録は fail。
+        for args in [
+            json!({"expense_id": id}),
+            json!({"expense_id": id, "amount": 0}),
+            json!({"expense_id": id, "date": "2026/10/06"}),
+            json!({"expense_id": id, "type": "refund"}),
+            json!({"amount": 100}),
+        ] {
+            let out = update.call(&ctx(), args.clone()).await.unwrap();
+            assert_eq!(out.payload["success"], false, "{args}");
+        }
+        let other = ToolContext::new(BotId::system_default(), UserId::new("userB"));
+        let out = update
+            .call(&other, json!({"expense_id": id, "amount": 1}))
+            .await
+            .unwrap();
+        assert_eq!(out.payload["success"], false);
+        let out = delete
+            .call(&other, json!({"expense_id": id}))
+            .await
+            .unwrap();
+        assert_eq!(out.payload["success"], false);
+
+        // 削除すると一覧から消え、2 回目は見つからない。
+        let out = delete
+            .call(&ctx(), json!({"expense_id": id}))
+            .await
+            .unwrap();
+        assert_eq!(out.payload["success"], true);
+        assert_eq!(out.payload["deleted"]["amount"], 3333);
+        let out = delete
+            .call(&ctx(), json!({"expense_id": id}))
+            .await
+            .unwrap();
+        assert_eq!(out.payload["success"], false);
     }
 
     #[tokio::test]

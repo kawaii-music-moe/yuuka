@@ -48,6 +48,30 @@ pub struct NewExpense {
     pub r#type: Option<String>,
 }
 
+/// 収支の部分更新（`updateExpense` ツール）。`None` の項目は変更しない。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ExpenseUpdate {
+    /// 円単位（1 以上の整数）。
+    pub amount: Option<i64>,
+    pub category: Option<String>,
+    /// DB の `memo` 列。
+    pub memo: Option<String>,
+    /// `'YYYY-MM-DD'`。
+    pub date: Option<String>,
+    /// `'HH:MM:SS'`。
+    pub time: Option<String>,
+    /// `"income" | "expense"`。
+    pub r#type: Option<String>,
+}
+
+impl ExpenseUpdate {
+    /// 変更する項目が 1 つも無いか。
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
 /// カテゴリ別集計の1件（Node `CategoryTotal` = `{category, total, count}`）。
 #[derive(Debug, Clone, Serialize, TS)]
 #[ts(export_to = "generated/")]

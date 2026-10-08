@@ -19,6 +19,8 @@ serde_json.workspace = true
 ts-rs.workspace = true
 async-trait.workspace = true
 chrono.workspace = true
+yuuka-google.workspace = true
+tracing.workspace = true
 
 [dev-dependencies]
 tokio.workspace = true

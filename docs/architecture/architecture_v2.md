@@ -113,7 +113,7 @@ export interface SessionUser { discordId: string; username: string; role: "user"
 | audit_logs | user_id | action, target, detail（PW本体は記録禁止） |
 | invite_codes / system_settings | 既存どおり |
 
-**シナプス認知アーキテクチャ（v10。設計: docs/design/synapse_cognitive_architecture.md・architecture_renewal_v3.md。詳細は §13）**。すべて `user_id`（汎用モードは `bot_id × guild_id` も）でスコープし、`message_logs` と同一 .db。**書き手は Node のみ**（Rust エンジンは read-only 参照）:
+**シナプス認知アーキテクチャ（v10。設計背景は旧資料 `docs/design/synapse_cognitive_architecture.md` 等を参照。詳細は §13）**。すべて `user_id`（汎用モードは `bot_id × guild_id` も）でスコープし、`message_logs` と同一 .db。**書き手は Node のみ**（Rust エンジンは read-only 参照）:
 
 | テーブル | キー/スコープ | 用途 |
 |---|---|---|
@@ -246,7 +246,7 @@ v2=初版全面再構築 / v3=ユーザーデータ各表へ bot_id 付与（`mi
 
 ## 13. シナプス認知アーキテクチャ（schema v10 / R0・R1 実装済み）
 
-設計思想は [`docs/design/synapse_cognitive_architecture.md`](../design/synapse_cognitive_architecture.md)（why/what）、システム実装面は [`docs/design/architecture_renewal_v3.md`](../design/architecture_renewal_v3.md)（how/topology）。本節は**実装済み部分（R0/R1）**を実装規範へ昇格したもの。R2（2nd Hop 勝率提示）・R3（ローカル SLM ハイブリッド）・R4（投機/キャッシュ）は未実装の将来フェーズ。
+設計思想は [`docs/design/synapse_cognitive_architecture.md`](../design/synapse_cognitive_architecture.md) を参照。旧Node構成の詳細提案書は整理済み。本節は当時の実装済み部分（R0/R1）を記録した履歴です。現在の実装・機能状況は Rust の `crates/yuuka-synapse` と `crates/yuuka-orchestrator` を参照してください。
 
 ### 13.1 構成（プロセス分離）
 - **Node オーケストレータ（既存）**: Discord I/O・ツール dispatch・Gemini 本推論＋ペルソナ・**SQLite の唯一の書き手**。

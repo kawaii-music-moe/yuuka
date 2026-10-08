@@ -25,7 +25,10 @@ use async_trait::async_trait;
 use yuuka_crypto::SystemCrypto;
 use yuuka_web::Db;
 
-use crate::ports::{CalendarPort, CalendarSummary, GoogleError, GoogleOAuthPort, GoogleTokens};
+use crate::ports::{
+    CalendarEventsPort, CalendarPort, CalendarSummary, GoogleError, GoogleEvent, GoogleEventInput,
+    GoogleOAuthPort, GoogleTokens, LinkedGoogleAccount,
+};
 use crate::repo;
 
 /// カレンダーキャッシュの TTL（Node `CACHE_TTL = 5 * 60 * 1000`）。
@@ -41,6 +44,14 @@ const TOKEN_ENDPOINT: &str = "https://oauth2.googleapis.com/token";
 const USERINFO_ENDPOINT: &str = "https://www.googleapis.com/oauth2/v2/userinfo";
 /// calendarList エンドポイント（利用可能カレンダー一覧）。
 const CALENDAR_LIST_ENDPOINT: &str = "https://www.googleapis.com/calendar/v3/users/me/calendarList";
+/// カレンダー API の基点（`{base}/{calendarId}/events`）。
+const CALENDARS_ENDPOINT: &str = "https://www.googleapis.com/calendar/v3/calendars";
+/// アクセストークンの使い回し期間（Google の有効期限 1 時間より短く取る）。
+const ACCESS_TOKEN_TTL: Duration = Duration::from_secs(50 * 60);
+/// 予定一覧のページ数の上限（1 ページ 250 件・取り込み範囲は 1 か月程度なので十分）。
+const MAX_EVENT_PAGES: usize = 8;
+/// アカウントに既定カレンダーが無いときの登録先（Google の主カレンダーの別名）。
+const PRIMARY_CALENDAR_ALIAS: &str = "primary";
 
 /// 同意画面で要求する OAuth スコープ（Node `GOOGLE_OAUTH_SCOPES`・並び順も一致）。
 const OAUTH_SCOPES: &[&str] = &[
@@ -62,6 +73,10 @@ pub struct GoogleHttpClient {
     db: Db,
     http: reqwest::Client,
     cache: Mutex<HashMap<String, (Vec<CalendarSummary>, Instant)>>,
+    /// アカウント別のアクセストークン（[`ACCESS_TOKEN_TTL`] の間は使い回す）。
+    access_tokens: Mutex<HashMap<i64, (String, Instant)>>,
+    /// アカウント別の書き込み可能カレンダー一覧（[`CACHE_TTL`]）。
+    account_calendars: Mutex<HashMap<i64, (Vec<CalendarSummary>, Instant)>>,
 }
 
 impl std::fmt::Debug for GoogleHttpClient {
@@ -89,7 +104,44 @@ impl GoogleHttpClient {
             db,
             http,
             cache: Mutex::new(HashMap::new()),
+            access_tokens: Mutex::new(HashMap::new()),
+            account_calendars: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// アカウントのアクセストークン（キャッシュが無効ならリフレッシュトークンから取り直す）。
+    ///
+    /// # Errors
+    /// アカウント不在 / 復号失敗 / 上流失敗時 [`GoogleError`]。
+    async fn access_token_for_account(&self, account_id: i64) -> Result<String, GoogleError> {
+        {
+            let guard = self.access_tokens.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some((token, fetched)) = guard.get(&account_id) {
+                if fetched.elapsed() < ACCESS_TOKEN_TTL {
+                    return Ok(token.clone());
+                }
+            }
+        }
+        let (_owner, enc, iv, tag) = repo::get_account_tokens(&self.db, account_id)
+            .await
+            .map_err(|e| GoogleError::Upstream(e.to_string()))?
+            .ok_or(GoogleError::NotConfigured)?;
+        let refresh = self
+            .crypto
+            .decrypt_text(&enc, &iv, &tag)
+            .map_err(|e| GoogleError::Upstream(e.to_string()))?;
+        let access = self.refresh_access_token(&refresh).await?;
+        let mut guard = self.access_tokens.lock().unwrap_or_else(|e| e.into_inner());
+        guard.insert(account_id, (access.clone(), Instant::now()));
+        Ok(access)
+    }
+
+    /// 上流の失敗をログ用の文言にする（本文の先頭だけ添える）。
+    async fn upstream_error(what: &str, resp: reqwest::Response) -> GoogleError {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        let snippet: String = body.chars().take(200).collect();
+        GoogleError::Upstream(format!("{what} status {status}: {snippet}"))
     }
 
     /// リフレッシュトークンをアクセストークンへ交換する（POST `grant_type=refresh_token`）。
@@ -369,14 +421,316 @@ impl CalendarPort for GoogleHttpClient {
     }
 }
 
+/// ローカル暦（`'YYYY-MM-DD HH:MM:SS'`・JST）を Google API の RFC 3339（`+09:00`）にする。
+fn local_to_rfc3339(local: &str) -> Option<String> {
+    let naive = chrono::NaiveDateTime::parse_from_str(local, "%Y-%m-%d %H:%M:%S").ok()?;
+    Some(naive.format("%Y-%m-%dT%H:%M:%S+09:00").to_string())
+}
+
+/// 開始から 1 時間後のローカル暦（終了が省略された予定用・Node `createCalendarEvent` と同じ）。
+fn one_hour_after(local: &str) -> Option<String> {
+    let naive = chrono::NaiveDateTime::parse_from_str(local, "%Y-%m-%d %H:%M:%S").ok()?;
+    Some(
+        (naive + chrono::Duration::hours(1))
+            .format("%Y-%m-%d %H:%M:%S")
+            .to_string(),
+    )
+}
+
+/// Google の `start`/`end`（`dateTime` か終日の `date`）をローカル暦にする。終日予定の `end.date` は
+/// 翌日（排他的）なので、`exclusive_end` のときは前日の 23:59:59 にする。
+fn google_time_to_local(value: &serde_json::Value, exclusive_end: bool) -> Option<String> {
+    let offset = chrono::FixedOffset::east_opt(9 * 3600)?;
+    if let Some(dt) = value.get("dateTime").and_then(serde_json::Value::as_str) {
+        let parsed = chrono::DateTime::parse_from_rfc3339(dt).ok()?;
+        return Some(
+            parsed
+                .with_timezone(&offset)
+                .format("%Y-%m-%d %H:%M:%S")
+                .to_string(),
+        );
+    }
+    let date = value.get("date").and_then(serde_json::Value::as_str)?;
+    let day = chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d").ok()?;
+    if exclusive_end {
+        let last = day.pred_opt()?;
+        return Some(format!("{} 23:59:59", last.format("%Y-%m-%d")));
+    }
+    Some(format!("{} 00:00:00", day.format("%Y-%m-%d")))
+}
+
+/// events.list 応答の `items` を [`GoogleEvent`] にする（キャンセル済み・開始の無いものは除く）。
+fn parse_events(value: &serde_json::Value) -> Vec<GoogleEvent> {
+    let Some(items) = value.get("items").and_then(serde_json::Value::as_array) else {
+        return Vec::new();
+    };
+    items
+        .iter()
+        .filter(|item| item.get("status").and_then(serde_json::Value::as_str) != Some("cancelled"))
+        .filter_map(|item| {
+            let id = item.get("id").and_then(serde_json::Value::as_str)?;
+            let start_local = google_time_to_local(item.get("start")?, false)?;
+            let end_local = item
+                .get("end")
+                .and_then(|end| google_time_to_local(end, true));
+            let text = |key: &str| {
+                item.get(key)
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned()
+            };
+            let title = Some(text("summary"))
+                .filter(|t| !t.is_empty())
+                .unwrap_or_else(|| "無題の予定".to_owned());
+            Some(GoogleEvent {
+                id: id.to_owned(),
+                title,
+                description: text("description"),
+                start_local,
+                end_local,
+            })
+        })
+        .collect()
+}
+
+#[async_trait]
+impl CalendarEventsPort for GoogleHttpClient {
+    async fn account_for(&self, user_id: &str, bot_id: &str) -> Option<LinkedGoogleAccount> {
+        if !self.is_configured() {
+            return None;
+        }
+        let account = repo::resolve_account_for_bot(&self.db, user_id, bot_id)
+            .await
+            .ok()
+            .flatten()?;
+        Some(LinkedGoogleAccount {
+            account_id: account.id,
+            default_calendar_id: account
+                .calendar_id
+                .filter(|id| !id.is_empty())
+                .unwrap_or_else(|| PRIMARY_CALENDAR_ALIAS.to_owned()),
+        })
+    }
+
+    async fn import_account_for(&self, user_id: &str, bot_id: &str) -> Option<i64> {
+        if !self.is_configured() {
+            return None;
+        }
+        repo::explicit_account_for_bot(&self.db, user_id, bot_id)
+            .await
+            .ok()
+            .flatten()
+    }
+
+    async fn calendars(&self, account_id: i64) -> Result<Vec<CalendarSummary>, GoogleError> {
+        {
+            let guard = self
+                .account_calendars
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            if let Some((calendars, fetched)) = guard.get(&account_id) {
+                if cache_entry_is_fresh(calendars, fetched.elapsed()) {
+                    return Ok(calendars.clone());
+                }
+            }
+        }
+        let access = self.access_token_for_account(account_id).await?;
+        let calendars = self.fetch_calendar_list(&access).await?;
+        let mut guard = self
+            .account_calendars
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        guard.insert(account_id, (calendars.clone(), Instant::now()));
+        Ok(calendars)
+    }
+
+    async fn insert_event(
+        &self,
+        account_id: i64,
+        calendar_id: &str,
+        event: &GoogleEventInput,
+    ) -> Result<String, GoogleError> {
+        let invalid = || GoogleError::Upstream("invalid event datetime".to_owned());
+        let start = local_to_rfc3339(&event.start_local).ok_or_else(invalid)?;
+        let end_local = match &event.end_local {
+            Some(end) => end.clone(),
+            None => one_hour_after(&event.start_local).ok_or_else(invalid)?,
+        };
+        let end = local_to_rfc3339(&end_local).ok_or_else(invalid)?;
+        let body = serde_json::json!({
+            "summary": event.title,
+            "description": event.description.clone().unwrap_or_default(),
+            "start": { "dateTime": start },
+            "end": { "dateTime": end },
+        });
+        let access = self.access_token_for_account(account_id).await?;
+        let resp = self
+            .http
+            .post(format!(
+                "{CALENDARS_ENDPOINT}/{}/events",
+                encode_component(calendar_id)
+            ))
+            .bearer_auth(access)
+            .json(&body)
+            .timeout(HTTP_TIMEOUT)
+            .send()
+            .await
+            .map_err(|e| GoogleError::Upstream(e.to_string()))?;
+        if !resp.status().is_success() {
+            return Err(Self::upstream_error("events.insert", resp).await);
+        }
+        let value: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| GoogleError::Upstream(e.to_string()))?;
+        value
+            .get("id")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
+            .ok_or_else(|| GoogleError::Upstream("events.insert returned no id".to_owned()))
+    }
+
+    async fn delete_event(
+        &self,
+        account_id: i64,
+        calendar_id: &str,
+        event_id: &str,
+    ) -> Result<(), GoogleError> {
+        let access = self.access_token_for_account(account_id).await?;
+        let resp = self
+            .http
+            .delete(format!(
+                "{CALENDARS_ENDPOINT}/{}/events/{}",
+                encode_component(calendar_id),
+                encode_component(event_id)
+            ))
+            .bearer_auth(access)
+            .timeout(HTTP_TIMEOUT)
+            .send()
+            .await
+            .map_err(|e| GoogleError::Upstream(e.to_string()))?;
+        // 既に消えている（404/410）なら目的は達成済み。
+        let status = resp.status().as_u16();
+        if resp.status().is_success() || status == 404 || status == 410 {
+            return Ok(());
+        }
+        Err(Self::upstream_error("events.delete", resp).await)
+    }
+
+    async fn list_events(
+        &self,
+        account_id: i64,
+        calendar_id: &str,
+        from_local: &str,
+        to_local: &str,
+    ) -> Result<Vec<GoogleEvent>, GoogleError> {
+        let invalid = || GoogleError::Upstream("invalid range datetime".to_owned());
+        let time_min = local_to_rfc3339(from_local).ok_or_else(invalid)?;
+        let time_max = local_to_rfc3339(to_local).ok_or_else(invalid)?;
+        let access = self.access_token_for_account(account_id).await?;
+        let url = format!(
+            "{CALENDARS_ENDPOINT}/{}/events",
+            encode_component(calendar_id)
+        );
+        let mut events = Vec::new();
+        let mut page_token: Option<String> = None;
+        for _ in 0..MAX_EVENT_PAGES {
+            let mut query = vec![
+                ("timeMin", time_min.clone()),
+                ("timeMax", time_max.clone()),
+                ("singleEvents", "true".to_owned()),
+                ("orderBy", "startTime".to_owned()),
+                ("maxResults", "250".to_owned()),
+            ];
+            if let Some(token) = &page_token {
+                query.push(("pageToken", token.clone()));
+            }
+            let resp = self
+                .http
+                .get(&url)
+                .query(&query)
+                .bearer_auth(&access)
+                .timeout(HTTP_TIMEOUT)
+                .send()
+                .await
+                .map_err(|e| GoogleError::Upstream(e.to_string()))?;
+            if !resp.status().is_success() {
+                return Err(Self::upstream_error("events.list", resp).await);
+            }
+            let value: serde_json::Value = resp
+                .json()
+                .await
+                .map_err(|e| GoogleError::Upstream(e.to_string()))?;
+            events.extend(parse_events(&value));
+            page_token = value
+                .get("nextPageToken")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned);
+            if page_token.is_none() {
+                break;
+            }
+        }
+        Ok(events)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
 
     use super::{
-        cache_entry_is_fresh, encode_component, parse_access_token, parse_calendar_list,
-        parse_email, parse_tokens, CalendarSummary, CACHE_TTL, OAUTH_SCOPES,
+        cache_entry_is_fresh, encode_component, google_time_to_local, local_to_rfc3339,
+        one_hour_after, parse_access_token, parse_calendar_list, parse_email, parse_events,
+        parse_tokens, CalendarSummary, CACHE_TTL, OAUTH_SCOPES,
     };
+
+    #[test]
+    fn converts_between_local_time_and_google_time() {
+        assert_eq!(
+            local_to_rfc3339("2026-10-06 09:30:00").as_deref(),
+            Some("2026-10-06T09:30:00+09:00")
+        );
+        assert_eq!(local_to_rfc3339("2026-10-06T09:30:00"), None);
+        assert_eq!(
+            one_hour_after("2026-10-06 23:30:00").as_deref(),
+            Some("2026-10-07 00:30:00")
+        );
+        let dt = serde_json::json!({ "dateTime": "2026-10-06T01:00:00Z" });
+        assert_eq!(
+            google_time_to_local(&dt, false).as_deref(),
+            Some("2026-10-06 10:00:00")
+        );
+        // 終日予定: 開始はその日の 0 時、終了（翌日・排他的）は前日の 23:59:59。
+        let day = serde_json::json!({ "date": "2026-10-07" });
+        assert_eq!(
+            google_time_to_local(&day, false).as_deref(),
+            Some("2026-10-07 00:00:00")
+        );
+        assert_eq!(
+            google_time_to_local(&day, true).as_deref(),
+            Some("2026-10-06 23:59:59")
+        );
+    }
+
+    #[test]
+    fn parses_events_skipping_cancelled_ones() {
+        let body = serde_json::json!({ "items": [
+            { "id": "a", "summary": "会議", "description": "メモ",
+              "start": { "dateTime": "2026-10-06T10:00:00+09:00" },
+              "end": { "dateTime": "2026-10-06T11:00:00+09:00" } },
+            { "id": "b", "status": "cancelled", "start": { "dateTime": "2026-10-06T12:00:00+09:00" } },
+            { "id": "c", "start": { "date": "2026-10-08" }, "end": { "date": "2026-10-09" } }
+        ] });
+        let events = parse_events(&body);
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].id, "a");
+        assert_eq!(events[0].title, "会議");
+        assert_eq!(events[0].start_local, "2026-10-06 10:00:00");
+        assert_eq!(events[0].end_local.as_deref(), Some("2026-10-06 11:00:00"));
+        assert_eq!(events[1].title, "無題の予定");
+        assert_eq!(events[1].start_local, "2026-10-08 00:00:00");
+        assert_eq!(events[1].end_local.as_deref(), Some("2026-10-08 23:59:59"));
+    }
 
     // auth_url は self（client_id）に依存するため、生成規則を純関数で再現して厳密検証する。
     fn build_auth_url(client_id: &str, redirect_uri: &str, state: &str) -> String {

@@ -3650,6 +3650,8 @@ checksum = "1ffae5123b2d3fc086436f8834ae3ab053a283cfac8fe0a0b8eaae044768a4c4"
 name = "xtask"
 version = "0.1.0"
 dependencies = [
+ "getrandom 0.2.17",
+ "rusqlite",
  "yuuka-credential",
  "yuuka-finance",
  "yuuka-persona",
@@ -3798,6 +3800,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "axum",
+ "base64",
  "chrono",
  "rusqlite",
  "secrecy",
@@ -4157,9 +4160,11 @@ dependencies = [
  "tempfile",
  "tokio",
  "tower",
+ "tracing",
  "ts-rs",
  "yuuka-core",
  "yuuka-db",
+ "yuuka-google",
  "yuuka-types",
  "yuuka-web",
 ]

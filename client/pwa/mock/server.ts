@@ -106,7 +106,7 @@ createServer(async (req, res) => {
         is_system_default: true,
         discord_username: 'yuuka-mock',
       }, {
-        // PWA のエージェント切り替え欄を出すための 2 つ目の Bot（モックのデータは Bot で分けない）。
+        // PWA が扱うエージェント（システム Bot は候補に出ない・モックのデータは Bot で分けない）。
         id: 'bot_mock_assistant',
         name: 'アシスタント',
         preset: 'mcp_assistant',
@@ -120,6 +120,11 @@ createServer(async (req, res) => {
   // this mock useful for the existing administration UI during its migration.
   const apiPath = url.pathname.replace(/^\/api\/(?:pwa|client)(?=\/|$)/, '/api')
   if (req.method === 'GET' && apiPath === '/api/status') return json(res, { status: 'ok', service: 'agent-mock', checkedAt: new Date().toISOString() })
+  // 本番と同じく、`/api/client/*` はエージェント（botId）必須。未指定・システム Bot は 403（モックのデータは Bot で分けない）。
+  if (url.pathname.startsWith('/api/client/') && !url.pathname.startsWith('/api/client/chat/attachments/')) {
+    const botId = url.searchParams.get('botId')?.trim()
+    if (!botId || botId === 'system_default') return json(res, { message: 'agent required' }, 403)
+  }
   if (req.method === 'GET' && url.pathname === '/api/settings/google/oauth/url') return json(res, { success: true, url: 'https://example.com/google-authorize' })
   if (apiPath === '/api/settings') {
     if (req.method === 'PUT') {
@@ -164,13 +169,21 @@ createServer(async (req, res) => {
   }
   if (apiPath === '/api/chat/messages') {
     if (req.method === 'POST') {
-      const { content } = await read(req)
-      if (typeof content !== 'string' || !content.trim()) return json(res, { message: 'content is required' }, 400)
+      // 本番と同じ契約: 本文が空でも添付（{ name, mimeType, dataBase64 }）があれば受け付け、添付は履歴の files に載せる。
+      const { content = '', attachments: sent = [] } = await read(req)
+      const text = typeof content === 'string' ? content.trim() : ''
+      if (!text && !sent.length) return json(res, { message: 'content is required' }, 400)
       if (turnInFlight) return json(res, { message: '前のメッセージへの応答がまだ処理中です。応答が届いてから送信してください。' }, 409)
       const sinceId = String(chatSeq)
-      chatMessages.push({ id: nextChatId(), role: 'user', content, createdAt: new Date().toISOString() })
+      const files = (sent as { name: string; mimeType: string; dataBase64: string }[]).map((file) => {
+        const id = String(Object.keys(attachments).length + 1)
+        attachments[id] = { name: file.name, mimeType: file.mimeType, bytes: Buffer.from(file.dataBase64, 'base64') }
+        return { id, name: file.name, mimeType: file.mimeType, url: `/api/client/chat/attachments/${id}` }
+      })
+      chatMessages.push({ id: nextChatId(), role: 'user', content: text, createdAt: new Date().toISOString(), files })
       turnInFlight = true
-      setTimeout(() => { chatMessages.push({ id: nextChatId(), createdAt: new Date().toISOString(), ...buildReply(content) }); turnInFlight = false }, chatDelayMs)
+      const prompt = text || `添付ファイル ${files.length} 件`
+      setTimeout(() => { chatMessages.push({ id: nextChatId(), createdAt: new Date().toISOString(), ...buildReply(prompt) }); turnInFlight = false }, chatDelayMs)
       return json(res, { status: 'pending', sinceId }, 202)
     }
     return json(res, chatMessages)

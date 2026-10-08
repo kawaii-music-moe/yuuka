@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { onBeforeUnmount, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import AppIcon from './AppIcon.vue'
-import { listAgents, selectAgent, selectedAgentId, type Agent } from '../api/agents'
+import { agents, selectAgent, selectedAgentId } from '../api/agents'
 import { logout, type SessionUser } from '../api/auth'
 import { buildLoginUrl } from '../api/loginRedirect'
 
@@ -24,16 +24,7 @@ const items = [
 const route = useRoute()
 watch(() => route.fullPath, () => { open.value = false })
 
-// 切り替え先が 1 つ（秘書 Bot のみ）なら選択欄は出さない。一覧を取れなくても既定のエージェントで使える。
-const agents = ref<Agent[]>([])
-onMounted(async () => {
-  try {
-    agents.value = await listAgents()
-  } catch {
-    agents.value = []
-  }
-})
-
+// 一覧は AppShell が取得する。切り替え先が 1 つ以下なら選択欄は出さない。
 function handleAgentChange(event: Event) {
   selectAgent((event.target as HTMLSelectElement).value)
   open.value = false

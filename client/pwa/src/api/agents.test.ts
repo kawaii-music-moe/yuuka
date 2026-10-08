@@ -2,17 +2,16 @@
 // スキップされる（このタブの中だけで切り替わる）経路を通る。
 import assert from 'node:assert/strict'
 import { afterEach, describe, it } from 'node:test'
-import { DEFAULT_AGENT_ID, selectAgent, selectedAgentId, withSelectedAgent } from './agents'
+import { SYSTEM_AGENT_ID, selectAgent, selectedAgentId, toAgents, withSelectedAgent } from './agents'
 
 describe('withSelectedAgent', () => {
-  afterEach(() => selectAgent(DEFAULT_AGENT_ID))
+  afterEach(() => selectAgent(''))
 
-  it('starts with the secretary and leaves paths unchanged for it', () => {
-    assert.equal(selectedAgentId.value, DEFAULT_AGENT_ID)
-    assert.equal(withSelectedAgent('/api/client/todos'), '/api/client/todos')
+  it('starts with no agent selected', () => {
+    assert.equal(selectedAgentId.value, '')
   })
 
-  it('adds botId for another agent', () => {
+  it('adds botId for the selected agent', () => {
     selectAgent('bot_123')
     assert.equal(selectedAgentId.value, 'bot_123')
     assert.equal(withSelectedAgent('/api/client/todos'), '/api/client/todos?botId=bot_123')
@@ -24,5 +23,25 @@ describe('withSelectedAgent', () => {
       withSelectedAgent('/api/client/finance/summary?month=2026-08'),
       '/api/client/finance/summary?month=2026-08&botId=bot%20a%26b',
     )
+  })
+})
+
+describe('toAgents', () => {
+  it('leaves out the system bot and keeps the server order', () => {
+    assert.deepEqual(
+      toAgents([
+        { id: SYSTEM_AGENT_ID, name: 'システムデフォルト' },
+        { id: 'bot_2', name: 'shared' },
+        { id: 'bot_1', name: 'mine' },
+      ]),
+      [
+        { id: 'bot_2', name: 'shared' },
+        { id: 'bot_1', name: 'mine' },
+      ],
+    )
+  })
+
+  it('returns an empty list when only the system bot exists', () => {
+    assert.deepEqual(toAgents([{ id: SYSTEM_AGENT_ID, name: 'システムデフォルト' }]), [])
   })
 })
