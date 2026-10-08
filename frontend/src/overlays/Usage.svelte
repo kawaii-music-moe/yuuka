@@ -37,18 +37,21 @@ import { goto } from "$lib/router";
 					</li>
 					<li>
 						<strong>デフォルトBotの設定：</strong> 管理者登録後、Discord Developer Portal
-						で作成した Discord Bot トークンを登録します。
+						で作成した Discord Bot トークンを登録します。このBotは「システムの案内役」として、Yuuka
+						の使い方や設定の質問に答え、システムからの通知を送ります。タスク・予定・家計などの個人データは扱いません。
 					</li>
 					<li>
 						<strong>一般ユーザー登録：</strong>
-						管理者が生成した「招待コード」を使用し、新規アカウントを作成します。
+						管理者が生成した「招待コード」を使用し、新規アカウントを作成します。登録後は管理画面のホーム（Bot一覧）から自分のBotを作成します。
 					</li>
 				</ul>
 			</div>
 
 			<div class="usage-section">
 				<h3>3. Discord での操作方法</h3>
-				<p>Bot にメンション、またはDMで話しかけて操作します。</p>
+				<p>
+					自分のBot（パーソナル秘書。管理画面のホームで作成）にメンション、またはDMで話しかけて操作します。デフォルトBotは案内役のため、以下の操作には使えません。
+				</p>
 				<ul>
 					<li>
 						<strong>タスク管理：</strong>

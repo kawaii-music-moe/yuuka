@@ -18,10 +18,6 @@ let { bots, grantedIds, ontoggle }: Props = $props();
 const granted = $derived(bots.filter((b) => grantedIds.has(b.id)));
 const available = $derived(bots.filter((b) => !grantedIds.has(b.id)));
 
-function botName(b: IntegratedBotView): string {
-	return b.is_system_default ? "既定の秘書（早瀬ユウカ）" : b.name;
-}
-
 function onSelect(e: Event) {
 	const sel = e.currentTarget as HTMLSelectElement;
 	const botId = sel.value;
@@ -35,12 +31,12 @@ function onSelect(e: Event) {
 	{#if granted.length}
 		{#each granted as b (b.id)}
 			<span class="int-chip">
-				{botName(b)}
+				{b.name}
 				<button
 					type="button"
 					class="int-chip-remove"
 					title="許可を解除"
-					aria-label="{botName(b)} の許可を解除"
+					aria-label="{b.name} の許可を解除"
 					onclick={() => ontoggle(b.id, false)}>×</button
 				>
 			</span>
@@ -58,7 +54,7 @@ function onSelect(e: Event) {
 		>
 			<option value="">＋</option>
 			{#each available as b (b.id)}
-				<option value={b.id}>{botName(b)}</option>
+				<option value={b.id}>{b.name}</option>
 			{/each}
 		</select>
 	{/if}
