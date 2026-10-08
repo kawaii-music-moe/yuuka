@@ -391,7 +391,7 @@ async function connectGoogle() {
 						<div class="int-bot-meta">
 							<div class="int-bot-name">
 								{b.name}
-								{#if b.is_system_default}<span class="int-bot-sub">(共有秘書)</span
+								{#if b.is_system_default}<span class="int-bot-sub">(システムの案内役)</span
 									>{/if}
 							</div>
 							<div class="int-bot-detail">

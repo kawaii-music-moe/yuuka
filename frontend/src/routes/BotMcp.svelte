@@ -48,9 +48,7 @@ let dashServer = $state<{ id: number; name: string } | null>(null);
 
 // 現在の Bot 表示ラベル（旧 mcp-current-bot-label）。
 const currentBotLabel = $derived(
-	$activeBot && $activeBot.id !== "system_default" && $activeBot.name
-		? `現在のBot: ${$activeBot.name}`
-		: "現在のBot: 既定の秘書（早瀬ユウカ）",
+	$activeBot?.name ? `現在のBot: ${$activeBot.name}` : "現在のBot: 未選択",
 );
 
 function reportError(e: unknown) {
