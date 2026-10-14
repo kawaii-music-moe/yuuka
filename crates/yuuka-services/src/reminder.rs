@@ -97,15 +97,16 @@ async fn advance_after_send(
 }
 
 /// リマインドの送信先を解決する（現行 `resolveTarget`）。
+/// 保存済みの `dm` は DM。登録時にユーザー既定送信先を保存済みのため、ここでは既定送信先を見ない。
 fn resolve_target(reminder: &DueReminder) -> NotifyTarget {
     if reminder.target_type.as_deref() == Some("channel") {
         match reminder.target_id.as_deref() {
             Some(id) if !id.is_empty() => NotifyTarget::Channel(id.to_owned()),
-            // チャンネル指定だが ID 不明 → 既定送信先（→DM）へ委ねる。
+            // チャンネル指定だが ID 不明 → ユーザー既定送信先（→DM）へ委ねる。
             _ => NotifyTarget::Default,
         }
     } else {
-        NotifyTarget::Default
+        NotifyTarget::Dm
     }
 }
 
@@ -230,6 +231,85 @@ mod tests {
         assert_eq!(format_display_datetime(None), "未設定");
         assert_eq!(format_display_datetime(Some("  ")), "未設定");
         assert_eq!(format_display_datetime(Some("later")), "later");
+    }
+
+    /// 既定送信先をチャンネル `c-default` にしたユーザー `u` を作る（users 表はマイグレーションが作る）。
+    async fn seed_user_with_channel_default(db: &yuuka_web::Db) {
+        db.writer
+            .execute(|conn| {
+                conn.execute(
+                    "INSERT INTO users \
+                       (discord_id, username, password_hash, salt, notify_target_type, notify_target_id) \
+                     VALUES ('u', 'u', 'x', 'x', 'channel', 'c-default')",
+                    [],
+                )
+                .map_err(map_sqlite)?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+    }
+
+    /// R17: 保存済みの dm は DM、ID 不明のチャンネル指定はユーザー既定送信先へ届ける。
+    #[tokio::test]
+    async fn due_reminder_targets_follow_saved_type() {
+        let (db, _dir) = seeded_db(REMINDERS_DDL);
+        seed_user_with_channel_default(&db).await;
+        db.writer
+            .execute(|conn| {
+                conn.execute_batch(
+                    "INSERT INTO reminders (user_id, bot_id, message, trigger_at, target_type, status) \
+                     VALUES ('u','system_default','dm','2000-01-01 00:00:00','dm','pending'); \
+                     INSERT INTO reminders (user_id, bot_id, message, trigger_at, target_type, status) \
+                     VALUES ('u','system_default','chan','2000-01-01 00:00:01','channel','pending');",
+                )
+                .map_err(map_sqlite)?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+
+        let rec = Arc::new(RecordingNotifier::new(true));
+        let ctx = ctx_with(db, rec.clone());
+        process_due_reminders(&ctx).await.unwrap();
+
+        let sent = rec.sent.lock().unwrap();
+        assert_eq!(sent.len(), 2);
+        assert_eq!(sent[0].target, NotifyTarget::Dm);
+        assert_eq!(
+            sent[1].target,
+            NotifyTarget::Channel("c-default".to_owned())
+        );
+    }
+
+    /// R17: 送信先を持たない ToDo 期限通知はユーザー既定送信先へ届ける。
+    #[tokio::test]
+    async fn todo_due_uses_user_default_target() {
+        let (db, _dir) = seeded_db(REMINDERS_DDL);
+        seed_user_with_channel_default(&db).await;
+        db.writer
+            .execute(|conn| {
+                conn.execute(
+                    "INSERT INTO todos (user_id, bot_id, title, due_date) \
+                     VALUES ('u', 'system_default', '資料', datetime('now', 'localtime', '+1 hours'))",
+                    [],
+                )
+                .map_err(map_sqlite)?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+
+        let rec = Arc::new(RecordingNotifier::new(true));
+        let ctx = ctx_with(db, rec.clone());
+        process_todo_due(&ctx).await.unwrap();
+
+        let sent = rec.sent.lock().unwrap();
+        assert_eq!(sent.len(), 1);
+        assert_eq!(
+            sent[0].target,
+            NotifyTarget::Channel("c-default".to_owned())
+        );
     }
 
     #[tokio::test]

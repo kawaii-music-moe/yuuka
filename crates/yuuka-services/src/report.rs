@@ -105,15 +105,16 @@ async fn deliver(ctx: &ServiceContext, config: &EnabledReport) -> Result<(), DbE
 }
 
 /// 配信先を解決する（Node `{ type: target_type, id: target_id }`）。
-/// `channel` かつ ID 有り → チャンネル指定・それ以外 → 既定送信先（→DM）。briefing / reminder と同規律。
+/// `channel` かつ ID 有り → チャンネル指定・それ以外 → DM。briefing と同規律（配信設定の送信先を
+/// 明示して渡すため、ユーザー既定送信先は見ない）。
 fn resolve_target(config: &EnabledReport) -> NotifyTarget {
     if config.target_type == "channel" {
         match config.target_id.as_deref() {
             Some(id) if !id.is_empty() => NotifyTarget::Channel(id.to_owned()),
-            _ => NotifyTarget::Default,
+            _ => NotifyTarget::Dm,
         }
     } else {
-        NotifyTarget::Default
+        NotifyTarget::Dm
     }
 }
 
@@ -476,8 +477,8 @@ mod tests {
 
         let sent = notifier.sent.lock().unwrap();
         assert_eq!(sent.len(), 1);
-        // 既定送信先（→DM）で、本文に日報タイトルと生データフッタが入る。
-        assert_eq!(sent[0].target, NotifyTarget::Default);
+        // 設定の dm は DM（ユーザー既定送信先は見ない）で、本文に日報タイトルと生データフッタが入る。
+        assert_eq!(sent[0].target, NotifyTarget::Dm);
         assert!(sent[0].content.contains("📋 日報"));
         assert!(sent[0].content.contains("Yuuka レポート（生データ）"));
         // 集約元が空でも fallback 本体（完了/持ち越し/収支）は出る。

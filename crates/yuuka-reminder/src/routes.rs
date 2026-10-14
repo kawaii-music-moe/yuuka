@@ -6,7 +6,7 @@
 //! 本ルータは supervisor 側で共通レイヤ（CSRF/body 上限）配下にマージされる。
 //!
 //! 方針: cancel は Node パリティで **404（不在）/ 409（実在するが pending でない）** を区別する。
-//! cron 検証・過去日時補正・既定送信先解決は deferred。
+//! cron 検証・過去日時補正は deferred（送信先省略時の既定送信先は repo の `add` が解決する）。
 
 use axum::extract::{Query, State};
 use axum::routing::{get, post};
