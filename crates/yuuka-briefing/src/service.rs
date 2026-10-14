@@ -9,7 +9,6 @@
 use std::time::Duration;
 
 use crate::repo::find_briefing;
-use crate::tools::is_likely_public_http_url;
 use yuuka_core::DbError;
 use yuuka_web::Db;
 
@@ -208,8 +207,9 @@ async fn fetch_news(feeds: &[String], keywords: &[String]) -> Vec<NewsItem> {
 
     let mut items: Vec<NewsItem> = Vec::new();
     for url in feeds.iter().take(10) {
-        // SSRF: 内部/予約レンジ・非 http(s) は取得しない（個別失敗は無視・Node パリティ）。
-        if !is_likely_public_http_url(url) {
+        // SSRF: 取得直前に DNS 解決先まで検査し、内部/予約レンジ・非 http(s) は取得しない
+        // （個別失敗は無視・Node パリティ）。登録時の簡易検査はドメインを公開扱いにするため、ここで再検査する。
+        if yuuka_browser::assert_safe_outbound_url(url).await.is_err() {
             continue;
         }
         let Ok(resp) = client.get(url).send().await else {
@@ -384,6 +384,46 @@ mod tests {
             <entry><title>エントリ1</title><link href="https://e.com/1"/></entry></feed>"#;
         let titles = parse_feed_titles(xml);
         assert_eq!(titles, vec!["エントリ1".to_owned()]);
+    }
+
+    /// R25: 文字列の簡易検査ではドメイン扱いになるが、実際は内部アドレスへ届くフィードを取得しない。
+    /// `127.1` / `2130706433` は URL 仕様で 127.0.0.1 に正規化され、`::ffff:127.0.0.1` は IPv4 の
+    /// ループバックへ届く。取得直前の検査で止め、ローカルのサーバーへ 1 度も接続しないことを確かめる。
+    #[tokio::test]
+    async fn fetch_news_skips_feeds_reaching_internal_address() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let hits = Arc::new(AtomicUsize::new(0));
+        let server_hits = Arc::clone(&hits);
+        let server = tokio::spawn(async move {
+            while let Ok((mut sock, _)) = listener.accept().await {
+                server_hits.fetch_add(1, Ordering::SeqCst);
+                let mut buf = [0u8; 1024];
+                let _ = sock.read(&mut buf).await;
+                let body = "<rss><channel><item><title>内部の記事</title></item></channel></rss>";
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/rss+xml\r\n\
+                     Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = sock.write_all(resp.as_bytes()).await;
+            }
+        });
+
+        let feeds = vec![
+            format!("http://127.1:{port}/feed.xml"),
+            format!("http://2130706433:{port}/feed.xml"),
+            format!("http://[::ffff:127.0.0.1]:{port}/feed.xml"),
+        ];
+        let items = fetch_news(&feeds, &[]).await;
+        server.abort();
+
+        assert!(items.is_empty());
+        assert_eq!(hits.load(Ordering::SeqCst), 0, "内部アドレスへ接続した");
     }
 
     #[test]
