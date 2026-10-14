@@ -828,20 +828,79 @@ impl<'a> ExpenseRepo<'a> {
                 .map_err(map_sqlite)?;
 
                 // (3) 紐付く未完了 ToDo を自動完了（§3.4.3 手順4）。件数を返す。
-                let completed = tx
-                    .execute(
-                        "UPDATE todos \
-                         SET status = 'done', updated_at = datetime('now', 'localtime') \
-                         WHERE user_id = ?1 AND bot_id = ?2 \
-                           AND linked_payment_id = ?3 AND status = 'open'",
-                        params![uid, bid, plan_id],
-                    )
-                    .map_err(map_sqlite)?;
+                let completed = complete_linked_todos(tx, &uid, &bid, plan_id)?;
 
-                Ok((expense_id, i64::try_from(completed).unwrap_or(i64::MAX)))
+                Ok((expense_id, completed))
             })
             .await
     }
+
+    /// pending の支払い予定を **記帳済みの支出** で消込する（Node `settlePlannedPayment` の
+    /// `expense_id` 指定・R14）。
+    ///
+    /// [`Self::settle_plan`] と違い Expense を新規に記録しない（レシート等で先に記帳した支払いを
+    /// 消込んでも二重計上にならない）。1 つの writer トランザクションで:
+    /// (1) 予定を `status='settled'` + `settled_expense_id`=`expense_id` へ更新、
+    /// (2) 紐付く未完了 ToDo を `done` へ自動完了。
+    /// (1) は予定が pending で、かつ `expense_id` がスコープ内の `type='expense'` の記録である
+    /// 場合だけ行う。支出の存在・種別は tool 層が先に確かめて個別のメッセージを返すが、その後の
+    /// 削除・別経路の消込と競合しても誤って紐付けないよう、更新条件にも含める。
+    ///
+    /// 返り値: 消込できたら自動完了した ToDo 件数、条件を満たさず何も変更しなかったら `None`。
+    ///
+    /// # Errors
+    /// 各更新失敗時 [`DbError`]。
+    pub async fn settle_plan_with_expense(
+        &self,
+        scope: &UserScope,
+        plan_id: i64,
+        expense_id: i64,
+    ) -> Result<Option<i64>, DbError> {
+        let (uid, bid) = scope_keys(scope);
+        self.writer
+            .transaction(move |tx| {
+                // (1) 予定を消込（pending のみ・スコープ内の支出記録に限り settled_expense_id を記録）。
+                let n = tx
+                    .execute(
+                        "UPDATE planned_payments \
+                         SET status = 'settled', settled_expense_id = ?1, \
+                             updated_at = datetime('now', 'localtime') \
+                         WHERE user_id = ?2 AND bot_id = ?3 AND id = ?4 AND status = 'pending' \
+                           AND EXISTS (SELECT 1 FROM expenses \
+                                       WHERE id = ?1 AND user_id = ?2 AND bot_id = ?3 \
+                                         AND type = 'expense')",
+                        params![expense_id, uid, bid, plan_id],
+                    )
+                    .map_err(map_sqlite)?;
+                if n == 0 {
+                    return Ok(None);
+                }
+
+                // (2) 紐付く未完了 ToDo を自動完了（§3.4.3 手順4）。
+                complete_linked_todos(tx, &uid, &bid, plan_id).map(Some)
+            })
+            .await
+    }
+}
+
+/// 支払い予定に紐付く未完了 ToDo（`linked_payment_id` = 予定 id・status='open'）を `done` へ
+/// 更新し、件数を返す（消込時の自動完了・§3.4.3 手順4）。
+fn complete_linked_todos(
+    tx: &rusqlite::Transaction,
+    uid: &str,
+    bid: &str,
+    plan_id: i64,
+) -> Result<i64, DbError> {
+    let completed = tx
+        .execute(
+            "UPDATE todos \
+             SET status = 'done', updated_at = datetime('now', 'localtime') \
+             WHERE user_id = ?1 AND bot_id = ?2 \
+               AND linked_payment_id = ?3 AND status = 'open'",
+            params![uid, bid, plan_id],
+        )
+        .map_err(map_sqlite)?;
+    Ok(i64::try_from(completed).unwrap_or(i64::MAX))
 }
 
 /// スコープから所有 String キーを取り出す（`spawn_blocking` の `'static` クロージャ用）。
