@@ -7,9 +7,9 @@
 //! を済ませ、[`ToolProvider::list`] は生成済み宣言を（露出ゲート越しに）返すだけにする。Node が FC ループ
 //! 前に `getMcpFunctionModuleForBot` で FunctionModule を組むのと同じ分業。
 //!
-//! **スコープ規約（Node v5/v7）**: 共有秘書（`system_default`）は発話者本人が付与した許可分 + システム
-//! レベル登録のみ（[`repo::list_servers_granted_to_bot_scoped`]・クロステナント露出防止）。単一所有 Bot は
-//! owner の許可をそのまま使う（[`repo::list_servers_granted_to_bot`]）。呼び出し時の再検証も同一スコープ。
+//! **スコープ規約**: Bot に付いた許可 + システムレベル登録（[`repo::list_servers_granted_to_bot`]）。
+//! 呼び出し時の再検証も同一スコープ。システム Bot（`system_default`）は案内役で MCP を使わないため、
+//! 許可が残っていても常に空 provider にする（エンジンも能力を渡さないが、ここでも塞いでおく）。
 //!
 //! **露出ゲート**: MCP 動的ツールは秘書ツール（Node は `caps.has("mcp")` 経路のみ・秘書経路）。
 //! [`ToolExposure`] を `mcp` 能力 + 秘書経路で構成し、`list` で `is_visible(ctx)` を通す。
@@ -105,15 +105,6 @@ struct DispatchEntry {
     server_name: String,
 }
 
-/// スコープ解決の 2 モード（Node v7）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Scope {
-    /// 共有秘書（`system_default`）: 発話者本人が付与した許可 + システムレベルのみ。
-    SharedSecretary,
-    /// 単一所有 Bot: owner の許可 + システムレベル。
-    OwnedBot,
-}
-
 /// 各ユーザーの MCP サーバー群から動的登録した provider。会話 1 ターンごとに [`Self::discover`] で作る。
 pub struct McpProvider {
     /// 生成済みの動的ツール宣言（露出ゲートは [`ToolProvider::list`] で適用）。
@@ -128,8 +119,6 @@ pub struct McpProvider {
     db: Db,
     /// この provider を組んだ Bot ID（再検証スコープの鍵）。
     bot_id: String,
-    /// スコープモード（共有秘書 or 単一所有 Bot）。
-    scope: Scope,
 }
 
 impl McpProvider {
@@ -146,30 +135,23 @@ impl McpProvider {
 
     /// 会話 1 ターンの MCP 動的ツールを探索して provider を構築する（Node `getMcpFunctionModuleForBot`）。
     ///
-    /// 手順: (1) スコープ解決（`system_default` は発話者スコープ）→ enabled 絞り込み。(2) キャッシュが古い
+    /// 手順: (1) Bot に許可されたサーバーを解決 → enabled 絞り込み。(2) キャッシュが古い
     /// サーバーは `tools/list` で再取得（失敗はキャッシュ続行）。(3) 各ツールを `mcp{id}_{name}` へ命名
     /// （衝突は退避名で一意化）し宣言 + dispatch 表を組む。サーバー取得自体が失敗しても空 provider を返す
     /// （FC ループを落とさない・Node の try/catch パリティ）。
     ///
-    /// `bot_id == "system_default"` を共有秘書とみなす（Node `isSharedSecretary`）。
-    pub async fn discover(
-        db: Db,
-        client: Arc<dyn McpClient>,
-        bot_id: &str,
-        speaker_user_id: &str,
-    ) -> Self {
-        let scope = if bot_id == "system_default" {
-            Scope::SharedSecretary
-        } else {
-            Scope::OwnedBot
-        };
+    /// システム Bot（`system_default`）は MCP を使わないため、許可が残っていても空 provider を返す。
+    pub async fn discover(db: Db, client: Arc<dyn McpClient>, bot_id: &str) -> Self {
+        if bot_id == "system_default" {
+            return Self::empty(db, client, bot_id);
+        }
 
         // (1) サーバー解決（失敗は空 provider・Node catch）。
-        let servers = match Self::resolve_servers(&db, bot_id, speaker_user_id, scope).await {
+        let servers = match Self::resolve_servers(&db, bot_id).await {
             Ok(s) => s,
             Err(e) => {
                 tracing::error!(bot = %bot_id, error = %e, "MCP サーバー一覧の取得に失敗（動的ツールをスキップ）");
-                return Self::empty(db, client, bot_id, scope);
+                return Self::empty(db, client, bot_id);
             }
         };
 
@@ -234,12 +216,11 @@ impl McpProvider {
             client,
             db,
             bot_id: bot_id.to_owned(),
-            scope,
         }
     }
 
-    /// 空 provider（サーバー未解決・取得失敗時）。
-    fn empty(db: Db, client: Arc<dyn McpClient>, bot_id: &str, scope: Scope) -> Self {
+    /// 空 provider（システム Bot・サーバー未解決・取得失敗時）。
+    fn empty(db: Db, client: Arc<dyn McpClient>, bot_id: &str) -> Self {
         Self {
             declarations: Vec::new(),
             dispatch: HashMap::new(),
@@ -247,23 +228,15 @@ impl McpProvider {
             client,
             db,
             bot_id: bot_id.to_owned(),
-            scope,
         }
     }
 
-    /// スコープに応じてサーバー一覧を解決し enabled のみへ絞る（Node の filter(enabled===1)）。
+    /// Bot に許可されたサーバー一覧を解決し enabled のみへ絞る（Node の filter(enabled===1)）。
     async fn resolve_servers(
         db: &Db,
         bot_id: &str,
-        speaker_user_id: &str,
-        scope: Scope,
     ) -> Result<Vec<McpServerRecord>, yuuka_core::DbError> {
-        let servers = match scope {
-            Scope::SharedSecretary => {
-                repo::list_servers_granted_to_bot_scoped(db, bot_id, speaker_user_id).await?
-            }
-            Scope::OwnedBot => repo::list_servers_granted_to_bot(db, bot_id).await?,
-        };
+        let servers = repo::list_servers_granted_to_bot(db, bot_id).await?;
         Ok(servers.into_iter().filter(|s| s.enabled == 1).collect())
     }
 
@@ -426,11 +399,8 @@ impl ToolProvider for McpProvider {
             return Err(ToolError::UnknownTool(name.as_str().to_owned()));
         };
 
-        // セキュリティ: 呼び出し時点でも可用性を再検証する（無効化/削除・スコープ・§4.4.3）。発話者は ctx.user_id。
-        if !self
-            .is_still_available(entry.server_id, ctx.user_id.as_str())
-            .await
-        {
+        // セキュリティ: 呼び出し時点でも可用性を再検証する（無効化/削除・許可解除・§4.4.3）。
+        if !self.is_still_available(entry.server_id).await {
             return Ok(ToolOutcome::from_payload(json!({
                 "success": false,
                 "message": "このMCPサーバーは現在利用できません（無効化または削除されています）。",
@@ -489,16 +459,9 @@ impl ToolProvider for McpProvider {
 impl McpProvider {
     /// 呼び出し時点の可用性再検証（Node `isStillAvailable` クロージャ）。
     ///
-    /// スコープ内の可視サーバーに当該 ID があり、かつ enabled なら true。DB エラーは false（安全側）。
-    async fn is_still_available(&self, server_id: i64, speaker_user_id: &str) -> bool {
-        let servers = match self.scope {
-            Scope::SharedSecretary => {
-                repo::list_servers_granted_to_bot_scoped(&self.db, &self.bot_id, speaker_user_id)
-                    .await
-            }
-            Scope::OwnedBot => repo::list_servers_granted_to_bot(&self.db, &self.bot_id).await,
-        };
-        match servers {
+    /// Bot に許可されたサーバーに当該 ID があり、かつ enabled なら true。DB エラーは false（安全側）。
+    async fn is_still_available(&self, server_id: i64) -> bool {
+        match repo::list_servers_granted_to_bot(&self.db, &self.bot_id).await {
             Ok(list) => list.iter().any(|s| s.id == server_id && s.enabled == 1),
             Err(e) => {
                 tracing::warn!(error = %e, "MCP 可用性の再検証に失敗（利用不可扱い）");
@@ -741,7 +704,7 @@ mod provider_tests {
         let _ = std::fs::remove_file(&path);
         drop(Connection::open(&path).expect("create db file"));
         let db = Db::open(&path).expect("open db");
-        // 全テスト共通の FK 充足: alice ユーザー + system_default Bot（owner=alice）。
+        // 全テスト共通の FK 充足: alice ユーザー + alice の Bot（b1）+ system_default Bot（owner=alice）。
         seed_base(&path);
         (db, path)
     }
@@ -771,9 +734,10 @@ mod provider_tests {
             .expect("seed bot");
     }
 
-    /// 共通の下ごしらえ: alice ユーザー + system_default Bot（owner=alice）。
+    /// 共通の下ごしらえ: alice ユーザー + alice の Bot（b1）+ system_default Bot（owner=alice）。
     fn seed_base(path: &PathBuf) {
         seed_user(path, "alice");
+        seed_bot(path, "b1", "alice");
         seed_bot(path, "system_default", "alice");
     }
 
@@ -808,7 +772,7 @@ mod provider_tests {
     }
 
     fn secretary_ctx() -> ToolContext {
-        let mut c = ToolContext::new(BotId::system_default(), UserId::new("alice"));
+        let mut c = ToolContext::new(BotId::new("b1"), UserId::new("alice"));
         c.mode = TurnMode::Secretary;
         c.capabilities =
             CapabilitySet::from_granted(vec!["mcp".to_owned(), "secretary".to_owned()]);
@@ -825,10 +789,10 @@ mod provider_tests {
             r#"[{"name":"echo","description":"repeat","inputSchema":{"type":"object","properties":{"x":{"type":"string"}}}},{"name":"","description":"drop-empty-name"}]"#,
             1,
         );
-        grant(&path, "system_default", "alice", sid);
+        grant(&path, "b1", "alice", sid);
 
         let client = Arc::new(FakeMcpClient::default());
-        let provider = McpProvider::discover(db, client, "system_default", "alice").await;
+        let provider = McpProvider::discover(db, client, "b1").await;
 
         let decls = provider.list(&secretary_ctx());
         // name 空は落とす → 1 ツール。名前は `mcp:mcp{id}_echo`。
@@ -851,7 +815,7 @@ mod provider_tests {
             r#"[{"name":"echo","description":"d"}]"#,
             1,
         );
-        grant(&path, "system_default", "alice", sid);
+        grant(&path, "b1", "alice", sid);
 
         let client = Arc::new(FakeMcpClient::default());
         client
@@ -860,7 +824,7 @@ mod provider_tests {
             .unwrap()
             .insert("echo".to_owned(), "hello-from-tool".to_owned());
 
-        let provider = McpProvider::discover(db, client.clone(), "system_default", "alice").await;
+        let provider = McpProvider::discover(db, client.clone(), "b1").await;
         let ctx = secretary_ctx();
         let name = ToolName::namespaced("mcp", &format!("mcp{sid}_echo")).unwrap();
 
@@ -884,10 +848,10 @@ mod provider_tests {
     async fn invoke_tool_error_returns_failure_shape() {
         let (db, path) = fresh_db();
         let sid = seed_server(&path, Some("alice"), "MyMcp", r#"[{"name":"boom"}]"#, 1);
-        grant(&path, "system_default", "alice", sid);
+        grant(&path, "b1", "alice", sid);
 
         let client = Arc::new(FakeMcpClient::default());
-        let provider = McpProvider::discover(db, client, "system_default", "alice").await;
+        let provider = McpProvider::discover(db, client, "b1").await;
         let name = ToolName::namespaced("mcp", &format!("mcp{sid}_boom")).unwrap();
         let out = provider
             .invoke(&name, json!({}), &secretary_ctx())
@@ -904,9 +868,9 @@ mod provider_tests {
     async fn invoke_gated_off_for_generic_mode_and_missing_cap() {
         let (db, path) = fresh_db();
         let sid = seed_server(&path, Some("alice"), "MyMcp", r#"[{"name":"echo"}]"#, 1);
-        grant(&path, "system_default", "alice", sid);
+        grant(&path, "b1", "alice", sid);
         let client = Arc::new(FakeMcpClient::default());
-        let provider = McpProvider::discover(db, client.clone(), "system_default", "alice").await;
+        let provider = McpProvider::discover(db, client.clone(), "b1").await;
         let name = ToolName::namespaced("mcp", &format!("mcp{sid}_echo")).unwrap();
 
         // 汎用モードでは MCP ツールは list に出ない。
@@ -932,47 +896,62 @@ mod provider_tests {
         let (db, path) = fresh_db();
         // enabled=0 のサーバーは discover の解決時点で除外される（Node filter enabled===1）。
         let sid = seed_server(&path, Some("alice"), "Off", r#"[{"name":"echo"}]"#, 0);
-        grant(&path, "system_default", "alice", sid);
+        grant(&path, "b1", "alice", sid);
         let client = Arc::new(FakeMcpClient::default());
-        let provider = McpProvider::discover(db, client, "system_default", "alice").await;
+        let provider = McpProvider::discover(db, client, "b1").await;
         assert_eq!(provider.list(&secretary_ctx()).len(), 0);
     }
 
     #[tokio::test]
-    async fn shared_secretary_scopes_to_speaker_but_includes_system_level() {
+    async fn bot_sees_all_grants_on_it_plus_system_level() {
         let (db, path) = fresh_db();
         seed_user(&path, "bob");
-        // alice が付与した owner サーバー・bob が付与した owner サーバー・システムレベル(user_id NULL)。
+        // alice・bob（共有相手）がそれぞれ b1 へ付与した owner サーバーと、システムレベル(user_id NULL)。
         let alice_sid = seed_server(&path, Some("alice"), "AliceMcp", r#"[{"name":"a"}]"#, 1);
         let bob_sid = seed_server(&path, Some("bob"), "BobMcp", r#"[{"name":"b"}]"#, 1);
         let sys_sid = seed_server(&path, None, "SysMcp", r#"[{"name":"s"}]"#, 1);
-        grant(&path, "system_default", "alice", alice_sid);
-        grant(&path, "system_default", "bob", bob_sid);
+        grant(&path, "b1", "alice", alice_sid);
+        grant(&path, "b1", "bob", bob_sid);
         // システムレベルは grant 不要（user_id IS NULL は全 Bot 利用可）。
 
         let client = Arc::new(FakeMcpClient::default());
-        // 発話者 alice: 自分の許可 + システムレベルのみ（bob の許可は混ざらない）。
-        let provider = McpProvider::discover(db, client, "system_default", "alice").await;
+        let provider = McpProvider::discover(db, client, "b1").await;
         let names: Vec<String> = provider
             .list(&secretary_ctx())
             .iter()
             .map(|d| d.name.as_str().to_owned())
             .collect();
         assert!(names.contains(&format!("mcp:mcp{alice_sid}_a")));
+        assert!(names.contains(&format!("mcp:mcp{bob_sid}_b")));
         assert!(names.contains(&format!("mcp:mcp{sys_sid}_s")));
-        assert!(
-            !names.iter().any(|n| n.contains(&format!("mcp{bob_sid}_"))),
-            "他人(bob)が付与したサーバーは発話者(alice)へ露出しない: {names:?}"
-        );
+    }
+
+    #[tokio::test]
+    async fn system_bot_gets_no_mcp_tools() {
+        let (db, path) = fresh_db();
+        // システム Bot に許可が残っていても、システムレベル登録があっても MCP ツールは出さない。
+        let sid = seed_server(&path, Some("alice"), "AliceMcp", r#"[{"name":"a"}]"#, 1);
+        seed_server(&path, None, "SysMcp", r#"[{"name":"s"}]"#, 1);
+        grant(&path, "system_default", "alice", sid);
+
+        let client = Arc::new(FakeMcpClient::default());
+        let provider = McpProvider::discover(db, client.clone(), "system_default").await;
+        let mut ctx = secretary_ctx();
+        ctx.bot_id = BotId::system_default();
+        assert!(provider.list(&ctx).is_empty());
+        let name = ToolName::namespaced("mcp", &format!("mcp{sid}_a")).unwrap();
+        let err = provider.invoke(&name, json!({}), &ctx).await.unwrap_err();
+        assert!(matches!(err, ToolError::UnknownTool(_)));
+        assert!(client.calls.lock().unwrap().is_empty());
     }
 
     #[tokio::test]
     async fn invoke_rejects_when_server_disabled_after_discovery() {
         let (db, path) = fresh_db();
         let sid = seed_server(&path, Some("alice"), "MyMcp", r#"[{"name":"echo"}]"#, 1);
-        grant(&path, "system_default", "alice", sid);
+        grant(&path, "b1", "alice", sid);
         let client = Arc::new(FakeMcpClient::default());
-        let provider = McpProvider::discover(db, client.clone(), "system_default", "alice").await;
+        let provider = McpProvider::discover(db, client.clone(), "b1").await;
         // 探索後にサーバーを無効化 → 呼び出し時の再検証で弾く（§4.4.3）。
         raw(&path)
             .execute(

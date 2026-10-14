@@ -185,13 +185,12 @@ impl<'a> CredentialAccessRepo<'a> {
             .await
     }
 
-    /// 登録した認証情報を「owner 本人の全 Bot ＋ 共有秘書（system_default）」へ利用許可する。
+    /// 登録した認証情報を owner 本人の全 Bot へ利用許可する。
     ///
-    /// Node `credentialRoutes.grantCredentialToOwnerBots`（register ルート）パリティ:
-    /// `listBotsOwnedBy(owner)`（system_default 以外の所有 Bot）∪ `{system_default}` の各 Bot へ
-    /// 冪等付与する。付与は全て owner 本人のスコープなのでクロステナント露出は起きない
-    /// （system_default は「発話者 = owner の会話」でのみ当該許可が効く）。所有 Bot 取得と付与を
-    /// 単一書き込みトランザクションで原子的に行う（部分適用を避ける）。`service_name` は正規化する。
+    /// Node `credentialRoutes.grantCredentialToOwnerBots`（register ルート）由来: `listBotsOwnedBy(owner)`
+    /// の各 Bot へ冪等付与する。システム Bot（`system_default`）は案内役でツールを使わないため、
+    /// owner が持ち主でも対象にしない。所有 Bot 取得と付与を単一書き込みトランザクションで原子的に
+    /// 行う（部分適用を避ける）。`service_name` は正規化する。
     ///
     /// # Errors
     /// 書き込み失敗時 [`DbError`]。
@@ -204,7 +203,7 @@ impl<'a> CredentialAccessRepo<'a> {
         self.writer
             .transaction(move |tx| {
                 // owner 本人が所有する Bot（system_default 以外）を集める。
-                let mut bot_ids: Vec<String> = {
+                let bot_ids: Vec<String> = {
                     let mut stmt = tx
                         .prepare(
                             "SELECT id FROM bots WHERE user_id = ?1 AND id != 'system_default'",
@@ -219,8 +218,6 @@ impl<'a> CredentialAccessRepo<'a> {
                     }
                     out
                 };
-                // 共有秘書は常に付与対象（Node `.add("system_default")`）。
-                bot_ids.push("system_default".to_owned());
                 for bot_id in &bot_ids {
                     tx.execute(
                         "INSERT OR IGNORE INTO bot_credential_access (bot_id, owner_id, service_name) \
@@ -354,21 +351,24 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn grant_to_owner_bots_covers_owned_and_system_default_only() {
+    async fn grant_to_owner_bots_covers_owned_bots_only() {
         let db = seed_db();
         let repo = CredentialAccessRepo::new(&db);
-        // owner の全 Bot（b1）＋ system_default へ冪等付与。正規化される。
+        // owner の所有 Bot（b1）へ冪等付与。正規化される。
         repo.grant_to_owner_bots("owner", "  GitHub ")
             .await
             .unwrap();
-        let mut bots = repo
+        let bots = repo
             .list_bot_ids_for_credential("owner", "github")
             .await
             .unwrap();
-        bots.sort();
-        assert_eq!(bots, vec!["b1".to_owned(), "system_default".to_owned()]);
+        assert_eq!(bots, vec!["b1".to_owned()]);
+        // システム Bot は owner が持ち主でも付与されない（案内役でツールを使わない）。
+        assert!(!repo
+            .is_granted("system_default", "owner", "github")
+            .await
+            .unwrap());
         // 他ユーザー所有 Bot（foreign）は付与されない（クロステナント露出しない）。
-        assert!(!bots.contains(&"foreign".to_owned()));
         assert!(!repo.is_granted("foreign", "owner", "github").await.unwrap());
         // 冪等: 再実行しても重複しない。
         repo.grant_to_owner_bots("owner", "github").await.unwrap();
@@ -376,7 +376,7 @@ mod tests {
             .list_bot_ids_for_credential("owner", "github")
             .await
             .unwrap();
-        assert_eq!(bots2.len(), 2);
+        assert_eq!(bots2.len(), 1);
     }
 
     #[tokio::test]

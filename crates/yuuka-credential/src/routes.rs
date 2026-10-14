@@ -91,7 +91,7 @@ async fn list(
     Ok(Json(Envelope::ok(CredentialListData { credentials })))
 }
 
-/// `POST /api/credentials/register` — 認証情報を暗号化保存し、owner 本人の全 Bot ＋ system_default へ
+/// `POST /api/credentials/register` — 認証情報を暗号化保存し、owner 本人の全 Bot（システム Bot を除く）へ
 /// 利用許可する（Node `credentialRoutes` register + `secretService.registerCredential` パリティ）。
 ///
 /// 検証失敗・暗号化不能はいずれも Node と同じ **400 `{success:false, message}`**（`WebError::Validation`）。
@@ -162,7 +162,7 @@ async fn register(
     let scope = UserScope::new(UserId::new(user_id.clone()), BotId::system_default());
     repo.save(&scope, &clean_service, clean_username, clean_url, enc)
         .await?;
-    // 登録＝利用可能を保証（owner 本人の全 Bot + system_default へ冪等付与・Node grantCredentialToOwnerBots）。
+    // 登録＝利用可能を保証（owner 本人の全 Bot へ冪等付与・システム Bot は除く・Node grantCredentialToOwnerBots）。
     CredentialAccessRepo::new(&db)
         .grant_to_owner_bots(&user_id, &clean_service)
         .await?;

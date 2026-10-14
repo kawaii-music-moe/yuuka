@@ -148,23 +148,6 @@ pub async fn get_bot(db: &Db, bot_id: &str) -> Result<Option<BotRow>, DbError> {
         .await
 }
 
-/// `bots` テーブルに `system_default` 行が存在しない場合の合成エントリ（UI 表示専用）。
-/// 実際の権限付与操作の前に [`ensure_system_default_bot`] でシードする。
-#[must_use]
-pub fn synthetic_system_default(user_id: &str) -> BotRow {
-    BotRow {
-        id: "system_default".to_owned(),
-        user_id: user_id.to_owned(),
-        name: "早瀬ユウカ".to_owned(),
-        suspended: false,
-        stopped: false,
-        has_token: false,
-        discord_username: None,
-        discord_avatar_url: None,
-        capabilities: Some(r#"["persona","memory","mcp","secretary"]"#.to_owned()),
-    }
-}
-
 /// オーナー所有 Bot 一覧（Node `listBotsOwnedBy`・`created_at ASC`）。共有・system_default 由来は含めない。
 ///
 /// # Errors
@@ -361,28 +344,6 @@ pub async fn get_server_owner(db: &Db, server_id: i64) -> Result<Option<Option<S
         .await
 }
 
-/// `system_default` が `bots` に存在しない場合にシードする（FK 満足のためのランタイム補完）。
-/// `bot_mcp_access.bot_id` / `bot_credential_access.bot_id` の FK は `bots(id)` を参照するため、
-/// 付与操作の前に `system_default` を存在保証する。既に存在する場合は OR IGNORE で no-op。
-/// `owner_id` = 付与操作者（最初の一人が実質オーナーになる）。
-///
-/// # Errors
-/// 書き込み失敗時 [`DbError`]。
-pub async fn ensure_system_default_bot(db: &Db, owner_id: &str) -> Result<(), DbError> {
-    let owner_id = owner_id.to_owned();
-    db.writer
-        .transaction(move |tx| {
-            tx.execute(
-                "INSERT OR IGNORE INTO bots (id, user_id, name, capabilities) \
-                 VALUES ('system_default', ?1, '早瀬ユウカ', '[\"persona\",\"memory\",\"mcp\",\"secretary\"]')",
-                params![owner_id],
-            )
-            .map_err(map_sqlite)?;
-            Ok(())
-        })
-        .await
-}
-
 /// Bot に MCP サーバー利用を許可する（冪等・Node `grantMcpToBot`）。`owner_id` は付与した呼び出し元。
 ///
 /// # Errors
@@ -408,35 +369,10 @@ pub async fn grant_mcp_to_bot(
         .await
 }
 
-/// Bot から MCP サーバー利用許可を取り消す（Node `revokeMcpFromBot`）。
-///
-/// # Errors
-/// 書き込み失敗時 [`DbError`]。
-pub async fn revoke_mcp_from_bot(
-    db: &Db,
-    bot_id: &str,
-    owner_id: &str,
-    server_id: i64,
-) -> Result<(), DbError> {
-    let bot_id = bot_id.to_owned();
-    let owner_id = owner_id.to_owned();
-    db.writer
-        .transaction(move |tx| {
-            tx.execute(
-                "DELETE FROM bot_mcp_access WHERE bot_id = ?1 AND owner_id = ?2 AND mcp_server_id = ?3",
-                params![bot_id, owner_id, server_id],
-            )
-            .map_err(map_sqlite)?;
-            Ok(())
-        })
-        .await
-}
-
 /// **bot-canonical な解除**：付与者（owner_id）を問わず、当該 bot から当該サーバーの許可を外す。
 ///
-/// 共有 bot（`system_default` 以外）の MCP 設定は共同編集のため、共有相手（A/B）のどちらが
-/// 付与したものでも解除できる（呼び出し側で bot アクセス権を検証済み前提）。**`system_default`
-/// には使わない**（共有秘書は発話者スコープ厳守＝[`revoke_mcp_from_bot`] で自分の付与分のみ解除）。
+/// 共有 bot の MCP 設定は共同編集のため、共有相手（A/B）のどちらが付与したものでも解除できる
+/// （呼び出し側で bot アクセス権を検証済み前提）。
 ///
 /// # Errors
 /// 書き込み失敗時 [`DbError`]。
@@ -743,8 +679,8 @@ mod tests {
         bot_dm_context_floor_key, clear_context_floor, context_floor_key, credential_exists,
         grant_credential_to_bot, grant_mcp_to_bot, is_guild_assistant, js_int,
         list_bot_grant_views, list_credential_names_for_bot, list_server_ids_for_bot,
-        parse_capabilities, preset_id_for, revoke_credential_from_bot, revoke_mcp_from_bot,
-        revoke_mcp_from_bot_any, set_bot_stopped,
+        parse_capabilities, preset_id_for, revoke_credential_from_bot, revoke_mcp_from_bot_any,
+        set_bot_stopped,
     };
     use yuuka_web::Db;
 
@@ -860,7 +796,7 @@ mod tests {
             .await
             .unwrap()
             .is_empty());
-        revoke_mcp_from_bot(&db, "b1", "owner", 7).await.unwrap();
+        revoke_mcp_from_bot_any(&db, "b1", 7).await.unwrap();
         assert!(list_server_ids_for_bot(&db, "b1", "owner")
             .await
             .unwrap()

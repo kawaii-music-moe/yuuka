@@ -330,7 +330,7 @@ async function saveCalendars(payload: {
 	}
 }
 
-// Bot 別 使用 Google アカウント割当（primary / none / account）。
+// 所有 Bot（システム Bot 以外）。認証情報・MCP の許可と Google アカウント割当の対象。
 const ownedBots = $derived(bots.filter((b) => !b.is_system_default));
 function assignValue(b: IntegratedBotView): string {
 	const gs = b.google_setting;
@@ -529,7 +529,7 @@ async function connectGoogle() {
 									>
 								</div>
 								<IntGrantChips
-									{bots}
+									bots={ownedBots}
 									grantedIds={credGrantedIds(c.service_name)}
 									ontoggle={(botId, granted) =>
 										toggleCred(botId, c.service_name, granted)}
@@ -624,7 +624,7 @@ async function connectGoogle() {
 									</div>
 								</div>
 								<IntGrantChips
-									{bots}
+									bots={ownedBots}
 									grantedIds={mcpGrantedIds(s.id)}
 									ontoggle={(botId, granted) => toggleMcp(botId, s.id, granted)}
 								/>

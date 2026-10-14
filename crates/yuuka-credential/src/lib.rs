@@ -362,7 +362,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
 
-    /// register: 暗号化保存 + owner 本人の全 Bot(system_default,b1) へ付与 + GET 一覧へ反映。
+    /// register: 暗号化保存 + owner 本人の Bot(b1) へ付与（システム Bot は除く）+ GET 一覧へ反映。
     /// 必須欠落は Node と同じ 400 `{success:false}`。
     #[tokio::test]
     async fn route_register_encrypts_and_grants_to_owner_bots() {
@@ -411,7 +411,8 @@ mod tests {
         let j: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(j["success"], serde_json::json!(false));
 
-        // 正常登録 → 200 success:true・正規化(github)保存・owner 全 Bot へ付与。
+        // 正常登録 → 200 success:true・正規化(github)保存・owner の Bot へ付与。
+        // system_default は owner が持ち主でも付与されない（案内役でツールを使わない）。
         let ok = app
             .clone()
             .oneshot(
@@ -433,16 +434,13 @@ mod tests {
             .unwrap();
         let j: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(j["success"], serde_json::json!(true));
-        assert_eq!(
-            granted_bots(&path, "u", "github"),
-            vec!["b1".to_owned(), "system_default".to_owned()]
-        );
+        assert_eq!(granted_bots(&path, "u", "github"), vec!["b1".to_owned()]);
 
-        // GET 一覧へ反映（system_default へ許可済み）。暗号化列は出ない。
+        // GET 一覧へ反映（b1 へ許可済み）。暗号化列は出ない。
         let list = app
             .oneshot(
                 Request::builder()
-                    .uri("/api/credentials")
+                    .uri("/api/credentials?botId=b1")
                     .header("cookie", "__Host-yuuka-session=good")
                     .body(Body::empty())
                     .unwrap(),

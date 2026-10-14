@@ -222,6 +222,26 @@ mod tests {
         seed_user(&path, "admin");
         seed_bot(&path, "system_default", "admin", None);
         seed_bot(&path, "b1", "owner", Some("ENC"));
+        // 過去にシステム Bot へ付いた許可（旧・共有秘書時代の名残）。
+        let conn = Connection::open(&path).unwrap();
+        conn.execute(
+            "INSERT INTO mcp_servers (id, user_id, name, endpoint_url) \
+             VALUES (7, 'owner', 'srv', 'https://ex.test')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO bot_mcp_access (bot_id, owner_id, mcp_server_id) \
+             VALUES ('system_default', 'owner', 7)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO bot_credential_access (bot_id, owner_id, service_name) \
+             VALUES ('system_default', 'owner', 'github')",
+            [],
+        )
+        .unwrap();
         let app = app_for(db, "owner");
 
         let resp = app
@@ -242,6 +262,9 @@ mod tests {
         assert_eq!(bots.len(), 2);
         assert_eq!(bots[0]["id"], "system_default");
         assert_eq!(bots[0]["is_system_default"], Value::Bool(true));
+        // システム Bot に残っている許可は返さない（許可の対象外）。
+        assert_eq!(bots[0]["granted_mcp_ids"], serde_json::json!([]));
+        assert_eq!(bots[0]["granted_credentials"], serde_json::json!([]));
         assert_eq!(bots[1]["id"], "b1");
         assert_eq!(bots[1]["is_system_default"], Value::Bool(false));
         // Null シーム → running/connected は false。
@@ -251,6 +274,149 @@ mod tests {
         assert_eq!(bots[1]["has_token"], Value::Bool(true));
         assert_eq!(bots[1]["preset"], "secretary");
         assert_eq!(bots[1]["google_setting"], "primary");
+    }
+
+    #[tokio::test]
+    async fn overview_omits_system_default_without_row() {
+        let (db, path) = fresh_db();
+        seed_user(&path, "owner");
+        seed_bot(&path, "b1", "owner", Some("ENC"));
+        let app = app_for(db, "owner");
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/integrated/overview")
+                    .header("cookie", "__Host-yuuka-session=good")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let j = body_json(resp).await;
+        // 初期セットアップ前（system_default 行が無い）は合成せず、所有 Bot だけを返す。
+        let bots = j["bots"].as_array().unwrap();
+        assert_eq!(bots.len(), 1);
+        assert_eq!(bots[0]["id"], "b1");
+    }
+
+    #[tokio::test]
+    async fn grants_forbidden_for_system_default() {
+        let (db, path) = fresh_db();
+        // admin がシステム Bot の持ち主でも、認証情報・MCP の許可の対象にできない。
+        seed_user(&path, "admin");
+        seed_bot(&path, "system_default", "admin", None);
+        let conn = Connection::open(&path).unwrap();
+        conn.execute(
+            "INSERT INTO mcp_servers (id, user_id, name, endpoint_url) \
+             VALUES (7, 'admin', 'srv', 'https://ex.test')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO credentials \
+               (user_id, service_name, username, encrypted_password, iv, auth_tag) \
+             VALUES ('admin', 'github', 'me', 'ENC', 'IV', 'TAG')",
+            [],
+        )
+        .unwrap();
+        let app = app_for(db, "admin");
+
+        let post = |uri: &'static str, body: &'static str| {
+            Request::builder()
+                .method("POST")
+                .uri(uri)
+                .header("cookie", "__Host-yuuka-session=good")
+                .header("content-type", "application/json")
+                .body(Body::from(body))
+                .unwrap()
+        };
+        for req in [
+            post(
+                "/api/integrated/grants/mcp",
+                r#"{"botId":"system_default","serverId":7,"granted":true}"#,
+            ),
+            post(
+                "/api/integrated/grants/mcp",
+                r#"{"botId":"system_default","serverId":7,"granted":false}"#,
+            ),
+            post(
+                "/api/integrated/grants/credential",
+                r#"{"botId":"system_default","serviceName":"github","granted":true}"#,
+            ),
+        ] {
+            let resp = app.clone().oneshot(req).await.unwrap();
+            assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+            let j = body_json(resp).await;
+            assert_eq!(j["message"], "対象Botへの権限がありません。");
+        }
+
+        // MCP の許可一覧（共同編集用）もシステム Bot は 403。
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/integrated/bots/mcp?botId=system_default")
+                    .header("cookie", "__Host-yuuka-session=good")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+        // 許可は 1 件も作られていない。
+        let count = |table: &str| -> i64 {
+            conn.query_row(
+                &format!("SELECT COUNT(*) FROM {table} WHERE bot_id = 'system_default'"),
+                [],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(count("bot_mcp_access"), 0);
+        assert_eq!(count("bot_credential_access"), 0);
+    }
+
+    #[tokio::test]
+    async fn grants_do_not_create_system_default_row() {
+        let (db, path) = fresh_db();
+        // 初期セットアップ前（system_default 行が無い）に一般ユーザーが操作しても、行は作られない。
+        seed_user(&path, "owner");
+        Connection::open(&path)
+            .unwrap()
+            .execute(
+                "INSERT INTO mcp_servers (id, user_id, name, endpoint_url) \
+                 VALUES (7, 'owner', 'srv', 'https://ex.test')",
+                [],
+            )
+            .unwrap();
+        let app = app_for(db, "owner");
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/integrated/grants/mcp")
+                    .header("cookie", "__Host-yuuka-session=good")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"botId":"system_default","serverId":7,"granted":true}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        let rows: i64 = Connection::open(&path)
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM bots WHERE id = 'system_default'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(rows, 0);
     }
 
     #[tokio::test]

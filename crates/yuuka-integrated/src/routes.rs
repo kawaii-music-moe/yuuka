@@ -40,11 +40,9 @@ pub(crate) async fn overview(
     let user_id = &user.0.discord_id;
     let db = &state.db;
 
-    // 対象 Bot = 共有秘書(system_default) + 所有 Bot。system_default はヘルス表示のみ。
-    // DB 未登録時はフォールバックの合成エントリを使う（MCP 付与 UI を常に表示するため）。
-    let system_default = repo::get_bot(db, "system_default")
-        .await?
-        .unwrap_or_else(|| repo::synthetic_system_default(user_id));
+    // 対象 Bot = システム Bot(system_default) + 所有 Bot。システム Bot はヘルス表示のみで、
+    // 認証情報・MCP の許可の対象にしない（行が無い＝初期セットアップ前は一覧に出さない）。
+    let system_default = repo::get_bot(db, "system_default").await?;
     let owned: Vec<repo::BotRow> = repo::list_bots_owned_by(db, user_id)
         .await?
         .into_iter()
@@ -52,7 +50,9 @@ pub(crate) async fn overview(
         .collect();
 
     let mut records: Vec<(repo::BotRow, bool)> = Vec::new();
-    records.push((system_default, true));
+    if let Some(system_default) = system_default {
+        records.push((system_default, true));
+    }
     for b in owned {
         records.push((b, false));
     }
@@ -61,8 +61,15 @@ pub(crate) async fn overview(
     for (bot, is_system_default) in records {
         let caps = repo::parse_capabilities(bot.capabilities.as_deref());
         let status = rt.lifecycle.run_status(&bot.id);
-        let granted_mcp_ids = repo::list_server_ids_for_bot(db, &bot.id, user_id).await?;
-        let granted_credentials = repo::list_credential_names_for_bot(db, &bot.id, user_id).await?;
+        // システム Bot はツールを使わないため、過去に付いた許可が残っていても返さない。
+        let (granted_mcp_ids, granted_credentials) = if is_system_default {
+            (Vec::new(), Vec::new())
+        } else {
+            (
+                repo::list_server_ids_for_bot(db, &bot.id, user_id).await?,
+                repo::list_credential_names_for_bot(db, &bot.id, user_id).await?,
+            )
+        };
         let google_setting = yuuka_google::repo::get_bot_google_mode(db, &bot.id)
             .await?
             .to_json();
@@ -263,7 +270,7 @@ pub(crate) async fn grants_mcp(
     let db = &state.db;
     let bot_id = body_bot_id(&body);
     let granted = body.get("granted") == Some(&Value::Bool(true));
-    // 共有 bot の MCP は共同編集：オーナー本人 or active 共有相手が管理できる（system_default は常に可）。
+    // 共有 bot の MCP は共同編集：オーナー本人 or active 共有相手が管理できる（system_default は不可）。
     if !can_manage_bot_mcp(db, user_id, &bot_id).await? {
         return Ok(forbidden("対象Botへの権限がありません。"));
     }
@@ -278,14 +285,7 @@ pub(crate) async fn grants_mcp(
         if !matches!(&owner, Some(Some(o)) if o == user_id) {
             return Ok(forbidden("自分が登録したMCPサーバーのみ許可できます。"));
         }
-        // system_default は bots テーブルに未登録の場合があるため FK 満足のため先にシードする。
-        if bot_id == "system_default" {
-            repo::ensure_system_default_bot(db, user_id).await?;
-        }
         repo::grant_mcp_to_bot(db, &bot_id, user_id, server_id).await?;
-    } else if bot_id == "system_default" {
-        // 共有秘書は発話者スコープ厳守＝**自分の付与分のみ**解除（クロステナント防御）。
-        repo::revoke_mcp_from_bot(db, &bot_id, user_id, server_id).await?;
     } else {
         // 共有 bot は bot-canonical 解除＝付与者を問わず外せる（共同編集・bot アクセス権は上で検証済み）。
         repo::revoke_mcp_from_bot_any(db, &bot_id, server_id).await?;
@@ -296,7 +296,7 @@ pub(crate) async fn grants_mcp(
 /// 共有 bot の MCP サーバー（bot-canonical）と、呼び出し元が付与できる自分の未付与サーバーを返す。
 ///
 /// 共有相手（オーナー or active 共有）が「この Bot が使う MCP」を閲覧・共同編集するための読み取り
-/// 経路。`system_default`（共有秘書）は発話者スコープ厳守のため**自分の付与分（＋システム）のみ**返す。
+/// 経路。`system_default`（システム Bot）は MCP を使わないため 403。
 pub(crate) async fn mcp_grants(
     user: AuthenticatedUser,
     State(state): State<AppState>,
@@ -308,15 +308,14 @@ pub(crate) async fn mcp_grants(
     // system_default へ畳む＝全ルート共通のフォールバック契約）。has_bot_access + get_bot の二重問い合わせを避ける。
     let scope = resolve_scope(&user.0, db, q.bot_id.as_deref()).await?;
     let bot_id = scope.bot_id().as_str();
-    let is_system_default = bot_id == "system_default";
-    // オーナー本人か（所有 bot は bot_owner_id==自分・共有 bot は !=自分・system_default は None）。
+    // システム Bot は MCP の許可の対象外（他ユーザーが過去に付けた許可を見せない）。
+    if bot_id == "system_default" {
+        return Ok(forbidden("対象Botへの権限がありません。"));
+    }
+    // オーナー本人か（所有 bot は bot_owner_id==自分・共有 bot は !=自分）。
     let is_owner = scope.bot_owner_id().map(|o| o.as_str()) == Some(user_id.as_str());
 
-    let mut grants = repo::list_bot_grant_views(db, bot_id).await?;
-    // 共有秘書は自分の付与分（＋システム）のみに絞り、他テナントの付与を隠す。
-    if is_system_default {
-        grants.retain(|g| g.system || g.granter.as_deref() == Some(user_id.as_str()));
-    }
+    let grants = repo::list_bot_grant_views(db, bot_id).await?;
     let granted_ids: std::collections::HashSet<i64> = grants.iter().map(|g| g.id).collect();
     let servers: Vec<Value> = grants
         .iter()
@@ -378,9 +377,6 @@ pub(crate) async fn grants_credential(
         return Ok(not_found("対象の認証情報が見つかりません。"));
     }
     if granted {
-        if bot_id == "system_default" {
-            repo::ensure_system_default_bot(db, user_id).await?;
-        }
         repo::grant_credential_to_bot(db, &bot_id, user_id, &raw_service).await?;
     } else {
         repo::revoke_credential_from_bot(db, &bot_id, user_id, &raw_service).await?;
@@ -581,24 +577,22 @@ async fn suspended_and_token_guards(
     Ok(None)
 }
 
-/// リソース許可の対象 Bot として有効か（Node `isGrantTargetBot`）。system_default は常に可
-/// （DB 未登録でも付与前に [`repo::ensure_system_default_bot`] が自動シードする）・
-/// それ以外は owner 本人所有のみ可。
+/// リソース許可の対象 Bot として有効か（Node `isGrantTargetBot`）。owner 本人所有のみ可。
+/// システム Bot（`system_default`）は案内役でツールを使わないため、持ち主（管理者）でも不可。
 async fn is_grant_target_bot(
     db: &yuuka_web::Db,
     user_id: &str,
     bot_id: &str,
 ) -> Result<bool, ApiError> {
-    // system_default は DB 未登録でも常に許可（後続で ensure_system_default_bot が自動シードする）。
     if bot_id == "system_default" {
-        return Ok(true);
+        return Ok(false);
     }
     let bot = repo::get_bot(db, bot_id).await?;
     Ok(bot.is_some_and(|b| b.user_id == user_id))
 }
 
 /// 共有 bot の **MCP** を管理（付与/解除）できるユーザーか。オーナー本人 or `active` 共有相手
-/// （共同編集）。`system_default` は常に可（付与前に自動シード・解除は発話者スコープ厳守）。
+/// （共同編集）。システム Bot（`system_default`）は MCP を使わないため不可。
 ///
 /// 認証情報（`grants_credential`）・Google（`grants_google`）は対象外（オーナー限定のまま）。MCP のみ
 /// 共有相手へ開放するため [`is_grant_target_bot`]（オーナー限定）とは別ヘルパにしている。
@@ -607,6 +601,10 @@ async fn can_manage_bot_mcp(
     user_id: &str,
     bot_id: &str,
 ) -> Result<bool, ApiError> {
+    // `repo::has_bot_access` は system_default を常に可とするため、先に除外する。
+    if bot_id == "system_default" {
+        return Ok(false);
+    }
     Ok(repo::has_bot_access(db, user_id, bot_id).await?)
 }
 
