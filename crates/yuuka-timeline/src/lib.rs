@@ -85,6 +85,13 @@ mod tests {
                 )
                 .expect("seed user");
             }
+            // 管理画面のデータ API は `botId` 必須（#139）。`u` の所有 Bot `mybot` と、`u` が
+            // 触れない `otherbot` を入れておく。
+            conn.execute_batch(
+                "INSERT OR IGNORE INTO bots (id, user_id, name) VALUES ('mybot', 'u', 'mine');
+                 INSERT OR IGNORE INTO bots (id, user_id, name) VALUES ('otherbot', 'other', 'theirs');",
+            )
+            .expect("seed bots");
         }
         db
     }
@@ -371,7 +378,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/api/timeline/record")
+                    .uri("/api/timeline/record?botId=mybot")
                     .header("cookie", "__Host-yuuka-session=good")
                     .header("content-type", "application/json")
                     .body(Body::from(
@@ -386,7 +393,7 @@ mod tests {
         let list = app
             .oneshot(
                 Request::builder()
-                    .uri("/api/timeline/day?date=2026-07-06")
+                    .uri("/api/timeline/day?date=2026-07-06&botId=mybot")
                     .header("cookie", "__Host-yuuka-session=good")
                     .body(Body::empty())
                     .unwrap(),
@@ -415,7 +422,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/api/timeline/record")
+                    .uri("/api/timeline/record?botId=mybot")
                     .header("cookie", "__Host-yuuka-session=good")
                     .header("content-type", "application/json")
                     .body(Body::from(
@@ -440,7 +447,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/api/timeline/record")
+                    .uri("/api/timeline/record?botId=mybot")
                     .header("cookie", "__Host-yuuka-session=good")
                     .header("content-type", "application/json")
                     .body(Body::from(r#"{"date":"2026-07-06","type":"expense"}"#))
@@ -483,7 +490,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/api/timeline/media")
+                    .uri("/api/timeline/media?botId=mybot")
                     .header("cookie", "__Host-yuuka-session=good")
                     .header("content-type", "application/json")
                     .body(Body::from(serde_json::to_vec(&body).unwrap()))
@@ -554,7 +561,7 @@ mod tests {
         let resp = app()
             .oneshot(
                 Request::builder()
-                    .uri("/api/timeline/day")
+                    .uri("/api/timeline/day?botId=mybot")
                     .header("cookie", "__Host-yuuka-session=good")
                     .body(Body::empty())
                     .unwrap(),
@@ -574,7 +581,7 @@ mod tests {
         let resp = app()
             .oneshot(
                 Request::builder()
-                    .uri("/api/timeline/day?date=2026-07-06")
+                    .uri("/api/timeline/day?date=2026-07-06&botId=mybot")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -624,7 +631,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/api/timeline/record")
+                    .uri("/api/timeline/record?botId=mybot")
                     .header("cookie", "__Host-yuuka-session=good")
                     .header("content-type", "application/json")
                     .body(Body::from(
@@ -644,6 +651,58 @@ mod tests {
         assert!(j["record"]["media_type"].is_null());
         assert!(j["record"]["expense_id"].is_null());
         assert!(j["record"]["expense_category"].is_null());
+    }
+
+    /// #139: Bot 未指定・`system_default` は 403、アクセスできない Bot は 404（システム Bot へ
+    /// フォールバックしない）。
+    #[tokio::test]
+    async fn route_rejects_system_and_inaccessible_bot() {
+        let app = app();
+        for (method, uri, status) in [
+            (
+                "GET",
+                "/api/timeline/day?date=2026-07-06",
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                "GET",
+                "/api/timeline/day?date=2026-07-06&botId=system_default",
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                "GET",
+                "/api/timeline/day?date=2026-07-06&botId=otherbot",
+                StatusCode::NOT_FOUND,
+            ),
+            ("POST", "/api/timeline/record", StatusCode::FORBIDDEN),
+            (
+                "POST",
+                "/api/timeline/record?botId=system_default",
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                "POST",
+                "/api/timeline/record?botId=otherbot",
+                StatusCode::NOT_FOUND,
+            ),
+        ] {
+            let resp = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(method)
+                        .uri(uri)
+                        .header("cookie", "__Host-yuuka-session=good")
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            r#"{"date":"2026-07-06","type":"memo","title":"t"}"#,
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), status, "{method} {uri}");
+        }
     }
 
     // ── day_plan_blocks（plan CRUD）──────────────────────────────────────────────
@@ -857,7 +916,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/api/timeline/plan")
+                    .uri("/api/timeline/plan?botId=mybot")
                     .header("cookie", "__Host-yuuka-session=good")
                     .header("content-type", "application/json")
                     .body(Body::from(
@@ -885,7 +944,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/api/timeline/plan/update")
+                    .uri("/api/timeline/plan/update?botId=mybot")
                     .header("cookie", "__Host-yuuka-session=good")
                     .header("content-type", "application/json")
                     .body(Body::from(format!(r#"{{"id":{id},"title":"打合せ"}}"#)))
@@ -905,7 +964,7 @@ mod tests {
             .clone()
             .oneshot(
                 Request::builder()
-                    .uri("/api/timeline/day?date=2026-07-06")
+                    .uri("/api/timeline/day?date=2026-07-06&botId=mybot")
                     .header("cookie", "__Host-yuuka-session=good")
                     .body(Body::empty())
                     .unwrap(),
@@ -925,7 +984,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/api/timeline/plan/delete")
+                    .uri("/api/timeline/plan/delete?botId=mybot")
                     .header("cookie", "__Host-yuuka-session=good")
                     .header("content-type", "application/json")
                     .body(Body::from(format!(r#"{{"id":{id}}}"#)))
@@ -948,7 +1007,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/api/timeline/plan")
+                    .uri("/api/timeline/plan?botId=mybot")
                     .header("cookie", "__Host-yuuka-session=good")
                     .header("content-type", "application/json")
                     .body(Body::from(r#"{"date":"2026-07-06","type":"event"}"#))
@@ -966,7 +1025,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/api/timeline/plan/update")
+                    .uri("/api/timeline/plan/update?botId=mybot")
                     .header("cookie", "__Host-yuuka-session=good")
                     .header("content-type", "application/json")
                     .body(Body::from(r#"{"id":424242,"title":"x"}"#))
@@ -984,7 +1043,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/api/timeline/plan/update")
+                    .uri("/api/timeline/plan/update?botId=mybot")
                     .header("cookie", "__Host-yuuka-session=good")
                     .header("content-type", "application/json")
                     .body(Body::from(r#"{"id":0,"title":"x"}"#))
@@ -1001,7 +1060,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/api/timeline/plan")
+                    .uri("/api/timeline/plan?botId=mybot")
                     .header("content-type", "application/json")
                     .body(Body::from(
                         r#"{"date":"2026-07-06","type":"event","title":"x"}"#,

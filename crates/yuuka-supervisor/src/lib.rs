@@ -167,6 +167,12 @@ mod tests {
                 [],
             )
             .expect("seed user");
+            // 管理画面のデータ API は `botId` 必須（#139）。"u" の所有 Bot を seed する。
+            conn.execute(
+                "INSERT OR IGNORE INTO bots (id, user_id, name) VALUES ('mybot', 'u', 'mine')",
+                [],
+            )
+            .expect("seed bot");
         }
         db
     }
@@ -297,7 +303,7 @@ mod tests {
         let tasks = app()
             .oneshot(
                 Request::builder()
-                    .uri("/api/tasks")
+                    .uri("/api/tasks?botId=mybot")
                     .header("cookie", "__Host-yuuka-session=good")
                     .body(Body::empty())
                     .unwrap(),
@@ -305,16 +311,30 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(tasks.status(), StatusCode::OK);
+
+        // #139: botId 未指定はシステム Bot へフォールバックせず 403。
+        let tasks_no_bot = app()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/tasks")
+                    .header("cookie", "__Host-yuuka-session=good")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(tasks_no_bot.status(), StatusCode::FORBIDDEN);
     }
 
     #[tokio::test]
     async fn csrf_layer_applies_to_domain_post() {
         // 共通レイヤ（CSRF）がドメイン POST にも被さる: Cookie×cross-site → 403。
+        // botId は有効な Bot を渡す（Bot 未指定の 403 と取り違えない）。
         let resp = app()
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/api/tasks/add")
+                    .uri("/api/tasks/add?botId=mybot")
                     .header("cookie", "__Host-yuuka-session=good")
                     .header("sec-fetch-site", "cross-site")
                     .header("content-type", "application/json")

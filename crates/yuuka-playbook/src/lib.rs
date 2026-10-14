@@ -417,8 +417,24 @@ mod tests {
                 role: Role::User,
             },
         });
-        let state = AppState::new(auth, WebConfig::default(), seed_db());
+        let (db, path) = seed_db_with_path();
+        seed_bots(&path);
+        let state = AppState::new(auth, WebConfig::default(), db);
         super::routes().with_state(state)
+    }
+
+    /// 管理画面のデータ API は `botId` 必須（#139）。`u` の所有 Bot `mybot` と、`u` が触れない
+    /// `otherbot` を入れておく（bots テーブルは `Db::open` のマイグレーションが作る。users 行は
+    /// 作らないので FK は切る）。
+    fn seed_bots(path: &std::path::Path) {
+        rusqlite::Connection::open(path)
+            .expect("seed bots conn")
+            .execute_batch(
+                "PRAGMA foreign_keys = OFF;
+                 INSERT OR IGNORE INTO bots (id, user_id, name) VALUES ('mybot', 'u', 'mine');
+                 INSERT OR IGNORE INTO bots (id, user_id, name) VALUES ('otherbot', 'other', 'theirs');",
+            )
+            .expect("seed bots");
     }
 
     #[tokio::test]
@@ -429,7 +445,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/api/playbooks/save")
+                    .uri("/api/playbooks/save?botId=mybot")
                     .header("cookie", "__Host-yuuka-session=good")
                     .header("content-type", "application/json")
                     .body(Body::from(
@@ -444,7 +460,7 @@ mod tests {
         let list = app
             .oneshot(
                 Request::builder()
-                    .uri("/api/playbooks")
+                    .uri("/api/playbooks?botId=mybot")
                     .header("cookie", "__Host-yuuka-session=good")
                     .body(Body::empty())
                     .unwrap(),
@@ -471,7 +487,7 @@ mod tests {
         let resp = app()
             .oneshot(
                 Request::builder()
-                    .uri("/api/playbooks")
+                    .uri("/api/playbooks?botId=mybot")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -514,7 +530,7 @@ mod tests {
         // playbook を先に作らないと schedule save は 400（マクロが見つかりません）。
         let pb = post_json(
             &app,
-            "/api/playbooks/save",
+            "/api/playbooks/save?botId=mybot",
             r#"{"name":"daily","title":"Daily","steps":"go"}"#,
         )
         .await;
@@ -523,7 +539,7 @@ mod tests {
         // schedules/save 成功 → 200 + {success, message, schedule}。
         let save = post_json(
             &app,
-            "/api/playbooks/schedules/save",
+            "/api/playbooks/schedules/save?botId=mybot",
             r#"{"playbook_name":"daily","cron_expression":"0 8 * * *"}"#,
         )
         .await;
@@ -545,7 +561,7 @@ mod tests {
             .clone()
             .oneshot(
                 Request::builder()
-                    .uri("/api/playbooks/schedules")
+                    .uri("/api/playbooks/schedules?botId=mybot")
                     .header("cookie", "__Host-yuuka-session=good")
                     .body(Body::empty())
                     .unwrap(),
@@ -559,7 +575,7 @@ mod tests {
         // toggle（無効化）→ 200 + 無効化メッセージ。
         let toggle = post_json(
             &app,
-            "/api/playbooks/schedules/toggle",
+            "/api/playbooks/schedules/toggle?botId=mybot",
             // format! を避け固定 id=1（AUTOINCREMENT の最初の行）。
             r#"{"id":1,"enabled":false}"#,
         )
@@ -573,7 +589,12 @@ mod tests {
         );
 
         // delete → 200 + 削除メッセージ。
-        let del = post_json(&app, "/api/playbooks/schedules/delete", r#"{"id":1}"#).await;
+        let del = post_json(
+            &app,
+            "/api/playbooks/schedules/delete?botId=mybot",
+            r#"{"id":1}"#,
+        )
+        .await;
         assert_eq!(del.status(), StatusCode::OK);
         let dj = body_json(del).await;
         assert_eq!(
@@ -587,7 +608,7 @@ mod tests {
         let app = app();
         let resp = post_json(
             &app,
-            "/api/playbooks/schedules/save",
+            "/api/playbooks/schedules/save?botId=mybot",
             r#"{"playbook_name":"","cron_expression":""}"#,
         )
         .await;
@@ -605,7 +626,7 @@ mod tests {
         let app = app();
         let resp = post_json(
             &app,
-            "/api/playbooks/schedules/save",
+            "/api/playbooks/schedules/save?botId=mybot",
             r#"{"playbook_name":"ghost","cron_expression":"0 8 * * *"}"#,
         )
         .await;
@@ -622,7 +643,7 @@ mod tests {
         let app = app();
         let resp = post_json(
             &app,
-            "/api/playbooks/schedules/toggle",
+            "/api/playbooks/schedules/toggle?botId=mybot",
             r#"{"enabled":true}"#,
         )
         .await;
@@ -634,7 +655,7 @@ mod tests {
     #[tokio::test]
     async fn route_delete_missing_id_400() {
         let app = app();
-        let resp = post_json(&app, "/api/playbooks/schedules/delete", r#"{}"#).await;
+        let resp = post_json(&app, "/api/playbooks/schedules/delete?botId=mybot", r#"{}"#).await;
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
         let j = body_json(resp).await;
         assert_eq!(j["message"], serde_json::json!("idは必須です。"));
@@ -645,7 +666,7 @@ mod tests {
         let app = app();
         let resp = post_json(
             &app,
-            "/api/playbooks/schedules/toggle",
+            "/api/playbooks/schedules/toggle?botId=mybot",
             r#"{"id":999,"enabled":true}"#,
         )
         .await;
@@ -657,13 +678,52 @@ mod tests {
         );
     }
 
+    /// #139: Bot 未指定・`system_default` は 403、アクセスできない Bot は 404（システム Bot へ
+    /// フォールバックしない）。bot 横断の schedules 一覧も同じく Bot を要する。
+    #[tokio::test]
+    async fn route_rejects_system_and_inaccessible_bot() {
+        let app = app();
+        for path in [
+            "/api/playbooks",
+            "/api/playbooks/schedules",
+            "/api/playbooks/runs",
+        ] {
+            for (query, status) in [
+                ("", StatusCode::FORBIDDEN),
+                ("?botId=system_default", StatusCode::FORBIDDEN),
+                ("?botId=otherbot", StatusCode::NOT_FOUND),
+            ] {
+                let uri = format!("{path}{query}");
+                let resp = app
+                    .clone()
+                    .oneshot(
+                        Request::builder()
+                            .uri(&uri)
+                            .header("cookie", "__Host-yuuka-session=good")
+                            .body(Body::empty())
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(resp.status(), status, "{uri}");
+            }
+        }
+        let save = post_json(
+            &app,
+            "/api/playbooks/save",
+            r#"{"name":"pb","title":"PB","steps":"go","botId":"system_default"}"#,
+        )
+        .await;
+        assert_eq!(save.status(), StatusCode::FORBIDDEN);
+    }
+
     #[tokio::test]
     async fn route_runs_empty_ok() {
         let app = app();
         let resp = app
             .oneshot(
                 Request::builder()
-                    .uri("/api/playbooks/runs")
+                    .uri("/api/playbooks/runs?botId=mybot")
                     .header("cookie", "__Host-yuuka-session=good")
                     .body(Body::empty())
                     .unwrap(),

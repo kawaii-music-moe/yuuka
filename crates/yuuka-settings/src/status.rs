@@ -1,7 +1,7 @@
 //! `GET /api/status` — ユーザー個別ダッシュボードの集計（Node `settingsRoutes.ts` `/api/status` パリティ）。
 //!
-//! 秘書業務データは `(user_id, bot_id)` スコープで集計する。`?botId=` はアクセス検証を通ったときのみ採用し、
-//! それ以外は `system_default` へフォールバックする（`resolveBotId` と一致）。Google カレンダー一覧は連携済み
+//! 秘書業務データは `(user_id, bot_id)` スコープで集計する。`?botId=` は必須で、未指定・`system_default` は 403、
+//! アクセスできない Bot は 404（システム Bot へはフォールバックしない）。Google カレンダー一覧は連携済み
 //! （primary アカウントあり）のときのみ [`CalendarPort`](yuuka_google::CalendarPort) 経由で取得する。
 
 use std::sync::Arc;
@@ -46,7 +46,7 @@ pub(crate) async fn status(
 ) -> Result<Response, ApiError> {
     let user_id = &user.0.discord_id;
 
-    // ダッシュボードは選択中の Bot スコープで集計する（アクセス不可は system_default）。
+    // ダッシュボードは選択中の Bot スコープで集計する（未指定・system_default は 403、アクセス不可は 404）。
     // 共通の resolve_scope で bot アクセス検証 + オーナー解決を行う。適用中ペルソナだけは
     // owner-canonical（共有 bot はオーナー基準・runtime と一致）、その他の秘書業務データは
     // 発話ユーザー自身で集計する。

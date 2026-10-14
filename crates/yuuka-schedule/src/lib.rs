@@ -81,7 +81,23 @@ mod tests {
             let conn = rusqlite::Connection::open(&path).expect("seed db");
             conn.execute_batch(SCHEDULES_DDL).expect("create schedules");
         }
-        Db::open(&path).expect("open db")
+        let db = Db::open(&path).expect("open db");
+        seed_bots(&path);
+        db
+    }
+
+    /// 管理画面のデータ API は `botId` 必須（#139）。`u` の所有 Bot `mybot` と、`u` が触れない
+    /// `otherbot` を入れておく（bots テーブルは `Db::open` のマイグレーションが作る。users 行は
+    /// 作らないので FK は切る）。
+    fn seed_bots(path: &std::path::Path) {
+        rusqlite::Connection::open(path)
+            .expect("seed bots conn")
+            .execute_batch(
+                "PRAGMA foreign_keys = OFF;
+                 INSERT OR IGNORE INTO bots (id, user_id, name) VALUES ('mybot', 'u', 'mine');
+                 INSERT OR IGNORE INTO bots (id, user_id, name) VALUES ('otherbot', 'other', 'theirs');",
+            )
+            .expect("seed bots");
     }
 
     fn scope(user: &str) -> UserScope {
@@ -305,7 +321,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/api/schedules/add")
+                    .uri("/api/schedules/add?botId=mybot")
                     .header("cookie", "__Host-yuuka-session=good")
                     .header("content-type", "application/json")
                     .body(Body::from(body))
@@ -318,7 +334,7 @@ mod tests {
         let list = app
             .oneshot(
                 Request::builder()
-                    .uri("/api/schedules?days=7")
+                    .uri("/api/schedules?days=7&botId=mybot")
                     .header("cookie", "__Host-yuuka-session=good")
                     .body(Body::empty())
                     .unwrap(),
@@ -345,13 +361,48 @@ mod tests {
         let resp = app()
             .oneshot(
                 Request::builder()
-                    .uri("/api/schedules")
+                    .uri("/api/schedules?botId=mybot")
                     .body(Body::empty())
                     .unwrap(),
             )
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    /// #139: Bot 未指定・`system_default` は 403、アクセスできない Bot は 404（システム Bot へ
+    /// フォールバックしない）。
+    #[tokio::test]
+    async fn route_rejects_system_and_inaccessible_bot() {
+        let app = app();
+        for (uri, status) in [
+            ("/api/schedules", StatusCode::FORBIDDEN),
+            ("/api/schedules?botId=system_default", StatusCode::FORBIDDEN),
+            ("/api/schedules?botId=otherbot", StatusCode::NOT_FOUND),
+            (
+                "/api/schedules/add?botId=system_default",
+                StatusCode::FORBIDDEN,
+            ),
+            ("/api/schedules/add?botId=otherbot", StatusCode::NOT_FOUND),
+        ] {
+            let method = if uri.contains("/add") { "POST" } else { "GET" };
+            let resp = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(method)
+                        .uri(uri)
+                        .header("cookie", "__Host-yuuka-session=good")
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            r#"{"title":"t","startAt":"2999-01-01 09:00:00"}"#,
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), status, "{method} {uri}");
+        }
     }
 
     /// M-12 golden: `POST /api/schedules/delete` は `200 {success:<bool>}`（`deletedId` 無し）。
@@ -364,7 +415,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/api/schedules/add")
+                    .uri("/api/schedules/add?botId=mybot")
                     .header("cookie", "__Host-yuuka-session=good")
                     .header("content-type", "application/json")
                     .body(Body::from(
@@ -386,7 +437,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/api/schedules/delete")
+                    .uri("/api/schedules/delete?botId=mybot")
                     .header("cookie", "__Host-yuuka-session=good")
                     .header("content-type", "application/json")
                     .body(Body::from(format!(r#"{{"id":{id}}}"#)))
@@ -408,7 +459,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/api/schedules/delete")
+                    .uri("/api/schedules/delete?botId=mybot")
                     .header("cookie", "__Host-yuuka-session=good")
                     .header("content-type", "application/json")
                     .body(Body::from(format!(r#"{{"id":{id}}}"#)))

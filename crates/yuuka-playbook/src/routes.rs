@@ -2,7 +2,7 @@
 //!
 //! 認可は [`AuthenticatedUser`] extractor で型強制、DB は `State<Db>` サブステートで取得、
 //! スコープは **共通の [`resolve_scope`]**（`?botId=` を bot アクセス認可つきで解決・
-//! 未アクセスは system_default にフォールバック）で束ねて repo に渡す。
+//! 未指定・`system_default` は 403、未アクセスは 404）で束ねて repo に渡す。
 //! 本ルータは supervisor 側で共通レイヤ（CSRF/body 上限）配下にマージされる。
 //!
 //! スコープ = コア CRUD（list/save/delete）＋定期実行スケジュール（schedules の
@@ -35,6 +35,13 @@ struct ListQuery {
     bot_id: Option<String>,
     #[serde(default)]
     query: Option<String>,
+}
+
+/// `?botId=` のみの query（schedules 一覧）。
+#[derive(Debug, Deserialize)]
+struct BotQuery {
+    #[serde(default, rename = "botId")]
+    bot_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -118,12 +125,14 @@ async fn delete(
 
 /// `GET /api/playbooks/schedules` — Node `listSchedules(userId)`（bot 横断・`user_id` スコープ）。
 ///
-/// Node は botId を読まない。scope の bot 部は使わないため `None` で解決する。
+/// 一覧自体は bot 横断だが、他の playbook ルートと同じく `?botId=` を解決する（未指定・
+/// `system_default` は 403、アクセス不可は 404。システム Bot のスコープでは読まない）。
 async fn list_schedules(
     user: AuthenticatedUser,
     State(db): State<Db>,
+    Query(q): Query<BotQuery>,
 ) -> Result<Json<Envelope<ScheduleListData>>, ApiError> {
-    let scope = resolve_scope(&user.0, &db, None).await?;
+    let scope = resolve_scope(&user.0, &db, q.bot_id.as_deref()).await?;
     let schedules = PlaybookRepo::new(&db).list_schedules(&scope).await?;
     Ok(Json(Envelope::ok(ScheduleListData { schedules })))
 }

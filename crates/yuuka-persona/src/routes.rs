@@ -3,8 +3,9 @@
 //! 認可は [`AuthenticatedUser`] extractor で型強制、DB は `State<Db>` サブステートで取得、
 //! スコープは **共通の [`resolve_scope`]** で束ねて repo に渡す。persona の owner キーは
 //! `UserScope::config_owner_id`＝**共有 bot ではオーナー**（owner-canonical・A/B 共同編集）・
-//! `system_default`／所有 bot では自分。従って list/save/delete/publish/activate/import は
-//! すべて botId を解決に使う（フロントは該当ルートを `scope:'bot'` で呼ぶ）。marketplace は
+//! 所有 bot では自分。従って list/save/delete/publish/activate/import は
+//! すべて botId を解決に使う（フロントは該当ルートを `scope:'bot'` で呼ぶ・`botId` 未指定と
+//! `system_default` は 403、アクセスできない Bot は 404）。marketplace は
 //! owner 非スコープの公開読み取り。本ルータは supervisor 側で共通レイヤ（CSRF/body 上限）配下へマージ。
 //!
 //! 参照スコープ = コア CRUD（list/save=create+update/delete）。activate/publish/marketplace/
@@ -22,7 +23,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use yuuka_core::WebError;
 use yuuka_types::{EmptyData, Envelope};
-use yuuka_web::{resolve_scope, ApiError, AppState, AuthenticatedUser, Db, ScopedJson};
+use yuuka_web::{resolve_scope, ApiError, AppState, AuthenticatedUser, Db, ScopeError, ScopedJson};
 
 use crate::dto::{Persona, PersonaData, PersonaListData, SavePersona, PERSONA_MAX_LENGTH};
 use crate::repo::PersonaRepo;
@@ -190,7 +191,7 @@ async fn import_persona(
     // 名前空間を左右する（共有 bot ではオーナー集合へ追加＝共同編集）。
     let scope = match resolve_scope(&user.0, &db, bot_id.as_deref()).await {
         Ok(s) => s,
-        Err(_) => return internal_error(),
+        Err(e) => return scope_error(e),
     };
     match PersonaRepo::new(&db).import_public(&scope, id).await {
         Ok(Some(persona)) => {
@@ -224,6 +225,14 @@ fn internal_error() -> Response {
         .into_response()
 }
 
+/// Bot スコープの解決失敗（Bot 未指定・システム Bot は 403、アクセス不可は 404、DB 失敗は 500）。
+fn scope_error(err: ScopeError) -> Response {
+    match err {
+        ScopeError::Db(_) => internal_error(),
+        other => other.into_response(),
+    }
+}
+
 /// id が整数でない/欠落時の 400（Node `!Number.isInteger(id)` 分岐・import/publish 共通）。
 fn missing_id() -> Response {
     (
@@ -252,7 +261,7 @@ async fn activate_persona(
 ) -> Response {
     let scope = match resolve_scope(&user.0, &db, bot_id.as_deref()).await {
         Ok(s) => s,
-        Err(_) => return internal_error(),
+        Err(e) => return scope_error(e),
     };
     let repo = PersonaRepo::new(&db);
     // null/欠落/空文字は「適用解除（既定へ）」（Node `id != null && id !== "" ? Number(id) : null`）。
@@ -330,7 +339,7 @@ async fn publish_persona(
     let is_public = input.is_public == Some(Value::Bool(true));
     let scope = match resolve_scope(&user.0, &db, bot_id.as_deref()).await {
         Ok(s) => s,
-        Err(_) => return internal_error(),
+        Err(e) => return scope_error(e),
     };
     match PersonaRepo::new(&db)
         .set_public(&scope, id, is_public)

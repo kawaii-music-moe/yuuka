@@ -70,7 +70,23 @@ mod tests {
             let conn = rusqlite::Connection::open(&path).expect("seed db");
             conn.execute_batch(PERSONAS_DDL).expect("create personas");
         }
-        Db::open(&path).expect("open db")
+        let db = Db::open(&path).expect("open db");
+        seed_bots(&path);
+        db
+    }
+
+    /// 管理画面のデータ API は `botId` 必須（#139）。`u` の所有 Bot `mybot` と、`u` が触れない
+    /// `otherbot` を入れておく（bots テーブルは `Db::open` のマイグレーションが作る。users 行は
+    /// 作らないので FK は切る）。
+    fn seed_bots(path: &std::path::Path) {
+        rusqlite::Connection::open(path)
+            .expect("seed bots conn")
+            .execute_batch(
+                "PRAGMA foreign_keys = OFF;
+                 INSERT OR IGNORE INTO bots (id, user_id, name) VALUES ('mybot', 'u', 'mine');
+                 INSERT OR IGNORE INTO bots (id, user_id, name) VALUES ('otherbot', 'other', 'theirs');",
+            )
+            .expect("seed bots");
     }
 
     fn scope(user: &str) -> UserScope {
@@ -364,7 +380,9 @@ mod tests {
             let conn = rusqlite::Connection::open(&path).expect("seed db");
             conn.execute_batch(PERSONAS_DDL).expect("create personas");
         }
-        (Db::open(&path).expect("open db"), path)
+        let db = Db::open(&path).expect("open db");
+        seed_bots(&path);
+        (db, path)
     }
 
     /// 公開/非公開ペルソナを直挿しする（publish 未移植のため raw で is_public を立てる）。作成 id を返す。
@@ -531,7 +549,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/api/personas/save")
+                    .uri("/api/personas/save?botId=mybot")
                     .header("cookie", "__Host-yuuka-session=good")
                     .header("content-type", "application/json")
                     .body(Body::from(r#"{"name":"hello","prompt":"be nice"}"#))
@@ -544,7 +562,7 @@ mod tests {
         let list = app
             .oneshot(
                 Request::builder()
-                    .uri("/api/personas")
+                    .uri("/api/personas?botId=mybot")
                     .header("cookie", "__Host-yuuka-session=good")
                     .body(Body::empty())
                     .unwrap(),
@@ -616,7 +634,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/api/personas/import")
+                    .uri("/api/personas/import?botId=mybot")
                     .header("cookie", "__Host-yuuka-session=good")
                     .header("content-type", "application/json")
                     .body(Body::from(format!(r#"{{"id":{pub_id}}}"#)))
@@ -644,7 +662,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/api/personas/import")
+                    .uri("/api/personas/import?botId=mybot")
                     .header("cookie", "__Host-yuuka-session=good")
                     .header("content-type", "application/json")
                     .body(Body::from(r#"{}"#))
@@ -664,7 +682,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/api/personas/import")
+                    .uri("/api/personas/import?botId=mybot")
                     .header("cookie", "__Host-yuuka-session=good")
                     .header("content-type", "application/json")
                     .body(Body::from(format!(r#"{{"id":{priv_id}}}"#)))
@@ -758,7 +776,7 @@ mod tests {
         // 公開: 200 success:true・Node 文言。
         let (st, j) = send_post(
             &app,
-            "/api/personas/publish",
+            "/api/personas/publish?botId=mybot",
             &format!(r#"{{"id":{mine},"isPublic":true}}"#),
         )
         .await;
@@ -769,7 +787,7 @@ mod tests {
         // 非公開に戻す: success:true・非公開文言。
         let (_, j) = send_post(
             &app,
-            "/api/personas/publish",
+            "/api/personas/publish?botId=mybot",
             &format!(r#"{{"id":{mine},"isPublic":false}}"#),
         )
         .await;
@@ -778,7 +796,7 @@ mod tests {
         // 非 bool isPublic は非公開扱い（Node 厳密 ===true）。他人のペルソナ → success:false。
         let (st, j) = send_post(
             &app,
-            "/api/personas/publish",
+            "/api/personas/publish?botId=mybot",
             &format!(r#"{{"id":{others},"isPublic":true}}"#),
         )
         .await;
@@ -790,7 +808,12 @@ mod tests {
             .contains("所有者ではありません"));
 
         // id 欠落 → 400。
-        let (st, j) = send_post(&app, "/api/personas/publish", r#"{"isPublic":true}"#).await;
+        let (st, j) = send_post(
+            &app,
+            "/api/personas/publish?botId=mybot",
+            r#"{"isPublic":true}"#,
+        )
+        .await;
         assert_eq!(st, StatusCode::BAD_REQUEST);
         assert_eq!(j["message"], serde_json::json!("id は必須です。"));
     }
@@ -859,7 +882,7 @@ mod tests {
         // 適用: 200「…を適用しました。」・active が mine になる。
         let (st, j) = send_post(
             &app,
-            "/api/personas/activate",
+            "/api/personas/activate?botId=mybot",
             &format!(r#"{{"id":{mine}}}"#),
         )
         .await;
@@ -868,7 +891,7 @@ mod tests {
         assert!(j["message"].as_str().unwrap().contains("適用しました"));
         assert_eq!(
             PersonaRepo::new(&db)
-                .active_persona_id(&scope("u"))
+                .active_persona_id(&scope_shared("u", "mybot", "u"))
                 .await
                 .unwrap(),
             Some(mine)
@@ -877,7 +900,7 @@ mod tests {
         // 他人のペルソナ → 403。
         let (st, j) = send_post(
             &app,
-            "/api/personas/activate",
+            "/api/personas/activate?botId=mybot",
             &format!(r#"{{"id":{others}}}"#),
         )
         .await;
@@ -888,19 +911,60 @@ mod tests {
             .contains("自分のペルソナのみ"));
 
         // 解除（id null）→ 200「デフォルト…」・active None。
-        let (st, j) = send_post(&app, "/api/personas/activate", r#"{"id":null}"#).await;
+        let (st, j) = send_post(&app, "/api/personas/activate?botId=mybot", r#"{"id":null}"#).await;
         assert_eq!(st, StatusCode::OK);
         assert!(j["message"].as_str().unwrap().contains("デフォルト"));
         assert!(PersonaRepo::new(&db)
-            .active_persona_id(&scope("u"))
+            .active_persona_id(&scope_shared("u", "mybot", "u"))
             .await
             .unwrap()
             .is_none());
 
         // 非整数 id → 400「id が不正です。」。
-        let (st, j) = send_post(&app, "/api/personas/activate", r#"{"id":"abc"}"#).await;
+        let (st, j) = send_post(
+            &app,
+            "/api/personas/activate?botId=mybot",
+            r#"{"id":"abc"}"#,
+        )
+        .await;
         assert_eq!(st, StatusCode::BAD_REQUEST);
         assert_eq!(j["message"], serde_json::json!("id が不正です。"));
+    }
+
+    /// #139: Bot 未指定・`system_default` は 403、アクセスできない Bot は 404（システム Bot へ
+    /// フォールバックしない）。import/activate/publish（独自の応答形）も 500 にせず同じ扱い。
+    #[tokio::test]
+    async fn route_rejects_system_and_inaccessible_bot() {
+        let app = app();
+        for (query, status) in [
+            ("", StatusCode::FORBIDDEN),
+            ("?botId=system_default", StatusCode::FORBIDDEN),
+            ("?botId=otherbot", StatusCode::NOT_FOUND),
+        ] {
+            let uri = format!("/api/personas{query}");
+            let resp = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(&uri)
+                        .header("cookie", "__Host-yuuka-session=good")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), status, "{uri}");
+            for path in [
+                "/api/personas/save",
+                "/api/personas/import",
+                "/api/personas/activate",
+                "/api/personas/publish",
+            ] {
+                let uri = format!("{path}{query}");
+                let (st, _) = send_post(&app, &uri, r#"{"id":1,"name":"n","prompt":"p"}"#).await;
+                assert_eq!(st, status, "{uri}");
+            }
+        }
     }
 
     #[tokio::test]
@@ -908,7 +972,7 @@ mod tests {
         let resp = app()
             .oneshot(
                 Request::builder()
-                    .uri("/api/personas")
+                    .uri("/api/personas?botId=mybot")
                     .body(Body::empty())
                     .unwrap(),
             )

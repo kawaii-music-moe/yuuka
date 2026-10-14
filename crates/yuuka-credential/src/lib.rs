@@ -167,15 +167,16 @@ mod tests {
     #[tokio::test]
     async fn route_list_returns_clean_view() {
         let (db, path) = seed_db_at();
+        seed_bots(&path);
         insert_at(&path, "u", "github", "alice");
-        // v5: 応対 Bot（未指定 → system_default）へ許可済みの service だけ返る。
-        grant_at(&path, "system_default", "u", "github");
+        // v5: 応対 Bot（mybot）へ許可済みの service だけ返る。
+        grant_at(&path, "mybot", "u", "github");
         let app = app_with(db);
 
         let list = app
             .oneshot(
                 Request::builder()
-                    .uri("/api/credentials")
+                    .uri("/api/credentials?botId=mybot")
                     .header("cookie", "__Host-yuuka-session=good")
                     .body(Body::empty())
                     .unwrap(),
@@ -204,16 +205,17 @@ mod tests {
     #[tokio::test]
     async fn route_list_filters_ungranted() {
         let (db, path) = seed_db_at();
+        seed_bots(&path);
         insert_at(&path, "u", "github", "alice");
         insert_at(&path, "u", "aws", "alice2");
         // github だけ許可（aws は未許可 → 一覧に出ない）。
-        grant_at(&path, "system_default", "u", "github");
+        grant_at(&path, "mybot", "u", "github");
         let app = app_with(db);
 
         let list = app
             .oneshot(
                 Request::builder()
-                    .uri("/api/credentials")
+                    .uri("/api/credentials?botId=mybot")
                     .header("cookie", "__Host-yuuka-session=good")
                     .body(Body::empty())
                     .unwrap(),
@@ -232,8 +234,9 @@ mod tests {
     #[tokio::test]
     async fn route_delete_then_list_empty() {
         let (db, path) = seed_db_at();
+        seed_bots(&path);
         insert_at(&path, "u", "github", "alice");
-        grant_at(&path, "system_default", "u", "github");
+        grant_at(&path, "mybot", "u", "github");
         let app = app_with(db);
 
         let del = app
@@ -256,7 +259,7 @@ mod tests {
         let list = app
             .oneshot(
                 Request::builder()
-                    .uri("/api/credentials")
+                    .uri("/api/credentials?botId=mybot")
                     .header("cookie", "__Host-yuuka-session=good")
                     .body(Body::empty())
                     .unwrap(),
@@ -353,13 +356,57 @@ mod tests {
         let resp = app_with(db)
             .oneshot(
                 Request::builder()
-                    .uri("/api/credentials")
+                    .uri("/api/credentials?botId=mybot")
                     .body(Body::empty())
                     .unwrap(),
             )
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    /// #139: 一覧は Bot 未指定・`system_default` で 403、アクセスできない Bot で 404（システム Bot へ
+    /// フォールバックしない）。削除は Bot に依らない（user 所有の認証情報）ので botId なしで通る。
+    #[tokio::test]
+    async fn route_rejects_system_and_inaccessible_bot() {
+        let (db, path) = seed_db_at();
+        seed_bots(&path);
+        insert_at(&path, "u", "github", "alice");
+        grant_at(&path, "system_default", "u", "github");
+        let app = app_with(db);
+        for (query, status) in [
+            ("", StatusCode::FORBIDDEN),
+            ("?botId=system_default", StatusCode::FORBIDDEN),
+            ("?botId=otherbot", StatusCode::NOT_FOUND),
+        ] {
+            let uri = format!("/api/credentials{query}");
+            let resp = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(&uri)
+                        .header("cookie", "__Host-yuuka-session=good")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), status, "{uri}");
+        }
+        let del = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/credentials/delete")
+                    .header("cookie", "__Host-yuuka-session=good")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"serviceName":"github"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(del.status(), StatusCode::OK);
+        assert!(granted_bots(&path, "u", "github").is_empty());
     }
 
     /// register: 暗号化保存 + owner 本人の全 Bot(system_default,b1) へ付与 + GET 一覧へ反映。
@@ -438,11 +485,11 @@ mod tests {
             vec!["b1".to_owned(), "system_default".to_owned()]
         );
 
-        // GET 一覧へ反映（system_default へ許可済み）。暗号化列は出ない。
+        // GET 一覧へ反映（所有 Bot b1 へ許可済み）。暗号化列は出ない。
         let list = app
             .oneshot(
                 Request::builder()
-                    .uri("/api/credentials")
+                    .uri("/api/credentials?botId=b1")
                     .header("cookie", "__Host-yuuka-session=good")
                     .body(Body::empty())
                     .unwrap(),
@@ -485,6 +532,20 @@ mod tests {
             params![user_id, service_name, "https://ex.test", username],
         )
         .expect("insert credential");
+    }
+
+    /// 管理画面のデータ API は `botId` 必須（#139）。`u` の所有 Bot `mybot` と、`u` が触れない
+    /// `otherbot` を入れておく（bots テーブルは `Db::open` のマイグレーションが作る。users 行は
+    /// 作らないので FK は切る）。
+    fn seed_bots(path: &std::path::Path) {
+        rusqlite::Connection::open(path)
+            .expect("seed bots conn")
+            .execute_batch(
+                "PRAGMA foreign_keys = OFF;
+                 INSERT OR IGNORE INTO bots (id, user_id, name) VALUES ('mybot', 'u', 'mine');
+                 INSERT OR IGNORE INTO bots (id, user_id, name) VALUES ('otherbot', 'other', 'theirs');",
+            )
+            .expect("seed bots");
     }
 
     /// 利用許可を直挿しする（FK を切って users/bots seed を省く・GET 一覧フィルタ検証用）。

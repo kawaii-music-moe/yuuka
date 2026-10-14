@@ -4,18 +4,24 @@
 //! アクセス権を必ず検証**する（既存 Node `resolveBotId`/`hasBotAccess` と一致）。
 //! これを各ドメインが自前で書くと認可漏れが8ドメインに増幅するため、ここに一元化し
 //! `yuuka_web::resolve_scope` として全ドメインに使わせる（レビュー H-1）。
+//!
+//! システム Bot（`system_default`）は案内役で個人データを持たないため、[`resolve_scope`] は
+//! システム Bot のスコープを作らない（#139）。
 
+use axum::response::{IntoResponse, Response};
 use rusqlite::{params, OptionalExtension};
-use yuuka_core::{BotId, DbError, UserId, UserScope};
+use yuuka_core::{BotId, DbError, UserId, UserScope, WebError};
 use yuuka_db::map_sqlite;
 use yuuka_types::SessionUser;
 
+use crate::error::ApiError;
 use crate::state::Db;
 
 /// 認証ユーザーが指定 bot にアクセスできるか（`system_default` は常に可）。
 ///
 /// 既存 Node `hasBotAccess`（botRepo.ts）と同一クエリ: 自分がオーナー、または
-/// `bot_shares` に `status='active'` の共有がある場合に可。
+/// `bot_shares` に `status='active'` の共有がある場合に可。個人データのルートはこれではなく
+/// [`resolve_scope`]（システム Bot を拒否する）を使う。
 ///
 /// # Errors
 /// クエリ失敗時 [`DbError`]。
@@ -74,44 +80,76 @@ async fn bot_owner_if_accessible(
         .await
 }
 
+/// [`resolve_scope`] の失敗。HTTP では [`ApiError`] へ写像する（403 / 404 / 500・502）。
+#[derive(Debug)]
+pub enum ScopeError {
+    /// `botId` が未指定・空・`system_default`（システム Bot は個人データを持たない）→ 403。
+    BotRequired,
+    /// 指定した Bot にアクセスできない（未知・他人の未共有 Bot）→ 404。
+    BotNotFound,
+    /// bot アクセス確認のクエリ失敗。
+    Db(DbError),
+}
+
+impl From<DbError> for ScopeError {
+    fn from(e: DbError) -> Self {
+        Self::Db(e)
+    }
+}
+
+impl From<ScopeError> for ApiError {
+    fn from(e: ScopeError) -> Self {
+        match e {
+            ScopeError::BotRequired => Self(WebError::Forbidden),
+            ScopeError::BotNotFound => Self(WebError::NotFound),
+            ScopeError::Db(e) => Self::from(e),
+        }
+    }
+}
+
+impl IntoResponse for ScopeError {
+    fn into_response(self) -> Response {
+        ApiError::from(self).into_response()
+    }
+}
+
 /// `?botId=` を認可検証しつつ `UserScope` へ解決する（全ドメイン共通の入口）。
 ///
-/// 未指定・空・`system_default`・**アクセス不可**はいずれも `system_default` に
-/// フォールバックする（Node `resolveBotId` と一致）。これにより「他人の bot を
-/// `?botId=` で指定してデータ空間へ横断アクセス」を構造的に封じる。
+/// 前後の空白を除いた `botId` が未指定・空・`system_default` なら [`ScopeError::BotRequired`]、
+/// アクセスできない（未知・他人の未共有）Bot なら [`ScopeError::BotNotFound`]。どちらも
+/// システム Bot へはフォールバックしない（PWA 用 API の `client_scope` と同じ方針）。これにより
+/// 「他人の bot を `?botId=` で指定してデータ空間へ横断アクセス」も「システム Bot へ個人データを
+/// 読み書き」も構造的に封じる。
 ///
-/// アクセス可能な実 bot（`system_default` 以外）では **オーナー ID を [`UserScope`] に束ねる**
-/// （[`UserScope::with_owner`]）。これにより共有 bot のペルソナ・MCP 等が
-/// [`UserScope::config_owner_id`] 経由でオーナーの名前空間へ正規化され、共有相手（A/B）間で
-/// 同期される。`system_default`（共有秘書）はオーナー無し＝発話ユーザー単位で独立（従来どおり）。
+/// 解決した bot では **オーナー ID を [`UserScope`] に束ねる**（[`UserScope::with_owner`]）。
+/// これにより共有 bot のペルソナ・MCP 等が [`UserScope::config_owner_id`] 経由でオーナーの
+/// 名前空間へ正規化され、共有相手（A/B）間で同期される。
 ///
 /// # Errors
-/// bot アクセス確認のクエリ失敗時 [`DbError`]。
+/// 上記の [`ScopeError::BotRequired`] / [`ScopeError::BotNotFound`]、bot アクセス確認のクエリ
+/// 失敗時 [`ScopeError::Db`]。
 pub async fn resolve_scope(
     user: &SessionUser,
     db: &Db,
     raw_bot_id: Option<&str>,
-) -> Result<UserScope, DbError> {
-    let uid = UserId::new(user.discord_id.clone());
-    match raw_bot_id {
-        Some(b) if !b.is_empty() && b != "system_default" => {
-            match bot_owner_if_accessible(db, user.discord_id.as_str(), b).await? {
-                Some(owner) => Ok(UserScope::with_owner(
-                    uid,
-                    BotId::new(b),
-                    UserId::new(owner),
-                )),
-                // アクセス不可・未知 bot は system_default へフォールバック（横断参照を封じる）。
-                None => Ok(UserScope::new(uid, BotId::system_default())),
-            }
-        }
-        _ => Ok(UserScope::new(uid, BotId::system_default())),
-    }
+) -> Result<UserScope, ScopeError> {
+    let requested = raw_bot_id
+        .map(str::trim)
+        .filter(|b| !b.is_empty() && *b != BotId::SYSTEM_DEFAULT)
+        .ok_or(ScopeError::BotRequired)?;
+    let owner = bot_owner_if_accessible(db, user.discord_id.as_str(), requested)
+        .await?
+        .ok_or(ScopeError::BotNotFound)?;
+    Ok(UserScope::with_owner(
+        UserId::new(user.discord_id.clone()),
+        BotId::new(requested),
+        UserId::new(owner),
+    ))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::resolve_scope;
+    use super::{resolve_scope, ScopeError};
     use crate::state::Db;
     use std::sync::atomic::{AtomicU64, Ordering};
     use yuuka_types::{Role, SessionUser};
@@ -126,10 +164,12 @@ mod tests {
         ));
         {
             let conn = rusqlite::Connection::open(&path).expect("seed");
+            // system_default の行はセットアップした管理者（ここでは 'owner'）が持ち主になる。
             conn.execute_batch(
                 "CREATE TABLE bots(id TEXT PRIMARY KEY, user_id TEXT NOT NULL);
                  CREATE TABLE bot_shares(id INTEGER PRIMARY KEY AUTOINCREMENT, bot_id TEXT, \
                     shared_user_id TEXT, status TEXT);
+                 INSERT INTO bots(id, user_id) VALUES('system_default', 'owner');
                  INSERT INTO bots(id, user_id) VALUES('mybot', 'owner');
                  INSERT INTO bots(id, user_id) VALUES('otherbot', 'someone');
                  INSERT INTO bots(id, user_id) VALUES('nobot', 'someone');
@@ -156,27 +196,32 @@ mod tests {
         let s = |b: Option<&'static str>| {
             let db = db.clone();
             let u = owner.clone();
-            async move {
-                resolve_scope(&u, &db, b)
-                    .await
-                    .unwrap()
-                    .bot_id()
-                    .as_str()
-                    .to_owned()
-            }
+            async move { resolve_scope(&u, &db, b).await }
+        };
+        let bot = |r: Result<yuuka_core::UserScope, ScopeError>| {
+            r.expect("resolved").bot_id().as_str().to_owned()
         };
 
-        // 未指定・system_default は system_default。
-        assert_eq!(s(None).await, "system_default");
-        assert_eq!(s(Some("system_default")).await, "system_default");
         // 所有 bot は許可。
-        assert_eq!(s(Some("mybot")).await, "mybot");
+        assert_eq!(bot(s(Some("mybot")).await), "mybot");
         // active 共有 bot は許可。
-        assert_eq!(s(Some("otherbot")).await, "otherbot");
-        // アクセス不可 bot は system_default にフォールバック（クロス bot 参照を封じる）。
-        assert_eq!(s(Some("nobot")).await, "system_default");
-        // 未知 bot もフォールバック。
-        assert_eq!(s(Some("ghost")).await, "system_default");
+        assert_eq!(bot(s(Some("otherbot")).await), "otherbot");
+        // 前後の空白は除いて解決する。
+        assert_eq!(bot(s(Some(" mybot ")).await), "mybot");
+        // 未指定・空・system_default はシステム Bot 宛てなので拒否（system_default の行の持ち主でも）。
+        for b in [None, Some(""), Some("  "), Some("system_default")] {
+            assert!(
+                matches!(s(b).await, Err(ScopeError::BotRequired)),
+                "botId={b:?}"
+            );
+        }
+        // アクセス不可 bot・未知 bot は system_default へフォールバックせず not found。
+        for b in ["nobot", "ghost"] {
+            assert!(
+                matches!(s(Some(b)).await, Err(ScopeError::BotNotFound)),
+                "botId={b}"
+            );
+        }
     }
 
     #[tokio::test]
@@ -194,15 +239,5 @@ mod tests {
         assert_eq!(s_shared.user_id().as_str(), "owner");
         assert_eq!(s_shared.bot_owner_id().map(|u| u.as_str()), Some("someone"));
         assert_eq!(s_shared.config_owner_id().as_str(), "someone");
-
-        // system_default はオーナー無し＝発話ユーザー単位（従来どおり独立）。
-        let s_default = resolve_scope(&owner, &db, None).await.unwrap();
-        assert_eq!(s_default.bot_owner_id(), None);
-        assert_eq!(s_default.config_owner_id().as_str(), "owner");
-
-        // アクセス不可 bot は system_default フォールバック＝オーナー無し。
-        let s_denied = resolve_scope(&owner, &db, Some("nobot")).await.unwrap();
-        assert_eq!(s_denied.bot_id().as_str(), "system_default");
-        assert_eq!(s_denied.bot_owner_id(), None);
     }
 }

@@ -296,7 +296,7 @@ pub(crate) async fn grants_mcp(
 /// 共有 bot の MCP サーバー（bot-canonical）と、呼び出し元が付与できる自分の未付与サーバーを返す。
 ///
 /// 共有相手（オーナー or active 共有）が「この Bot が使う MCP」を閲覧・共同編集するための読み取り
-/// 経路。`system_default`（共有秘書）は発話者スコープ厳守のため**自分の付与分（＋システム）のみ**返す。
+/// 経路。`system_default`（システム Bot）は対象外（`botId` 未指定と合わせて 403・アクセス不可は 404）。
 pub(crate) async fn mcp_grants(
     user: AuthenticatedUser,
     State(state): State<AppState>,
@@ -304,19 +304,14 @@ pub(crate) async fn mcp_grants(
 ) -> Result<Response, ApiError> {
     let user_id = &user.0.discord_id;
     let db = &state.db;
-    // 共通の resolve_scope で bot アクセス検証 + オーナー解決を単一クエリで行う（空/未指定/未アクセスは
-    // system_default へ畳む＝全ルート共通のフォールバック契約）。has_bot_access + get_bot の二重問い合わせを避ける。
+    // 共通の resolve_scope で bot アクセス検証 + オーナー解決を単一クエリで行う（空/未指定/system_default は
+    // 403・未アクセスは 404＝全ルート共通の契約）。has_bot_access + get_bot の二重問い合わせを避ける。
     let scope = resolve_scope(&user.0, db, q.bot_id.as_deref()).await?;
     let bot_id = scope.bot_id().as_str();
-    let is_system_default = bot_id == "system_default";
-    // オーナー本人か（所有 bot は bot_owner_id==自分・共有 bot は !=自分・system_default は None）。
+    // オーナー本人か（所有 bot は bot_owner_id==自分・共有 bot は !=自分）。
     let is_owner = scope.bot_owner_id().map(|o| o.as_str()) == Some(user_id.as_str());
 
-    let mut grants = repo::list_bot_grant_views(db, bot_id).await?;
-    // 共有秘書は自分の付与分（＋システム）のみに絞り、他テナントの付与を隠す。
-    if is_system_default {
-        grants.retain(|g| g.system || g.granter.as_deref() == Some(user_id.as_str()));
-    }
+    let grants = repo::list_bot_grant_views(db, bot_id).await?;
     let granted_ids: std::collections::HashSet<i64> = grants.iter().map(|g| g.id).collect();
     let servers: Vec<Value> = grants
         .iter()

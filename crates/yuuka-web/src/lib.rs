@@ -23,7 +23,7 @@ pub use auth::{AdminUser, AuthBackend, AuthenticatedUser, BearerUser, OptionalUs
 pub use config::WebConfig;
 pub use error::ApiError;
 pub use extract::ScopedJson;
-pub use scope::{has_bot_access, resolve_scope};
+pub use scope::{has_bot_access, resolve_scope, ScopeError};
 pub use settings::{get_system_setting, public_legal_urls};
 pub use state::{AppState, Db};
 pub use static_files::{mount_pwa, mount_static, ADMIN_PREFIX};

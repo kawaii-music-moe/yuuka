@@ -103,7 +103,23 @@ mod tests {
             conn.execute_batch(PROGRESS_LOGS_DDL)
                 .expect("create task_progress_logs");
         }
-        Db::open(&path).expect("open db")
+        let db = Db::open(&path).expect("open db");
+        seed_bots(&path);
+        db
+    }
+
+    /// 管理画面のデータ API は `botId` 必須（#139）。`u` の所有 Bot `mybot` と、`u` が触れない
+    /// `otherbot` を入れておく（bots テーブルは `Db::open` のマイグレーションが作る。users 行は
+    /// 作らないので FK は切る）。
+    fn seed_bots(path: &std::path::Path) {
+        rusqlite::Connection::open(path)
+            .expect("seed bots conn")
+            .execute_batch(
+                "PRAGMA foreign_keys = OFF;
+                 INSERT OR IGNORE INTO bots (id, user_id, name) VALUES ('mybot', 'u', 'mine');
+                 INSERT OR IGNORE INTO bots (id, user_id, name) VALUES ('otherbot', 'other', 'theirs');",
+            )
+            .expect("seed bots");
     }
 
     fn scope(user: &str) -> UserScope {
@@ -370,7 +386,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/api/tasks/add")
+                    .uri("/api/tasks/add?botId=mybot")
                     .header("cookie", "__Host-yuuka-session=good")
                     .header("content-type", "application/json")
                     .body(Body::from(r#"{"title":"hello","tags":["home"]}"#))
@@ -383,7 +399,7 @@ mod tests {
         let list = app
             .oneshot(
                 Request::builder()
-                    .uri("/api/tasks")
+                    .uri("/api/tasks?botId=mybot")
                     .header("cookie", "__Host-yuuka-session=good")
                     .body(Body::empty())
                     .unwrap(),
@@ -408,7 +424,7 @@ mod tests {
         let resp = app()
             .oneshot(
                 Request::builder()
-                    .uri("/api/tasks")
+                    .uri("/api/tasks?botId=mybot")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -426,7 +442,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/api/tasks/add")
+                    .uri("/api/tasks/add?botId=mybot")
                     .header("cookie", "__Host-yuuka-session=good")
                     .header("content-type", "application/json")
                     .body(Body::from(
@@ -618,7 +634,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/api/tasks/add")
+                    .uri("/api/tasks/add?botId=mybot")
                     .header("cookie", "__Host-yuuka-session=good")
                     .header("content-type", "application/json")
                     .body(Body::from(r#"{"title":"P"}"#))
@@ -638,7 +654,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/api/tasks/add")
+                    .uri("/api/tasks/add?botId=mybot")
                     .header("cookie", "__Host-yuuka-session=good")
                     .header("content-type", "application/json")
                     .body(Body::from(format!(r#"{{"title":"C","parentId":{pid}}}"#)))
@@ -651,7 +667,7 @@ mod tests {
         let list = app
             .oneshot(
                 Request::builder()
-                    .uri("/api/tasks")
+                    .uri("/api/tasks?botId=mybot")
                     .header("cookie", "__Host-yuuka-session=good")
                     .body(Body::empty())
                     .unwrap(),
@@ -688,7 +704,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/api/tasks/add")
+                    .uri("/api/tasks/add?botId=mybot")
                     .header("cookie", "__Host-yuuka-session=good")
                     .header("content-type", "application/json")
                     .body(Body::from(r#"{"title":"to-delete"}"#))
@@ -707,7 +723,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/api/tasks/delete")
+                    .uri("/api/tasks/delete?botId=mybot")
                     .header("cookie", "__Host-yuuka-session=good")
                     .header("content-type", "application/json")
                     .body(Body::from(format!(r#"{{"id":{id}}}"#)))
@@ -730,7 +746,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/api/tasks/delete")
+                    .uri("/api/tasks/delete?botId=mybot")
                     .header("cookie", "__Host-yuuka-session=good")
                     .header("content-type", "application/json")
                     .body(Body::from(format!(r#"{{"id":{id}}}"#)))
@@ -754,7 +770,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/api/tasks/complete")
+                    .uri("/api/tasks/complete?botId=mybot")
                     .header("cookie", "__Host-yuuka-session=good")
                     .header("content-type", "application/json")
                     .body(Body::from(r#"{"id":999999}"#))
@@ -1150,9 +1166,40 @@ mod tests {
 
     /// 親を 1 件追加して id を返す（E2E ヘルパ）。
     async fn add_parent(app: &axum::Router, body: &str) -> i64 {
-        let (status, j) = post_json(app, "/api/tasks/add", body.to_owned()).await;
+        let (status, j) = post_json(app, "/api/tasks/add?botId=mybot", body.to_owned()).await;
         assert_eq!(status, StatusCode::OK);
         j["task"]["id"].as_i64().expect("id")
+    }
+
+    /// #139: Bot 未指定・空・`system_default` は 403、アクセスできない Bot は 404。どちらも
+    /// システム Bot へフォールバックして読み書きしない（body の botId でも同じ）。
+    #[tokio::test]
+    async fn route_rejects_system_and_inaccessible_bot() {
+        let app = app();
+        for uri in [
+            "/api/tasks",
+            "/api/tasks?botId=",
+            "/api/tasks?botId=system_default",
+        ] {
+            assert_eq!(get_json(&app, uri).await.0, StatusCode::FORBIDDEN, "{uri}");
+        }
+        for uri in ["/api/tasks?botId=otherbot", "/api/tasks?botId=ghost"] {
+            assert_eq!(get_json(&app, uri).await.0, StatusCode::NOT_FOUND, "{uri}");
+        }
+        for (bot, status) in [
+            ("system_default", StatusCode::FORBIDDEN),
+            ("otherbot", StatusCode::NOT_FOUND),
+        ] {
+            let body = format!(r#"{{"title":"t","botId":"{bot}"}}"#);
+            assert_eq!(
+                post_json(&app, "/api/tasks/add", body).await.0,
+                status,
+                "{bot}"
+            );
+        }
+        // 拒否した書き込みはどの Bot にも入っていない。
+        let (_, j) = get_json(&app, "/api/tasks?botId=mybot").await;
+        assert_eq!(j["tasks"], serde_json::json!([]));
     }
 
     /// `GET /api/tasks/detail`: id 未指定/非数値/0 は 400、不在は 404、成功は camelCase 兄弟キー付き。
@@ -1161,22 +1208,26 @@ mod tests {
         let app = app();
         // id 未指定 → 400。
         assert_eq!(
-            get_json(&app, "/api/tasks/detail").await.0,
+            get_json(&app, "/api/tasks/detail?botId=mybot").await.0,
             StatusCode::BAD_REQUEST
         );
         // 非数値 → 400（Node Number("abc")=NaN）。
         assert_eq!(
-            get_json(&app, "/api/tasks/detail?id=abc").await.0,
+            get_json(&app, "/api/tasks/detail?id=abc&botId=mybot")
+                .await
+                .0,
             StatusCode::BAD_REQUEST
         );
         // 0 → 400（Node !0）。
         assert_eq!(
-            get_json(&app, "/api/tasks/detail?id=0").await.0,
+            get_json(&app, "/api/tasks/detail?id=0&botId=mybot").await.0,
             StatusCode::BAD_REQUEST
         );
         // 不在 → 404。
         assert_eq!(
-            get_json(&app, "/api/tasks/detail?id=999999").await.0,
+            get_json(&app, "/api/tasks/detail?id=999999&botId=mybot")
+                .await
+                .0,
             StatusCode::NOT_FOUND
         );
 
@@ -1184,12 +1235,12 @@ mod tests {
         let leaf = add_parent(&app, r#"{"title":"L"}"#).await;
         let (ps, _) = post_json(
             &app,
-            "/api/tasks/progress",
+            "/api/tasks/progress?botId=mybot",
             format!(r#"{{"id":{leaf},"progress":40,"note":"half"}}"#),
         )
         .await;
         assert_eq!(ps, StatusCode::OK);
-        let (ls, lj) = get_json(&app, &format!("/api/tasks/detail?id={leaf}")).await;
+        let (ls, lj) = get_json(&app, &format!("/api/tasks/detail?id={leaf}&botId=mybot")).await;
         assert_eq!(ls, StatusCode::OK);
         assert_eq!(lj["success"], serde_json::json!(true));
         // task はフラット単一 todo（subtasks を内包しない）。
@@ -1212,11 +1263,12 @@ mod tests {
         let pid = add_parent(&app, r#"{"title":"P"}"#).await;
         post_json(
             &app,
-            "/api/tasks/add",
+            "/api/tasks/add?botId=mybot",
             format!(r#"{{"title":"C","parentId":{pid}}}"#),
         )
         .await;
-        let (pstatus, pj) = get_json(&app, &format!("/api/tasks/detail?id={pid}")).await;
+        let (pstatus, pj) =
+            get_json(&app, &format!("/api/tasks/detail?id={pid}&botId=mybot")).await;
         assert_eq!(pstatus, StatusCode::OK);
         assert_eq!(pj["subtasks"][0]["title"], serde_json::json!("C"));
         assert!(pj["effectiveProgress"].is_number());
@@ -1231,14 +1283,14 @@ mod tests {
         add_parent(&app, r#"{"title":"dated","dueDate":"2026-07-10"}"#).await;
         add_parent(&app, r#"{"title":"undated"}"#).await;
 
-        let (gs, gj) = get_json(&app, "/api/tasks/gantt").await;
+        let (gs, gj) = get_json(&app, "/api/tasks/gantt?botId=mybot").await;
         assert_eq!(gs, StatusCode::OK);
         assert_eq!(gj["success"], serde_json::json!(true));
         assert_eq!(gj["tasks"].as_array().unwrap().len(), 1);
         assert_eq!(gj["tasks"][0]["title"], serde_json::json!("dated"));
         assert!(gj["tasks"][0]["user_id"].is_null(), "clean view");
 
-        let (ss, sj) = get_json(&app, "/api/tasks/someday").await;
+        let (ss, sj) = get_json(&app, "/api/tasks/someday?botId=mybot").await;
         assert_eq!(ss, StatusCode::OK);
         assert_eq!(sj["tasks"].as_array().unwrap().len(), 1);
         assert_eq!(sj["tasks"][0]["title"], serde_json::json!("undated"));
@@ -1250,16 +1302,20 @@ mod tests {
         let app = app();
         // id なし → 400（missing field id で DTO パース失敗）。
         assert_eq!(
-            post_json(&app, "/api/tasks/update", r#"{"title":"x"}"#.to_owned())
-                .await
-                .0,
+            post_json(
+                &app,
+                "/api/tasks/update?botId=mybot",
+                r#"{"title":"x"}"#.to_owned()
+            )
+            .await
+            .0,
             StatusCode::BAD_REQUEST
         );
         // id=0 → 400。
         assert_eq!(
             post_json(
                 &app,
-                "/api/tasks/update",
+                "/api/tasks/update?botId=mybot",
                 r#"{"id":0,"title":"x"}"#.to_owned()
             )
             .await
@@ -1270,7 +1326,7 @@ mod tests {
         assert_eq!(
             post_json(
                 &app,
-                "/api/tasks/update",
+                "/api/tasks/update?botId=mybot",
                 r#"{"id":999999,"title":"x"}"#.to_owned()
             )
             .await
@@ -1281,7 +1337,7 @@ mod tests {
         let pid = add_parent(&app, r#"{"title":"orig"}"#).await;
         let (status, j) = post_json(
             &app,
-            "/api/tasks/update",
+            "/api/tasks/update?botId=mybot",
             format!(r#"{{"id":{pid},"title":"updated","priority":"high","status":"done"}}"#),
         )
         .await;
@@ -1297,16 +1353,20 @@ mod tests {
         let app = app();
         // id なし → 400。
         assert_eq!(
-            post_json(&app, "/api/tasks/progress", r#"{"progress":50}"#.to_owned())
-                .await
-                .0,
+            post_json(
+                &app,
+                "/api/tasks/progress?botId=mybot",
+                r#"{"progress":50}"#.to_owned()
+            )
+            .await
+            .0,
             StatusCode::BAD_REQUEST
         );
         // 不在 → 404。
         assert_eq!(
             post_json(
                 &app,
-                "/api/tasks/progress",
+                "/api/tasks/progress?botId=mybot",
                 r#"{"id":999999,"progress":50}"#.to_owned()
             )
             .await
@@ -1318,7 +1378,7 @@ mod tests {
         let leaf = add_parent(&app, r#"{"title":"leaf"}"#).await;
         let (ls, lj) = post_json(
             &app,
-            "/api/tasks/progress",
+            "/api/tasks/progress?botId=mybot",
             format!(r#"{{"id":{leaf},"progress":60}}"#),
         )
         .await;
@@ -1329,14 +1389,14 @@ mod tests {
         let parent = add_parent(&app, r#"{"title":"parent"}"#).await;
         post_json(
             &app,
-            "/api/tasks/add",
+            "/api/tasks/add?botId=mybot",
             format!(r#"{{"title":"child","parentId":{parent}}}"#),
         )
         .await;
         assert_eq!(
             post_json(
                 &app,
-                "/api/tasks/progress",
+                "/api/tasks/progress?botId=mybot",
                 format!(r#"{{"id":{parent},"progress":50}}"#)
             )
             .await

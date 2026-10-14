@@ -2,7 +2,7 @@
 //!
 //! 認可は [`AuthenticatedUser`] extractor で型強制、DB は `State<Db>` サブステートで取得、
 //! スコープは **共通の [`resolve_scope`]**（`?botId=` を bot アクセス認可つきで解決・
-//! 未アクセスは system_default にフォールバック）で束ねて repo に渡す。
+//! 未指定・`system_default` は 403、未アクセスは 404）で束ねて repo に渡す。
 //! 本ルータは supervisor 側で共通レイヤ（CSRF/body 上限）配下にマージされる。
 //!
 //! **機密ドメイン**: 返す DTO は暗号化列・鍵材料を持たない（[`crate::dto`] のクリーンビュー）。
@@ -172,11 +172,15 @@ async fn register(
     )))
 }
 
+/// `POST /api/credentials/delete` — 自分の認証情報を削除し、全 Bot の利用許可も掃除する。
+///
+/// 認証情報は register と同じく (user_id, service_name) 所有で Bot の個人データではないため、
+/// `botId` は読まない（統合管理から Bot を選ばずに削除する・フロントは `scope:'user'`）。
 async fn delete(
     user: AuthenticatedUser,
     State(db): State<Db>,
     ScopedJson {
-        bot_id,
+        bot_id: _,
         value: input,
     }: ScopedJson<DeleteCredential>,
 ) -> Result<Json<Envelope<EmptyData>>, ApiError> {
@@ -187,7 +191,11 @@ async fn delete(
             "サービス名は必須です。".to_owned(),
         )));
     }
-    let scope = resolve_scope(&user.0, &db, bot_id.as_deref()).await?;
+    // credentials は (user_id, service_name) 所有（bot_id 非依存）。scope の bot は使われない。
+    let scope = UserScope::new(
+        UserId::new(user.0.discord_id.clone()),
+        BotId::system_default(),
+    );
     let ok = CredentialRepo::new(&db)
         .delete(&scope, &input.service_name)
         .await?;

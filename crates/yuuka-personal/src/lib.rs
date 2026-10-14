@@ -108,7 +108,23 @@ mod tests {
             conn.execute_batch(CONTEXT_NOTES_DDL)
                 .expect("create context_notes");
         }
-        Db::open(&path).expect("open db")
+        let db = Db::open(&path).expect("open db");
+        seed_bots(&path);
+        db
+    }
+
+    /// 管理画面のデータ API は `botId` 必須（#139）。`u` の所有 Bot `mybot` と、`u` が触れない
+    /// `otherbot` を入れておく（bots テーブルは `Db::open` のマイグレーションが作る。users 行は
+    /// 作らないので FK は切る）。
+    fn seed_bots(path: &std::path::Path) {
+        rusqlite::Connection::open(path)
+            .expect("seed bots conn")
+            .execute_batch(
+                "PRAGMA foreign_keys = OFF;
+                 INSERT OR IGNORE INTO bots (id, user_id, name) VALUES ('mybot', 'u', 'mine');
+                 INSERT OR IGNORE INTO bots (id, user_id, name) VALUES ('otherbot', 'other', 'theirs');",
+            )
+            .expect("seed bots");
     }
 
     fn scope(user: &str) -> UserScope {
@@ -243,7 +259,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/api/contacts/save")
+                    .uri("/api/contacts/save?botId=mybot")
                     .header("cookie", "__Host-yuuka-session=good")
                     .header("content-type", "application/json")
                     .body(Body::from(
@@ -258,7 +274,7 @@ mod tests {
         let list = app
             .oneshot(
                 Request::builder()
-                    .uri("/api/contacts")
+                    .uri("/api/contacts?botId=mybot")
                     .header("cookie", "__Host-yuuka-session=good")
                     .body(Body::empty())
                     .unwrap(),
@@ -289,7 +305,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/api/contacts/save")
+                    .uri("/api/contacts/save?botId=mybot")
                     .header("cookie", "__Host-yuuka-session=good")
                     .header("content-type", "application/json")
                     .body(Body::from(r#"{"name":"Eve","birthday":"not-a-date"}"#))
@@ -305,7 +321,7 @@ mod tests {
         let resp = app()
             .oneshot(
                 Request::builder()
-                    .uri("/api/contacts")
+                    .uri("/api/contacts?botId=mybot")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -338,7 +354,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/api/contacts/save")
+                    .uri("/api/contacts/save?botId=mybot")
                     .header("cookie", "__Host-yuuka-session=good")
                     .header("content-type", "application/json")
                     .body(Body::from(
@@ -364,7 +380,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/api/contacts/save")
+                    .uri("/api/contacts/save?botId=mybot")
                     .header("cookie", "__Host-yuuka-session=good")
                     .header("content-type", "application/json")
                     .body(Body::from(format!(
@@ -486,7 +502,7 @@ mod tests {
             .clone()
             .oneshot(
                 Request::builder()
-                    .uri("/api/context-note")
+                    .uri("/api/context-note?botId=mybot")
                     .header("cookie", "__Host-yuuka-session=good")
                     .body(Body::empty())
                     .unwrap(),
@@ -509,7 +525,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/api/context-note")
+                    .uri("/api/context-note?botId=mybot")
                     .header("cookie", "__Host-yuuka-session=good")
                     .header("content-type", "application/json")
                     .body(Body::from(r#"{"content":"覚えておいてね"}"#))
@@ -523,7 +539,7 @@ mod tests {
         let get1 = app
             .oneshot(
                 Request::builder()
-                    .uri("/api/context-note")
+                    .uri("/api/context-note?botId=mybot")
                     .header("cookie", "__Host-yuuka-session=good")
                     .body(Body::empty())
                     .unwrap(),
@@ -547,7 +563,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/api/context-note")
+                    .uri("/api/context-note?botId=mybot")
                     .header("cookie", "__Host-yuuka-session=good")
                     .header("content-type", "application/json")
                     .body(Body::from(body))
@@ -574,7 +590,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/api/clipboard/delete")
+                    .uri("/api/clipboard/delete?botId=mybot")
                     .header("cookie", "__Host-yuuka-session=good")
                     .header("content-type", "application/json")
                     .body(Body::from(r#"{"id":99999}"#))
@@ -596,12 +612,53 @@ mod tests {
         let resp = app()
             .oneshot(
                 Request::builder()
-                    .uri("/api/clipboard")
+                    .uri("/api/clipboard?botId=mybot")
                     .body(Body::empty())
                     .unwrap(),
             )
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    /// #139: Bot 未指定・`system_default` は 403、アクセスできない Bot は 404（システム Bot へ
+    /// フォールバックしない）。
+    #[tokio::test]
+    async fn route_rejects_system_and_inaccessible_bot() {
+        let app = app();
+        for path in ["/api/contacts", "/api/clipboard", "/api/context-note"] {
+            for (query, status) in [
+                ("", StatusCode::FORBIDDEN),
+                ("?botId=system_default", StatusCode::FORBIDDEN),
+                ("?botId=otherbot", StatusCode::NOT_FOUND),
+            ] {
+                let uri = format!("{path}{query}");
+                let resp = app
+                    .clone()
+                    .oneshot(
+                        Request::builder()
+                            .uri(&uri)
+                            .header("cookie", "__Host-yuuka-session=good")
+                            .body(Body::empty())
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(resp.status(), status, "{uri}");
+            }
+        }
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/context-note?botId=system_default")
+                    .header("cookie", "__Host-yuuka-session=good")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"content":"x"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
     }
 }

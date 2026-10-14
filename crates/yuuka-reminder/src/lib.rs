@@ -83,7 +83,23 @@ mod tests {
             let conn = rusqlite::Connection::open(&path).expect("seed db");
             conn.execute_batch(REMINDERS_DDL).expect("create reminders");
         }
-        Db::open(&path).expect("open db")
+        let db = Db::open(&path).expect("open db");
+        seed_bots(&path);
+        db
+    }
+
+    /// 管理画面のデータ API は `botId` 必須（#139）。`u` の所有 Bot `mybot` と、`u` が触れない
+    /// `otherbot` を入れておく（bots テーブルは `Db::open` のマイグレーションが作る。users 行は
+    /// 作らないので FK は切る）。
+    fn seed_bots(path: &std::path::Path) {
+        rusqlite::Connection::open(path)
+            .expect("seed bots conn")
+            .execute_batch(
+                "PRAGMA foreign_keys = OFF;
+                 INSERT OR IGNORE INTO bots (id, user_id, name) VALUES ('mybot', 'u', 'mine');
+                 INSERT OR IGNORE INTO bots (id, user_id, name) VALUES ('otherbot', 'other', 'theirs');",
+            )
+            .expect("seed bots");
     }
 
     fn scope(user: &str) -> UserScope {
@@ -208,7 +224,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/api/reminders/add")
+                    .uri("/api/reminders/add?botId=mybot")
                     .header("cookie", "__Host-yuuka-session=good")
                     .header("content-type", "application/json")
                     .body(Body::from(
@@ -223,7 +239,7 @@ mod tests {
         let list = app
             .oneshot(
                 Request::builder()
-                    .uri("/api/reminders")
+                    .uri("/api/reminders?botId=mybot")
                     .header("cookie", "__Host-yuuka-session=good")
                     .body(Body::empty())
                     .unwrap(),
@@ -248,13 +264,61 @@ mod tests {
         let resp = app()
             .oneshot(
                 Request::builder()
-                    .uri("/api/reminders")
+                    .uri("/api/reminders?botId=mybot")
                     .body(Body::empty())
                     .unwrap(),
             )
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    /// #139: Bot 未指定・`system_default` は 403、アクセスできない Bot は 404（システム Bot へ
+    /// フォールバックしない）。
+    #[tokio::test]
+    async fn route_rejects_system_and_inaccessible_bot() {
+        let app = app();
+        for (method, uri, status) in [
+            ("GET", "/api/reminders", StatusCode::FORBIDDEN),
+            (
+                "GET",
+                "/api/reminders?botId=system_default",
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                "GET",
+                "/api/reminders?botId=otherbot",
+                StatusCode::NOT_FOUND,
+            ),
+            ("POST", "/api/reminders/add", StatusCode::FORBIDDEN),
+            (
+                "POST",
+                "/api/reminders/add?botId=system_default",
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                "POST",
+                "/api/reminders/add?botId=otherbot",
+                StatusCode::NOT_FOUND,
+            ),
+        ] {
+            let resp = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(method)
+                        .uri(uri)
+                        .header("cookie", "__Host-yuuka-session=good")
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            r#"{"message":"m","trigger_at":"2999-01-01 09:00:00"}"#,
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), status, "{method} {uri}");
+        }
     }
 
     /// wire 契約ロック（**非対称の例外**）: reminder の入力は例外的に **snake_case**。
@@ -291,7 +355,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/api/reminders/cancel")
+                    .uri("/api/reminders/cancel?botId=mybot")
                     .header("cookie", "__Host-yuuka-session=good")
                     .header("content-type", "application/json")
                     .body(Body::from(r#"{"reminder_id":999999}"#))
@@ -307,7 +371,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/api/reminders/add")
+                    .uri("/api/reminders/add?botId=mybot")
                     .header("cookie", "__Host-yuuka-session=good")
                     .header("content-type", "application/json")
                     .body(Body::from(
@@ -329,7 +393,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/api/reminders/cancel")
+                    .uri("/api/reminders/cancel?botId=mybot")
                     .header("cookie", "__Host-yuuka-session=good")
                     .header("content-type", "application/json")
                     .body(Body::from(format!(r#"{{"reminder_id":{id}}}"#)))
@@ -350,7 +414,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/api/reminders/cancel")
+                    .uri("/api/reminders/cancel?botId=mybot")
                     .header("cookie", "__Host-yuuka-session=good")
                     .header("content-type", "application/json")
                     .body(Body::from(format!(r#"{{"reminder_id":{id}}}"#)))

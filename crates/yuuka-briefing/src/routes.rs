@@ -2,7 +2,7 @@
 //!
 //! 朝報（briefing）・日報/週報（report）の設定 CRUD と、テスト配信 2 本を提供する。
 //! 認可は [`AuthenticatedUser`] extractor で型強制、DB は `State<Db>`、bot スコープは共通の
-//! [`resolve_scope`]（`botId`＝body → クエリの順・未アクセスは `system_default` へフォールバック）で解決。
+//! [`resolve_scope`]（`botId`＝body → クエリの順・未指定と `system_default` は 403、アクセス不可は 404）で解決。
 //! レスポンス形は Node `sendJson` にバイト単位で合わせる（フラット `{success, ...}`・日本語 verbatim）。
 //!
 //! **配信サービスのシーム**: `/api/briefing/test`・`/api/report-configs/test` の実配信は
@@ -22,7 +22,7 @@ use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use yuuka_core::DbError;
-use yuuka_web::{resolve_scope, AppState, AuthenticatedUser, Db};
+use yuuka_web::{resolve_scope, AppState, AuthenticatedUser, Db, ScopeError};
 
 use crate::repo;
 use crate::tools::{is_likely_public_http_url, is_valid_cron_basic};
@@ -85,7 +85,7 @@ async fn get_briefing_config(
 ) -> Response {
     let scope = match resolve_scope(&user.0, &db, q.bot_id.as_deref()).await {
         Ok(s) => s,
-        Err(e) => return server_error(&e),
+        Err(e) => return scope_error(e),
     };
     let config =
         match repo::find_briefing(&db, scope.user_id().as_str(), scope.bot_id().as_str()).await {
@@ -141,7 +141,7 @@ async fn post_briefing_config(
         .or(q.bot_id.as_deref());
     let scope = match resolve_scope(&user.0, &db, raw_bot).await {
         Ok(s) => s,
-        Err(e) => return server_error(&e),
+        Err(e) => return scope_error(e),
     };
 
     // Node `key in body` 意味論: present なフィールドだけ patch へ載せる。
@@ -195,7 +195,7 @@ async fn briefing_test(
         .or(q.bot_id.as_deref());
     let scope = match resolve_scope(&user.0, &db, raw_bot).await {
         Ok(s) => s,
-        Err(e) => return server_error(&e),
+        Err(e) => return scope_error(e),
     };
     let (uid, bid) = (
         scope.user_id().as_str().to_owned(),
@@ -229,7 +229,7 @@ async fn get_report_configs(
 ) -> Response {
     let scope = match resolve_scope(&user.0, &db, q.bot_id.as_deref()).await {
         Ok(s) => s,
-        Err(e) => return server_error(&e),
+        Err(e) => return scope_error(e),
     };
     let configs =
         match repo::get_reports(&db, scope.user_id().as_str(), scope.bot_id().as_str()).await {
@@ -272,7 +272,7 @@ async fn post_report_configs(
         .or(q.bot_id.as_deref());
     let scope = match resolve_scope(&user.0, &db, raw_bot).await {
         Ok(s) => s,
-        Err(e) => return server_error(&e),
+        Err(e) => return scope_error(e),
     };
 
     let patch = repo::ReportPatch {
@@ -324,7 +324,7 @@ async fn report_test(
         .or(q.bot_id.as_deref());
     let scope = match resolve_scope(&user.0, &db, raw_bot).await {
         Ok(s) => s,
-        Err(e) => return server_error(&e),
+        Err(e) => return scope_error(e),
     };
     let sent = runner
         .run_report(
@@ -410,6 +410,14 @@ fn server_error(err: &DbError) -> Response {
         .into_response()
 }
 
+/// Bot スコープの解決失敗（Bot 未指定・システム Bot は 403、アクセス不可は 404、DB 失敗は 500）。
+fn scope_error(err: ScopeError) -> Response {
+    match err {
+        ScopeError::Db(e) => server_error(&e),
+        other => other.into_response(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -463,6 +471,14 @@ mod tests {
                 [],
             )
             .expect("seed user");
+            // 配信設定の API は `botId` 必須（#139）。`u` の所有 Bot `mybot` と、`u` が触れない
+            // `otherbot` を入れておく（`other` の users 行は作らないので FK は切る）。
+            conn.execute_batch(
+                "PRAGMA foreign_keys = OFF;
+                 INSERT OR IGNORE INTO bots (id, user_id, name) VALUES ('mybot', 'u', 'mine');
+                 INSERT OR IGNORE INTO bots (id, user_id, name) VALUES ('otherbot', 'other', 'theirs');",
+            )
+            .expect("seed bots");
         }
         db
     }
@@ -501,7 +517,7 @@ mod tests {
         let app = app();
 
         // 未設定は config: null。
-        let (st, j) = send(&app, "GET", "/api/briefing-config", "").await;
+        let (st, j) = send(&app, "GET", "/api/briefing-config?botId=mybot", "").await;
         assert_eq!(st, StatusCode::OK);
         assert_eq!(j["success"], true);
         assert!(j["config"].is_null());
@@ -510,7 +526,7 @@ mod tests {
         let (st, j) = send(
             &app,
             "POST",
-            "/api/briefing-config",
+            "/api/briefing-config?botId=mybot",
             r#"{"enabled":true,"schedule_cron":"0 8 * * *","location_name":"東京","weather_lat":35.6,"news_feeds":["https://example.com/a.xml"]}"#,
         )
         .await;
@@ -518,7 +534,7 @@ mod tests {
         assert_eq!(j["message"], "朝報の設定を保存しました。");
 
         // GET に反映。
-        let (_st, j) = send(&app, "GET", "/api/briefing-config", "").await;
+        let (_st, j) = send(&app, "GET", "/api/briefing-config?botId=mybot", "").await;
         let c = &j["config"];
         assert_eq!(c["enabled"], true);
         assert_eq!(c["schedule_cron"], "0 8 * * *");
@@ -533,11 +549,11 @@ mod tests {
         let (_st, _j) = send(
             &app,
             "POST",
-            "/api/briefing-config",
+            "/api/briefing-config?botId=mybot",
             r#"{"location_name":null}"#,
         )
         .await;
-        let (_st, j) = send(&app, "GET", "/api/briefing-config", "").await;
+        let (_st, j) = send(&app, "GET", "/api/briefing-config?botId=mybot", "").await;
         assert!(j["config"]["location_name"].is_null());
         assert_eq!(j["config"]["enabled"], true); // 保持。
     }
@@ -548,7 +564,7 @@ mod tests {
         let (st, j) = send(
             &app,
             "POST",
-            "/api/briefing-config",
+            "/api/briefing-config?botId=mybot",
             r#"{"schedule_cron":"nope"}"#,
         )
         .await;
@@ -558,7 +574,7 @@ mod tests {
         let (st, j) = send(
             &app,
             "POST",
-            "/api/briefing-config",
+            "/api/briefing-config?botId=mybot",
             r#"{"news_feeds":["http://169.254.169.254/latest"]}"#,
         )
         .await;
@@ -570,7 +586,7 @@ mod tests {
     async fn briefing_test_requires_config_then_null_runner_reports_failure() {
         let app = app();
         // 未設定 → 400。
-        let (st, j) = send(&app, "POST", "/api/briefing/test", "{}").await;
+        let (st, j) = send(&app, "POST", "/api/briefing/test?botId=mybot", "{}").await;
         assert_eq!(st, StatusCode::BAD_REQUEST);
         assert_eq!(
             j["message"],
@@ -581,11 +597,11 @@ mod tests {
         send(
             &app,
             "POST",
-            "/api/briefing-config",
+            "/api/briefing-config?botId=mybot",
             r#"{"enabled":true,"schedule_cron":"0 8 * * *"}"#,
         )
         .await;
-        let (st, j) = send(&app, "POST", "/api/briefing/test", "{}").await;
+        let (st, j) = send(&app, "POST", "/api/briefing/test?botId=mybot", "{}").await;
         assert_eq!(st, StatusCode::OK);
         assert_eq!(j["success"], false);
         assert!(j["message"].as_str().unwrap().contains("配信に失敗"));
@@ -596,7 +612,13 @@ mod tests {
         let app = app();
 
         // 不正 type → 400。
-        let (st, j) = send(&app, "POST", "/api/report-configs", r#"{"type":"monthly"}"#).await;
+        let (st, j) = send(
+            &app,
+            "POST",
+            "/api/report-configs?botId=mybot",
+            r#"{"type":"monthly"}"#,
+        )
+        .await;
         assert_eq!(st, StatusCode::BAD_REQUEST);
         assert_eq!(
             j["message"],
@@ -607,7 +629,7 @@ mod tests {
         let (st, j) = send(
             &app,
             "POST",
-            "/api/report-configs",
+            "/api/report-configs?botId=mybot",
             r#"{"type":"daily","enabled":true,"schedule_cron":"0 21 * * *"}"#,
         )
         .await;
@@ -615,7 +637,7 @@ mod tests {
         assert_eq!(j["message"], "日報の設定を保存しました。");
 
         // GET に反映。
-        let (st, j) = send(&app, "GET", "/api/report-configs", "").await;
+        let (st, j) = send(&app, "GET", "/api/report-configs?botId=mybot", "").await;
         assert_eq!(st, StatusCode::OK);
         let configs = j["configs"].as_array().unwrap();
         assert!(configs
@@ -626,11 +648,45 @@ mod tests {
         let (st, j) = send(
             &app,
             "POST",
-            "/api/report-configs/test",
+            "/api/report-configs/test?botId=mybot",
             r#"{"type":"weekly"}"#,
         )
         .await;
         assert_eq!(st, StatusCode::OK);
         assert_eq!(j["success"], false);
+    }
+
+    /// #139: Bot 未指定・`system_default` は 403、アクセスできない Bot は 404（500 にせず、
+    /// システム Bot へもフォールバックしない）。body の botId でも同じ。
+    #[tokio::test]
+    async fn rejects_system_and_inaccessible_bot() {
+        let app = app();
+        for (query, status) in [
+            ("", StatusCode::FORBIDDEN),
+            ("?botId=system_default", StatusCode::FORBIDDEN),
+            ("?botId=otherbot", StatusCode::NOT_FOUND),
+        ] {
+            for (method, path) in [
+                ("GET", "/api/briefing-config"),
+                ("POST", "/api/briefing-config"),
+                ("POST", "/api/briefing/test"),
+                ("GET", "/api/report-configs"),
+                ("POST", "/api/report-configs"),
+                ("POST", "/api/report-configs/test"),
+            ] {
+                let uri = format!("{path}{query}");
+                let (st, j) = send(&app, method, &uri, r#"{"type":"daily"}"#).await;
+                assert_eq!(st, status, "{method} {uri}");
+                assert_eq!(j["success"], false, "{method} {uri}");
+            }
+        }
+        let (st, _) = send(
+            &app,
+            "POST",
+            "/api/briefing-config?botId=mybot",
+            r#"{"enabled":true,"botId":"system_default"}"#,
+        )
+        .await;
+        assert_eq!(st, StatusCode::FORBIDDEN);
     }
 }

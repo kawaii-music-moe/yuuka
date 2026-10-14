@@ -66,6 +66,24 @@ mod tests {
     // すべて含む）。テスト側で部分 DDL を手書きすると後続 INDEX（例 idx_todos_parent）と
     // 衝突するため、空ファイルからマイグレーションに一任する。
     fn seed_db() -> Db {
+        seed_db_at().0
+    }
+
+    /// 管理画面のデータ API は `botId` 必須（#139）。`u` の所有 Bot `mybot` と、`u` が触れない
+    /// `otherbot` を入れた DB（ルートのテスト用）。
+    fn seed_db_with_bots() -> Db {
+        let (db, path) = seed_db_at();
+        rusqlite::Connection::open(&path)
+            .expect("seed bots conn")
+            .execute_batch(
+                "INSERT INTO bots (id, user_id, name) VALUES ('mybot', 'u', 'mine');
+                 INSERT INTO bots (id, user_id, name) VALUES ('otherbot', 'other', 'theirs');",
+            )
+            .expect("seed bots");
+        db
+    }
+
+    fn seed_db_at() -> (Db, std::path::PathBuf) {
         let seq = SEQ.fetch_add(1, Ordering::Relaxed);
         let path = std::env::temp_dir().join(format!(
             "yuuka_finance_test_{}_{seq}.sqlite",
@@ -93,7 +111,7 @@ mod tests {
                 .expect("seed user");
             }
         }
-        db
+        (db, path)
     }
 
     fn scope(user: &str) -> UserScope {
@@ -331,7 +349,7 @@ mod tests {
                 role: Role::User,
             },
         });
-        let state = AppState::new(auth, WebConfig::default(), seed_db());
+        let state = AppState::new(auth, WebConfig::default(), seed_db_with_bots());
         super::routes().with_state(state)
     }
 
@@ -343,7 +361,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/api/expenses/add")
+                    .uri("/api/expenses/add?botId=mybot")
                     .header("cookie", "__Host-yuuka-session=good")
                     .header("content-type", "application/json")
                     .body(Body::from(
@@ -358,7 +376,7 @@ mod tests {
         let list = app
             .oneshot(
                 Request::builder()
-                    .uri("/api/expenses")
+                    .uri("/api/expenses?botId=mybot")
                     .header("cookie", "__Host-yuuka-session=good")
                     .body(Body::empty())
                     .unwrap(),
@@ -394,7 +412,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/api/expenses/add")
+                    .uri("/api/expenses/add?botId=mybot")
                     .header("cookie", "__Host-yuuka-session=good")
                     .header("content-type", "application/json")
                     .body(Body::from(r#"{"amount":0,"category":"食費"}"#))
@@ -410,7 +428,7 @@ mod tests {
         let resp = app()
             .oneshot(
                 Request::builder()
-                    .uri("/api/expenses")
+                    .uri("/api/expenses?botId=mybot")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -419,16 +437,58 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
 
+    /// #139: Bot 未指定・`system_default` は 403、アクセスできない Bot は 404（システム Bot へ
+    /// フォールバックしない）。
+    #[tokio::test]
+    async fn route_rejects_system_and_inaccessible_bot() {
+        let app = app();
+        for (method, uri, status) in [
+            ("GET", "/api/expenses", StatusCode::FORBIDDEN),
+            (
+                "GET",
+                "/api/expenses?botId=system_default",
+                StatusCode::FORBIDDEN,
+            ),
+            ("GET", "/api/expenses?botId=otherbot", StatusCode::NOT_FOUND),
+            ("POST", "/api/expenses/add", StatusCode::FORBIDDEN),
+            (
+                "POST",
+                "/api/expenses/add?botId=system_default",
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                "POST",
+                "/api/expenses/add?botId=otherbot",
+                StatusCode::NOT_FOUND,
+            ),
+        ] {
+            let resp = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(method)
+                        .uri(uri)
+                        .header("cookie", "__Host-yuuka-session=good")
+                        .header("content-type", "application/json")
+                        .body(Body::from(r#"{"amount":1500,"category":"食費"}"#))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), status, "{method} {uri}");
+        }
+    }
+
     // ── ヘルパ（消込テスト用の直挿し／検査）──────────────────────────────────
 
-    /// 支払い予定を1件挿入し（user=u/system_default）、任意で紐付き未完了 ToDo を作る。
+    /// 支払い予定を1件挿入し（user=u/mybot・ルートから消込できる Bot）、任意で紐付き未完了 ToDo を作る。
     async fn insert_plan_with_todo(db: &Db, with_open_todo: bool) -> i64 {
         db.writer
             .transaction(move |tx| {
                 tx.execute(
                     "INSERT INTO planned_payments \
                        (user_id, bot_id, title, amount, category, due_date) \
-                     VALUES ('u', 'system_default', '電気代', 5000, '光熱費', '2026-07-01')",
+                     VALUES ('u', 'mybot', '電気代', 5000, '光熱費', '2026-07-01')",
                     [],
                 )
                 .map_err(yuuka_db::map_sqlite)?;
@@ -436,7 +496,7 @@ mod tests {
                 if with_open_todo {
                     tx.execute(
                         "INSERT INTO todos (user_id, bot_id, title, status, linked_payment_id) \
-                         VALUES ('u', 'system_default', '電気代を払う', 'open', ?1)",
+                         VALUES ('u', 'mybot', '電気代を払う', 'open', ?1)",
                         rusqlite::params![plan_id],
                     )
                     .map_err(yuuka_db::map_sqlite)?;
@@ -521,7 +581,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/api/expenses/budget-limits")
+                    .uri("/api/expenses/budget-limits?botId=mybot")
                     .header("cookie", "__Host-yuuka-session=good")
                     .header("content-type", "application/json")
                     .body(Body::from(r#"{"category":"食費","limit_amount":50000}"#))
@@ -543,7 +603,7 @@ mod tests {
         let get = app
             .oneshot(
                 Request::builder()
-                    .uri("/api/expenses/budget-limits")
+                    .uri("/api/expenses/budget-limits?botId=mybot")
                     .header("cookie", "__Host-yuuka-session=good")
                     .body(Body::empty())
                     .unwrap(),
@@ -567,7 +627,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/api/expenses/budget-limits")
+                    .uri("/api/expenses/budget-limits?botId=mybot")
                     .header("cookie", "__Host-yuuka-session=good")
                     .header("content-type", "application/json")
                     .body(Body::from(r#"{"category":"食費","limit_amount":-1}"#))
@@ -630,7 +690,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/api/expenses/plans/add")
+                    .uri("/api/expenses/plans/add?botId=mybot")
                     .header("cookie", "__Host-yuuka-session=good")
                     .header("content-type", "application/json")
                     .body(Body::from(
@@ -656,7 +716,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/api/expenses/plans/add")
+                    .uri("/api/expenses/plans/add?botId=mybot")
                     .header("cookie", "__Host-yuuka-session=good")
                     .header("content-type", "application/json")
                     .body(Body::from(
@@ -674,7 +734,7 @@ mod tests {
         let db = seed_db();
         let plan_id = insert_plan_with_todo(&db, true).await;
         let repo = ExpenseRepo::new(&db);
-        let s = scope("u");
+        let s = UserScope::new(UserId::new("u"), BotId::new("mybot"));
 
         let plan = repo.get_plan(&s, plan_id).await.unwrap().expect("plan");
         let (expense_id, completed) = repo.settle_plan(&s, &plan).await.unwrap();
@@ -700,7 +760,7 @@ mod tests {
 
     #[tokio::test]
     async fn route_pay_settles_and_reports_todo_count() {
-        let db = seed_db();
+        let db = seed_db_with_bots();
         let plan_id = insert_plan_with_todo(&db, true).await;
         let auth = Arc::new(FakeAuth {
             user: SessionUser {
@@ -716,7 +776,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/api/expenses/plans/pay")
+                    .uri("/api/expenses/plans/pay?botId=mybot")
                     .header("cookie", "__Host-yuuka-session=good")
                     .header("content-type", "application/json")
                     .body(Body::from(format!(r#"{{"id":{plan_id}}}"#)))
@@ -746,7 +806,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/api/expenses/plans/pay")
+                    .uri("/api/expenses/plans/pay?botId=mybot")
                     .header("cookie", "__Host-yuuka-session=good")
                     .header("content-type", "application/json")
                     .body(Body::from(r#"{"id":9999}"#))
@@ -761,7 +821,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/api/expenses/plans/pay")
+                    .uri("/api/expenses/plans/pay?botId=mybot")
                     .header("cookie", "__Host-yuuka-session=good")
                     .header("content-type", "application/json")
                     .body(Body::from(r#"{"id":0}"#))
@@ -775,7 +835,7 @@ mod tests {
     #[tokio::test]
     async fn route_pay_non_pending_is_blocked() {
         // キャンセル済みの予定は 400（既に消込済/キャンセル済）。
-        let db = seed_db();
+        let db = seed_db_with_bots();
         let plan_id = insert_plan_with_todo(&db, false).await;
         db.writer
             .transaction(move |tx| {
@@ -801,7 +861,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/api/expenses/plans/pay")
+                    .uri("/api/expenses/plans/pay?botId=mybot")
                     .header("cookie", "__Host-yuuka-session=good")
                     .header("content-type", "application/json")
                     .body(Body::from(format!(r#"{{"id":{plan_id}}}"#)))
@@ -814,7 +874,7 @@ mod tests {
 
     #[tokio::test]
     async fn route_plan_delete_bare_success() {
-        let db = seed_db();
+        let db = seed_db_with_bots();
         let plan_id = insert_plan_with_todo(&db, false).await;
         let auth = Arc::new(FakeAuth {
             user: SessionUser {
@@ -832,7 +892,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/api/expenses/plans/delete")
+                    .uri("/api/expenses/plans/delete?botId=mybot")
                     .header("cookie", "__Host-yuuka-session=good")
                     .header("content-type", "application/json")
                     .body(Body::from(format!(r#"{{"id":{plan_id}}}"#)))
@@ -852,7 +912,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/api/expenses/plans/delete")
+                    .uri("/api/expenses/plans/delete?botId=mybot")
                     .header("cookie", "__Host-yuuka-session=good")
                     .header("content-type", "application/json")
                     .body(Body::from(format!(r#"{{"id":{plan_id}}}"#)))
