@@ -162,6 +162,8 @@ pub enum LoginUiState {
     },
     /// 認証成功。Bot 解決 + WS 接続中（`ready` 受領でオーバーレイへ遷移）。
     Connecting,
+    /// ログイン済みだが使える Bot が無い（管理画面での Bot 作成を案内し、再試行を待つ）。
+    NoBot,
     /// エラー表示。
     Error(String),
 }
@@ -416,6 +418,10 @@ impl YuukaApp {
             }
             LoginEvent::Failed(msg) => {
                 self.state.login = LoginUiState::Error(msg);
+                self.state.view = View::Login;
+            }
+            LoginEvent::NoBot => {
+                self.state.login = LoginUiState::NoBot;
                 self.state.view = View::Login;
             }
         }

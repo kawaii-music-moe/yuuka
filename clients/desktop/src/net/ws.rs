@@ -2,7 +2,8 @@
 //!
 //! 仕様: client_design.md §9 / backend_api.md §3。
 //!
-//! - `wss://{host}/ws/chat?botId={id}` に `Authorization: Bearer` 付きで接続。
+//! - `wss://{host}/ws/chat?botId={id}` に `Authorization: Bearer` 付きで接続（botId 未確定なら
+//!   付けずに接続し、サーバが選んだ Bot を `ready.bot` で受け取る）。
 //! - 受信タスク: JSON を [`ServerFrame`] にデコードし [`NetEvent::Frame`] で UI へ。
 //! - 送信タスク: UI からの [`UiEvent::Send`] を WS テキストフレームへ。
 //! - 指数バックオフ再接続（1s→2s→…→上限 30s）。再接続後 `ready` で復帰。
@@ -37,18 +38,24 @@ pub enum WsExit {
     Shutdown,
     /// トークン失効 or 明示ログアウト。トークンを破棄して再ログインへ戻す。
     LoggedOut,
+    /// botId 未指定の接続に 404 が返った＝使える Bot（自分の Bot・共有された Bot）が無い。
+    NoBot,
 }
 
 /// WS のメインループ。切断されたらバックオフして再接続し続ける。
+///
+/// `bot_id` が `None` なら `?botId=` を付けずに接続し、サーバが選んだ Bot（自分の最初の Bot、
+/// 無ければ共有された Bot）を `ready.bot` で受け取って以後の再接続に使う。
 ///
 /// チャネルは借用で受け取り（オーケストレータが所有・複数セッション間で再利用する）、
 /// 終了理由を [`WsExit`] で返す:
 /// - [`UiEvent::Shutdown`] / `ui_rx` クローズ → [`WsExit::Shutdown`]
 /// - [`UiEvent::Logout`] / 401 / `error{unauthorized}` → [`WsExit::LoggedOut`]
+/// - botId 未指定で 404 → [`WsExit::NoBot`]
 /// - [`UiEvent::SwitchBot`] は内部で botId を差し替えて即再接続する。
 pub async fn run_ws_loop(
     token: &str,
-    mut bot_id: String,
+    mut bot_id: Option<String>,
     ui_rx: &mut mpsc::Receiver<UiEvent>,
     net_tx: &mpsc::Sender<NetEvent>,
     http: &reqwest::Client,
@@ -67,24 +74,32 @@ pub async fn run_ws_loop(
             .send(NetEvent::Connection(ConnectionState::Connecting))
             .await;
 
-        match connect(token, &bot_id).await {
+        match connect(token, bot_id.as_deref()).await {
             Ok(stream) => {
                 backoff = BACKOFF_INITIAL; // 接続成功でバックオフをリセット。
                 forbidden_notified = None; // 以後この Bot が 403 になれば再通知する。
-                last_good_bot = Some(bot_id.clone()); // 403 時の自動復帰先として記憶。
-                let _ = net_tx
-                    .send(NetEvent::Connection(ConnectionState::Connected {
-                        bot_id: bot_id.clone(),
-                    }))
-                    .await;
 
                 // 退避していた送信を先頭に注入して、1 接続分のセッションを回す。
-                match run_session(stream, ui_rx, net_tx, &mut outbox, http, fetched_avatars).await {
+                // 束縛 Bot は ready で確定する（botId 未指定の接続はここで初めて決まる）。
+                let outcome = run_session(
+                    stream,
+                    &mut bot_id,
+                    ui_rx,
+                    net_tx,
+                    &mut outbox,
+                    http,
+                    fetched_avatars,
+                )
+                .await;
+                if bot_id.is_some() {
+                    last_good_bot = bot_id.clone(); // 403 時の自動復帰先として記憶。
+                }
+                match outcome {
                     SessionOutcome::Shutdown => return WsExit::Shutdown,
                     SessionOutcome::LoggedOut => return WsExit::LoggedOut,
                     SessionOutcome::SwitchBot(new_id) => {
                         // Bot 切替: 即時に新 botId で張り直す（バックオフ無し）。
-                        bot_id = new_id;
+                        bot_id = Some(new_id);
                         outbox.clear(); // 別 Bot の文脈なので退避は破棄。
                         continue;
                     }
@@ -98,13 +113,17 @@ pub async fn run_ws_loop(
                 if is_unauthorized(&e) {
                     return WsExit::LoggedOut;
                 }
+                // botId 未指定で 404 = サーバが束縛できる Bot が無い（システム Bot へは束縛しない）。
+                if bot_id.is_none() && is_not_found(&e) {
+                    return WsExit::NoBot;
+                }
                 // 403 = この Bot へのアクセス権が無い（共有取消・無効 ID 等）。
                 if is_forbidden(&e) {
                     // NetError は UI に出ないため、エラーフレームを合成して履歴に可視化する
                     // （沈黙の無限リトライで「選んでも切り替わらない」ように見えるのを防ぐ）。
                     // 同一 Bot の再試行ごとに繰り返さないよう、通知は botId 単位で 1 度だけ。
-                    if forbidden_notified.as_deref() != Some(bot_id.as_str()) {
-                        forbidden_notified = Some(bot_id.clone());
+                    if forbidden_notified != bot_id {
+                        forbidden_notified = bot_id.clone();
                         let _ = net_tx
                             .send(NetEvent::Frame(crate::model::ServerFrame::Error {
                                 code: crate::model::ErrorCode::Internal,
@@ -116,8 +135,8 @@ pub async fn run_ws_loop(
                     // 直前に正常接続できていた別 Bot があれば、そこへ即座に戻す
                     // （切替先が 403 でもユーザーを行き止まりにせず、selector も追従する）。
                     if let Some(prev) = last_good_bot.clone() {
-                        if prev != bot_id {
-                            bot_id = prev;
+                        if bot_id.as_deref() != Some(prev.as_str()) {
+                            bot_id = Some(prev);
                             outbox.clear();
                             backoff = BACKOFF_INITIAL;
                             continue;
@@ -143,7 +162,7 @@ pub async fn run_ws_loop(
                 Some(UiEvent::Shutdown) | None => return WsExit::Shutdown,
                 Some(UiEvent::Logout) => return WsExit::LoggedOut,
                 Some(UiEvent::SwitchBot { bot_id: new_id }) => {
-                    bot_id = new_id;
+                    bot_id = Some(new_id);
                     outbox.clear();
                     backoff = BACKOFF_INITIAL;
                     continue;
@@ -173,6 +192,13 @@ fn is_forbidden(e: &tokio_tungstenite::tungstenite::Error) -> bool {
     matches!(e, Error::Http(resp) if resp.status() == StatusCode::FORBIDDEN)
 }
 
+/// upgrade レスポンスが 404 か（botId 未指定で束縛できる Bot が無い判定）。
+fn is_not_found(e: &tokio_tungstenite::tungstenite::Error) -> bool {
+    use tokio_tungstenite::tungstenite::http::StatusCode;
+    use tokio_tungstenite::tungstenite::Error;
+    matches!(e, Error::Http(resp) if resp.status() == StatusCode::NOT_FOUND)
+}
+
 /// 1 接続分のセッション内ループの結果。
 enum SessionOutcome {
     /// アプリ終了。
@@ -188,10 +214,10 @@ enum SessionOutcome {
 type WsStream =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
-/// `wss://.../ws/chat?botId={id}` へ Bearer 付きで接続する。
+/// `wss://.../ws/chat?botId={id}`（`None` は `?botId=` 無し）へ Bearer 付きで接続する。
 async fn connect(
     token: &str,
-    bot_id: &str,
+    bot_id: Option<&str>,
 ) -> Result<WsStream, tokio_tungstenite::tungstenite::Error> {
     let url = ws_url(bot_id);
     // ネイティブクライアントは upgrade リクエストに任意ヘッダを付けられる
@@ -208,8 +234,11 @@ async fn connect(
 }
 
 /// 接続確立後の送受信ループ。送信（UI/keepalive）と受信を `select!` で多重化する。
+///
+/// `ready` を受けたら `bound` を `ready.bot.id` にし、接続済み（[`ConnectionState::Connected`]）を通知する。
 async fn run_session(
     stream: WsStream,
+    bound: &mut Option<String>,
     ui_rx: &mut mpsc::Receiver<UiEvent>,
     net_tx: &mpsc::Sender<NetEvent>,
     outbox: &mut Vec<ClientFrame>,
@@ -274,6 +303,12 @@ async fn run_session(
                             // ready を受けたら束縛 Bot と一覧のアイコンを Net 側で先読みする
                             // （UI スレッドを塞がない・重複は fetched_avatars で抑止）。
                             if let crate::model::ServerFrame::Ready { bot, bots, .. } = &frame {
+                                *bound = Some(bot.id.clone());
+                                let _ = net_tx
+                                    .send(NetEvent::Connection(ConnectionState::Connected {
+                                        bot_id: bot.id.clone(),
+                                    }))
+                                    .await;
                                 spawn_avatar_fetches(http, bot, bots, fetched_avatars, net_tx);
                             }
                             // トークン失効通知は UI へ転送しつつセッションを畳んで再ログインへ。

@@ -9,6 +9,8 @@
     clippy::indexing_slicing
 )]
 
+use std::net::SocketAddr;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -98,8 +100,8 @@ impl GeminiFactory for FakeFactory {
     }
 }
 
-/// users 行に暗号化 Gemini キーを seed して DB を返す。
-fn seeded_db() -> (Db, Arc<SystemCrypto>) {
+/// users 行に暗号化 Gemini キーを seed して DB を返す（Bot 行の追加用に DB ファイルのパスも返す）。
+fn seeded_db() -> (Db, Arc<SystemCrypto>, PathBuf) {
     let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let path = std::env::temp_dir().join(format!("yuuka_ws_it_{}_{n}.sqlite", std::process::id()));
     {
@@ -117,25 +119,58 @@ fn seeded_db() -> (Db, Arc<SystemCrypto>) {
         rusqlite::params![enc.encrypted, enc.iv, enc.auth_tag],
     )
     .unwrap();
-    (db, crypto)
+    // 共有 Bot のオーナー（u1 以外のユーザー）。
+    conn.execute(
+        "INSERT INTO users (discord_id, username, password_hash, salt, role) \
+         VALUES ('u2', 'kayo', 'x', '00', 'user')",
+        [],
+    )
+    .unwrap();
+    (db, crypto, path)
 }
 
-/// 実サーバを ephemeral ポートで起動し、Bearer 認証つき WS クライアントで接続する。
-#[tokio::test]
-async fn ws_chat_ready_then_msg_returns_done() {
-    let (db, crypto) = seeded_db();
+/// Bot 行を作る（`created_at` で作成順を固定する）。
+fn insert_bot(path: &Path, id: &str, owner: &str, name: &str, created_at: &str) {
+    rusqlite::Connection::open(path)
+        .unwrap()
+        .execute(
+            "INSERT INTO bots (id, user_id, name, created_at) VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![id, owner, name, created_at],
+        )
+        .unwrap();
+}
+
+/// `owner` の Bot を u1 へ共有する（`active`）。
+fn share_bot_to_u1(path: &Path, bot_id: &str, owner: &str) {
+    rusqlite::Connection::open(path)
+        .unwrap()
+        .execute(
+            "INSERT INTO bot_shares (bot_id, owner_id, shared_user_id, status) \
+             VALUES (?1, ?2, 'u1', 'active')",
+            rusqlite::params![bot_id, owner],
+        )
+        .unwrap();
+}
+
+/// 実サーバを ephemeral ポートで起動する（`/ws/chat` 以外は空ルータ）。
+async fn start_server(
+    db: Db,
+    crypto: Arc<SystemCrypto>,
+    auth: Arc<dyn AuthBackend>,
+    reply: &str,
+) -> (SocketAddr, tokio::task::JoinHandle<()>) {
     let engine = Arc::new(ChatEngine::new(
         db.clone(),
         Some(crypto),
         ToolRegistry::new(),
         Arc::new(FakeFactory {
-            text: "こんにちは！".to_owned(),
+            text: reply.to_owned(),
         }),
         None,
         Arc::new(yuuka_mcp::NullMcpClient),
         None,
     ));
-    let state = AppState::new(Arc::new(FakeAuth), WebConfig::default(), db);
+    let state = AppState::new(auth, WebConfig::default(), db);
     let app = build_app(
         state,
         axum::Router::new(),
@@ -163,22 +198,55 @@ async fn ws_chat_ready_then_msg_returns_done() {
     let server = tokio::spawn(async move {
         let _ = axum::serve(listener, app).await;
     });
+    (addr, server)
+}
 
-    // Bearer 認証つきで /ws/chat?botId=system_default へ接続。
-    let mut req = format!("ws://{addr}/ws/chat?botId=system_default")
+/// Bearer "good" で `/ws/chat{query}` へ接続する。
+async fn connect_bearer(
+    addr: SocketAddr,
+    query: &str,
+) -> Result<WsStream, tokio_tungstenite::tungstenite::Error> {
+    let mut req = format!("ws://{addr}/ws/chat{query}")
         .into_client_request()
         .unwrap();
     req.headers_mut()
         .insert("authorization", "Bearer good".parse().unwrap());
-    let (mut ws, _resp) = tokio_tungstenite::connect_async(req)
+    tokio_tungstenite::connect_async(req)
         .await
-        .expect("connect");
+        .map(|(ws, _)| ws)
+}
+
+/// `ready.bots` の `(id, primary)` 一覧。
+fn bot_flags(ready: &Value) -> Vec<(String, bool)> {
+    ready["bots"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|b| {
+            (
+                b["id"].as_str().unwrap().to_owned(),
+                b["primary"].as_bool().unwrap(),
+            )
+        })
+        .collect()
+}
+
+/// 実サーバを ephemeral ポートで起動し、Bearer 認証つき WS クライアントで接続する。
+/// `botId` 未指定は自分の Bot へ束縛される（システム Bot ではない）。
+#[tokio::test]
+async fn ws_chat_ready_then_msg_returns_done() {
+    let (db, crypto, path) = seeded_db();
+    insert_bot(&path, "b1", "u1", "ユウカ", "2026-01-01 00:00:00");
+    let (addr, server) = start_server(db, crypto, Arc::new(FakeAuth), "こんにちは！").await;
+
+    let mut ws = connect_bearer(addr, "").await.expect("connect");
 
     // 1) 最初のフレームは ready（束縛 Bot・ユーザー・上限）。
     let ready = next_json(&mut ws).await;
     assert_eq!(ready["type"], "ready", "ready: {ready}");
     assert_eq!(ready["user"]["discordId"], "u1");
-    assert_eq!(ready["bot"]["id"], "system_default");
+    assert_eq!(ready["bot"]["id"], "b1");
+    assert_eq!(ready["bot"]["primary"], true);
     assert_eq!(ready["maxUploadMb"], 20);
 
     // 2) msg 送信 → status/done を受け取る（done まで読む）。
@@ -195,51 +263,118 @@ async fn ws_chat_ready_then_msg_returns_done() {
     server.abort();
 }
 
+/// `botId` 未指定は、作成が先のシステム Bot・共有された Bot よりも自分の最初の Bot へ束縛する。
+/// `ready.bots` からシステム Bot を外し、`primary` は束縛先の Bot にだけ付く（#142）。
+#[tokio::test]
+async fn ws_chat_without_bot_id_binds_own_bot_not_system_bot() {
+    let (db, crypto, path) = seeded_db();
+    // u1 は管理者としてシステム Bot のオーナーでもある（システム Bot は自分の Bot として数えない）。
+    insert_bot(
+        &path,
+        "system_default",
+        "u1",
+        "案内役",
+        "2026-01-01 00:00:00",
+    );
+    insert_bot(&path, "shared1", "u2", "カヨコ", "2026-01-02 00:00:00");
+    share_bot_to_u1(&path, "shared1", "u2");
+    insert_bot(&path, "own1", "u1", "ユウカ", "2026-01-03 00:00:00");
+    insert_bot(&path, "own2", "u1", "ノア", "2026-01-04 00:00:00");
+    let (addr, server) = start_server(db, crypto, Arc::new(FakeAuth), "x").await;
+
+    let mut ws = connect_bearer(addr, "").await.expect("connect");
+    let ready = next_json(&mut ws).await;
+    assert_eq!(ready["type"], "ready", "ready: {ready}");
+    assert_eq!(ready["bot"]["id"], "own1");
+    assert_eq!(ready["bot"]["primary"], true);
+    assert_eq!(
+        bot_flags(&ready),
+        [
+            ("shared1".to_owned(), false),
+            ("own1".to_owned(), true),
+            ("own2".to_owned(), false),
+        ]
+    );
+    ws.close(None).await.ok();
+
+    // 空の `botId=` も未指定と同じ扱い。
+    let mut ws = connect_bearer(addr, "?botId=").await.expect("connect");
+    let ready = next_json(&mut ws).await;
+    assert_eq!(ready["bot"]["id"], "own1");
+    ws.close(None).await.ok();
+
+    // 明示の `botId=system_default` は従来どおり接続できる（一覧には出さず、primary でもない）。
+    let mut ws = connect_bearer(addr, "?botId=system_default")
+        .await
+        .expect("connect");
+    let ready = next_json(&mut ws).await;
+    assert_eq!(ready["bot"]["id"], "system_default");
+    assert_eq!(ready["bot"]["name"], "案内役");
+    assert_eq!(ready["bot"]["primary"], false);
+    assert!(bot_flags(&ready)
+        .iter()
+        .all(|(id, _)| id != "system_default"));
+    ws.close(None).await.ok();
+
+    server.abort();
+}
+
+/// 自分の Bot が無ければ、`botId` 未指定は最初の共有された Bot へ束縛する。
+#[tokio::test]
+async fn ws_chat_without_bot_id_falls_back_to_shared_bot() {
+    let (db, crypto, path) = seeded_db();
+    insert_bot(
+        &path,
+        "system_default",
+        "u2",
+        "案内役",
+        "2026-01-01 00:00:00",
+    );
+    insert_bot(&path, "shared1", "u2", "カヨコ", "2026-01-02 00:00:00");
+    share_bot_to_u1(&path, "shared1", "u2");
+    let (addr, server) = start_server(db, crypto, Arc::new(FakeAuth), "x").await;
+
+    let mut ws = connect_bearer(addr, "").await.expect("connect");
+    let ready = next_json(&mut ws).await;
+    assert_eq!(ready["bot"]["id"], "shared1");
+    assert_eq!(bot_flags(&ready), [("shared1".to_owned(), true)]);
+    ws.close(None).await.ok();
+
+    server.abort();
+}
+
+/// 使える Bot（自分の Bot・共有された Bot）が無いとき、`botId` 未指定の upgrade は 404 で断り、
+/// システム Bot へは束縛しない。
+#[tokio::test]
+async fn ws_chat_without_bot_id_and_no_bots_is_not_found() {
+    let (db, crypto, path) = seeded_db();
+    insert_bot(
+        &path,
+        "system_default",
+        "u1",
+        "案内役",
+        "2026-01-01 00:00:00",
+    );
+    let (addr, server) = start_server(db, crypto, Arc::new(FakeAuth), "x").await;
+
+    match connect_bearer(addr, "").await {
+        Err(tokio_tungstenite::tungstenite::Error::Http(resp)) => {
+            assert_eq!(resp.status(), 404);
+        }
+        Err(e) => panic!("unexpected error: {e}"),
+        Ok(_) => panic!("使える Bot が無いのに upgrade が通った"),
+    }
+
+    server.abort();
+}
+
 /// **B5（CSWSH 回帰）**: 正当な Cookie セッションだけを持ち Bearer を持たない WS upgrade は
 /// **拒否**されねばならない（`/ws/chat` は Bearer 専用）。これが 101 で通ると、悪意サイトが
 /// ambient Cookie を載せて Cross-Site WebSocket Hijacking を成立させられる。
 #[tokio::test]
 async fn ws_chat_rejects_cookie_only_auth() {
-    let (db, crypto) = seeded_db();
-    let engine = Arc::new(ChatEngine::new(
-        db.clone(),
-        Some(crypto),
-        ToolRegistry::new(),
-        Arc::new(FakeFactory {
-            text: "x".to_owned(),
-        }),
-        None,
-        Arc::new(yuuka_mcp::NullMcpClient),
-        None,
-    ));
-    let state = AppState::new(Arc::new(CookieAndBearerAuth), WebConfig::default(), db);
-    let app = build_app(
-        state,
-        axum::Router::new(),
-        axum::Router::new(),
-        axum::Router::new(),
-        axum::Router::new(),
-        axum::Router::new(),
-        // credential ルータ（本テストでは不要・空ルータ）。
-        axum::Router::new(),
-        // デバイスフロー ルータ（本テストでは不要・空ルータ）。
-        axum::Router::new(),
-        ws_routes(engine, 20),
-        // MCP / 統合設定 / finance / Bot 管理 / client-api ルータ（本テストでは不要・空ルータ）。
-        axum::Router::new(),
-        axum::Router::new(),
-        axum::Router::new(),
-        axum::Router::new(),
-        axum::Router::new(),
-        None,
-        None,
-    );
-
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    let server = tokio::spawn(async move {
-        let _ = axum::serve(listener, app).await;
-    });
+    let (db, crypto, _path) = seeded_db();
+    let (addr, server) = start_server(db, crypto, Arc::new(CookieAndBearerAuth), "x").await;
 
     // 正当な Cookie セッションのみ（Authorization ヘッダ無し）で接続を試みる。
     let mut req = format!("ws://{addr}/ws/chat?botId=system_default")
@@ -254,13 +389,7 @@ async fn ws_chat_rejects_cookie_only_auth() {
     );
 
     // 対照: 同一サーバに Bearer で接続すると 101 で通る（Bearer 専用が機能している証左）。
-    let mut ok_req = format!("ws://{addr}/ws/chat?botId=system_default")
-        .into_client_request()
-        .unwrap();
-    ok_req
-        .headers_mut()
-        .insert("authorization", "Bearer good".parse().unwrap());
-    let (mut ws, _resp) = tokio_tungstenite::connect_async(ok_req)
+    let mut ws = connect_bearer(addr, "?botId=system_default")
         .await
         .expect("Bearer 認証の WS upgrade は成功する");
     let ready = next_json(&mut ws).await;

@@ -54,6 +54,20 @@ pub fn view(state: &mut AppState, ui: &mut egui::Ui) {
                     ui.label("接続中…");
                 });
             }
+            LoginUiState::NoBot => {
+                ui.colored_label(egui::Color32::LIGHT_RED, "利用可能な Bot がありません。");
+                ui.add_space(4.0);
+                ui.label("管理画面で自分の Bot を作成してから、再試行してください。");
+                ui.add_space(8.0);
+                if ui.button("再試行").clicked() {
+                    // Net スレッドはログイン済みのまま待機しており、StartLogin で接続をやり直す。
+                    state.login = LoginUiState::Connecting;
+                    state.request_login_start = true;
+                }
+                if ui.button("ログアウト").clicked() {
+                    state.request_logout = true;
+                }
+            }
             LoginUiState::Error(msg) => {
                 ui.colored_label(egui::Color32::LIGHT_RED, msg);
                 if ui.button("再試行").clicked() {

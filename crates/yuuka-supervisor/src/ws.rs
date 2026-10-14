@@ -3,7 +3,8 @@
 //! クライアントは **Rust デスクトップ**（`clients/desktop/src/model.rs` の `ClientFrame`/`ServerFrame`
 //! が唯一の契約）。認証は **Bearer デスクトップトークン専用**（[`BearerUser`]・Cookie は受理しない＝
 //! WS upgrade の CSWSH を構造的に封じる・B5）、`?botId=` は接続時に 1 Bot へ束縛し [`has_bot_access`]
-//! で検証する。フレームは全て JSON テキスト。
+//! で検証する（未指定は自分の最初の Bot、無ければ最初の共有 Bot。システム Bot は既定にしない）。
+//! フレームは全て JSON テキスト。
 //!
 //! **実装範囲（P1-2 増分）**: 接続時 `ready` → 受信 `msg` を [`ChatEngine::secretary_turn`] で処理し
 //! `status`（thinking/writing）→ `done` を返す。`reset` はコンテキストクリア、`ping` は no-op。keepalive は
@@ -52,7 +53,8 @@ struct BotQuery {
     bot_id: Option<String>,
 }
 
-/// WS upgrade ハンドラ。**Bearer 専用**認証（[`BearerUser`]・CSWSH 対策 B5）→ botId アクセス検証 → upgrade。
+/// WS upgrade ハンドラ。**Bearer 専用**認証（[`BearerUser`]・CSWSH 対策 B5）→ 束縛 Bot の決定と
+/// botId アクセス検証 → upgrade。
 async fn ws_upgrade(
     user: BearerUser,
     State(state): State<AppState>,
@@ -61,19 +63,24 @@ async fn ws_upgrade(
     Query(q): Query<BotQuery>,
     ws: WebSocketUpgrade,
 ) -> Response {
-    // 未指定は既定 Bot（Node と同じ system_default 束縛）。
-    let bot_id = q
-        .bot_id
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "system_default".to_owned());
+    let Ok(bots) = list_bot_infos(&state.db, user.0.discord_id.as_str()).await else {
+        return (StatusCode::INTERNAL_SERVER_ERROR, "internal").into_response();
+    };
+    // 未指定は `primary`（自分の最初の Bot、無ければ最初の共有 Bot）へ束縛する。システム Bot は案内役で
+    // タスクや予定を扱えないため既定にしない。使える Bot が無ければ束縛先が無いので 404。
+    let bot_id = match q.bot_id.filter(|s| !s.is_empty()) {
+        Some(id) => id,
+        None => match bots.primary_id() {
+            Some(id) => id.to_owned(),
+            None => return (StatusCode::NOT_FOUND, "no bot").into_response(),
+        },
+    };
     match has_bot_access(&state.db, user.0.discord_id.as_str(), &bot_id).await {
         Ok(true) => {}
         Ok(false) => return (StatusCode::FORBIDDEN, "forbidden").into_response(),
         Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, "internal").into_response(),
     }
-    ws.on_upgrade(move |socket| {
-        handle_socket(socket, user.0, bot_id, state.db.clone(), engine, max_upload)
-    })
+    ws.on_upgrade(move |socket| handle_socket(socket, user.0, bot_id, bots, engine, max_upload))
 }
 
 // ─── サーバ → クライアントのフレーム（clients/desktop/src/model.rs `ServerFrame` に一致） ───
@@ -157,7 +164,7 @@ async fn handle_socket(
     socket: WebSocket,
     user: SessionUser,
     bot_id: String,
-    db: Db,
+    bots: AccessibleBots,
     engine: Arc<ChatEngine>,
     max_upload: MaxUploadMb,
 ) {
@@ -172,16 +179,11 @@ async fn handle_socket(
         }
     });
 
-    // ready: 束縛 Bot・アクセス可能 Bot 一覧・添付上限を最初に配布する。
-    let bots = list_bot_infos(&db, user.discord_id.as_str()).await;
-    let bound = bots
-        .iter()
-        .find(|b| b.id == bot_id)
-        .map_or_else(|| synthetic_bot(&bot_id), clone_bot);
+    // ready: 束縛 Bot・切替候補の Bot 一覧・添付上限を最初に配布する。
     let ready = ServerFrame::Ready {
         user: &user,
-        bot: bound,
-        bots,
+        bot: bots.bound(&bot_id),
+        bots: bots.bots,
         max_upload_mb: max_upload.0,
     };
     let _ = tx.send(json_msg(&ready));
@@ -420,42 +422,86 @@ fn random_message_id() -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
 }
 
-/// アクセス可能 Bot 一覧を [`BotInfo`] で返す（Node `listBotsForUser().map(toBotInfo)`）。
-async fn list_bot_infos(db: &Db, user_id: &str) -> Vec<BotInfo> {
-    let user_id = user_id.to_owned();
+/// 接続ユーザーがアクセスできる Bot（[`list_bot_infos`] の結果）。
+struct AccessibleBots {
+    /// `ready.bots`（切替候補）: 自分の Bot・共有された Bot を作成順に並べる。システム Bot（案内役）は
+    /// PWA と同じく候補に出さない。`primary` は自分の最初の Bot（無ければ最初の共有 Bot）にだけ付く。
+    bots: Vec<BotInfo>,
+    /// システム Bot（行があれば）。`?botId=system_default` を明示したときの `ready.bot` にだけ使う。
+    system: Option<BotInfo>,
+}
+
+impl AccessibleBots {
+    /// アクセス可能な Bot の行（作成順・オーナー ID 付き）から組む。
+    fn from_rows(user_id: &str, rows: Vec<(BotInfo, String)>) -> Self {
+        let mut system = None;
+        let mut bots = Vec::new();
+        let mut first_owned = None;
+        for (bot, owner) in rows {
+            if bot.id == yuuka_core::BotId::SYSTEM_DEFAULT {
+                system = Some(bot);
+                continue;
+            }
+            if first_owned.is_none() && owner == user_id {
+                first_owned = Some(bots.len());
+            }
+            bots.push(bot);
+        }
+        if let Some(b) = bots.get_mut(first_owned.unwrap_or(0)) {
+            b.primary = true;
+        }
+        Self { bots, system }
+    }
+
+    /// `?botId=` 未指定時に束縛する Bot（`primary`）。使える Bot が無ければ `None`。
+    fn primary_id(&self) -> Option<&str> {
+        self.bots.iter().find(|b| b.primary).map(|b| b.id.as_str())
+    }
+
+    /// 束縛 Bot の `ready.bot`。一覧に無ければ合成する（Node の `?? { id, name: botId, ... }`）。
+    fn bound(&self, bot_id: &str) -> BotInfo {
+        self.bots
+            .iter()
+            .chain(&self.system)
+            .find(|b| b.id == bot_id)
+            .map_or_else(|| synthetic_bot(bot_id), clone_bot)
+    }
+}
+
+/// アクセス可能 Bot を返す（Node `listBotsForUser().map(toBotInfo)`）。
+///
+/// # Errors
+/// 読み取り失敗時 [`DbError`](yuuka_core::DbError)。
+async fn list_bot_infos(db: &Db, user_id: &str) -> Result<AccessibleBots, yuuka_core::DbError> {
+    let uid = user_id.to_owned();
     let rows = db
         .read
         .read(move |conn| {
             let mut stmt = conn
                 .prepare(
-                    "SELECT DISTINCT b.id, b.name, b.discord_avatar_url FROM bots b \
+                    "SELECT DISTINCT b.id, b.name, b.discord_avatar_url, b.user_id FROM bots b \
                      LEFT JOIN bot_shares s ON s.bot_id = b.id AND s.shared_user_id = ?1 AND s.status = 'active' \
                      WHERE b.user_id = ?1 OR b.id = 'system_default' OR s.id IS NOT NULL \
                      ORDER BY b.created_at ASC",
                 )
                 .map_err(yuuka_db::map_sqlite)?;
             let out = stmt
-                .query_map([user_id], |r| {
-                    Ok(BotInfo {
+                .query_map([uid], |r| {
+                    let bot = BotInfo {
                         id: r.get::<_, String>(0)?,
                         name: r.get::<_, String>(1)?,
                         discord_avatar_url: r.get::<_, Option<String>>(2)?,
-                        primary: false, // 下で id 判定して設定。
-                    })
+                        primary: false, // AccessibleBots::from_rows で設定。
+                    };
+                    Ok((bot, r.get::<_, String>(3)?))
                 })
                 .map_err(yuuka_db::map_sqlite)?
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(yuuka_db::map_sqlite)?;
             Ok(out)
         })
-        .await
-        .unwrap_or_default();
-    rows.into_iter()
-        .map(|mut b| {
-            b.primary = b.id == "system_default";
-            b
-        })
-        .collect()
+        .await?;
+    Ok(AccessibleBots::from_rows(user_id, rows))
 }
 
 /// 一覧に無い束縛 Bot の合成情報（Node の `?? { id, name: botId, ... }`）。
@@ -464,7 +510,7 @@ fn synthetic_bot(bot_id: &str) -> BotInfo {
         id: bot_id.to_owned(),
         name: bot_id.to_owned(),
         discord_avatar_url: None,
-        primary: bot_id == "system_default",
+        primary: false,
     }
 }
 
@@ -492,8 +538,8 @@ mod tests {
         let ready = ServerFrame::Ready {
             user: &user,
             bot: BotInfo {
-                id: "system_default".to_owned(),
-                name: "デフォルト".to_owned(),
+                id: "b1".to_owned(),
+                name: "ユウカ".to_owned(),
                 discord_avatar_url: None,
                 primary: true,
             },
@@ -503,11 +549,73 @@ mod tests {
         let v: serde_json::Value = serde_json::to_value(&ready).expect("ser");
         assert_eq!(v["type"], "ready");
         assert_eq!(v["user"]["discordId"], "u1");
-        assert_eq!(v["bot"]["id"], "system_default");
+        assert_eq!(v["bot"]["id"], "b1");
         assert_eq!(v["bot"]["primary"], true);
         // discord_avatar_url は None なので出力されない。
         assert!(v["bot"].get("discord_avatar_url").is_none());
         assert_eq!(v["maxUploadMb"], 20);
+    }
+
+    /// 切替候補からシステム Bot を外し、`primary` は自分の最初の Bot（無ければ最初の共有 Bot）に付ける。
+    #[test]
+    fn accessible_bots_exclude_system_bot_and_prefer_own_bot() {
+        use super::AccessibleBots;
+        let bot = |id: &str, name: &str| BotInfo {
+            id: id.to_owned(),
+            name: name.to_owned(),
+            ..BotInfo::default()
+        };
+        let flags = |b: &AccessibleBots| {
+            b.bots
+                .iter()
+                .map(|x| (x.id.clone(), x.primary))
+                .collect::<Vec<_>>()
+        };
+
+        // 作成順: システム Bot（管理者 u1 がオーナー）→ 共有された Bot → 自分の Bot 2 つ。
+        let all = AccessibleBots::from_rows(
+            "u1",
+            vec![
+                (bot("system_default", "案内役"), "u1".to_owned()),
+                (bot("shared", "共有"), "u2".to_owned()),
+                (bot("own1", "ユウカ"), "u1".to_owned()),
+                (bot("own2", "カヨコ"), "u1".to_owned()),
+            ],
+        );
+        assert_eq!(
+            flags(&all),
+            [
+                ("shared".to_owned(), false),
+                ("own1".to_owned(), true),
+                ("own2".to_owned(), false),
+            ]
+        );
+        assert_eq!(all.primary_id(), Some("own1"));
+        // 明示の system_default は一覧に出さないが、ready.bot は実名で返す（primary ではない）。
+        let system = all.bound("system_default");
+        assert_eq!(system.name, "案内役");
+        assert!(!system.primary);
+        // 一覧に無い Bot は合成情報（primary ではない）。
+        assert!(!all.bound("unknown").primary);
+
+        // 自分の Bot が無ければ最初の共有 Bot。
+        let shared_only = AccessibleBots::from_rows(
+            "u1",
+            vec![
+                (bot("system_default", "案内役"), "admin".to_owned()),
+                (bot("s1", "共有1"), "u2".to_owned()),
+                (bot("s2", "共有2"), "u3".to_owned()),
+            ],
+        );
+        assert_eq!(shared_only.primary_id(), Some("s1"));
+
+        // システム Bot しか無ければ、未指定の束縛先は無い。
+        let none = AccessibleBots::from_rows(
+            "u1",
+            vec![(bot("system_default", "案内役"), "u1".to_owned())],
+        );
+        assert!(none.bots.is_empty());
+        assert_eq!(none.primary_id(), None);
     }
 
     #[test]

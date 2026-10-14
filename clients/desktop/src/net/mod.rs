@@ -63,6 +63,8 @@ pub enum LoginEvent {
     Succeeded,
     /// ログイン失敗/失効（人間向けメッセージ）。
     Failed(String),
+    /// ログイン済みだが使える Bot（自分の Bot・共有された Bot）が無い。作成を案内し再試行を待つ。
+    NoBot,
 }
 
 /// WS 接続状態（client_design.md §5「接続状態」表示）。
@@ -86,11 +88,11 @@ pub enum ConnectionState {
 ///
 /// 1. keyring のトークンを読む。無ければ [`UiEvent::StartLogin`] を待ってデバイス
 ///    フローを回し、access_token を得る（client_design.md §8）。
-/// 2. `bot_id` 未確定なら `GET /api/bots` でプライマリ Bot を解決する
-///    （architecture.md §8.1）。
-/// 3. WS セッションを回す（[`ws::run_ws_loop`]）。ログアウト/トークン失効で
-///    セッションが終わったらトークンを破棄して 1. へ戻る。
-/// 4. [`UiEvent::Shutdown`]（または `ui_rx` クローズ）で終了する。
+/// 2. WS セッションを回す（[`ws::run_ws_loop`]）。`bot_id` 未確定なら `?botId=` を付けずに
+///    接続し、サーバが選ぶプライマリ Bot へ束縛する（`ready.bot` で確定）。ログアウト/
+///    トークン失効でセッションが終わったらトークンを破棄して 1. へ戻る。使える Bot が無ければ
+///    [`LoginEvent::NoBot`] を通知し、再試行（[`UiEvent::StartLogin`]）を待つ。
+/// 3. [`UiEvent::Shutdown`]（または `ui_rx` クローズ）で終了する。
 pub async fn run(
     startup_bot_id: Option<String>,
     mut ui_rx: mpsc::Receiver<UiEvent>,
@@ -127,66 +129,12 @@ pub async fn run(
             }
         };
 
-        // 2) bot_id 未確定なら REST でプライマリ Bot を解決する。
-        if bot_id.is_none() {
-            match rest::get_bots(&http, &token).await {
-                Ok(bots) => {
-                    bot_id = bots
-                        .iter()
-                        .find(|b| b.primary)
-                        .or_else(|| bots.first())
-                        .map(|b| b.id.clone());
-                }
-                Err(rest::RestError::Unauthorized) => {
-                    // 保存トークンが失効していた → 破棄して再ログインへ。
-                    let _ = auth::delete_token();
-                    let _ = net_tx
-                        .send(NetEvent::Login(LoginEvent::Failed(
-                            "認証の有効期限が切れています。再度ログインしてください。".into(),
-                        )))
-                        .await;
-                    continue;
-                }
-                Err(e) => {
-                    // 一過性のネットワークエラー。少し待って再試行する
-                    // （トークンは有効なので await_login には戻さない）。
-                    let _ = net_tx
-                        .send(NetEvent::NetError(format!(
-                            "Bot 一覧の取得に失敗（再試行します）: {e}"
-                        )))
-                        .await;
-                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-                    continue;
-                }
-            }
-        }
-
-        let Some(active_bot) = bot_id.clone() else {
-            // Bot を解決できない（共有 Bot ゼロ等）。ユーザーへ通知し、
-            // 次の StartLogin か Shutdown まで待機する（ビジーループ回避）。
-            let _ = net_tx
-                .send(NetEvent::NetError(
-                    "利用可能な Bot がありません。Web 設定をご確認ください。".into(),
-                ))
-                .await;
-            loop {
-                match ui_rx.recv().await {
-                    None | Some(UiEvent::Shutdown) => return,
-                    Some(UiEvent::Logout) => {
-                        let _ = auth::delete_token();
-                        break;
-                    }
-                    _ => {}
-                }
-            }
-            bot_id = None;
-            continue;
-        };
-
-        // 3) WS セッション（ログアウト/失効/終了で復帰）。
+        // 2) WS セッション（ログアウト/失効/終了で復帰）。bot_id 未確定なら botId を付けずに
+        //    接続し、サーバが選ぶプライマリ Bot（自分の最初の Bot、無ければ共有された Bot）へ
+        //    束縛する。システム Bot（案内役）は既定にならない。
         match ws::run_ws_loop(
             &token,
-            active_bot,
+            bot_id.clone(),
             &mut ui_rx,
             &net_tx,
             &http,
@@ -202,6 +150,26 @@ pub async fn run(
                 let _ = net_tx
                     .send(NetEvent::Connection(ConnectionState::Disconnected))
                     .await;
+            }
+            ws::WsExit::NoBot => {
+                // 使える Bot が無い（自分の Bot も共有された Bot も無い）。ログインビューに案内を
+                // 出し、再試行（StartLogin）・ログアウト・終了のいずれかまで待つ（ビジーループ回避）。
+                let _ = net_tx
+                    .send(NetEvent::Connection(ConnectionState::Disconnected))
+                    .await;
+                let _ = net_tx.send(NetEvent::Login(LoginEvent::NoBot)).await;
+                loop {
+                    match ui_rx.recv().await {
+                        None | Some(UiEvent::Shutdown) => return,
+                        Some(UiEvent::Logout) => {
+                            let _ = auth::delete_token();
+                            break;
+                        }
+                        // ログイン済みなのでデバイスフローは回さず、接続をやり直す。
+                        Some(UiEvent::StartLogin { .. }) => break,
+                        _ => {}
+                    }
+                }
             }
         }
     }

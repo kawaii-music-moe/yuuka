@@ -1,8 +1,8 @@
 //! REST ヘルパ（reqwest + Bearer）。
 //!
 //! 仕様: backend_api.md §1.5（Bearer 認証）/ §4（端末管理）/ client_design.md §9。
-//! 現状の利用箇所は `GET /api/bots`（Bot 一覧・オーブ画像取得）と
-//! `GET /api/devices`（端末一覧）。トークン失効（ログアウト）は
+//! 現状の利用箇所はオーブ画像取得（[`fetch_avatar`]）。`GET /api/bots`（Bot 一覧・現状未使用）と
+//! `GET /api/devices`（端末一覧）も用意している。トークン失効（ログアウト）は
 //! `POST /api/devices/revoke`（自端末）を使う。
 
 use serde::Deserialize;
@@ -62,9 +62,11 @@ struct BotsResponse {
     bots: Vec<BotInfo>,
 }
 
-/// `GET /api/bots` — 所有/共有 Bot の一覧。
+/// `GET /api/bots` — 所有/共有 Bot の一覧（システム Bot を含む）。要素は [`BotInfo`]。
 ///
-/// オーブ画像（`discord_avatar_url`）と切替セレクタに使う。要素は [`BotInfo`]。
+/// 現状は未使用。初回の Bot は WS の既定束縛（`?botId=` 無し）でサーバが選び、切替候補と
+/// オーブ画像は `ready.bots` を使う（この一覧は自分の Bot と共有された Bot を区別できない）。
+#[allow(dead_code)]
 pub async fn get_bots(client: &reqwest::Client, token: &str) -> Result<Vec<BotInfo>, RestError> {
     let resp = bearer(client.get(format!("{}/api/bots", rest_base())), token)
         .send()

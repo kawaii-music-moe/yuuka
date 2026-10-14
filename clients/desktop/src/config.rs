@@ -37,8 +37,9 @@ pub fn rest_base() -> String {
 /// 指定 botId に対する WS URL を導出する。
 ///
 /// `http` → `ws`、`https` → `wss` に変換し、`/ws/chat?botId=<id>` を付ける
-/// （client_design.md §9）。botId は URL エンコードする。
-pub fn ws_url(bot_id: &str) -> String {
+/// （client_design.md §9）。botId は URL エンコードする。`None` は `?botId=` を付けない
+/// （サーバが既定の Bot＝自分の最初の Bot、無ければ共有された Bot へ束縛し、`ready.bot` で返す）。
+pub fn ws_url(bot_id: Option<&str>) -> String {
     let base = rest_base();
     let ws_scheme_base = if let Some(rest) = base.strip_prefix("https://") {
         format!("wss://{rest}")
@@ -48,7 +49,10 @@ pub fn ws_url(bot_id: &str) -> String {
         // scheme 不明時は素朴に wss を仮定（焼き込み URL は scheme を含む前提）。
         format!("wss://{base}")
     };
-    format!("{ws_scheme_base}/ws/chat?botId={}", urlencode(bot_id))
+    match bot_id {
+        Some(id) => format!("{ws_scheme_base}/ws/chat?botId={}", urlencode(id)),
+        None => format!("{ws_scheme_base}/ws/chat"),
+    }
 }
 
 /// 最小限の URL クエリエンコード（追加依存を避けるための自前実装）。
@@ -224,7 +228,7 @@ impl Settings {
 /// 決定順（client_design.md §4.4 / architecture.md §8.1）:
 /// 1. `--bot <id>` 引数
 /// 2. 保存された前回 Bot（`Settings.last_bot_id`）
-/// 3. None（呼び出し側が `ready.bots` のプライマリへフォールバック）
+/// 3. None（`?botId=` を付けずに接続し、サーバが選ぶプライマリ Bot＝`ready.bot` へ束縛する）
 pub fn resolve_bot_id(args: &CliArgs, settings: &Settings) -> Option<String> {
     args.bot_id.clone().or_else(|| settings.last_bot_id.clone())
 }
@@ -241,7 +245,7 @@ mod tests {
     fn ws_url_https_to_wss() {
         // rest_base は API_BASE 由来なので、ロジックは ws_url の変換のみ検証。
         // ここでは関数の scheme 変換規則を直接確認するため一時的に組み立てを再現。
-        let url = ws_url("b1");
+        let url = ws_url(Some("b1"));
         // 焼き込み既定はローカル http なので ws:// になる。
         assert!(url.starts_with("ws://") || url.starts_with("wss://"));
         assert!(url.contains("/ws/chat?botId=b1"));
@@ -249,8 +253,14 @@ mod tests {
 
     #[test]
     fn ws_url_encodes_special_bot_id() {
-        let url = ws_url("a b/c");
+        let url = ws_url(Some("a b/c"));
         assert!(url.contains("botId=a%20b%2Fc"), "got: {url}");
+    }
+
+    #[test]
+    fn ws_url_without_bot_id_omits_query() {
+        let url = ws_url(None);
+        assert!(url.ends_with("/ws/chat"), "got: {url}");
     }
 
     #[test]
