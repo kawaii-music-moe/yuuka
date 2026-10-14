@@ -3,7 +3,8 @@
 //! 受信 `POST /hook/{token}`（auth:none・トークン単位レート制限・即時 200 応答後に非同期処理）と
 //! 管理 `/api/webhooks/*`（auth:user）。シークレットは作成/更新時に [`SystemCrypto`] で暗号化して保存し、
 //! 応答へは `has_secret` フラグのみ出す。受信の実処理（HMAC 検証・通知・todo/reminder 生成）は
-//! [`WebhookProcessor`] シーム越しに委譲する（未配線時は既定 [`NullWebhookProcessor`]＝no-op）。
+//! [`WebhookProcessor`] シーム越しに委譲する（本番は [`crate::RealWebhookProcessor`]・未配線時は既定
+//! [`NullWebhookProcessor`]＝no-op）。
 
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock, Mutex};
@@ -35,7 +36,7 @@ pub trait WebhookProcessor: Send + Sync {
     );
 }
 
-/// 受信処理未配線時の既定プロセッサ（no-op）。
+/// 受信処理未配線時の既定プロセッサ（no-op・テストやルータ単体の組み立て用）。
 pub struct NullWebhookProcessor;
 
 #[async_trait]

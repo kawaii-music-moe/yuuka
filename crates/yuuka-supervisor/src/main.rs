@@ -24,9 +24,10 @@ use yuuka_discord::{rate_limit_message, DiscordManager, ManagerPorts, Prepared, 
 use yuuka_orchestrator::{ChatEngine, DbBotDirectory, DbMembership, InMemoryRateLimiter};
 use yuuka_services::{MetricsRegistry, ServiceContext};
 use yuuka_supervisor::{
-    build_app, build_supervised_services, build_tool_registry, ws_routes, MessengerRegistrationDm,
-    RegistryBotRuntime, RegistryBotViewRuntime, RegistryDiscordLive, RegistryLifecycle,
-    ServiceError, ShutdownToken, SupervisedService, Supervisor, TenantRegistry,
+    build_app, build_supervised_services, build_tool_registry, ws_routes, GeminiAuxText,
+    MessengerRegistrationDm, MessengerWebhookNotifier, RegistryBotRuntime, RegistryBotViewRuntime,
+    RegistryDiscordLive, RegistryLifecycle, ServiceError, ShutdownToken, SupervisedService,
+    Supervisor, TenantRegistry,
 };
 use yuuka_web::{AppState, Db, WebConfig};
 
@@ -343,10 +344,17 @@ async fn run() -> Result<(), String> {
         rate_limiter: Arc::new(InMemoryRateLimiter::new(db.clone())),
     }));
 
-    // Webhook ルータ（シークレット暗号化に crypto を注入・受信の実処理は未配線のため Null プロセッサへ縮退）。
+    // Webhook ルータ（シークレット暗号化に crypto を注入）。受信の実処理（署名検証・通知・ToDo/リマインド化・
+    // 受信履歴）は RealWebhookProcessor が行い、通知は Discord Messenger（gateway 非依存の REST 送信）、
+    // ペイロード解釈は受信先ユーザー本人の Gemini キーによる補助生成で行う。
     let webhook_routes = yuuka_webhook::routes_with(
         crypto.clone(),
-        Arc::new(yuuka_webhook::NullWebhookProcessor),
+        Arc::new(yuuka_webhook::RealWebhookProcessor::new(
+            db.clone(),
+            crypto.clone(),
+            Arc::new(MessengerWebhookNotifier::new(messenger.clone())),
+            Arc::new(GeminiAuxText::new(db.clone(), crypto.clone())),
+        )),
     );
 
     // Discord ライブ照会（sync-discord の Bot ユーザー参照・guild-options のロール/メンバー候補）。

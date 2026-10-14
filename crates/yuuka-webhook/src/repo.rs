@@ -365,6 +365,46 @@ pub async fn add_delivery(
         .await
 }
 
+/// 受信から 1 時間後の単発リマインドを作る（Node `addReminder(..., source: "webhook")`）。作成した id を返す。
+///
+/// `ReminderRepo::add` は Web UI 由来として `source='manual'` 固定のため、受信元を残せるよう
+/// ここで直接挿入する（`source='webhook'`・`source_id`=エンドポイント id）。発火時刻は DB の
+/// ローカル時刻形式（`'YYYY-MM-DD HH:MM:SS'`）で、cron の字句比較と揃う。
+///
+/// # Errors
+/// 書き込み失敗時 [`DbError`]。
+pub async fn add_webhook_reminder(
+    db: &Db,
+    endpoint: &WebhookEndpoint,
+    bot_id: &str,
+    message: &str,
+) -> Result<i64, DbError> {
+    let uid = endpoint.user_id.clone();
+    let bid = bot_id.to_owned();
+    let message = message.to_owned();
+    let target_type = if endpoint.notify_target_type == "channel" {
+        "channel"
+    } else {
+        "dm"
+    };
+    let target_id = endpoint.notify_target_id.clone();
+    let source_id = endpoint.id.to_string();
+    db.writer
+        .transaction(move |tx| {
+            tx.execute(
+                "INSERT INTO reminders \
+                   (user_id, bot_id, message, trigger_at, target_type, target_id, status, \
+                    source, source_id, created_at) \
+                 VALUES (?1, ?2, ?3, datetime('now', 'localtime', '+1 hour'), ?4, ?5, 'pending', \
+                         'webhook', ?6, datetime('now', 'localtime'))",
+                params![uid, bid, message, target_type, target_id, source_id],
+            )
+            .map_err(map_sqlite)?;
+            Ok(tx.last_insert_rowid())
+        })
+        .await
+}
+
 /// 受信履歴（id DESC・`endpoint_id` 絞り込み可・Node `listDeliveries`）。
 ///
 /// # Errors
