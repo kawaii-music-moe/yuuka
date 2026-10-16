@@ -31,23 +31,6 @@ export type MeResponse = ApiResponse<{
 	usageUrl?: string;
 }>;
 
-/** GET /api/setup/status（共通エンベロープの例外: success を持たない） */
-export interface SetupStatusResponse {
-	needSetup: boolean;
-	termsUrl?: string;
-	privacyUrl?: string;
-	usageUrl?: string;
-}
-
-/** POST /api/login */
-export type LoginResponse = ApiResponse<{ user?: SessionUser }>;
-
-/**
- * POST /api/register（DM チャレンジ発行 → /api/register/verify で確定）。
- * サーバは本人確認のため常に pending:true を返す（authRoutes.ts:282）。
- */
-export type RegisterResponse = ApiResponse<{ pending?: boolean }>;
-
 // ─── bots ────────────────────────────────────────────────────────────────────
 
 /** botViewSchema（src/types/apiViews.ts）。機密トークン/APIキー暗号文は含まれない。 */

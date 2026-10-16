@@ -142,7 +142,9 @@ mod tests {
              DROP INDEX idx_message_logs_user_bot_source; \
              ALTER TABLE message_logs DROP COLUMN source; \
              ALTER TABLE todos DROP COLUMN list; \
-             ALTER TABLE context_notes DROP COLUMN title;",
+             ALTER TABLE context_notes DROP COLUMN title; \
+             DROP INDEX idx_users_sk_account_id; \
+             ALTER TABLE users DROP COLUMN sk_account_id;",
         )
         .unwrap();
 

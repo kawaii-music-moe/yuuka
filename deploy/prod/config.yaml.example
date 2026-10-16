@@ -16,6 +16,10 @@ REMINDER_CRON: "* * * * *"
 PORT: 7854
 HOST: "0.0.0.0"
 
+# ログインは sk-account に委ねる（公開 URL と、サーバーから認可コードを交換する内部 URL）
+SK_ACCOUNT_URL: "https://account.sk-9.net"
+SK_ACCOUNT_INTERNAL_URL: "http://127.0.0.1:3100"
+
 # ユーザー登録用の招待コード（環境に合わせて変更）
 INVITE_CODES:
   - "change-me-invite-1"

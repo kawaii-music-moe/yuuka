@@ -43,7 +43,8 @@ cp example.yaml config.yaml
 - **`PORT` / `HOST`**: バックエンドサーバーがリスンするポートとホスト名。デフォルトはローカル接続のみ (`127.0.0.1` / `7854`)。リバースプロキシ経由で公開する場合は `HOST` を `"0.0.0.0"` に変更します。
 - **`GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`**: Google OAuth 認証情報（カレンダー/Drive 連携用のシステム共通設定、任意）。
 - **`BASE_URL`**: 外部公開 HTTPS ベース URL（OAuth リダイレクト・Cookie ハードニング判定に使用）。
-- **`ADMIN_DISCORD_IDS`**: 初期 Admin に昇格する Discord ユーザー ID（任意。未設定なら最初の登録者が Admin）。
+- **`SK_ACCOUNT_URL` / `SK_ACCOUNT_INTERNAL_URL`**: ログインに使う sk-account の公開 URL（ブラウザの遷移先・既定 `https://account.sk-9.net`）と、サーバーから認可コードを交換する内部 URL（既定 `http://127.0.0.1:3100`）。Yuuka はパスワードを持たず、本人認証は sk-account のパスキーだけで行う。
+- **`ADMIN_DISCORD_IDS`**: 初回ログイン時に Admin として作成する Discord ユーザー ID（任意。未設定なら最初のログイン者が Admin）。
 
 ### 環境変数（機密設定）
 

@@ -47,11 +47,6 @@ export const ACCOUNT_SECTIONS: ManagementSection[] = [
 	{ key: "profile", label: "表示名（プロフィール）", desc: "ご自身の表示名" },
 	{ key: "theme", label: "テーマ設定", desc: "管理画面の外観テーマ" },
 	{
-		key: "password",
-		label: "パスワード変更",
-		desc: "管理画面ログイン用パスワードの変更",
-	},
-	{
 		key: "delete",
 		label: "アカウントの削除",
 		desc: "アカウントと関連データの削除（取り消し不可）",

@@ -155,7 +155,7 @@ pnpm check              # typecheck:front + lint をまとめて実行
 | crate | 役割 |
 |---|---|
 | `yuuka-web` | axum の共通層: 型付き認可 extractor（`AuthenticatedUser`/`AdminUser`/`OptionalUser`/`BearerUser`）、`ApiError`、CSRF、body 上限、セキュリティヘッダ、静的配信（`/admin` の SPA・`/` の PWA）、`AppState`/`Db` |
-| `yuuka-auth` | 認証バックエンド（Cookie=Redis セッション / Bearer=SQLite デスクトップトークン）、ログイン/登録/初期セットアップ、招待コード、パスワードポリシー（ブラックリストは `crates/yuuka-auth/assets/common-passwords-10k.txt` を `include_str!` で埋込）、OAuth デバイスフロー、監査ログ、レート制限 |
+| `yuuka-auth` | 認証バックエンド（Cookie=Redis セッション / Bearer=SQLite デスクトップトークン）、sk-account ログイン（認可コードのバックチャネル交換 → `users.sk_account_id` へ紐付け）、招待コード、OAuth デバイスフロー、監査ログ |
 | `yuuka-supervisor` | **エントリポイント**（bin: `yuuka`）。`main.rs`（起動シーケンス・`--healthcheck`）、`lib.rs::build_app`（全ルータの merge）、`supervisor.rs`（JoinSet 監督）、`ws.rs`（`/ws/chat`）、`tool_registry.rs`（全ドメインのツール集約）、`tenants.rs`/`discord.rs`（Discord テナント配線）、`services.rs`（cron 配線）、`desktop_dist.rs`（デスクトップクライアント配布 API） |
 
 **会話・LLM**

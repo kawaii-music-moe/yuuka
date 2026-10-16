@@ -14,7 +14,7 @@
 //   - scope:'user' … botId を絶対に注入しない（auth/me/bots系/device/setup/admin/
 //                     settings）。stale な botId を混ぜると別 Bot のデータに化ける。
 //   - 除外は「プレフィックス一致」なので、サービス層で正しい scope を付ける責務。
-//     （/api/bots 配下・/api/login|register|logout|me・/api/auth/device/*・
+//     （/api/bots 配下・/api/logout|me・/api/auth/device/*・
 //       device-management 3本・/api/setup* は scope:'user'）
 //
 //   - credentials:'same-origin' を明示。dev は Vite proxy(changeOrigin:false)で

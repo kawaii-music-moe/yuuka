@@ -31,6 +31,10 @@ pub struct Config {
     pub session_ttl_days: u32,
     /// Redis 接続 URL（`REDIS_URL`・既定 `redis://127.0.0.1:6379`）。
     pub redis_url: String,
+    /// sk-account のブラウザ向け公開URL。
+    pub sk_account_url: String,
+    /// Yuuka サーバーから認可コードを交換する内部URL。
+    pub sk_account_internal_url: String,
     /// XFF 信頼判定に使う信頼プロキシ（`TRUSTED_PROXIES`・カンマ/YAML 配列）。
     pub trusted_proxies: Vec<IpAddr>,
     /// index.html へ差し込む google-site-verification 値（`GOOGLE_SITE_VERIFICATION`）。
@@ -104,6 +108,10 @@ impl Config {
             db_path,
             session_ttl_days,
             redis_url,
+            sk_account_url: get("SK_ACCOUNT_URL")
+                .unwrap_or_else(|| "https://account.sk-9.net".to_owned()),
+            sk_account_internal_url: get("SK_ACCOUNT_INTERNAL_URL")
+                .unwrap_or_else(|| "http://127.0.0.1:3100".to_owned()),
             trusted_proxies,
             google_site_verification: non_empty(get("GOOGLE_SITE_VERIFICATION")),
             privacy_policy_url: get("PRIVACY_POLICY_URL").unwrap_or_default(),

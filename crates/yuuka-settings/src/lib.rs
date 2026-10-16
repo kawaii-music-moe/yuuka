@@ -83,7 +83,6 @@ impl SettingsRuntime {
 pub fn routes(runtime: Arc<SettingsRuntime>) -> Router<AppState> {
     Router::new()
         .route("/api/settings/profile", post(routes::profile))
-        .route("/api/settings/password", post(routes::password))
         .route("/api/settings/delete-account", post(routes::delete_account))
         .route("/api/settings/user", post(routes::user_settings))
         .route("/api/settings/gemini", post(routes::gemini))

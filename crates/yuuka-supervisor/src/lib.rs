@@ -19,7 +19,7 @@ pub mod tenants;
 pub mod tool_registry;
 pub mod ws;
 
-pub use discord::{DiscordTenantService, MessengerRegistrationDm};
+pub use discord::DiscordTenantService;
 pub use services::{build_supervised_services, CronSupervised};
 pub use supervisor::{RestartPolicy, ServiceError, ShutdownToken, SupervisedService, Supervisor};
 pub use tenants::{
@@ -186,8 +186,8 @@ mod tests {
         let runtime = std::sync::Arc::new(yuuka_auth::AuthRuntime::new(
             yuuka_auth::SessionStore::in_memory(),
             7,
-            None,
-            std::sync::Arc::new(yuuka_auth::NullRegistrationDm),
+            "https://account.sk-9.net".to_owned(),
+            "http://127.0.0.1:3100".to_owned(),
             Vec::new(),
         ));
         // 管理ルータ（in-memory セッション・NullBotRuntime・暗号なし）を組んで merge を検証する。
