@@ -369,20 +369,7 @@ impl DiscordMessenger {
         let content = format!(
             "📨 **{owner_name}** さんがあなたをBot「**{bot_name}**」に招待しました。{persona_info}"
         );
-        let components = vec![ActionRow {
-            buttons: vec![
-                Button {
-                    custom_id: format!("share_accept:{share_id}"),
-                    label: "承認する".to_owned(),
-                    style: ButtonStyle::Success,
-                },
-                Button {
-                    custom_id: format!("share_decline:{share_id}"),
-                    label: "辞退する".to_owned(),
-                    style: ButtonStyle::Secondary,
-                },
-            ],
-        }];
+        let components = share_invite_components(share_id);
         self.send_owner_dm(shared_user_id, &content, &components)
             .await
     }
@@ -480,6 +467,21 @@ impl crate::ports::MemberDmSender for DiscordMessenger {
 }
 
 #[async_trait]
+impl crate::ports::ShareInviteDm for DiscordMessenger {
+    async fn send_invite(
+        &self,
+        share_id: i64,
+        target_user_id: &str,
+        bot_name: &str,
+        owner_name: &str,
+        persona_name: Option<&str>,
+    ) -> bool {
+        self.send_share_invite_dm(target_user_id, bot_name, owner_name, persona_name, share_id)
+            .await
+    }
+}
+
+#[async_trait]
 impl Notifier for DiscordMessenger {
     async fn send_to_user(
         &self,
@@ -513,6 +515,27 @@ impl Notifier for DiscordMessenger {
         let _ = &self.directory; // 将来 botId 無し経路（listBotsForUser）で使用。
         send_channel_reply(&client, channel_id, None, &reply).await
     }
+}
+
+/// 共有招待 DM の承認/辞退ボタン（`share_accept:{id}` / `share_decline:{id}`）。
+///
+/// custom_id は [`crate::interaction::decide`] の `share_accept`/`share_decline` 分岐と一致させる
+/// （押下はデフォルト Bot のテナントが受ける・interaction のテストで往復を検証）。
+pub(crate) fn share_invite_components(share_id: i64) -> Vec<ActionRow> {
+    vec![ActionRow {
+        buttons: vec![
+            Button {
+                custom_id: format!("share_accept:{share_id}"),
+                label: "承認する".to_owned(),
+                style: ButtonStyle::Success,
+            },
+            Button {
+                custom_id: format!("share_decline:{share_id}"),
+                label: "辞退する".to_owned(),
+                style: ButtonStyle::Secondary,
+            },
+        ],
+    }]
 }
 
 /// テナント別 http クライアントを作る（トークン別・レート bucket 別・§8.1.3 案 (a)）。

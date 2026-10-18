@@ -1,8 +1,9 @@
 //! Bot 共有 Web-API（Node `botRoutes` の共有 3 本・全て auth:user）。
 //!
 //! 共有設定の閲覧 / 招待作成 / 取消。作成者（Admin は取消のみ）スコープを型で強制せず handler で判定する
-//! （Node と同分岐）。招待 DM は [`ShareInviteDm`] ポート越しに送る（Discord 未配線時は既定
-//! [`NullShareInviteDm`]＝未送信・DB 上の招待は承認待ち一覧から拾える）。
+//! （Node と同分岐）。招待 DM は [`ShareInviteDm`] ポート越しに送る（supervisor が `DiscordMessenger` を
+//! [`routes_with`] で注入・既定 [`routes`] は [`NullShareInviteDm`]＝未送信）。DM 送信に失敗しても招待行は
+//! 作成済みで 200 を返す（Node 同様 message で失敗を伝える・承認待ち一覧から拾える）。
 //! bot CRUD / sync-discord / profile（同 `botRoutes`）は Discord ランタイム health に依存するため別増分。
 
 use std::sync::Arc;
@@ -15,23 +16,10 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::{json, Value};
+pub use yuuka_discord::ShareInviteDm;
 use yuuka_web::{AppState, AuthenticatedUser, Db};
 
 use crate::bot_repo::{self, BotShareRow};
-
-/// 共有招待 DM 送信ポート（Node `sendShareInviteDM`）。Discord 未配線時は [`NullShareInviteDm`]。
-#[async_trait]
-pub trait ShareInviteDm: Send + Sync {
-    /// 招待先へ承認/辞退ボタン付き DM を送る（成功なら `true`）。
-    async fn send_invite(
-        &self,
-        share_id: i64,
-        target_user_id: &str,
-        bot_name: &str,
-        owner_name: &str,
-        persona_name: Option<&str>,
-    ) -> bool;
-}
 
 /// Discord 未配線時の既定 DM sender（no-op・常に未送信）。
 pub struct NullShareInviteDm;
@@ -50,12 +38,12 @@ impl ShareInviteDm for NullShareInviteDm {
     }
 }
 
-/// 共有ルータ（既定 [`NullShareInviteDm`]・`AppState` 上でマージされる）。
+/// 共有ルータ（DM 未送信の [`NullShareInviteDm`] 版・テスト / Discord 無し構成用）。
 pub fn routes() -> Router<AppState> {
     routes_with(Arc::new(NullShareInviteDm))
 }
 
-/// 実 DM sender を注入して共有ルータを組む（Discord 配線時に使う）。
+/// 実 DM sender を注入して共有ルータを組む（supervisor は `DiscordMessenger` を渡す）。
 pub fn routes_with(dm: Arc<dyn ShareInviteDm>) -> Router<AppState> {
     Router::new()
         .route("/api/bots/shares", get(list_shares))
@@ -180,6 +168,10 @@ async fn invite(
             persona_name.as_deref(),
         )
         .await;
+    // 送信失敗は応答を失敗にしない（招待行は作成済み・Node は console.error のみ）。
+    if !dm_sent {
+        tracing::warn!(share_id = share.id, user = %target, "共有招待 DM の送信に失敗");
+    }
 
     let message = if dm_sent {
         format!(
@@ -301,7 +293,7 @@ fn server_error() -> Response {
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
 
     use async_trait::async_trait;
     use axum::body::{to_bytes, Body};
@@ -367,6 +359,18 @@ mod tests {
                 [],
             )
             .expect("seed bot");
+            // 推奨ペルソナ（公開）付きの Bot（招待 DM にペルソナ名が添えられることの検証用）。
+            conn.execute(
+                "INSERT INTO personas (id, owner_id, name, is_public) VALUES (7, 'owner', 'Maid', 1)",
+                [],
+            )
+            .expect("seed persona");
+            conn.execute(
+                "INSERT INTO bots (id, user_id, name, recommended_persona_id) \
+                 VALUES ('b2', 'owner', 'PersonaBot', 7)",
+                [],
+            )
+            .expect("seed bot2");
         }
         db
     }
@@ -374,6 +378,50 @@ mod tests {
     fn app() -> axum::Router {
         let state = AppState::new(Arc::new(FakeAuth), WebConfig::default(), seed_db());
         super::routes().with_state(state)
+    }
+
+    /// 招待 DM の記録（share_id, 宛先, bot 名, 招待者名, 推奨ペルソナ名）。
+    type InviteDm = (i64, String, String, String, Option<String>);
+
+    /// 送信された招待 DM を記録する fake（`ok` で送信成否を切り替える）。
+    struct FakeShareDm {
+        ok: bool,
+        sent: Mutex<Vec<InviteDm>>,
+    }
+
+    impl FakeShareDm {
+        fn new(ok: bool) -> Arc<Self> {
+            Arc::new(Self {
+                ok,
+                sent: Mutex::new(Vec::new()),
+            })
+        }
+    }
+
+    #[async_trait]
+    impl super::ShareInviteDm for FakeShareDm {
+        async fn send_invite(
+            &self,
+            share_id: i64,
+            target_user_id: &str,
+            bot_name: &str,
+            owner_name: &str,
+            persona_name: Option<&str>,
+        ) -> bool {
+            self.sent.lock().unwrap().push((
+                share_id,
+                target_user_id.to_owned(),
+                bot_name.to_owned(),
+                owner_name.to_owned(),
+                persona_name.map(str::to_owned),
+            ));
+            self.ok
+        }
+    }
+
+    fn app_with(dm: Arc<FakeShareDm>) -> axum::Router {
+        let state = AppState::new(Arc::new(FakeAuth), WebConfig::default(), seed_db());
+        super::routes_with(dm).with_state(state)
     }
 
     async fn send(
@@ -504,6 +552,97 @@ mod tests {
         assert_eq!(st, StatusCode::OK);
         assert_eq!(j["success"], false);
         assert_eq!(j["message"], "共有設定が見つかりません。");
+    }
+
+    #[tokio::test]
+    async fn invite_sends_dm_with_share_id_to_target() {
+        let dm = FakeShareDm::new(true);
+        let app = app_with(dm.clone());
+        let (st, j) = send(
+            &app,
+            "POST",
+            "/api/bots/shares/invite",
+            "owner",
+            r#"{"botId":"b1","targetUserId":"target"}"#,
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(j["success"], true);
+        assert!(j["message"]
+            .as_str()
+            .unwrap()
+            .contains("target_name さんへ招待DMを送信しました"));
+        let share_id = j["share"]["id"].as_i64().unwrap();
+        // 招待行の id（= ボタン custom_id `share_accept:{id}` の id）で招待先へ 1 通だけ送る。
+        let sent = dm.sent.lock().unwrap().clone();
+        assert_eq!(
+            sent,
+            vec![(
+                share_id,
+                "target".to_owned(),
+                "TestBot".to_owned(),
+                "owner_name".to_owned(),
+                None,
+            )]
+        );
+    }
+
+    #[tokio::test]
+    async fn invite_dm_carries_recommended_persona_name() {
+        let dm = FakeShareDm::new(true);
+        let app = app_with(dm.clone());
+        let (st, _) = send(
+            &app,
+            "POST",
+            "/api/bots/shares/invite",
+            "owner",
+            r#"{"botId":"b2","targetUserId":"target"}"#,
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK);
+        let sent = dm.sent.lock().unwrap().clone();
+        assert_eq!(sent.len(), 1);
+        assert_eq!(sent[0].2, "PersonaBot");
+        assert_eq!(sent[0].4.as_deref(), Some("Maid"));
+    }
+
+    #[tokio::test]
+    async fn invite_dm_failure_still_creates_share_and_returns_ok() {
+        let dm = FakeShareDm::new(false);
+        let app = app_with(dm.clone());
+        let (st, j) = send(
+            &app,
+            "POST",
+            "/api/bots/shares/invite",
+            "owner",
+            r#"{"botId":"b1","targetUserId":"target"}"#,
+        )
+        .await;
+        // DM 失敗でも 200・success:true（message で失敗を伝える）。
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(j["success"], true);
+        assert!(j["message"].as_str().unwrap().contains("DM送信に失敗"));
+        assert_eq!(dm.sent.lock().unwrap().len(), 1);
+        // 招待行は pending で残る（承認待ち一覧から拾える）。
+        let (_st, j) = send(&app, "GET", "/api/bots/shares?botId=b1", "owner", "").await;
+        let shares = j["shares"].as_array().unwrap();
+        assert_eq!(shares.len(), 1);
+        assert_eq!(shares[0]["status"], "pending");
+    }
+
+    #[tokio::test]
+    async fn rejected_invite_sends_no_dm() {
+        let dm = FakeShareDm::new(true);
+        let app = app_with(dm.clone());
+        // 非作成者・未登録ユーザー宛は DM を送らない。
+        for (token, body) in [
+            ("other", r#"{"botId":"b1","targetUserId":"target"}"#),
+            ("owner", r#"{"botId":"b1","targetUserId":"ghost"}"#),
+        ] {
+            let (st, _) = send(&app, "POST", "/api/bots/shares/invite", token, body).await;
+            assert_ne!(st, StatusCode::OK);
+        }
+        assert!(dm.sent.lock().unwrap().is_empty());
     }
 
     #[tokio::test]
