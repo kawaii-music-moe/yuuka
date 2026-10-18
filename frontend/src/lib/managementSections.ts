@@ -47,6 +47,11 @@ export const ACCOUNT_SECTIONS: ManagementSection[] = [
 	{ key: "profile", label: "表示名（プロフィール）", desc: "ご自身の表示名" },
 	{ key: "theme", label: "テーマ設定", desc: "管理画面の外観テーマ" },
 	{
+		key: "package",
+		label: "Bot移行パッケージ",
+		desc: "所有する全Botと関連データを暗号化して保存",
+	},
+	{
 		key: "delete",
 		label: "アカウントの削除",
 		desc: "アカウントと関連データの削除（取り消し不可）",

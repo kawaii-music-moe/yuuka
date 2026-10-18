@@ -4168,6 +4168,7 @@ name = "yuuka-settings"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "chrono",
  "rusqlite",
  "serde",
  "serde_json",
@@ -4182,6 +4183,7 @@ dependencies = [
  "yuuka-google",
  "yuuka-types",
  "yuuka-web",
+ "zip",
 ]
 
 [[package]]

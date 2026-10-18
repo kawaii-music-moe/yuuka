@@ -84,6 +84,47 @@ const USER_KEYED_TABLES: &[(&str, &str)] = &[
     ("briefing_configs", "user_id"),
 ];
 
+/// 所有 Bot に直接ぶら下がるテーブル。共有ユーザーがその Bot 上で作った履歴・業務データも、
+/// Bot 単位の移行で欠落しないよう `bots.user_id` を介して抽出する。
+const BOT_SCOPED_TABLES: &[&str] = &[
+    "bot_shares",
+    "bot_context_notes",
+    "bot_guild_notes",
+    "bot_guilds",
+    "bot_members",
+    "bot_channels",
+    "bot_muted_channels",
+    "bot_credential_access",
+    "bot_google_account",
+    "bot_mcp_access",
+    "bot_active_personas",
+    "bot_member_requests",
+    "bot_roles",
+    "bot_user_modules",
+    "message_logs",
+    "todos",
+    "schedules",
+    "reminders",
+    "expenses",
+    "budget_limits",
+    "planned_payments",
+    "playbooks",
+    "playbook_schedules",
+    "playbook_runs",
+    "clipboard_entries",
+    "contacts",
+    "mcp_servers",
+    "context_notes",
+    "briefing_configs",
+    "report_configs",
+    "tool_outcomes",
+    "topic_tool_stats",
+    "synapses",
+    "task_progress_logs",
+    "day_plan_blocks",
+    "timeline_records",
+];
+
 /// Drive ファイルの最小ビュー（Node `listBackupFiles` の返り値要素）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct DriveFile {
@@ -341,32 +382,34 @@ impl GoogleBackupClient {
     /// # Errors
     /// 一時 DB 作成 / コピー / ZIP 化失敗時 [`GoogleError::Upstream`]。
     async fn export_and_zip(&self, user_id: &str) -> Result<Vec<u8>, GoogleError> {
-        let uid = user_id.to_owned();
-        let db_bytes = self
-            .db
-            .read
-            .read(move |conn| {
-                // 一時 SQLite ファイルへ本人分をエクスポート（Node `exportUserData`）。
-                let tmp = tempfile::Builder::new()
-                    .prefix("yuuka_backup_")
-                    .suffix(".db")
-                    .tempfile()
-                    .map_err(|e| DbError::Operation(format!("temp db: {e}")))?;
-                let tmp_path = tmp.path().to_path_buf();
-                {
-                    let dest = Connection::open(&tmp_path).map_err(map_sqlite)?;
-                    export_user_data(conn, &dest, &uid).map_err(map_sqlite)?;
-                    // dest は close（drop）してからファイルを読む。
-                }
-                std::fs::read(&tmp_path)
-                    .map_err(|e| DbError::Operation(format!("read temp db: {e}")))
-            })
+        let db_bytes = export_user_database(&self.db, user_id)
             .await
             .map_err(|e| GoogleError::Upstream(e.to_string()))?;
 
         zip_single_file("data/yuuka.db", &db_bytes)
             .map_err(|e| GoogleError::Upstream(format!("zip: {e}")))
     }
+}
+
+/// 本人のアカウント設定・所有 Bot とその業務データだけを SQLite バイト列へ抽出する。
+/// Google Drive バックアップと PIN 付き移行パッケージが同じ抽出規則を共有するための入口。
+pub async fn export_user_database(db: &Db, user_id: &str) -> Result<Vec<u8>, DbError> {
+    let uid = user_id.to_owned();
+    db.read
+        .read(move |conn| {
+            let tmp = tempfile::Builder::new()
+                .prefix("yuuka_export_")
+                .suffix(".db")
+                .tempfile()
+                .map_err(|e| DbError::Operation(format!("temp db: {e}")))?;
+            let tmp_path = tmp.path().to_path_buf();
+            {
+                let dest = Connection::open(&tmp_path).map_err(map_sqlite)?;
+                export_user_data(conn, &dest, &uid).map_err(map_sqlite)?;
+            }
+            std::fs::read(&tmp_path).map_err(|e| DbError::Operation(format!("read temp db: {e}")))
+        })
+        .await
 }
 
 // ─── 純ロジック（テスト対象） ──────────────────────────────────────────────────
@@ -412,6 +455,15 @@ fn export_user_data(src: &Connection, dest: &Connection, user_id: &str) -> rusql
     for (table, where_col) in USER_SCOPED_TABLES.iter().chain(USER_KEYED_TABLES) {
         copy_rows(src, dest, table, where_col, user_id)?;
     }
+    for table in BOT_SCOPED_TABLES {
+        if !table_has_column(src, table, "bot_id")? {
+            continue;
+        }
+        let select = format!(
+            "SELECT t.* FROM {table} t JOIN bots b ON b.id = t.bot_id WHERE b.user_id = ?1"
+        );
+        copy_rows_from_select(src, dest, table, &select, user_id)?;
+    }
     // V22: 添付には user_id 列がない。親の message_logs を介して本人分だけをコピーする。
     // これを省くと返信本文は復元できても、グラフ等のファイル実体が失われる。
     copy_rows_from_select(
@@ -419,11 +471,26 @@ fn export_user_data(src: &Connection, dest: &Connection, user_id: &str) -> rusql
         dest,
         "message_attachments",
         "SELECT a.* FROM message_attachments a \
-         JOIN message_logs m ON m.id = a.message_log_id WHERE m.user_id = ?1",
+         JOIN message_logs m ON m.id = a.message_log_id \
+         LEFT JOIN bots b ON b.id = m.bot_id \
+         WHERE m.user_id = ?1 OR b.user_id = ?1",
         user_id,
     )?;
     copy_rows(src, dest, "bots", "user_id", user_id)?;
     Ok(())
+}
+
+/// 古いスキーマや最小テストスキーマに対象列が無い場合は、その抽出経路だけを省略する。
+fn table_has_column(conn: &Connection, table: &str, column: &str) -> rusqlite::Result<bool> {
+    let sql = format!("PRAGMA table_info({table})");
+    let mut stmt = conn.prepare(&sql)?;
+    let names = stmt.query_map([], |row| row.get::<_, String>(1))?;
+    for name in names {
+        if name? == column {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// `prepare` 失敗が「対象テーブルが存在しない」ことによるものか判定する。
@@ -491,7 +558,8 @@ fn copy_rows_from_select(
         .map(|i| format!("?{i}"))
         .collect::<Vec<_>>()
         .join(", ");
-    let insert = format!("INSERT INTO {table} ({col_list}) VALUES ({placeholders})");
+    // user scope と owned-bot scope の両方に該当する行は重複するため冪等にコピーする。
+    let insert = format!("INSERT OR IGNORE INTO {table} ({col_list}) VALUES ({placeholders})");
 
     let col_count = columns.len();
     let mut rows = stmt.query([user_id])?;

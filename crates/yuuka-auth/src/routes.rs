@@ -3,6 +3,10 @@
 //! Yuuka と sk-account は親ドメインが異なるため Cookie は共有しない。ブラウザを
 //! sk-account の認可入口へ送り、一回限り・短命の code をバックチャネルで交換した後、
 //! Yuuka 自身のホスト専用 Cookie セッションを発行する。
+//!
+//! ログイン CSRF（攻撃者自身の code を持つ callback へ被害者を送り込み、攻撃者の
+//! アカウントでログインさせる）を防ぐため、`start` で発行した `state` を短命 Cookie と
+//! 認可 URL の両方に載せ、`callback` で一致を確かめてから code を交換する。
 
 use std::convert::Infallible;
 use std::sync::Arc;
@@ -10,7 +14,7 @@ use std::sync::Arc;
 use axum::extract::{Extension, FromRequestParts, Query, State};
 use axum::http::header::{LOCATION, SET_COOKIE};
 use axum::http::request::Parts;
-use axum::http::{HeaderValue, StatusCode};
+use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -23,6 +27,10 @@ use crate::{users, SessionStore};
 
 const COOKIE_HOST: &str = "__Host-yuuka-session";
 const COOKIE_DEV: &str = "yuuka-session";
+const STATE_COOKIE_HOST: &str = "__Host-yuuka-sk-state";
+const STATE_COOKIE_DEV: &str = "yuuka-sk-state";
+/// sk-account でのログイン・登録に掛かる時間を見込んだ `state` の有効期間。
+const STATE_TTL_SECS: i64 = 10 * 60;
 
 pub struct AuthRuntime {
     sessions: SessionStore,
@@ -62,16 +70,32 @@ pub fn routes(runtime: Arc<AuthRuntime>) -> Router<AppState> {
         .layer(Extension(runtime))
 }
 
-async fn start(Extension(rt): Extension<Arc<AuthRuntime>>) -> Response {
-    redirect(&format!(
-        "{}/api/services/yuuka/authorize",
+async fn start(
+    State(state): State<AppState>,
+    Extension(rt): Extension<Arc<AuthRuntime>>,
+) -> Response {
+    let Ok(login_state) = crate::token::generate_token() else {
+        return error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "ログインを開始できません。",
+        );
+    };
+    // generate_token は URL セーフ文字だけを返すのでそのままクエリに載せられる。
+    let mut response = redirect(&format!(
+        "{}/api/services/yuuka/authorize?state={login_state}",
         rt.sk_account_public_url
-    ))
+    ));
+    response.headers_mut().insert(
+        SET_COOKIE,
+        build_state_cookie(state.config.https, &login_state, STATE_TTL_SECS),
+    );
+    response
 }
 
 #[derive(Deserialize)]
 struct CallbackQuery {
     code: Option<String>,
+    state: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -91,7 +115,34 @@ async fn callback(
     State(state): State<AppState>,
     Extension(rt): Extension<Arc<AuthRuntime>>,
     Query(query): Query<CallbackQuery>,
+    headers: HeaderMap,
 ) -> Response {
+    let https = state.config.https;
+    let mut response = exchange_and_login(&state, &rt, query, &headers).await;
+    // 成否に関わらず state は一回限りにする。
+    response
+        .headers_mut()
+        .append(SET_COOKIE, build_state_cookie(https, "", 0));
+    response
+}
+
+async fn exchange_and_login(
+    state: &AppState,
+    rt: &AuthRuntime,
+    query: CallbackQuery,
+    headers: &HeaderMap,
+) -> Response {
+    let expected = cookie_value(headers, state_cookie_name(state.config.https));
+    let state_matches = match (expected, query.state.as_deref()) {
+        (Some(expected), Some(actual)) => constant_time_eq(expected.as_bytes(), actual.as_bytes()),
+        _ => false,
+    };
+    if !state_matches {
+        return error(
+            StatusCode::BAD_REQUEST,
+            "ログインの確認に失敗しました。もう一度ログインしてください。",
+        );
+    }
     let Some(code) = query.code.filter(|v| !v.is_empty()) else {
         return error(StatusCode::BAD_REQUEST, "認証コードがありません。");
     };
@@ -213,17 +264,43 @@ pub fn build_session_cookie(https: bool, token: &str, max_age: i64) -> HeaderVal
     HeaderValue::from_str(&cookie).unwrap_or_else(|_| HeaderValue::from_static(""))
 }
 
-fn extract_cookie_token(parts: &Parts, https: bool) -> Option<String> {
-    let raw = parts
-        .headers
-        .get(axum::http::header::COOKIE)?
-        .to_str()
-        .ok()?;
-    let preferred = if https { COOKIE_HOST } else { COOKIE_DEV };
+fn state_cookie_name(https: bool) -> &'static str {
+    if https {
+        STATE_COOKIE_HOST
+    } else {
+        STATE_COOKIE_DEV
+    }
+}
+
+/// `__Host-` 接頭辞は `Path=/` を要求するため、state Cookie もサイト全体に付ける。
+/// 兄弟サブドメインから上書きされない（`__Host-`）ことを経路の絞り込みより優先する。
+fn build_state_cookie(https: bool, value: &str, max_age: i64) -> HeaderValue {
+    let name = state_cookie_name(https);
+    let secure = if https { "; Secure" } else { "" };
+    let cookie =
+        format!("{name}={value}; Path=/; HttpOnly; SameSite=Lax{secure}; Max-Age={max_age}");
+    HeaderValue::from_str(&cookie).unwrap_or_else(|_| HeaderValue::from_static(""))
+}
+
+/// 長さは秘密ではないので先に比べ、中身は早期終了せずに全バイトを比べる。
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let diff = a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y));
+    std::hint::black_box(diff) == 0
+}
+
+fn cookie_value(headers: &HeaderMap, wanted: &str) -> Option<String> {
+    let raw = headers.get(axum::http::header::COOKIE)?.to_str().ok()?;
     raw.split(';').find_map(|part| {
         let (name, value) = part.trim().split_once('=')?;
-        (name == preferred && !value.is_empty()).then(|| value.to_owned())
+        (name == wanted && !value.is_empty()).then(|| value.to_owned())
     })
+}
+
+fn extract_cookie_token(parts: &Parts, https: bool) -> Option<String> {
+    cookie_value(&parts.headers, if https { COOKIE_HOST } else { COOKIE_DEV })
 }
 
 pub struct SessionCookieToken(pub Option<String>);

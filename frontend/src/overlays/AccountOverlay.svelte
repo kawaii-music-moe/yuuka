@@ -27,6 +27,9 @@ let geminiModel = $state("gemini-3.1-flash-lite");
 // ── 表示名 ──
 // 初期値は現在のセッションユーザー名（旧 fetchAccountSettings）。
 let username = $state("");
+let packagePin = $state("");
+let packagePinConfirm = $state("");
+let packaging = $state(false);
 $effect(() => {
 	// currentUser 変化に追従（未編集時のみ埋める。空文字なら未初期化とみなす）。
 	if (!username && $currentUser?.username) username = $currentUser.username;
@@ -91,6 +94,35 @@ async function deleteAccount(e: SubmitEvent): Promise<void> {
 		navigateTo("/login");
 	} catch (e) {
 		reportError(e);
+	}
+}
+
+async function downloadPackage(e: SubmitEvent): Promise<void> {
+	e.preventDefault();
+	if (!/^\d{6,12}$/.test(packagePin)) {
+		pushToast("PINコードは6〜12桁の半角数字で入力してください。", "error");
+		return;
+	}
+	if (packagePin !== packagePinConfirm) {
+		pushToast("確認用PINコードが一致しません。", "error");
+		return;
+	}
+	packaging = true;
+	try {
+		const { blob, filename } = await settingsApi.downloadPackage(packagePin);
+		const url = URL.createObjectURL(blob);
+		const link = document.createElement("a");
+		link.href = url;
+		link.download = filename ?? "yuuka-bots.yuuka";
+		link.click();
+		URL.revokeObjectURL(url);
+		packagePin = "";
+		packagePinConfirm = "";
+		pushToast("暗号化パッケージを作成しました。PINコードとファイルを別々に保管してください。", "success");
+	} catch (e) {
+		reportError(e);
+	} finally {
+		packaging = false;
 	}
 }
 </script>
@@ -175,6 +207,28 @@ async function deleteAccount(e: SubmitEvent): Promise<void> {
 					</div>
 				{/if}
 
+				{#if section === "package"}
+					<p class="description-text" style="margin-top:12px;">
+						所有するすべてのBotと関連データを、PINコードで暗号化した移行用ファイルとしてダウンロードします。
+						復元にはファイルとPINコードの両方が必要です。
+					</p>
+					<form onsubmit={downloadPackage} class="package-form">
+						<div class="form-group">
+							<label for="package-pin">PINコード（6〜12桁）</label>
+							<input id="package-pin" type="password" inputmode="numeric" minlength="6" maxlength="12" autocomplete="new-password" required bind:value={packagePin} />
+						</div>
+						<div class="form-group">
+							<label for="package-pin-confirm">PINコード（確認）</label>
+							<input id="package-pin-confirm" type="password" inputmode="numeric" minlength="6" maxlength="12" autocomplete="new-password" required bind:value={packagePinConfirm} />
+						</div>
+						<button type="submit" class="btn btn-primary" disabled={packaging}>
+							<Icon name="download" class="icon-button-left" />
+							{packaging ? "パッケージ作成中…" : "暗号化してダウンロード"}
+						</button>
+					</form>
+					<p class="field-sub">PINコードはサーバーに保存されません。紛失した場合、パッケージを復元できません。</p>
+				{/if}
+
 				<!-- アカウント削除 -->
 				{#if section === "delete"}
 					<p class="description-text" style="margin-top:12px;">
@@ -197,5 +251,12 @@ async function deleteAccount(e: SubmitEvent): Promise<void> {
 	.theme-option {
 		cursor: pointer;
 		font: inherit;
+	}
+	.package-form {
+		display: flex;
+		flex-direction: column;
+		gap: 12px;
+		max-width: 480px;
+		margin-top: 16px;
 	}
 </style>

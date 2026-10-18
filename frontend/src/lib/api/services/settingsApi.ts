@@ -61,4 +61,7 @@ export const settingsApi = {
 	/** POST /api/settings/backup/trigger — 手動バックアップ実行 */
 	triggerBackup: () =>
 		api.post<ApiResponse>("/api/settings/backup/trigger", {}, USER),
+	/** 所有する全Botと関連データをPIN暗号化した移行パッケージとして取得 */
+	downloadPackage: (pin: string) =>
+		api.downloadPost("/api/settings/package/download", { pin }),
 };
