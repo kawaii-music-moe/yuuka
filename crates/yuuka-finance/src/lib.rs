@@ -819,12 +819,11 @@ mod tests {
         let s = scope("u");
         // 別の予定に紐付く pending のリマインド（巻き込まれないことの確認用）。
         let unrelated_plan = insert_plan_with_todo(&db, false).await;
-        let unrelated =
-            insert_linked_reminder(&db, unrelated_plan, "system_default", "pending").await;
+        let unrelated = insert_linked_reminder(&db, unrelated_plan, TEST_BOT_ID, "pending").await;
 
         // 新規記帳で消込。
         let plan_id = insert_plan_with_todo(&db, false).await;
-        let reminder = insert_linked_reminder(&db, plan_id, "system_default", "pending").await;
+        let reminder = insert_linked_reminder(&db, plan_id, TEST_BOT_ID, "pending").await;
         let plan = repo.get_plan(&s, plan_id).await.unwrap().expect("plan");
         let settled = repo.settle_plan(&s, &plan).await.unwrap();
         assert_eq!(settled.cancelled_reminder_id, Some(reminder));
@@ -832,7 +831,7 @@ mod tests {
 
         // 記帳済みの支出で消込。
         let plan_id = insert_plan_with_todo(&db, false).await;
-        let reminder = insert_linked_reminder(&db, plan_id, "system_default", "pending").await;
+        let reminder = insert_linked_reminder(&db, plan_id, TEST_BOT_ID, "pending").await;
         let existing = repo.add(&s, new_expense(5000, "光熱費")).await.unwrap();
         let settled = repo
             .settle_plan_with_expense(&s, plan_id, existing.id)
@@ -844,7 +843,7 @@ mod tests {
 
         // キャンセル。
         let plan_id = insert_plan_with_todo(&db, false).await;
-        let reminder = insert_linked_reminder(&db, plan_id, "system_default", "pending").await;
+        let reminder = insert_linked_reminder(&db, plan_id, TEST_BOT_ID, "pending").await;
         let cancelled = repo
             .cancel_plan(&s, plan_id)
             .await
@@ -855,7 +854,7 @@ mod tests {
 
         // 送信済みのリマインドは sent のまま（止めたことにしない）。
         let plan_id = insert_plan_with_todo(&db, false).await;
-        let reminder = insert_linked_reminder(&db, plan_id, "system_default", "sent").await;
+        let reminder = insert_linked_reminder(&db, plan_id, TEST_BOT_ID, "sent").await;
         let cancelled = repo
             .cancel_plan(&s, plan_id)
             .await
@@ -883,11 +882,10 @@ mod tests {
     async fn route_pay_and_delete_stop_linked_reminder() {
         let db = seed_db();
         let paid_plan = insert_plan_with_todo(&db, false).await;
-        let paid_reminder =
-            insert_linked_reminder(&db, paid_plan, "system_default", "pending").await;
+        let paid_reminder = insert_linked_reminder(&db, paid_plan, TEST_BOT_ID, "pending").await;
         let cancelled_plan = insert_plan_with_todo(&db, false).await;
         let cancelled_reminder =
-            insert_linked_reminder(&db, cancelled_plan, "system_default", "pending").await;
+            insert_linked_reminder(&db, cancelled_plan, TEST_BOT_ID, "pending").await;
         let auth = Arc::new(FakeAuth {
             user: SessionUser {
                 discord_id: "u".to_owned(),
@@ -896,7 +894,8 @@ mod tests {
             },
         });
         let state = AppState::new(auth, WebConfig::default(), db.clone());
-        let app = super::routes().with_state(state);
+        yuuka_web::test_support::seed_bot(&db, TEST_BOT_ID, "u").await;
+        let app = with_bot_query(super::routes().with_state(state), TEST_BOT_ID);
 
         for (uri, plan_id) in [
             ("/api/expenses/plans/pay", paid_plan),
