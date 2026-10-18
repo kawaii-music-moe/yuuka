@@ -165,7 +165,9 @@ pub async fn run_tenant(
                         // 参加ギルドの可視化（READY 直後に参加分が流れる・以降は新規参加時のみ）。
                         // 「許可ギルド設定と実参加ギルドの不一致」調査に使う。
                         tracing::info!(bot_id = %cfg.bot_id, guild_id = %guild.id(), "ギルド参加を確認");
-                        // Bot 統合ロール（`@Bot名` 補完のロールメンション判定用）を控える。
+                        // Bot 自身のロール（ロールメンション判定用）を控える。統合ロールは
+                        // `@Bot名` 補完、保持ロールは自メンバー（GUILD_CREATE の `members` には
+                        // intent に関わらず自 Bot が含まれる）から取る。
                         if let (Some(rt), GuildCreate::Available(g)) =
                             (runtime.as_ref(), guild.as_ref())
                         {
@@ -174,13 +176,41 @@ pub async fn run_tenant(
                                     .as_ref()
                                     .is_some_and(|t| t.bot_id == Some(rt.bot_user_id))
                             });
-                            if let Some(role) = own_role {
-                                rt.note_integration_role(g.id.get(), role.id.get());
+                            let own_member = g.members.iter().find(|m| m.user.id == rt.bot_user_id);
+                            rt.with_own_roles(|roles| {
+                                if let Some(role) = own_role {
+                                    roles.note_integration_role(g.id.get(), role.id.get());
+                                }
+                                if let Some(member) = own_member {
+                                    roles.set_held_roles(
+                                        g.id.get(),
+                                        member.roles.iter().map(|r| r.get()),
+                                    );
+                                }
+                            });
+                        }
+                    }
+                    Event::MemberUpdate(update) => {
+                        // 自 Bot のロール付け外し（GUILD_MEMBERS intent が無くても自分宛は届く）。
+                        if let Some(rt) = runtime.as_ref() {
+                            if update.user.id == rt.bot_user_id {
+                                rt.with_own_roles(|roles| {
+                                    roles.set_held_roles(
+                                        update.guild_id.get(),
+                                        update.roles.iter().map(|r| r.get()),
+                                    );
+                                });
                             }
                         }
                     }
                     Event::GuildDelete(guild) => {
                         tracing::info!(bot_id = %cfg.bot_id, guild_id = %guild.id, "ギルドから離脱");
+                        // 障害による一時的な unavailable 以外（キック・退出）は控えを捨てる。
+                        if guild.unavailable != Some(true) {
+                            if let Some(rt) = runtime.as_ref() {
+                                rt.with_own_roles(|roles| roles.forget_guild(guild.id.get()));
+                            }
+                        }
                     }
                     Event::InteractionCreate(interaction) => {
                         let ideps = interaction_deps.clone();
@@ -263,7 +293,7 @@ async fn on_ready(
         bot_id: cfg.bot_id.clone(),
         bot_user_id,
         sender,
-        integration_roles: std::sync::Arc::default(),
+        own_roles: std::sync::Arc::default(),
     }
 }
 
