@@ -33,8 +33,8 @@ fn conn(path: &std::path::Path) -> rusqlite::Connection {
 fn seed_user(path: &std::path::Path, discord_id: &str, role: &str) {
     conn(path)
         .execute(
-            "INSERT INTO users (discord_id, username, password_hash, salt, role) \
-             VALUES (?1, ?1, 'x', '00', ?2)",
+            "INSERT INTO users (discord_id, username, salt, role) \
+             VALUES (?1, ?1, '00', ?2)",
             rusqlite::params![discord_id, role],
         )
         .expect("seed user");

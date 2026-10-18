@@ -378,8 +378,8 @@ mod tests {
         {
             let conn = rusqlite::Connection::open(&path).unwrap();
             conn.execute(
-                "INSERT OR IGNORE INTO users (discord_id, username, password_hash, salt) \
-                 VALUES ('u','u','x',?1)",
+                "INSERT OR IGNORE INTO users (discord_id, username, salt) \
+                 VALUES ('u','u',?1)",
                 params![salt],
             )
             .unwrap();

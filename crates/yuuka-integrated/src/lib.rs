@@ -190,8 +190,8 @@ mod tests {
         Connection::open(path)
             .expect("open")
             .execute(
-                "INSERT OR IGNORE INTO users (discord_id, username, password_hash, salt) \
-                 VALUES (?1, ?1, 'h', 's')",
+                "INSERT OR IGNORE INTO users (discord_id, username, salt) \
+                 VALUES (?1, ?1, 's')",
                 params![user],
             )
             .expect("seed user");

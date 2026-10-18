@@ -1,7 +1,7 @@
 //! `users` テーブルの認証向け CRUD（Node `src/db/userRepo.ts` パリティ）。
 //!
-//! 本人認証は sk-account が担い、Yuuka はパスワードを持たない（`password_hash` 列はスキーマ互換のため
-//! 空文字で残す）。`users.salt` は Argon2id ユーザー鍵導出用の **16 バイト CSPRNG hex**
+//! 本人認証は sk-account だけが担い、Yuuka は認証情報（パスワード等）を一切持たない。
+//! `users.salt` は Argon2id ユーザー鍵導出用の **16 バイト CSPRNG hex**
 //! （[`yuuka_crypto::generate_user_salt`]）を生成時に一度だけ設定し、以後変更しない。
 
 use rusqlite::{params, OptionalExtension};
@@ -70,9 +70,10 @@ pub async fn get_user_by_discord_id(
 
 /// sk-account の確定済みIDを Yuuka のローカル権限・データ所有者へ結び付ける。
 ///
-/// 既存行は Discord ID で一度だけリンクし（残っていたパスワードハッシュはここで消去する）、以後は
-/// sk-account ID との組み合わせも一致する場合だけプロフィール名を同期する。新規利用者はパスワードを
-/// 持たない行として作成し、最初の利用者または `admin_ids` に含まれる Discord ID だけを admin にする。
+/// 利用者は sk-account ID で引き当て、Discord ID との組み合わせも一致する場合だけプロフィール名を
+/// 同期する。sk-account に未紐付けのデータ行（旧環境から移した行）は、sk-account が確認した Discord ID
+/// が一致すれば一度だけ引き受ける。新規利用者は、最初の利用者または `admin_ids` に含まれる
+/// Discord ID だけを admin にする。
 /// COUNT→INSERT は単一 writer トランザクション内で行い、初回 admin 判定の競合を閉じる。
 ///
 /// # Errors
@@ -129,7 +130,7 @@ pub async fn upsert_from_sk_account(
                     ));
                 }
                 tx.execute(
-                    "UPDATE users SET sk_account_id = ?1, username = ?2, password_hash = '', updated_at = datetime('now','localtime') WHERE discord_id = ?3",
+                    "UPDATE users SET sk_account_id = ?1, username = ?2, updated_at = datetime('now','localtime') WHERE discord_id = ?3",
                     params![sk_account_id, username, discord_id],
                 )
                 .map_err(map_sqlite)?;
@@ -145,7 +146,7 @@ pub async fn upsert_from_sk_account(
                 Role::User
             };
             tx.execute(
-                "INSERT INTO users (discord_id, username, password_hash, salt, role, sk_account_id) VALUES (?1, ?2, '', ?3, ?4, ?5)",
+                "INSERT INTO users (discord_id, username, salt, role, sk_account_id) VALUES (?1, ?2, ?3, ?4, ?5)",
                 params![discord_id, username, salt, role_text(role), sk_account_id],
             )
             .map_err(map_sqlite)?;

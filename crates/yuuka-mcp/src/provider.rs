@@ -717,8 +717,8 @@ mod provider_tests {
     fn seed_user(path: &PathBuf, discord_id: &str) {
         raw(path)
             .execute(
-                "INSERT OR IGNORE INTO users (discord_id, username, password_hash, salt, role) \
-                 VALUES (?1, ?1, 'h', 'deadbeef', 'user')",
+                "INSERT OR IGNORE INTO users (discord_id, username, salt, role) \
+                 VALUES (?1, ?1, 'deadbeef', 'user')",
                 params![discord_id],
             )
             .expect("seed user");

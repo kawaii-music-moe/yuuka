@@ -119,7 +119,7 @@ async fn run() -> Result<(), String> {
     let state = AppState::new(auth, web_config, db.clone());
 
     // 4.5) 共有暗号（Gemini キー・Bot トークン等の暗号化）。`YUUKA_ENCRYPTION_SECRET` 未設定なら `None`
-    //      （暗号を要する機能のみ縮退）。招待コードは起動時に冪等シードする。
+    //      （暗号を要する機能のみ縮退）。
     let crypto = match SystemCrypto::from_config(&cfg) {
         Ok(c) => Some(Arc::new(c)),
         Err(e) => {
@@ -246,11 +246,6 @@ async fn run() -> Result<(), String> {
         ))
     });
 
-    match yuuka_auth::invite::seed_initial_codes(&db, &cfg.invite_codes).await {
-        Ok(n) if n > 0 => tracing::info!(seeded = n, "招待コードをシードしました"),
-        Ok(_) => {}
-        Err(e) => tracing::warn!(error = %e, "招待コードのシードに失敗（起動は継続）"),
-    }
     // 管理ルータ（/api/admin/*）。セッション一括失効は auth と同一ストアを共有（ロール変更/削除の
     // 即時反映）、デフォルト Bot トークン暗号化は同じ crypto を使う。runtime 効果（Bot 再起動/停止/
     // 稼働状態）は Rust が gateway を所有する時のみ live（TenantRegistry）、Node 所有時は

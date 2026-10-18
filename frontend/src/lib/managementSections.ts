@@ -86,11 +86,6 @@ export const ADMIN_SECTIONS: ManagementSection[] = [
 		desc: "公開ペルソナの非公開化・削除",
 	},
 	{ key: "audit", label: "監査ログ", desc: "セキュリティ関連の操作履歴" },
-	{
-		key: "invites",
-		label: "招待コード管理",
-		desc: "新規ユーザー登録用の招待コードの発行・管理",
-	},
 ];
 
 /**

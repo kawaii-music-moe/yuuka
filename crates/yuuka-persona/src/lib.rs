@@ -390,8 +390,8 @@ mod tests {
     fn insert_user(path: &std::path::Path, discord_id: &str, username: &str) {
         let conn = rusqlite::Connection::open(path).expect("open");
         conn.execute(
-            "INSERT OR IGNORE INTO users (discord_id, username, password_hash, salt) \
-             VALUES (?1, ?2, 'x', 'x')",
+            "INSERT OR IGNORE INTO users (discord_id, username, salt) \
+             VALUES (?1, ?2, 'x')",
             rusqlite::params![discord_id, username],
         )
         .expect("insert user");

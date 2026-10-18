@@ -10,7 +10,7 @@ use yuuka_crypto::Encrypted;
 use yuuka_db::map_sqlite;
 use yuuka_web::Db;
 
-use crate::dto::{AdminBotView, AdminStats, AdminUserView, AuditLogView, InviteCodeView};
+use crate::dto::{AdminBotView, AdminStats, AdminUserView, AuditLogView};
 
 /// システム全体の集計（Node `GET /api/admin/stats`）。
 ///
@@ -27,16 +27,6 @@ pub async fn stats(db: &Db) -> Result<AdminStats, DbError> {
                 total_bots: count("SELECT COUNT(*) FROM bots").map_err(map_sqlite)?,
                 suspended_bots: count("SELECT COUNT(*) FROM bots WHERE suspended = 1")
                     .map_err(map_sqlite)?,
-                total_invite_codes: count("SELECT COUNT(*) FROM invite_codes")
-                    .map_err(map_sqlite)?,
-                used_invite_codes: count(
-                    "SELECT COUNT(*) FROM invite_codes WHERE used_by IS NOT NULL",
-                )
-                .map_err(map_sqlite)?,
-                available_invite_codes: count(
-                    "SELECT COUNT(*) FROM invite_codes WHERE used_by IS NULL AND revoked_at IS NULL",
-                )
-                .map_err(map_sqlite)?,
             })
         })
         .await
@@ -379,98 +369,6 @@ pub async fn upsert_default_bot_token(
         .await
 }
 
-/// 招待コード一覧を作成日時降順で返す（Node `listInviteCodes`＝`SELECT *`）。
-///
-/// # Errors
-/// クエリ失敗時 [`DbError`]。
-pub async fn list_invite_codes(db: &Db) -> Result<Vec<InviteCodeView>, DbError> {
-    db.read
-        .read(move |conn| {
-            let mut stmt = conn
-                .prepare(
-                    "SELECT code, created_by, used_by, used_at, revoked_at, created_at \
-                     FROM invite_codes ORDER BY created_at DESC",
-                )
-                .map_err(map_sqlite)?;
-            let rows = stmt
-                .query_map([], |row| {
-                    Ok(InviteCodeView {
-                        code: row.get(0)?,
-                        created_by: row.get(1)?,
-                        used_by: row.get(2)?,
-                        used_at: row.get(3)?,
-                        revoked_at: row.get(4)?,
-                        created_at: row.get(5)?,
-                    })
-                })
-                .map_err(map_sqlite)?;
-            let mut out = Vec::new();
-            for row in rows {
-                out.push(row.map_err(map_sqlite)?);
-            }
-            Ok(out)
-        })
-        .await
-}
-
-/// 招待コードを作成する（Node `createInviteCode`＝`INSERT OR IGNORE`・重複は無視）。
-///
-/// # Errors
-/// 書き込み失敗時 [`DbError`]。
-pub async fn create_invite_code(db: &Db, code: &str, created_by: &str) -> Result<(), DbError> {
-    let code = code.to_owned();
-    let created_by = created_by.to_owned();
-    db.writer
-        .transaction(move |tx| {
-            tx.execute(
-                "INSERT OR IGNORE INTO invite_codes (code, created_by) VALUES (?1, ?2)",
-                params![code, created_by],
-            )
-            .map_err(map_sqlite)?;
-            Ok(())
-        })
-        .await
-}
-
-/// 未使用の招待コードを無効化する（Node `revokeInviteCode`・記録は残す）。成功時 `true`。
-///
-/// # Errors
-/// 書き込み失敗時 [`DbError`]。
-pub async fn revoke_invite_code(db: &Db, code: &str) -> Result<bool, DbError> {
-    let code = code.to_owned();
-    db.writer
-        .transaction(move |tx| {
-            let n = tx
-                .execute(
-                    "UPDATE invite_codes SET revoked_at = datetime('now', 'localtime') \
-                     WHERE code = ?1 AND used_by IS NULL AND revoked_at IS NULL",
-                    params![code],
-                )
-                .map_err(map_sqlite)?;
-            Ok(n > 0)
-        })
-        .await
-}
-
-/// 未使用の招待コードを物理削除する（Node `deleteInviteCode`・使用済みは削除不可）。成功時 `true`。
-///
-/// # Errors
-/// 書き込み失敗時 [`DbError`]。
-pub async fn delete_invite_code(db: &Db, code: &str) -> Result<bool, DbError> {
-    let code = code.to_owned();
-    db.writer
-        .transaction(move |tx| {
-            let n = tx
-                .execute(
-                    "DELETE FROM invite_codes WHERE code = ?1 AND used_by IS NULL",
-                    params![code],
-                )
-                .map_err(map_sqlite)?;
-            Ok(n > 0)
-        })
-        .await
-}
-
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
@@ -485,7 +383,7 @@ mod tests {
     static SEQ: AtomicU64 = AtomicU64::new(0);
 
     /// `Db::open`（= run_migrations）が V17 baseline を丸ごと適用し、admin が触る全表
-    /// （users/bots/invite_codes/audit_logs/system_settings）を作る。返り値はハンドルとパス。
+    /// （users/bots/audit_logs/system_settings）を作る。返り値はハンドルとパス。
     fn fresh_db() -> (Db, PathBuf) {
         let seq = SEQ.fetch_add(1, Ordering::Relaxed);
         let path = std::env::temp_dir().join(format!(
@@ -506,8 +404,8 @@ mod tests {
     fn seed_user(path: &PathBuf, discord_id: &str, role: &str) {
         raw(path)
             .execute(
-                "INSERT INTO users (discord_id, username, password_hash, salt, role) \
-                 VALUES (?1, ?1, 'x', '00', ?2)",
+                "INSERT INTO users (discord_id, username, salt, role) \
+                 VALUES (?1, ?1, '00', ?2)",
                 params![discord_id, role],
             )
             .expect("seed user");
@@ -525,63 +423,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn stats_counts_users_bots_invites() {
+    async fn stats_counts_users_and_bots() {
         let (db, path) = fresh_db();
         seed_user(&path, "owner", "admin");
         seed_bot(&path, "system_default", "owner", 0, true);
         seed_bot(&path, "b1", "owner", 1, false);
-        create_invite_code(&db, "FREE", "owner").await.unwrap();
-        create_invite_code(&db, "USED", "owner").await.unwrap();
-        // USED を消費済みにする。
-        raw(&path)
-            .execute(
-                "UPDATE invite_codes SET used_by = 'someone' WHERE code = 'USED'",
-                [],
-            )
-            .unwrap();
 
         let s = stats(&db).await.unwrap();
         assert_eq!(s.total_users, 1);
         assert_eq!(s.total_bots, 2);
         assert_eq!(s.suspended_bots, 1);
-        assert_eq!(s.total_invite_codes, 2);
-        assert_eq!(s.used_invite_codes, 1);
-        assert_eq!(s.available_invite_codes, 1);
-    }
-
-    #[tokio::test]
-    async fn invite_code_lifecycle() {
-        let (db, _path) = fresh_db();
-        create_invite_code(&db, "ALPHA", "admin").await.unwrap();
-        // 重複作成は無視（INSERT OR IGNORE）— 件数は増えない。
-        create_invite_code(&db, "ALPHA", "admin").await.unwrap();
-        let codes = list_invite_codes(&db).await.unwrap();
-        assert_eq!(codes.len(), 1);
-        assert_eq!(codes[0].code, "ALPHA");
-        assert!(codes[0].revoked_at.is_none());
-
-        // 無効化 → revoked_at が付く。再無効化は false（既に revoked）。
-        assert!(revoke_invite_code(&db, "ALPHA").await.unwrap());
-        assert!(!revoke_invite_code(&db, "ALPHA").await.unwrap());
-        // revoked でも未使用なら削除可（DELETE は used_by IS NULL のみ条件）。
-        assert!(delete_invite_code(&db, "ALPHA").await.unwrap());
-        assert!(list_invite_codes(&db).await.unwrap().is_empty());
-    }
-
-    #[tokio::test]
-    async fn used_invite_cannot_be_revoked_or_deleted() {
-        let (db, path) = fresh_db();
-        create_invite_code(&db, "TAKEN", "admin").await.unwrap();
-        raw(&path)
-            .execute(
-                "UPDATE invite_codes SET used_by = 'u' WHERE code = 'TAKEN'",
-                [],
-            )
-            .unwrap();
-        assert!(!revoke_invite_code(&db, "TAKEN").await.unwrap());
-        assert!(!delete_invite_code(&db, "TAKEN").await.unwrap());
-        // 記録は残る。
-        assert_eq!(list_invite_codes(&db).await.unwrap().len(), 1);
     }
 
     #[tokio::test]

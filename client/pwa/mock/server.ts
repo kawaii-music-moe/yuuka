@@ -76,15 +76,12 @@ createServer(async (req, res) => {
   if (req.method === 'OPTIONS') { res.writeHead(204, { 'access-control-allow-origin': '*', 'access-control-allow-methods': 'GET,POST,PUT,PATCH,OPTIONS', 'access-control-allow-headers': 'content-type' }); return res.end() }
   const url = new URL(req.url ?? '/', 'http://localhost:8787')
   const hasSession = req.headers.cookie?.includes('yuuka-mock-session=admin') ?? false
-  if (req.method === 'POST' && url.pathname === '/api/login') {
-    const { discordId, password } = await read(req)
-    if (discordId !== 'admin' || password !== 'pass') return json(res, { message: 'Invalid credentials' }, 401)
-    return json(res, { success: true }, 200, { 'Set-Cookie': 'yuuka-mock-session=admin; Path=/; SameSite=Lax' })
+  // ログインは sk-account に一本化されている。モックでは認可画面を挟まず、そのまま admin でログイン済みにして戻す。
+  if (req.method === 'GET' && url.pathname === '/api/auth/sk/start') {
+    res.writeHead(302, { location: '/', 'Set-Cookie': 'yuuka-mock-session=admin; Path=/; SameSite=Lax' })
+    return res.end()
   }
   if (req.method === 'POST' && url.pathname === '/api/logout') return json(res, { success: true }, 200, { 'Set-Cookie': 'yuuka-mock-session=; Path=/; Max-Age=0' })
-  // 共有ログイン画面（frontend/src/overlays/Login.svelte）が起動時にプローブする。
-  // 初期セットアップ不要な状態を返し、通常のログインフォームを表示させる。
-  if (req.method === 'GET' && url.pathname === '/api/setup/status') return json(res, { needSetup: false })
   if (req.method === 'GET' && url.pathname === '/api/me') {
     if (!hasSession) return json(res, { message: 'Unauthorized' }, 401)
     // Keep this response compatible with the production authentication API.

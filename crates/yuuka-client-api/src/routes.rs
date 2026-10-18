@@ -389,7 +389,7 @@ async fn settings_view(
 
 /// `users` 行が無いユーザーの設定更新を拒否するエラー（issue #39）。
 ///
-/// `users` 行は認証（`yuuka-auth`）が `password_hash`/`salt` 付きで作る唯一の正で、PWA 設定の
+/// `users` 行は認証（`yuuka-auth`）が `salt`・sk-account ID 付きで作る唯一の正で、PWA 設定の
 /// 書き込みが仮の認証情報で行を作ることはしない。行が無いまま黙ってスキップして「保存した」と
 /// 応答するのは不正確なので、明示的に 404 を返す。
 fn user_settings_not_found() -> ClientApiError {
@@ -1514,9 +1514,9 @@ mod tests {
         let enc = crypto.encrypt_text("fake-gemini-key").expect("encrypt");
         let conn = rusqlite::Connection::open(path).expect("open seed");
         conn.execute(
-            "INSERT INTO users (discord_id, username, password_hash, salt, role, \
+            "INSERT INTO users (discord_id, username, salt, role, \
              gemini_api_key_encrypted, gemini_api_key_iv, gemini_api_key_tag, gemini_model) \
-             VALUES (?1, 'yuu', 'x', '00', 'user', ?2, ?3, ?4, 'gemini-3.1-flash-lite')",
+             VALUES (?1, 'yuu', '00', 'user', ?2, ?3, ?4, 'gemini-3.1-flash-lite')",
             rusqlite::params![discord_id, enc.encrypted, enc.iv, enc.auth_tag],
         )
         .expect("seed user");

@@ -776,8 +776,8 @@ mod tests {
             let conn = Connection::open(&path).unwrap();
             for uid in ["userA", "userB"] {
                 conn.execute(
-                    "INSERT OR IGNORE INTO users (discord_id, username, password_hash, salt) \
-                     VALUES (?1, ?1, 'x', 'x')",
+                    "INSERT OR IGNORE INTO users (discord_id, username, salt) \
+                     VALUES (?1, ?1, 'x')",
                     rusqlite::params![uid],
                 )
                 .unwrap();

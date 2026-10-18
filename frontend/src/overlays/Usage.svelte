@@ -47,7 +47,7 @@ import { goto } from "$lib/router";
 					</li>
 					<li>
 						<strong>一般ユーザー登録：</strong>
-						管理者が生成した「招待コード」を使用し、新規アカウントを作成します。
+						「sk-9 Accountでログイン」から sk-account でログインすると、初回ログイン時に Yuuka の利用者として登録されます。
 					</li>
 				</ul>
 			</div>

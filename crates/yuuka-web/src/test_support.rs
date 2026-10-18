@@ -44,8 +44,8 @@ pub async fn seed_bot(db: &Db, bot_id: &str, owner: &str) {
                 .map_err(map_sqlite)?;
             if has_users {
                 tx.execute(
-                    "INSERT OR IGNORE INTO users (discord_id, username, password_hash, salt) \
-                     VALUES (?1, ?1, '', '')",
+                    "INSERT OR IGNORE INTO users (discord_id, username, salt) \
+                     VALUES (?1, ?1, '')",
                     params![owner],
                 )
                 .map_err(map_sqlite)?;

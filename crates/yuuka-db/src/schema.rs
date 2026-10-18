@@ -41,3 +41,58 @@ pub fn run_migrations(conn: &mut Connection) -> Result<(), DbError> {
     tracing::info!("db migrations applied successfully");
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{embedded, run_migrations};
+    use rusqlite::Connection;
+
+    #[test]
+    fn v25_drops_accounts_not_linked_to_sk_account() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+        embedded::migrations::runner()
+            .set_target(refinery::Target::Version(24))
+            .run(&mut conn)
+            .unwrap();
+        conn.execute_batch(
+            "INSERT INTO users (discord_id, username, password_hash, salt, sk_account_id) VALUES
+               ('legacy', 'legacy', '$2b$12$hash', '00', NULL),
+               ('linked', 'linked', '', '00', 'acc-1');
+             INSERT INTO bots (id, user_id, name) VALUES ('b-legacy', 'legacy', 'b'), ('b-linked', 'linked', 'b');
+             INSERT INTO invite_codes (code) VALUES ('code');",
+        )
+        .unwrap();
+
+        run_migrations(&mut conn).unwrap();
+
+        let users: Vec<String> = conn
+            .prepare("SELECT discord_id FROM users ORDER BY discord_id")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(users, vec!["linked".to_owned()]);
+        let bots: Vec<String> = conn
+            .prepare("SELECT id FROM bots ORDER BY id")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(
+            bots,
+            vec!["b-linked".to_owned()],
+            "旧アカウントの所有データも消える"
+        );
+        let password_col: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('users') WHERE name='password_hash'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(password_col, 0);
+    }
+}

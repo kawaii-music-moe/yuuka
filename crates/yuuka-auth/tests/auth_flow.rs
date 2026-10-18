@@ -151,13 +151,13 @@ async fn callback(router: &axum::Router, code: &str) -> axum::response::Response
     .await
 }
 
-/// `(sk_account_id, username, password_hash, role)` を返す。
-fn user_row(path: &PathBuf, discord_id: &str) -> Option<(Option<String>, String, String, String)> {
+/// `(sk_account_id, username, role)` を返す。
+fn user_row(path: &PathBuf, discord_id: &str) -> Option<(Option<String>, String, String)> {
     let conn = rusqlite::Connection::open(path).expect("open");
     conn.query_row(
-        "SELECT sk_account_id, username, password_hash, role FROM users WHERE discord_id = ?1",
+        "SELECT sk_account_id, username, role FROM users WHERE discord_id = ?1",
         [discord_id],
-        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
     )
     .ok()
 }
@@ -165,8 +165,8 @@ fn user_row(path: &PathBuf, discord_id: &str) -> Option<(Option<String>, String,
 fn seed_user(path: &PathBuf, discord_id: &str, role: &str, sk_account_id: Option<&str>) {
     let conn = rusqlite::Connection::open(path).expect("open");
     conn.execute(
-        "INSERT INTO users (discord_id, username, password_hash, salt, role, sk_account_id) \
-         VALUES (?1, 'old-name', '$2b$12$legacyhash', '00ff', ?2, ?3)",
+        "INSERT INTO users (discord_id, username, salt, role, sk_account_id) \
+         VALUES (?1, 'old-name', '00ff', ?2, ?3)",
         rusqlite::params![discord_id, role, sk_account_id],
     )
     .expect("seed user");
@@ -314,10 +314,9 @@ async fn callback_creates_first_user_as_admin_and_issues_session() {
         .expect("session cookie");
     assert!(cookie.contains("HttpOnly"), "{cookie}");
 
-    let (sk_id, name, hash, role) = user_row(&t.db_path, "100").expect("user created");
+    let (sk_id, name, role) = user_row(&t.db_path, "100").expect("user created");
     assert_eq!(sk_id.as_deref(), Some("acc-1"));
     assert_eq!(name, "Alice");
-    assert_eq!(hash, "", "Yuuka はパスワードを持たない");
     assert_eq!(role, "admin", "最初の利用者は admin");
 }
 
@@ -339,12 +338,12 @@ async fn callback_creates_later_users_as_user_unless_listed_admin() {
         callback(&t.router, "good-1").await.status(),
         StatusCode::FOUND
     );
-    assert_eq!(user_row(&t.db_path, "200").expect("bob").3, "user");
-    assert_eq!(user_row(&t.db_path, "300").expect("carol").3, "admin");
+    assert_eq!(user_row(&t.db_path, "200").expect("bob").2, "user");
+    assert_eq!(user_row(&t.db_path, "300").expect("carol").2, "admin");
 }
 
 #[tokio::test]
-async fn callback_links_existing_user_and_erases_password_hash() {
+async fn callback_claims_unlinked_user_row_with_same_discord_id() {
     let sk = mock_sk_account(vec![account("acc-4", "400", "Dave")]).await;
     let t = app_with(&sk, Vec::new());
     seed_user(&t.db_path, "400", "admin", None);
@@ -353,10 +352,9 @@ async fn callback_links_existing_user_and_erases_password_hash() {
         callback(&t.router, "good-0").await.status(),
         StatusCode::FOUND
     );
-    let (sk_id, name, hash, role) = user_row(&t.db_path, "400").expect("user");
+    let (sk_id, name, role) = user_row(&t.db_path, "400").expect("user");
     assert_eq!(sk_id.as_deref(), Some("acc-4"));
     assert_eq!(name, "Dave");
-    assert_eq!(hash, "");
     assert_eq!(role, "admin", "既存のロールを保つ");
 
     // 二回目以降も同じ組み合わせならログインできる。

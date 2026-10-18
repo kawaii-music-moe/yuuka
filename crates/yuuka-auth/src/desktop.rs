@@ -121,27 +121,6 @@ pub async fn add_desktop_token(
         .await
 }
 
-/// あるユーザーの全デスクトップトークンを物理削除する（Node `revokeAllDesktopTokensForUser`）。
-///
-/// パスワード変更時に全端末を強制再ログインさせるために呼ぶ（`DELETE FROM desktop_tokens
-/// WHERE user_id = ?`）。
-///
-/// # Errors
-/// 書き込み失敗時 [`DbError`](yuuka_core::DbError)。
-pub async fn revoke_all_for_user(db: &Db, user_id: &str) -> Result<(), yuuka_core::DbError> {
-    let user_id = user_id.to_owned();
-    db.writer
-        .transaction(move |tx| {
-            tx.execute(
-                "DELETE FROM desktop_tokens WHERE user_id = ?1",
-                params![user_id],
-            )
-            .map_err(map_sqlite)?;
-            Ok(())
-        })
-        .await
-}
-
 /// 端末管理一覧の 1 行（`GET /api/devices` 用・`token_hash` は current 判定にのみ使う）。
 #[derive(Debug, Clone)]
 pub struct DesktopTokenInfo {
@@ -226,20 +205,18 @@ mod tests {
             std::thread::current().id()
         ));
         let _ = std::fs::remove_file(&path);
-        {
-            let conn = rusqlite::Connection::open(&path).expect("seed");
-            conn.execute_batch(
-                "CREATE TABLE users (discord_id TEXT PRIMARY KEY, username TEXT NOT NULL, \
-                    role TEXT NOT NULL DEFAULT 'user');
-                 CREATE TABLE desktop_tokens (id INTEGER PRIMARY KEY AUTOINCREMENT, \
-                    user_id TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE, device_name TEXT, \
-                    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')), \
-                    last_used_at TEXT, revoked INTEGER NOT NULL DEFAULT 0);
-                 INSERT INTO users(discord_id, username, role) VALUES('123','alice','admin');",
+        // 実スキーマ（migrations）で作り、sk-account に紐付いた利用者を 1 件置く。
+        std::fs::File::create(&path).expect("create");
+        let db = Db::open(&path).expect("open");
+        rusqlite::Connection::open(&path)
+            .expect("seed")
+            .execute(
+                "INSERT INTO users(discord_id, username, salt, role, sk_account_id) \
+                 VALUES('123', 'alice', '00', 'admin', 'acc-123')",
+                [],
             )
-            .expect("ddl");
-        }
-        Db::open(&path).expect("open")
+            .expect("seed user");
+        db
     }
 
     #[tokio::test]

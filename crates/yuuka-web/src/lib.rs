@@ -156,7 +156,7 @@ mod tests {
     }
 
     /// `/api/me` の DB 再取得（P3-5）で 200 を返す経路用に、`users` 行を 1 件 seed した DB。
-    /// V17 実スキーマは username/password_hash/salt が NOT NULL なので最小限充足する。
+    /// V17 実スキーマは username/salt が NOT NULL なので最小限充足する。
     fn test_db_with_user(discord_id: &str, username: &str, role: Role) -> Db {
         let path = fresh_db_path();
         {
@@ -165,8 +165,8 @@ mod tests {
         let db = Db::open(&path).expect("open db"); // migrations で users 表を作成。
         let conn = rusqlite::Connection::open(&path).expect("open");
         conn.execute(
-            "INSERT OR REPLACE INTO users (discord_id, username, password_hash, salt, role) \
-             VALUES (?1, ?2, 'x', '00', ?3)",
+            "INSERT OR REPLACE INTO users (discord_id, username, salt, role) \
+             VALUES (?1, ?2, '00', ?3)",
             rusqlite::params![discord_id, username, role_text(role)],
         )
         .expect("seed user");

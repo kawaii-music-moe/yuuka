@@ -605,8 +605,8 @@ mod tests {
     fn seed_user(path: &PathBuf, discord_id: &str, role: &str) {
         raw(path)
             .execute(
-                "INSERT INTO users (discord_id, username, password_hash, salt, role) \
-                 VALUES (?1, ?1, 'orig-hash', 'deadbeef', ?2)",
+                "INSERT INTO users (discord_id, username, salt, role) \
+                 VALUES (?1, ?1, 'deadbeef', ?2)",
                 params![discord_id, role],
             )
             .expect("seed user");

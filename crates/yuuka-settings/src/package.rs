@@ -50,8 +50,8 @@ pub(crate) async fn download(
 
     let database = yuuka_google::export_user_database(&state.db, &user.0.discord_id).await?;
     let media = package_media(&state, &user.0.discord_id).await?;
-    let payload = zip_payload(&database, &media)
-        .map_err(|_| ApiError(yuuka_core::WebError::Internal))?;
+    let payload =
+        zip_payload(&database, &media).map_err(|_| ApiError(yuuka_core::WebError::Internal))?;
     let salt = generate_user_salt().map_err(|_| ApiError(yuuka_core::WebError::Internal))?;
     let key =
         derive_user_key(&body.pin, &salt).map_err(|_| ApiError(yuuka_core::WebError::Internal))?;
@@ -132,8 +132,8 @@ fn zip_payload(
     let mut cursor = std::io::Cursor::new(Vec::new());
     {
         let mut zip = zip::ZipWriter::new(&mut cursor);
-        let options: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default()
-            .compression_method(zip::CompressionMethod::Deflated);
+        let options: zip::write::FileOptions<'_, ()> =
+            zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
         zip.start_file("data/yuuka.db", options)?;
         zip.write_all(database)?;
         for (name, bytes) in media {
@@ -168,7 +168,11 @@ mod tests {
         let bytes = zip_payload(&[1, 2, 3], &[("photo.jpg".into(), vec![4, 5])]).unwrap();
         let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
         let mut db = Vec::new();
-        archive.by_name("data/yuuka.db").unwrap().read_to_end(&mut db).unwrap();
+        archive
+            .by_name("data/yuuka.db")
+            .unwrap()
+            .read_to_end(&mut db)
+            .unwrap();
         assert_eq!(db, [1, 2, 3]);
         assert!(archive.by_name("data/media/photo.jpg").is_ok());
     }

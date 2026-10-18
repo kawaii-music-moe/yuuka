@@ -1621,8 +1621,8 @@ mod tests {
             let conn = rusqlite::Connection::open(&path).expect("seed conn");
             for (uid, role) in [("owner", "user"), ("admin", "admin"), ("other", "user")] {
                 conn.execute(
-                    "INSERT OR IGNORE INTO users (discord_id, username, password_hash, salt, role) \
-                     VALUES (?1, ?1, 'x', 'x', ?2)",
+                    "INSERT OR IGNORE INTO users (discord_id, username, salt, role) \
+                     VALUES (?1, ?1, 'x', ?2)",
                     rusqlite::params![uid, role],
                 )
                 .expect("seed user");
@@ -2355,8 +2355,8 @@ mod tests {
         {
             let conn = rusqlite::Connection::open(&path).expect("seed conn");
             conn.execute(
-                "INSERT OR IGNORE INTO users (discord_id, username, password_hash, salt, role) \
-                 VALUES ('owner', 'owner', 'x', 'x', 'user')",
+                "INSERT OR IGNORE INTO users (discord_id, username, salt, role) \
+                 VALUES ('owner', 'owner', 'x', 'user')",
                 [],
             )
             .expect("seed user");

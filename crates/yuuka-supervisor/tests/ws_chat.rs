@@ -111,16 +111,16 @@ fn seeded_db() -> (Db, Arc<SystemCrypto>) {
     let enc = crypto.encrypt_text("fake-key").unwrap();
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute(
-        "INSERT INTO users (discord_id, username, password_hash, salt, role, \
+        "INSERT INTO users (discord_id, username, salt, role, \
          gemini_api_key_encrypted, gemini_api_key_iv, gemini_api_key_tag) \
-         VALUES ('u1', 'yuu', 'x', '00', 'user', ?1, ?2, ?3)",
+         VALUES ('u1', 'yuu', '00', 'user', ?1, ?2, ?3)",
         rusqlite::params![enc.encrypted, enc.iv, enc.auth_tag],
     )
     .unwrap();
     // u1 はシステム Bot の持ち主（管理者）でもある。共有された Bot（u2 持ち）を自分の Bot より先に作り、
     // primary が「作成順の先頭」ではなく「自分の最初の Bot」になることを確かめる。
     conn.execute_batch(
-        "INSERT INTO users (discord_id, username, password_hash, salt) VALUES ('u2', 'u2', 'x', '00');
+        "INSERT INTO users (discord_id, username, salt) VALUES ('u2', 'u2', '00');
          INSERT INTO bots (id, user_id, name, created_at) VALUES
            ('system_default', 'u1', 'システムデフォルト', '2026-01-01 00:00:00'),
            ('b_shared', 'u2', 'シェア', '2026-01-02 00:00:00'),
