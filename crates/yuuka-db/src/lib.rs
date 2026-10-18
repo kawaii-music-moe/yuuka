@@ -120,7 +120,8 @@ mod tests {
         // 「Node 実スキーマ（baseline のみ既存）+ 履歴なし」を正確に再現する: 履歴を消した上で
         // post-baseline の産物（bot_channels / message_logs.channel_id・source / todos.list /
         // context_notes.title / message_logs.rich_content / message_attachments）も除去してから再走する。V20（bot_muted_channels）は
-        // `CREATE TABLE IF NOT EXISTS` のみで自然に冪等のため対象外。
+        // `CREATE TABLE IF NOT EXISTS` のみで自然に冪等のため対象外。V25 が落とす users.password_hash は
+        // Node 実スキーマに合わせて戻しておく。
         let dir = tempdir().unwrap();
         let path = dir.path().join("populated.sqlite");
         seed_db(&path, "");
@@ -142,7 +143,10 @@ mod tests {
              DROP INDEX idx_message_logs_user_bot_source; \
              ALTER TABLE message_logs DROP COLUMN source; \
              ALTER TABLE todos DROP COLUMN list; \
-             ALTER TABLE context_notes DROP COLUMN title;",
+             ALTER TABLE context_notes DROP COLUMN title; \
+             DROP INDEX idx_users_sk_account_id; \
+             ALTER TABLE users DROP COLUMN sk_account_id; \
+             ALTER TABLE users ADD COLUMN password_hash TEXT NOT NULL DEFAULT '';",
         )
         .unwrap();
 
@@ -228,6 +232,24 @@ mod tests {
             )
             .unwrap();
         assert_eq!(notice_col, 1, "V22: message_logs.is_notice 再追加");
+
+        // V25（sk-account 一本化）: パスワード列と招待コード表が無い。
+        let password_col: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('users') WHERE name='password_hash'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(password_col, 0, "V25: users.password_hash 削除");
+        let invite_table: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='invite_codes'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(invite_table, 0, "V25: invite_codes 削除");
     }
 
     #[tokio::test]
@@ -299,8 +321,8 @@ mod tests {
         writer
             .transaction(|tx| {
                 tx.execute(
-                    "INSERT INTO users(discord_id, username, password_hash, salt) \
-                     VALUES ('u1', 'alice', 'hash', 'salt')",
+                    "INSERT INTO users(discord_id, username, salt) \
+                     VALUES ('u1', 'alice', 'salt')",
                     [],
                 )
                 .map_err(map_sqlite)?;
