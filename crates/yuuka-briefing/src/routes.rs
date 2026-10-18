@@ -2,7 +2,7 @@
 //!
 //! 朝報（briefing）・日報/週報（report）の設定 CRUD と、テスト配信 2 本を提供する。
 //! 認可は [`AuthenticatedUser`] extractor で型強制、DB は `State<Db>`、bot スコープは共通の
-//! [`resolve_scope`]（`botId`＝body → クエリの順・未アクセスは `system_default` へフォールバック）で解決。
+//! [`resolve_scope`]（`botId`＝body → クエリの順・未指定は 403・未アクセスは 404）で解決。
 //! レスポンス形は Node `sendJson` にバイト単位で合わせる（フラット `{success, ...}`・日本語 verbatim）。
 //!
 //! **配信サービスのシーム**: `/api/briefing/test`・`/api/report-configs/test` の実配信は
@@ -85,7 +85,7 @@ async fn get_briefing_config(
 ) -> Response {
     let scope = match resolve_scope(&user.0, &db, q.bot_id.as_deref()).await {
         Ok(s) => s,
-        Err(e) => return server_error(&e),
+        Err(e) => return e.into_response(),
     };
     let config =
         match repo::find_briefing(&db, scope.user_id().as_str(), scope.bot_id().as_str()).await {
@@ -141,7 +141,7 @@ async fn post_briefing_config(
         .or(q.bot_id.as_deref());
     let scope = match resolve_scope(&user.0, &db, raw_bot).await {
         Ok(s) => s,
-        Err(e) => return server_error(&e),
+        Err(e) => return e.into_response(),
     };
 
     // Node `key in body` 意味論: present なフィールドだけ patch へ載せる。
@@ -195,7 +195,7 @@ async fn briefing_test(
         .or(q.bot_id.as_deref());
     let scope = match resolve_scope(&user.0, &db, raw_bot).await {
         Ok(s) => s,
-        Err(e) => return server_error(&e),
+        Err(e) => return e.into_response(),
     };
     let (uid, bid) = (
         scope.user_id().as_str().to_owned(),
@@ -229,7 +229,7 @@ async fn get_report_configs(
 ) -> Response {
     let scope = match resolve_scope(&user.0, &db, q.bot_id.as_deref()).await {
         Ok(s) => s,
-        Err(e) => return server_error(&e),
+        Err(e) => return e.into_response(),
     };
     let configs =
         match repo::get_reports(&db, scope.user_id().as_str(), scope.bot_id().as_str()).await {
@@ -272,7 +272,7 @@ async fn post_report_configs(
         .or(q.bot_id.as_deref());
     let scope = match resolve_scope(&user.0, &db, raw_bot).await {
         Ok(s) => s,
-        Err(e) => return server_error(&e),
+        Err(e) => return e.into_response(),
     };
 
     let patch = repo::ReportPatch {
@@ -324,7 +324,7 @@ async fn report_test(
         .or(q.bot_id.as_deref());
     let scope = match resolve_scope(&user.0, &db, raw_bot).await {
         Ok(s) => s,
-        Err(e) => return server_error(&e),
+        Err(e) => return e.into_response(),
     };
     let sent = runner
         .run_report(
@@ -422,6 +422,7 @@ mod tests {
     use tower::ServiceExt;
     use yuuka_core::AuthError;
     use yuuka_types::{Role, SessionUser};
+    use yuuka_web::test_support::{with_bot_query, TEST_BOT_ID};
     use yuuka_web::{AppState, AuthBackend, Db, WebConfig};
 
     static SEQ: AtomicU64 = AtomicU64::new(0);
@@ -467,9 +468,11 @@ mod tests {
         db
     }
 
-    fn app() -> axum::Router {
-        let state = AppState::new(Arc::new(FakeAuth), WebConfig::default(), seed_db());
-        super::routes().with_state(state)
+    async fn app() -> axum::Router {
+        let db = seed_db();
+        yuuka_web::test_support::seed_bot(&db, TEST_BOT_ID, "u").await;
+        let state = AppState::new(Arc::new(FakeAuth), WebConfig::default(), db);
+        with_bot_query(super::routes().with_state(state), TEST_BOT_ID)
     }
 
     async fn send(app: &axum::Router, method: &str, uri: &str, body: &str) -> (StatusCode, Value) {
@@ -498,7 +501,7 @@ mod tests {
 
     #[tokio::test]
     async fn briefing_get_unset_is_null_then_roundtrips() {
-        let app = app();
+        let app = app().await;
 
         // 未設定は config: null。
         let (st, j) = send(&app, "GET", "/api/briefing-config", "").await;
@@ -544,7 +547,7 @@ mod tests {
 
     #[tokio::test]
     async fn briefing_post_rejects_bad_cron_and_internal_feed() {
-        let app = app();
+        let app = app().await;
         let (st, j) = send(
             &app,
             "POST",
@@ -568,7 +571,7 @@ mod tests {
 
     #[tokio::test]
     async fn briefing_test_requires_config_then_null_runner_reports_failure() {
-        let app = app();
+        let app = app().await;
         // 未設定 → 400。
         let (st, j) = send(&app, "POST", "/api/briefing/test", "{}").await;
         assert_eq!(st, StatusCode::BAD_REQUEST);
@@ -593,7 +596,7 @@ mod tests {
 
     #[tokio::test]
     async fn report_configs_roundtrip_and_validation() {
-        let app = app();
+        let app = app().await;
 
         // 不正 type → 400。
         let (st, j) = send(&app, "POST", "/api/report-configs", r#"{"type":"monthly"}"#).await;

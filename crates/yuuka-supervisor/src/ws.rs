@@ -2,8 +2,8 @@
 //!
 //! クライアントは **Rust デスクトップ**（`clients/desktop/src/model.rs` の `ClientFrame`/`ServerFrame`
 //! が唯一の契約）。認証は **Bearer デスクトップトークン専用**（[`BearerUser`]・Cookie は受理しない＝
-//! WS upgrade の CSWSH を構造的に封じる・B5）、`?botId=` は接続時に 1 Bot へ束縛し [`has_bot_access`]
-//! で検証する。フレームは全て JSON テキスト。
+//! WS upgrade の CSWSH を構造的に封じる・B5）、`?botId=`（未指定は primary・システム Bot は不可）は
+//! 接続時に 1 Bot へ束縛し [`has_bot_access`] で検証する。フレームは全て JSON テキスト。
 //!
 //! **実装範囲（P1-2 増分）**: 接続時 `ready` → 受信 `msg` を [`ChatEngine::secretary_turn`] で処理し
 //! `status`（thinking/writing）→ `done` を返す。`reset` はコンテキストクリア、`ping` は no-op。keepalive は
@@ -23,6 +23,7 @@ use base64::Engine as _;
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
+use yuuka_core::BotId;
 use yuuka_discord::{
     BotStatus, FileAttachment, IncomingChat, InlineMedia, RichEmbed, StatusSink, TurnReply,
 };
@@ -61,11 +62,22 @@ async fn ws_upgrade(
     Query(q): Query<BotQuery>,
     ws: WebSocketUpgrade,
 ) -> Response {
-    // 未指定は既定 Bot（Node と同じ system_default 束縛）。
-    let bot_id = q
-        .bot_id
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "system_default".to_owned());
+    // 未指定は primary（自分の最初の Bot・無ければ共有された Bot）。システムデフォルト Bot は案内役で
+    // タスクや予定を扱えないため、明示されても繋がない（issue #142）。
+    let bot_id = match q.bot_id.filter(|s| !s.is_empty()) {
+        Some(b) if b == BotId::SYSTEM_DEFAULT => {
+            return (StatusCode::FORBIDDEN, "forbidden").into_response();
+        }
+        Some(b) => b,
+        None => match list_bot_infos(&state.db, user.0.discord_id.as_str())
+            .await
+            .into_iter()
+            .next()
+        {
+            Some(b) => b.id,
+            None => return (StatusCode::FORBIDDEN, "no bot").into_response(),
+        },
+    };
     match has_bot_access(&state.db, user.0.discord_id.as_str(), &bot_id).await {
         Ok(true) => {}
         Ok(false) => return (StatusCode::FORBIDDEN, "forbidden").into_response(),
@@ -421,6 +433,9 @@ fn random_message_id() -> String {
 }
 
 /// アクセス可能 Bot 一覧を [`BotInfo`] で返す（Node `listBotsForUser().map(toBotInfo)`）。
+///
+/// `/api/bots` と同じく、システムデフォルト Bot は持ち主（管理者）でも含めない。並びは自分の Bot →
+/// 共有された Bot（それぞれ作成順）で、先頭を `primary` にする（デスクトップの初回接続先）。
 async fn list_bot_infos(db: &Db, user_id: &str) -> Vec<BotInfo> {
     let user_id = user_id.to_owned();
     let rows = db
@@ -430,8 +445,8 @@ async fn list_bot_infos(db: &Db, user_id: &str) -> Vec<BotInfo> {
                 .prepare(
                     "SELECT DISTINCT b.id, b.name, b.discord_avatar_url FROM bots b \
                      LEFT JOIN bot_shares s ON s.bot_id = b.id AND s.shared_user_id = ?1 AND s.status = 'active' \
-                     WHERE b.user_id = ?1 OR b.id = 'system_default' OR s.id IS NOT NULL \
-                     ORDER BY b.created_at ASC",
+                     WHERE (b.user_id = ?1 OR s.id IS NOT NULL) AND b.id != 'system_default' \
+                     ORDER BY (b.user_id = ?1) DESC, b.created_at ASC",
                 )
                 .map_err(yuuka_db::map_sqlite)?;
             let out = stmt
@@ -440,7 +455,7 @@ async fn list_bot_infos(db: &Db, user_id: &str) -> Vec<BotInfo> {
                         id: r.get::<_, String>(0)?,
                         name: r.get::<_, String>(1)?,
                         discord_avatar_url: r.get::<_, Option<String>>(2)?,
-                        primary: false, // 下で id 判定して設定。
+                        primary: false, // 下で先頭に設定。
                     })
                 })
                 .map_err(yuuka_db::map_sqlite)?
@@ -450,12 +465,11 @@ async fn list_bot_infos(db: &Db, user_id: &str) -> Vec<BotInfo> {
         })
         .await
         .unwrap_or_default();
-    rows.into_iter()
-        .map(|mut b| {
-            b.primary = b.id == "system_default";
-            b
-        })
-        .collect()
+    let mut rows = rows;
+    if let Some(first) = rows.first_mut() {
+        first.primary = true;
+    }
+    rows
 }
 
 /// 一覧に無い束縛 Bot の合成情報（Node の `?? { id, name: botId, ... }`）。
@@ -464,7 +478,7 @@ fn synthetic_bot(bot_id: &str) -> BotInfo {
         id: bot_id.to_owned(),
         name: bot_id.to_owned(),
         discord_avatar_url: None,
-        primary: bot_id == "system_default",
+        primary: false,
     }
 }
 

@@ -9,20 +9,24 @@ export type Bot = {
 } | null;
 
 const KEY = "currentBot";
+/** システムデフォルト Bot。案内役で個人データを持たないため選択できない（issue #140）。 */
+const SYSTEM_DEFAULT_BOT_ID = "system_default";
 
 function load(): Bot {
 	if (typeof window === "undefined") return null;
 	const raw = localStorage.getItem(KEY);
 	if (raw) {
 		try {
-			return JSON.parse(raw) as Bot;
+			const bot = JSON.parse(raw) as Bot;
+			// 以前システム Bot を選んでいた場合は未選択に戻す（Bot 一覧へ誘導される）。
+			return bot?.id === SYSTEM_DEFAULT_BOT_ID ? null : bot;
 		} catch {
 			/* fallthrough: 破損時は旧4キー移行を試す */
 		}
 	}
 	// one-time マイグレーション: 旧4キー → 新オブジェクト
 	const id = localStorage.getItem("currentBotId");
-	if (id) {
+	if (id && id !== SYSTEM_DEFAULT_BOT_ID) {
 		const migrated: Bot = {
 			id,
 			name: localStorage.getItem("currentBotName") ?? "",
@@ -53,5 +57,5 @@ activeBot.subscribe((b) => {
 
 /** Bot 選択ヘルパ。selectBot() の localStorage 書き込みは activeBot.set() に集約。 */
 export function selectBot(bot: Bot): void {
-	activeBot.set(bot);
+	activeBot.set(bot?.id === SYSTEM_DEFAULT_BOT_ID ? null : bot);
 }

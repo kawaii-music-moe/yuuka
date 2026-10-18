@@ -2,7 +2,7 @@
 //!
 //! 認可は [`AuthenticatedUser`] extractor で型強制、DB は `State<Db>` サブステートで取得、
 //! スコープは **共通の [`resolve_scope`]**（`?botId=` を bot アクセス認可つきで解決・
-//! 未アクセスは system_default にフォールバック）で束ねて repo に渡す。
+//! 未指定・system_default は 403、未アクセスは 404）で束ねて repo に渡す。
 //! 本ルータは supervisor 側で共通レイヤ（CSRF/body 上限）配下にマージされる。
 //!
 //! 方針（M-12・全ドメイン共通）: delete の該当無は Node パリティで **200 `{success:false}`**

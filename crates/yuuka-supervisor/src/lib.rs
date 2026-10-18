@@ -304,7 +304,8 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(tasks.status(), StatusCode::OK);
+        // 認証は通り、ドメインのハンドラまで届く（botId 未指定はシステム Bot へ落とさず 403・issue #139）。
+        assert_eq!(tasks.status(), StatusCode::FORBIDDEN);
     }
 
     #[tokio::test]

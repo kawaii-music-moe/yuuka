@@ -493,11 +493,10 @@ export type GoogleOAuthUrlResponse = ApiResponse<{ url: string }>;
 
 // ─── integrated（integratedRoutes: /api/integrated/overview） ─────────────────
 
-/** 統合オーバービューの Bot 行（overview handler の bots[] を写す） */
+/** 統合オーバービューの Bot 行（overview handler の bots[] を写す・所有 Bot のみ。システム Bot は含まない） */
 export interface IntegratedBotView {
 	id: string;
 	name: string;
-	is_system_default: boolean;
 	preset: string;
 	suspended: boolean;
 	stopped: boolean;

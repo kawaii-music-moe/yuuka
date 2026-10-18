@@ -281,8 +281,7 @@ pub async fn list_system_servers(db: &Db) -> Result<Vec<McpServerRecord>, DbErro
 /// 当該 Bot に許可された MCP サーバー一覧（Node `listServersGrantedToBot`）。
 ///
 /// = `bot_mcp_access` で許可されたサーバー（owner 所有）+ システムレベル登録（`user_id IS NULL`・全 Bot 利用可）。
-/// 単一所有 Bot のランタイム解決に使う（共有秘書 `system_default` では
-/// [`list_servers_granted_to_bot_scoped`] を使いクロステナント露出を防ぐ）。
+/// MCP 動的ツールのランタイム解決に使う（`system_default` は案内役のため呼ばれない）。
 ///
 /// # Errors
 /// 読み取り失敗時 [`DbError`]。
@@ -304,44 +303,6 @@ pub async fn list_servers_granted_to_bot(
                 .map_err(map_sqlite)?;
             let rows = stmt
                 .query_map(params![bot_id], McpServerRecord::from_row)
-                .map_err(map_sqlite)?;
-            let mut out = Vec::new();
-            for row in rows {
-                out.push(row.map_err(map_sqlite)?);
-            }
-            Ok(out)
-        })
-        .await
-}
-
-/// 発話者スコープの MCP サーバー一覧（Node `listServersGrantedToBotScoped`・ランタイムのセキュリティゲート）。
-///
-/// 当該 Bot に「発話者（`speaker_user_id`）が付与した」許可分（`owner_id = speaker_user_id`）と、
-/// システムレベル登録（`user_id IS NULL`・全 Bot 利用可）の和。共有秘書（`system_default`）は全ユーザーが
-/// 会話するため、他人が付与した許可（他人の認証情報を抱えた MCP サーバー）が発話者の会話へ注入されない
-/// ように発話者所有分のみへ限定する。
-///
-/// # Errors
-/// 読み取り失敗時 [`DbError`]。
-pub async fn list_servers_granted_to_bot_scoped(
-    db: &Db,
-    bot_id: &str,
-    speaker_user_id: &str,
-) -> Result<Vec<McpServerRecord>, DbError> {
-    let (bot_id, speaker) = (bot_id.to_owned(), speaker_user_id.to_owned());
-    db.read
-        .read(move |conn| {
-            let mut stmt = conn
-                .prepare(
-                    "SELECT s.* FROM mcp_servers s \
-                     JOIN bot_mcp_access a ON a.mcp_server_id = s.id AND a.bot_id = ?1 AND a.owner_id = ?2 \
-                     UNION \
-                     SELECT s.* FROM mcp_servers s WHERE s.user_id IS NULL \
-                     ORDER BY created_at ASC",
-                )
-                .map_err(map_sqlite)?;
-            let rows = stmt
-                .query_map(params![bot_id, speaker], McpServerRecord::from_row)
                 .map_err(map_sqlite)?;
             let mut out = Vec::new();
             for row in rows {
