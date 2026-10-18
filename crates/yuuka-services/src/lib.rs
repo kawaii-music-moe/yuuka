@@ -17,6 +17,8 @@
 //!   **report**（日報/週報の活動データ集約 + 定時配信・LLM 要約は未配線＝Node 自前の生データ
 //!   フォールバックを実装）/ **backup**（ユーザー別 Google Drive バックアップの定期実行・実 Drive
 //!   アップロードは [`backup::BackupRunner`] ポート経由＝main で `GoogleBackupClient` へ橋渡し）
+//! - 朝報・日報/週報の**テスト配信**（[`NotifierDeliveryRunner`]・`yuuka_briefing::DeliveryRunner` の実装。
+//!   定時配信と同じ `deliver` を本人・選択中 Bot の設定で 1 回呼ぶ）
 
 use std::sync::Arc;
 
@@ -32,6 +34,7 @@ pub mod turn;
 mod birthday;
 mod briefing;
 mod clipboard;
+mod delivery;
 mod payment_recurrence;
 mod planned_payment;
 mod playbook_schedule;
@@ -45,6 +48,7 @@ mod test_support;
 pub use backup::{BackupRunner, NullBackupRunner};
 pub use calendar_sync::{CalendarSyncRunner, NullCalendarSyncRunner};
 pub use context::ServiceContext;
+pub use delivery::NotifierDeliveryRunner;
 pub use metrics::MetricsRegistry;
 pub use notifier::{Notification, Notifier, NotifyTarget, NullNotifier};
 pub use schedule::{run_cron, CronService, Schedule};

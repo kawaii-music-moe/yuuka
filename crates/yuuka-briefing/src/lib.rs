@@ -5,9 +5,10 @@
 //! 読取）・configureBriefing（SSRF ガード + ニュースフィード配列の部分更新）。
 //! 移植済み（Web-API・`deliveryRoutes`）: `GET/POST /api/briefing-config`・`POST /api/briefing/test`・
 //! `GET/POST /api/report-configs`・`POST /api/report-configs/test`。`/test` の実配信は
-//! [`DeliveryRunner`] シーム越しに委譲し、サービス本体（天気/RSS/Discord 送信）未配線のうちは
-//! 既定 [`NullDeliveryRunner`]（常に未配信）へ縮退する。
-//! **残（後続）**: runBriefingNow / DeliveryRunner の実装（briefing/report サービス本体）。
+//! [`DeliveryRunner`] シーム越しに委譲する（実装は `yuuka-services` の `NotifierDeliveryRunner`＝
+//! 定時配信と同じ生成・送信経路。supervisor が [`routes_with`] で注入し、未注入時は
+//! [`NullDeliveryRunner`]（常に未配信）へ縮退する）。
+//! **残（後続）**: runBriefingNow の配信先（issue #136）。
 //!
 //! 定時配信（cron→DM/channel）は `yuuka-services` の `BriefingService` が担う。本 crate は横断走査
 //! （[`list_enabled_briefings`]）・生成（[`build_briefing`]）・テキスト整形（[`render_briefing_text`]）
@@ -19,7 +20,10 @@ mod routes;
 mod service;
 mod tools;
 
-pub use repo::{list_enabled_briefings, list_enabled_reports, EnabledBriefing, EnabledReport};
+pub use repo::{
+    find_briefing, find_report, list_enabled_briefings, list_enabled_reports, BriefingConfig,
+    EnabledBriefing, EnabledReport, ReportConfig,
+};
 pub use routes::{routes, routes_with, DeliveryRunner, NullDeliveryRunner};
 pub use service::{build_briefing, render_briefing_text, BriefingContent};
 pub use tools::tools;
