@@ -24,7 +24,7 @@ use yuuka_discord::{
 };
 use yuuka_gemini::{
     run_function_calling_loop, Content, GeminiClient, GenerateBackend, LoopOptions, Part, Role,
-    Status, StatusCb,
+    Status, StatusCb, ToolOutcomeSink,
 };
 use yuuka_google::CalendarEventsPort;
 use yuuka_mcp::{McpClient, McpProvider};
@@ -160,6 +160,9 @@ pub struct ChatEngine {
     /// PWA の予定追加が Discord と同じ同期付きの `addSchedule` を使うのに使う。`None` なら非注入・同期なし。
     /// main.rs で [`ChatEngine::with_calendar`] 注入。
     calendar: Option<Arc<dyn CalendarEventsPort>>,
+    /// ツール実行実績（`tool_outcomes`）の記録先。秘書・汎用モード双方の FC ループへ渡す（Node は共通
+    /// dispatch で両モードを記録）。`None` なら記録しない。main.rs で [`ChatEngine::with_tool_outcomes`] 注入。
+    tool_outcomes: Option<Arc<dyn ToolOutcomeSink>>,
 }
 
 impl ChatEngine {
@@ -184,7 +187,15 @@ impl ChatEngine {
             mcp_client,
             synapse,
             calendar: None,
+            tool_outcomes: None,
         }
+    }
+
+    /// ツール実行実績の記録先を後付けする。未注入なら FC ループは実績を保存しない。
+    #[must_use]
+    pub fn with_tool_outcomes(mut self, sink: Arc<dyn ToolOutcomeSink>) -> Self {
+        self.tool_outcomes = Some(sink);
+        self
     }
 
     /// Google カレンダー（予定の同期先）を後付けする。未注入なら systemInstruction にカレンダー一覧を
@@ -454,9 +465,11 @@ impl ChatEngine {
         };
         let snapshot = self.registry.snapshot_with(&ctx, mcp_provider.as_ref());
         // 秘書経路のみ操作履歴を記録する（Node `processMessage` は recordActions:true・guild/DM は false）。
+        // 実行実績（tool_outcomes）は汎用モードと同じく常に記録する。
         let opts = LoopOptions {
             on_status: Some(status_bridge(status)),
             action_recorder: self.recorder.clone(),
+            outcome_sink: self.tool_outcomes.clone(),
             ..LoopOptions::default()
         };
         let result = match run_function_calling_loop(
@@ -777,6 +790,7 @@ impl ChatEngine {
         let snapshot = self.registry.snapshot(&ctx);
         let opts = LoopOptions {
             on_status: Some(status_bridge(status)),
+            outcome_sink: self.tool_outcomes.clone(),
             ..LoopOptions::default()
         };
         let result = match run_function_calling_loop(

@@ -29,6 +29,8 @@ pub mod synapse_extract;
 pub mod synapse_recall;
 pub mod synapse_repo;
 pub mod system_prompt;
+pub mod tool_outcome;
+pub mod tool_outcome_repo;
 pub mod user;
 
 pub use bot_attr_routes::{
@@ -48,3 +50,4 @@ pub use receipt_extract::{ReceiptDraft, ReceiptExtractError};
 pub use share_routes::{
     routes as bot_share_routes, routes_with as bot_share_routes_with, NullShareInviteDm,
 };
+pub use tool_outcome::DbToolOutcomeSink;
