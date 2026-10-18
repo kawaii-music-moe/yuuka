@@ -536,7 +536,7 @@ fn zip_single_file(name: &str, bytes: &[u8]) -> Result<Vec<u8>, zip::result::Zip
     let mut buf = std::io::Cursor::new(Vec::new());
     {
         let mut writer = zip::ZipWriter::new(&mut buf);
-        let options: zip::write::FileOptions<'_, ()> =
+        let options: zip::write::FileOptions<'_, '_, ()> =
             zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
         writer.start_file(name, options)?;
         writer.write_all(bytes)?;
@@ -978,7 +978,7 @@ mod tests {
         let mut archive = zip::ZipArchive::new(reader).expect("open zip");
         assert_eq!(archive.len(), 1);
         let mut file = archive.by_index(0).expect("entry");
-        assert_eq!(file.name(), "data/yuuka.db");
+        assert_eq!(file.name().unwrap(), "data/yuuka.db");
         use std::io::Read as _;
         let mut out = Vec::new();
         file.read_to_end(&mut out).expect("read");

@@ -23,6 +23,10 @@ yanked = "deny"
 # ignore する（advisories クリーン必須方針の唯一の例外・ユーザー承認済み）。
 ignore = [
     "RUSTSEC-2026-0192", # ttf-parser unmaintained（ab_glyph 経由・sendChart のラベル描画）
+    # unsafe-libyaml unmaintained（修正版なし）。serde_yaml 0.9 経由で yuuka-core の config.yaml
+    # 読み込みにだけ使う。入力は管理者が配置する起動時のローカル設定で外部入力をパースしないため、
+    # 非メンテ勧告のみを限定除外する（safe Rust の YAML パーサへの移行は別 PR・要ユーザー承認）。
+    "RUSTSEC-2024-0449",
 ]
 
 [licenses]
