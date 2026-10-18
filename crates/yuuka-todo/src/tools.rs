@@ -17,6 +17,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde_json::{json, Value};
+use yuuka_core::cron_util;
 use yuuka_core::tool::FunctionDeclaration;
 use yuuka_core::{DbError, Tool, ToolContext, ToolError, ToolName, ToolOutcome, UserScope};
 use yuuka_web::Db;
@@ -197,12 +198,6 @@ fn due_label(due_date: Option<&str>) -> String {
     }
 }
 
-/// 最小 cron 妥当性（5 フィールド・空でない）。厳密な範囲検証は後続（Node `isValidCron` の簡約）。
-fn is_valid_cron_basic(rule: &str) -> bool {
-    let fields: Vec<&str> = rule.split_whitespace().collect();
-    fields.len() == 5 && fields.iter().all(|f| !f.is_empty())
-}
-
 /// DbError をツール実行エラーへ（握り潰さず Gemini へ `{success:false}` として返る・§8.4）。
 fn exec_err(e: DbError) -> ToolError {
     ToolError::Execution(e.to_string())
@@ -260,7 +255,7 @@ impl Tool for AddTodoTool {
         let repeat_rule = arg_str(&args, "repeat_rule");
         let due_date = arg_str(&args, "due_date");
         if let Some(rule) = &repeat_rule {
-            if !is_valid_cron_basic(rule) {
+            if !cron_util::is_valid(rule) {
                 return Ok(fail_payload(
                     "repeat_rule は cron式（分 時 日 月 曜日。例 '0 9 * * 1'=毎週月曜）で指定してください。",
                 ));
@@ -1400,6 +1395,16 @@ mod tests {
         // repeat_rule だけで due_date 無し → fail。
         let out = add
             .call(&ctx(), json!({"title": "x", "repeat_rule": "0 9 * * 1"}))
+            .await
+            .unwrap();
+        assert_eq!(out.payload["success"], false);
+
+        // 5 フィールドでも実行時 parser が解釈できない repeat_rule → fail。
+        let out = add
+            .call(
+                &ctx(),
+                json!({"title": "x", "repeat_rule": "0 9 * * 8", "due_date": "2026-07-13"}),
+            )
             .await
             .unwrap();
         assert_eq!(out.payload["success"], false);

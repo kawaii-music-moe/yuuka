@@ -5,10 +5,11 @@
 //!
 //! Phase 1 スコープ = コア CRUD（list/add/cancel/delete）。cron 用の全件走査
 //! （listDuePending / markSent / rescheduleRepeat）は Phase 4 で [`cron`] に追加済み。deferred（後回し）:
-//! - repeat_rule の cron 式**厳密**検証（cron 依存・cron_util は上位 crate）
+//! - 既定送信先解決（users.notify_target_*）・source/source_id の各機能連携
 //!
 //! 過去日時の保護（単発は拒否・繰り返しは次回時刻へ補正）は addReminder ツール（[`tools`]）で行う。
-//! - 既定送信先解決（users.notify_target_*）・source/source_id の各機能連携
+//! repeat_rule の cron 式は実行時と同じ parser（`yuuka_core::cron_util::is_valid`）で、ツールと
+//! `POST /api/reminders/add` の両方で検証する。
 //!
 //! trigger_at の DB 形式正規化（`T`/空白/日付のみ）は [`datetime::to_db_datetime`] で実装済み（B4 修正）。
 //!
@@ -203,6 +204,52 @@ mod tests {
         yuuka_web::test_support::seed_bot(&db, TEST_BOT_ID, "u").await;
         let state = AppState::new(auth, WebConfig::default(), db);
         with_bot_query(super::routes().with_state(state), TEST_BOT_ID)
+    }
+
+    #[tokio::test]
+    async fn route_add_validates_repeat_rule_with_runtime_parser() {
+        // R19: 5 フィールドでも実行時 parser が解釈できない式は保存しない（ツールと同じ判定）。
+        let app = app().await;
+        let post = |body: &'static str| {
+            Request::builder()
+                .method("POST")
+                .uri("/api/reminders/add")
+                .header("cookie", "__Host-yuuka-session=good")
+                .header("content-type", "application/json")
+                .body(Body::from(body))
+                .unwrap()
+        };
+        let bad = app
+            .clone()
+            .oneshot(post(
+                r#"{"message":"m","trigger_at":"2999-01-01 09:00:00","repeat_rule":"0 9 * * 8"}"#,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(bad.status(), StatusCode::BAD_REQUEST);
+
+        let ok = app
+            .clone()
+            .oneshot(post(
+                r#"{"message":"m","trigger_at":"2999-01-01 09:00:00","repeat_rule":"0 9 * * 1"}"#,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(ok.status(), StatusCode::OK);
+
+        // 空の repeat_rule は単発として保存する（ツールの arg_str と同じ扱い）。
+        let blank = app
+            .oneshot(post(
+                r#"{"message":"m","trigger_at":"2999-01-01 09:00:00","repeat_rule":" "}"#,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(blank.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(blank.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let j: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert!(j["reminder"]["repeat_rule"].is_null());
     }
 
     #[tokio::test]

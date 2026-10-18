@@ -19,8 +19,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Duration, Local, NaiveDateTime};
-use croner::Cron;
 use serde_json::{json, Value};
+use yuuka_core::cron_util;
 use yuuka_core::tool::FunctionDeclaration;
 use yuuka_core::{DbError, Tool, ToolContext, ToolError, ToolName, ToolOutcome, UserScope};
 use yuuka_web::Db;
@@ -106,12 +106,6 @@ fn exec_err(e: DbError) -> ToolError {
     ToolError::Execution(e.to_string())
 }
 
-/// 最小 cron 妥当性（5 フィールド・空でない）。厳密検証（cron-parser）は deferred（todo と同じ簡約）。
-fn is_valid_cron_basic(rule: &str) -> bool {
-    let fields: Vec<&str> = rule.split_whitespace().collect();
-    fields.len() == 5 && fields.iter().all(|f| !f.is_empty())
-}
-
 /// 過去とみなすまでの猶予（Node `Date.now() - 60_000`）。
 const PAST_GRACE_SECS: i64 = 60;
 
@@ -137,14 +131,9 @@ fn guard_past_trigger(
             "送信日時が過去です: {raw}（現在日時: {now_db}。未来の日時を指定してください）"
         ));
     };
-    Cron::new(rule)
-        .parse()
-        .ok()
-        .and_then(|cron| cron.find_next_occurrence(&now, false).ok())
-        .map(|next| next.format("%Y-%m-%d %H:%M:%S").to_string())
-        .ok_or_else(|| {
-            format!("repeat_rule のcron式が不正です: {rule}（例: 毎週月曜9時 = '0 9 * * 1'）")
-        })
+    cron_util::next_reminder_trigger(rule, now).ok_or_else(|| {
+        format!("repeat_rule のcron式が不正です: {rule}（例: 毎週月曜9時 = '0 9 * * 1'）")
+    })
 }
 
 /// `s` が `mask` に一致するか（mask の `'d'`=数字、それ以外=リテラル。長さ一致必須）。
@@ -287,10 +276,10 @@ impl Tool for AddReminderTool {
             )));
         };
 
-        // 繰り返しの cron 式は簡易検証（厳密検証は deferred）。
+        // 繰り返しの cron 式は実行時と同じ parser で検証する（保存後に実行側で止まらないように）。
         let repeat_rule = arg_str(&args, "repeat_rule");
         if let Some(rule) = &repeat_rule {
-            if !is_valid_cron_basic(rule) {
+            if !cron_util::is_valid(rule) {
                 return Ok(fail_payload(format!(
                     "repeat_rule のcron式が不正です: {rule}（例: 毎週月曜9時 = '0 9 * * 1'）"
                 )));
@@ -613,15 +602,17 @@ mod tests {
         let out = add.call(&ctx(), json!({"message": "x"})).await.unwrap();
         assert_eq!(out.payload["success"], false);
 
-        // 不正 cron（5 フィールドでない）→ fail。
-        let out = add
-            .call(
-                &ctx(),
-                json!({"message": "x", "trigger_at": "2999-01-01 09:00:00", "repeat_rule": "bad"}),
-            )
-            .await
-            .unwrap();
-        assert_eq!(out.payload["success"], false);
+        // 不正 cron（5 フィールドでない／5 フィールドでも範囲外）→ fail。
+        for rule in ["bad", "99 99 * * *"] {
+            let out = add
+                .call(
+                    &ctx(),
+                    json!({"message": "x", "trigger_at": "2999-01-01 09:00:00", "repeat_rule": rule}),
+                )
+                .await
+                .unwrap();
+            assert_eq!(out.payload["success"], false, "{rule}");
+        }
 
         // 正しい cron + trigger_at → 成功し repeat_rule が入る。
         let out = add

@@ -19,7 +19,7 @@ use axum::routing::{get, post};
 use axum::{Extension, Json, Router};
 use serde::Deserialize;
 use serde_json::json;
-use yuuka_core::WebError;
+use yuuka_core::{cron_util, WebError};
 use yuuka_types::{EmptyData, Envelope};
 use yuuka_web::{resolve_scope, ApiError, AppState, AuthenticatedUser, Db, ScopeError, ScopedJson};
 
@@ -315,7 +315,7 @@ async fn add_plan(
     State(db): State<Db>,
     ScopedJson {
         bot_id,
-        value: input,
+        value: mut input,
     }: ScopedJson<NewPlannedPayment>,
 ) -> Result<Json<Envelope<PlannedPaymentData>>, ApiError> {
     // Node parity: 期日は dueDate ?? plannedDate（旧 UI 互換）。空文字は falsy 扱い。
@@ -336,6 +336,18 @@ async fn add_plan(
             )));
         }
     };
+    // R19: 繰り返しの cron 式はツールと同じく実行時の parser で検証する（空は単発扱い）。
+    input.repeat_rule = input
+        .repeat_rule
+        .map(|rule| rule.trim().to_owned())
+        .filter(|rule| !rule.is_empty());
+    if let Some(rule) = &input.repeat_rule {
+        if !cron_util::is_valid(rule) {
+            return Err(ApiError(WebError::Validation(
+                "repeatRule must be a valid cron expression".to_owned(),
+            )));
+        }
+    }
     let scope = resolve_scope(&user.0, &db, bot_id.as_deref()).await?;
     let plan = ExpenseRepo::new(&db).add_plan(&scope, input, due).await?;
     Ok(Json(Envelope::ok(PlannedPaymentData { plan })))

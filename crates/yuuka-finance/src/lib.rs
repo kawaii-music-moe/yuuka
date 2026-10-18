@@ -657,6 +657,42 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn route_plan_add_validates_repeat_rule_with_runtime_parser() {
+        // R19: 5 フィールドでも実行時 parser が解釈できない式は保存しない（ツールと同じ判定）。
+        let app = app().await;
+        let post = |body: &'static str| {
+            Request::builder()
+                .method("POST")
+                .uri("/api/expenses/plans/add")
+                .header("cookie", "__Host-yuuka-session=good")
+                .header("content-type", "application/json")
+                .body(Body::from(body))
+                .unwrap()
+        };
+        let bad = app
+            .clone()
+            .oneshot(post(
+                r#"{"title":"家賃","amount":80000,"category":"その他","dueDate":"2026-08-27","repeatRule":"0 0 32 * *"}"#,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(bad.status(), StatusCode::BAD_REQUEST);
+
+        let ok = app
+            .oneshot(post(
+                r#"{"title":"家賃","amount":80000,"category":"その他","dueDate":"2026-08-27","repeatRule":"0 0 27 * *"}"#,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(ok.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(ok.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let j: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(j["plan"]["repeat_rule"], serde_json::json!("0 0 27 * *"));
+    }
+
+    #[tokio::test]
     async fn route_plan_add_rejects_missing_due() {
         let resp = app()
             .await

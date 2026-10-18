@@ -6,13 +6,13 @@
 //! 本ルータは supervisor 側で共通レイヤ（CSRF/body 上限）配下にマージされる。
 //!
 //! 方針: cancel は Node パリティで **404（不在）/ 409（実在するが pending でない）** を区別する。
-//! cron 検証・過去日時補正・既定送信先解決は deferred。
+//! repeat_rule の cron 式はツールと同じ `cron_util::is_valid` で検証する。過去日時補正・既定送信先解決は deferred。
 
 use axum::extract::{Query, State};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Deserialize;
-use yuuka_core::WebError;
+use yuuka_core::{cron_util, WebError};
 use yuuka_types::Envelope;
 use yuuka_web::{resolve_scope, ApiError, AppState, AuthenticatedUser, Db, ScopedJson};
 
@@ -58,7 +58,7 @@ async fn add(
     State(db): State<Db>,
     ScopedJson {
         bot_id,
-        value: input,
+        value: mut input,
     }: ScopedJson<NewReminder>,
 ) -> Result<Json<Envelope<ReminderData>>, ApiError> {
     if input.message.trim().is_empty() {
@@ -77,6 +77,18 @@ async fn add(
         return Err(ApiError(WebError::Validation(
             "trigger_at must be a valid date-time".to_owned(),
         )));
+    }
+    // R19: 繰り返しの cron 式はツールと同じく実行時の parser で検証する（空は単発扱い）。
+    input.repeat_rule = input
+        .repeat_rule
+        .map(|rule| rule.trim().to_owned())
+        .filter(|rule| !rule.is_empty());
+    if let Some(rule) = &input.repeat_rule {
+        if !cron_util::is_valid(rule) {
+            return Err(ApiError(WebError::Validation(
+                "repeat_rule must be a valid cron expression".to_owned(),
+            )));
+        }
     }
     let scope = resolve_scope(&user.0, &db, bot_id.as_deref()).await?;
     let reminder = ReminderRepo::new(&db).add(&scope, input).await?;
