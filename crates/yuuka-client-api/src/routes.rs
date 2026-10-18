@@ -31,6 +31,7 @@ use axum::{Extension, Json, Router};
 use serde::Deserialize;
 use serde_json::json;
 use tokio::time::timeout;
+use yuuka_core::datetime::{browser_local_to_db, db_to_utc_iso};
 use yuuka_core::{BotId, GuildId, ToolContext, UserId, UserScope};
 use yuuka_discord::{
     rate_limit_message, IncomingChat, InlineMedia, RateLimiter, RichEmbed, StatusSink,
@@ -49,10 +50,7 @@ use yuuka_todo::dto::{NewTodo, Todo, TodoUpdate};
 use yuuka_todo::repo::TodoRepo;
 use yuuka_web::{resolve_scope, AppState, AuthenticatedUser, Db, ScopeError};
 
-use crate::date_util::{
-    day_start, local_to_utc_iso, next_day_start, parse_local_date, parse_local_datetime,
-    parse_local_month,
-};
+use crate::date_util::{day_start, next_day_start, parse_local_date, parse_local_month};
 use crate::dto::{
     CalendarEventView, ChatAttachmentInput, ChatEmbedFieldView, ChatEmbedView, ChatFileView,
     ChatMessageView, ChatSendAccepted, ChatSendInput, FinanceSummaryView, NewCalendarEventInput,
@@ -530,7 +528,7 @@ async fn note_get(
             id: "shared-note",
             title: note.title,
             body: note.body,
-            updated_at: local_to_utc_iso(&note.updated_at).unwrap_or(note.updated_at),
+            updated_at: db_to_utc_iso(&note.updated_at).unwrap_or(note.updated_at),
         })),
         None => Ok(Json(SharedNoteView {
             id: "shared-note",
@@ -567,7 +565,7 @@ async fn note_put(
         id: "shared-note",
         title: note.title,
         body: note.body,
-        updated_at: local_to_utc_iso(&note.updated_at).unwrap_or(note.updated_at),
+        updated_at: db_to_utc_iso(&note.updated_at).unwrap_or(note.updated_at),
     }))
 }
 
@@ -700,9 +698,9 @@ fn map_calendar_event(
     end_at: Option<&str>,
     google_calendar_id: Option<String>,
 ) -> Option<CalendarEventView> {
-    let starts_at = local_to_utc_iso(start_at)?;
+    let starts_at = db_to_utc_iso(start_at)?;
     let ends_at = end_at
-        .and_then(local_to_utc_iso)
+        .and_then(db_to_utc_iso)
         .unwrap_or_else(|| starts_at.clone());
     let (calendar, calendar_name) = match google_calendar_id.filter(|s| !s.is_empty()) {
         Some(id) => (id, "Google カレンダー".to_owned()),
@@ -776,11 +774,11 @@ async fn calendar_add(
     let start_at = body
         .starts_at
         .as_deref()
-        .and_then(parse_local_datetime)
+        .and_then(browser_local_to_db)
         .ok_or_else(|| ClientApiError::bad_request("startsAt must be YYYY-MM-DDTHH:MM"))?;
     let end_at = match body.ends_at.as_deref().filter(|s| !s.trim().is_empty()) {
         Some(raw) => Some(
-            parse_local_datetime(raw)
+            browser_local_to_db(raw)
                 .ok_or_else(|| ClientApiError::bad_request("endsAt must be YYYY-MM-DDTHH:MM"))?,
         ),
         None => None,
@@ -1024,8 +1022,7 @@ async fn chat_history(
     for row in rows {
         let is_assistant = row.role == "assistant";
         let role: &'static str = if is_assistant { "agent" } else { "user" };
-        let created_at =
-            local_to_utc_iso(&row.created_at).unwrap_or_else(|| row.created_at.clone());
+        let created_at = db_to_utc_iso(&row.created_at).unwrap_or_else(|| row.created_at.clone());
         let references = if is_assistant {
             infer_reference(&row.content).map(|r| vec![r])
         } else {

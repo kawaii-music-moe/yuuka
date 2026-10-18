@@ -11,12 +11,11 @@
 //! repeat_rule の cron 式は実行時と同じ parser（`yuuka_core::cron_util::is_valid`）で、ツールと
 //! `POST /api/reminders/add` の両方で検証する。
 //!
-//! trigger_at の DB 形式正規化（`T`/空白/日付のみ）は [`datetime::to_db_datetime`] で実装済み（B4 修正）。
+//! trigger_at の DB 形式正規化（`T`/空白/日付のみ）は [`yuuka_core::datetime::input_to_db_local`] で実装済み（B4 修正）。
 //!
 //! cancel 失敗の **404（不在）/ 409（実在するが pending でない）** 区別は M-12 で実装済み。
 
 pub mod cron;
-pub mod datetime;
 pub mod dto;
 pub mod repo;
 pub mod routes;

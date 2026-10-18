@@ -73,7 +73,7 @@ async fn add(
     }
     // #6/B4: 正規化できない日時（Z/オフセット/不正日付）は 400 で弾く（Node `reminderRoutes.ts`・
     // tool `tools.rs` と同一判定）。repo は正規化済み文字列を INSERT するため、字句比較バグを残さない。
-    if crate::datetime::to_db_datetime(&input.trigger_at).is_none() {
+    if yuuka_core::datetime::input_to_db_local(&input.trigger_at).is_none() {
         return Err(ApiError(WebError::Validation(
             "trigger_at must be a valid date-time".to_owned(),
         )));

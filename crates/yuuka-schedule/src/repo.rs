@@ -5,12 +5,12 @@
 //! [`WriterHandle`]（BEGIN IMMEDIATE）へ送る。参照実装は yuuka-todo。
 
 use rusqlite::{params, OptionalExtension, Row};
+use yuuka_core::datetime::input_to_db_jst;
 use yuuka_core::scope::ScopedRepo;
 use yuuka_core::{DbError, UserScope};
 use yuuka_db::{map_sqlite, ReadPool, WriterHandle};
 use yuuka_web::Db;
 
-use crate::datetime::normalize_local_datetime;
 use crate::dto::{NewSchedule, Schedule};
 
 /// 返却列（クリーンビュー・内部列 user_id/bot_id/reminded/google_* は含めない）。
@@ -142,10 +142,8 @@ impl<'a> ScheduleRepo<'a> {
             .unwrap_or(DEFAULT_REMIND_BEFORE_MINUTES);
         // 一覧・リマインド・PWA カレンダーが前提にするローカル暦の保存形式へ揃える
         // （解釈できない値は呼び出し側の検証を通った前提でそのまま保存する）。
-        let start_at = normalize_local_datetime(&input.start_at).unwrap_or(input.start_at);
-        let end_at = input
-            .end_at
-            .map(|end| normalize_local_datetime(&end).unwrap_or(end));
+        let start_at = input_to_db_jst(&input.start_at).unwrap_or(input.start_at);
+        let end_at = input.end_at.map(|end| input_to_db_jst(&end).unwrap_or(end));
         let id = self
             .writer
             .transaction(move |tx| {
