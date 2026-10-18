@@ -93,12 +93,13 @@ pub fn build_app(
         .merge(client_api_routes)
         .merge(bot_management_routes)
         .merge(desktop_dist::routes());
+    let site_verification = state.config.google_site_verification.as_deref();
     let routes = match pwa_dist_dir {
-        Some(dir) => mount_pwa(routes, dir),
+        Some(dir) => mount_pwa(routes, dir, site_verification),
         None => routes,
     };
     let routes = match dist_dir {
-        Some(dir) => mount_static(routes, dir),
+        Some(dir) => mount_static(routes, dir, site_verification),
         None => routes,
     };
     let https = state.config.https;
