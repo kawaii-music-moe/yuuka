@@ -118,7 +118,10 @@ async function downloadPackage(e: SubmitEvent): Promise<void> {
 		URL.revokeObjectURL(url);
 		packagePin = "";
 		packagePinConfirm = "";
-		pushToast("暗号化パッケージを作成しました。PINコードとファイルを別々に保管してください。", "success");
+		pushToast(
+			"暗号化パッケージを作成しました。PINコードとファイルを別々に保管してください。",
+			"success",
+		);
 	} catch (e) {
 		reportError(e);
 	} finally {

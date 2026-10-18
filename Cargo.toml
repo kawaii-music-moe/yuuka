@@ -127,10 +127,10 @@ regex                    = "1"                                                  
 async-trait              = "0.1"
 tracing                  = "0.1"
 tracing-subscriber       = { version = "0.3", features = ["env-filter", "fmt"] }
-serde_yaml               = "0.9"
+serde_yaml               = { package = "serde_yaml_ng", version = "0.10" }
 chrono                   = { version = "0.4", default-features = false, features = ["clock", "std"] }  # cron スケジューラのローカル壁時計（node-cron はローカル時刻）。SQLite datetime とは別用途
 croner                   = "2"                                                  # 5-field cron 式の次回発火計算（node-cron / cron-parser パリティ）
-zip                      = { version = "8", default-features = false, features = ["deflate-flate2"] }  # バックアップ ZIP（Node archiver 相当）。deflate のみ（bzip2/zstd/lzma/aes 非有効＝MIT/Apache/Zlib のみに限定）
+zip                      = { version = "9", default-features = false, features = ["deflate-flate2"] }  # バックアップ ZIP（Node archiver 相当）。deflate のみ（bzip2/zstd/lzma/aes 非有効＝MIT/Apache/Zlib のみに限定）
 tempfile                 = "3"                                                  # バックアップの一時 SQLite/ZIP（scratch ディレクトリ相当）
 
 # yuuka クレート間の内部依存（パス依存）
