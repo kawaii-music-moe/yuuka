@@ -15,6 +15,8 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use chrono::{DateTime, Duration, Local, NaiveDateTime};
+use croner::Cron;
 use serde_json::{json, Value};
 use yuuka_core::tool::FunctionDeclaration;
 use yuuka_core::{DbError, Tool, ToolContext, ToolError, ToolName, ToolOutcome, UserScope};
@@ -105,6 +107,41 @@ fn exec_err(e: DbError) -> ToolError {
 fn is_valid_cron_basic(rule: &str) -> bool {
     let fields: Vec<&str> = rule.split_whitespace().collect();
     fields.len() == 5 && fields.iter().all(|f| !f.is_empty())
+}
+
+/// 過去とみなすまでの猶予（Node `Date.now() - 60_000`）。
+const PAST_GRACE_SECS: i64 = 60;
+
+/// DB 形式の `trigger_at` が過去なら、繰り返しは次回時刻へ補正し、単発は拒否する
+/// （旧 `reminderFunctions.ts:230` パリティ・1 分の猶予あり）。
+///
+/// 返り値は保存する DB 形式の日時。`Err` はユーザーへ返す失敗メッセージ。
+fn guard_past_trigger(
+    trigger_db: String,
+    raw: &str,
+    repeat_rule: Option<&str>,
+    now: DateTime<Local>,
+) -> Result<String, String> {
+    let Ok(at) = NaiveDateTime::parse_from_str(&trigger_db, "%Y-%m-%d %H:%M:%S") else {
+        return Ok(trigger_db);
+    };
+    if at >= (now - Duration::seconds(PAST_GRACE_SECS)).naive_local() {
+        return Ok(trigger_db);
+    }
+    let now_db = now.format("%Y-%m-%d %H:%M:%S").to_string();
+    let Some(rule) = repeat_rule else {
+        return Err(format!(
+            "送信日時が過去です: {raw}（現在日時: {now_db}。未来の日時を指定してください）"
+        ));
+    };
+    Cron::new(rule)
+        .parse()
+        .ok()
+        .and_then(|cron| cron.find_next_occurrence(&now, false).ok())
+        .map(|next| next.format("%Y-%m-%d %H:%M:%S").to_string())
+        .ok_or_else(|| {
+            format!("repeat_rule のcron式が不正です: {rule}（例: 毎週月曜9時 = '0 9 * * 1'）")
+        })
 }
 
 /// `s` が `mask` に一致するか（mask の `'d'`=数字、それ以外=リテラル。長さ一致必須）。
@@ -241,13 +278,13 @@ impl Tool for AddReminderTool {
         };
         // B4: DB 形式へ正規化できない日時は Node 同様に弾いて理由を返す（repo でも正規化されるが、
         // ここで検証してユーザーに再入力を促す。空白/T 区切り・日付のみ・実在日付を受理）。
-        if crate::datetime::to_db_datetime(&trigger_at).is_none() {
+        let Some(trigger_db) = crate::datetime::to_db_datetime(&trigger_at) else {
             return Ok(fail_payload(format!(
                 "送信日時を解釈できません: {trigger_at}（ISO 8601形式 YYYY-MM-DDTHH:MM:SS で指定してください）"
             )));
-        }
+        };
 
-        // 繰り返しの cron 式を検証する。過去日時は repo が次回の未来時刻へ補正する。
+        // 繰り返しの cron 式は簡易検証（厳密検証は deferred）。
         let repeat_rule = arg_str(&args, "repeat_rule");
         if let Some(rule) = &repeat_rule {
             if !is_valid_cron_basic(rule) {
@@ -257,7 +294,18 @@ impl Tool for AddReminderTool {
             }
         }
 
-        // 送信先: 明示指定が無ければ repo がユーザー設定の既定送信先（users.notify_target_*）を保存する。
+        // 過去日時: 単発は拒否、繰り返しは次回時刻へ補正（次の走査で即時通知させない）。
+        let trigger_at = match guard_past_trigger(
+            trigger_db,
+            &trigger_at,
+            repeat_rule.as_deref(),
+            Local::now(),
+        ) {
+            Ok(at) => at,
+            Err(msg) => return Ok(fail_payload(msg)),
+        };
+
+        // 送信先: 明示指定が無ければ repo がユーザー設定の既定送信先を保存する。
         // target_id は既定送信先由来のため None。
         let new = NewReminder {
             message,
@@ -610,6 +658,105 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(bad.payload["success"], false);
+    }
+
+    fn local(s: &str) -> DateTime<Local> {
+        NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S")
+            .unwrap()
+            .and_local_timezone(Local)
+            .unwrap()
+    }
+
+    #[test]
+    fn guard_past_trigger_keeps_future_and_grace_minute() {
+        let now = local("2026-07-12 10:00:00");
+        for at in [
+            "2026-07-12 10:30:00",
+            "2026-07-12 09:59:30",
+            "2026-07-12 09:59:00",
+        ] {
+            assert_eq!(
+                guard_past_trigger(at.to_owned(), at, None, now).as_deref(),
+                Ok(at),
+                "未来・猶予 1 分以内はそのまま: {at}"
+            );
+        }
+    }
+
+    #[test]
+    fn guard_past_trigger_rejects_past_one_shot() {
+        let now = local("2026-07-12 10:00:00");
+        let err = guard_past_trigger(
+            "2026-07-12 09:58:59".to_owned(),
+            "2026-07-12T09:58:59",
+            None,
+            now,
+        )
+        .unwrap_err();
+        assert!(
+            err.contains("送信日時が過去です: 2026-07-12T09:58:59"),
+            "{err}"
+        );
+        assert!(err.contains("現在日時: 2026-07-12 10:00:00"), "{err}");
+    }
+
+    #[test]
+    fn guard_past_trigger_moves_past_repeat_to_next_run() {
+        // 2026-07-12 は日曜。毎週月曜 9 時の次回は翌日。
+        let now = local("2026-07-12 10:00:00");
+        let out = guard_past_trigger(
+            "2026-07-06 09:00:00".to_owned(),
+            "2026-07-06T09:00:00",
+            Some("0 9 * * 1"),
+            now,
+        );
+        assert_eq!(out.as_deref(), Ok("2026-07-13 09:00:00"));
+        // 5 フィールドでも解釈できない式は cron 不正として返す。
+        let err = guard_past_trigger(
+            "2026-07-06 09:00:00".to_owned(),
+            "2026-07-06T09:00:00",
+            Some("99 9 * * 1"),
+            now,
+        )
+        .unwrap_err();
+        assert!(err.contains("repeat_rule のcron式が不正です"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn add_rejects_past_one_shot_and_reschedules_past_repeat() {
+        let db = seed_db();
+        let tools = tools(db).unwrap();
+        let add = find(&tools, "addReminder");
+        let list = find(&tools, "listReminders");
+
+        // 単発の過去日時は保存しない。
+        let out = add
+            .call(
+                &ctx(),
+                json!({"message": "過去", "trigger_at": "2000-01-01T09:00:00"}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(out.payload["success"], false);
+        let out = list.call(&ctx(), json!({})).await.unwrap();
+        assert_eq!(out.payload["reminders"].as_array().unwrap().len(), 0);
+
+        // 繰り返しの過去日時は次回時刻（現在より後）へ補正して保存する。
+        let before = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+        let out = add
+            .call(
+                &ctx(),
+                json!({"message": "毎朝", "trigger_at": "2000-01-01T09:00:00", "repeat_rule": "0 9 * * *"}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(out.payload["success"], true);
+        let saved = out.payload["reminder"]["trigger_at"].as_str().unwrap();
+        assert!(
+            saved > before.as_str(),
+            "次回時刻へ補正されていない: {saved}"
+        );
+        assert!(saved.ends_with(" 09:00:00"), "{saved}");
     }
 
     #[tokio::test]

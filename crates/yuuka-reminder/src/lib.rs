@@ -6,6 +6,7 @@
 //! Phase 1 スコープ = コア CRUD（list/add/cancel/delete）。cron 用の全件走査
 //! （listDuePending / markSent / rescheduleRepeat）は Phase 4 で [`cron`] に追加済み。
 //! source/source_id の各機能連携は deferred（後回し）。
+//! 過去日時の保護（単発は拒否・繰り返しは次回時刻へ補正）は addReminder ツール（[`tools`]）で行う。
 //!
 //! trigger_at の DB 形式正規化（`T`/空白/日付のみ）は [`datetime::to_db_datetime`] で実装済み（B4 修正）。
 //! 送信先省略時の既定送信先解決（users.notify_target_*）は [`notify_target`] で実装済み（R17）。
