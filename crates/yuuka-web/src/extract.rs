@@ -32,8 +32,8 @@ struct BotIdQuery {
 
 /// JSON body を `T` に読み、botId を **body 優先 → query** で解決する抽出器。
 ///
-/// `bot_id` はそのまま [`crate::resolve_scope`] に渡す（`""`/`system_default`/未アクセスは
-/// `resolve_scope` 側で `system_default` に畳まれる）。ハンドラ引数の**最後**に置くこと
+/// `bot_id` はそのまま [`crate::resolve_scope`] に渡す（`""`/`system_default` は 403・未アクセスは
+/// 404 を `resolve_scope` 側で返す）。ハンドラ引数の**最後**に置くこと
 /// （body を消費する `FromRequest` のため）。
 pub struct ScopedJson<T> {
     /// 解決前の raw botId（body の `botId` を優先し、無ければ query の `botId`）。
@@ -51,7 +51,7 @@ where
 
     async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
         // body 消費前に query の botId（フォールバック）を取り出す。query が壊れていても
-        // 認可漏れにはならない（未解決 → system_default）ので `.ok()` で握る。
+        // 認可漏れにはならない（未解決 → resolve_scope が 403）ので `.ok()` で握る。
         let (mut parts, body) = req.into_parts();
         let query_bot = Query::<BotIdQuery>::from_request_parts(&mut parts, state)
             .await
@@ -140,7 +140,7 @@ mod tests {
 
     #[tokio::test]
     async fn none_when_botid_absent_everywhere() {
-        // botId がどこにも無ければ None（呼び出し側で system_default に畳まれる）。
+        // botId がどこにも無ければ None（呼び出し側の resolve_scope が 403 にする）。
         let req = post("/x", r#"{"title":"t"}"#);
         let s = ScopedJson::<Value>::from_request(req, &())
             .await

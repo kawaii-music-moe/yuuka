@@ -16,11 +16,6 @@ REMINDER_CRON: "* * * * *"
 PORT: 7854
 HOST: "0.0.0.0"
 
-# dev 専用の招待コード
-INVITE_CODES:
-  - "yuuka-dev-001"
-  - "yuuka-dev-002"
-
 # Google OAuth2（dev は http://localhost のため既定で無効。必要時に dev 用クライアントを設定）
 GOOGLE_CLIENT_ID: ""
 GOOGLE_CLIENT_SECRET: ""

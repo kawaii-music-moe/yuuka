@@ -48,6 +48,7 @@ mod tests {
     use yuuka_core::{AuthError, BotId, UserId, UserScope};
     use yuuka_db::map_sqlite;
     use yuuka_types::{Role, SessionUser};
+    use yuuka_web::test_support::{with_bot_query, TEST_BOT_ID};
     use yuuka_web::{AppState, AuthBackend, Db, WebConfig};
 
     use crate::dto::NewSchedule;
@@ -276,7 +277,7 @@ mod tests {
         }
     }
 
-    fn app() -> axum::Router {
+    async fn app() -> axum::Router {
         let auth = Arc::new(FakeAuth {
             user: SessionUser {
                 discord_id: "u".to_owned(),
@@ -284,13 +285,15 @@ mod tests {
                 role: Role::User,
             },
         });
-        let state = AppState::new(auth, WebConfig::default(), seed_db());
-        super::routes().with_state(state)
+        let db = seed_db();
+        yuuka_web::test_support::seed_bot(&db, TEST_BOT_ID, "u").await;
+        let state = AppState::new(auth, WebConfig::default(), db);
+        with_bot_query(super::routes().with_state(state), TEST_BOT_ID)
     }
 
     #[tokio::test]
     async fn route_add_then_list() {
-        let app = app();
+        let app = app().await;
         // now 基準の相対式で確実に窓に載る開始時刻を実値化する。
         let start = {
             let conn = rusqlite::Connection::open_in_memory().expect("mem conn");
@@ -343,6 +346,7 @@ mod tests {
     #[tokio::test]
     async fn route_requires_auth() {
         let resp = app()
+            .await
             .oneshot(
                 Request::builder()
                     .uri("/api/schedules")
@@ -358,7 +362,7 @@ mod tests {
     /// 実在削除は `success:true`、該当無（二重削除）は **404 ではなく** `200 {success:false}`。
     #[tokio::test]
     async fn route_delete_returns_bare_success_without_deleted_id() {
-        let app = app();
+        let app = app().await;
         let add = app
             .clone()
             .oneshot(

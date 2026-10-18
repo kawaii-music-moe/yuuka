@@ -268,19 +268,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
 
 [[package]]
-name = "bcrypt"
-version = "0.16.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2b1866ecef4f2d06a0bb77880015fdf2b89e25a1c2e5addacb87e459c86dc67e"
-dependencies = [
- "base64",
- "blowfish",
- "getrandom 0.2.17",
- "subtle",
- "zeroize",
-]
-
-[[package]]
 name = "bitflags"
 version = "2.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -302,16 +289,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3078c7629b62d3f0439517fa394996acacc5cbc91c5a20d8c658e77abd503a71"
 dependencies = [
  "generic-array",
-]
-
-[[package]]
-name = "blowfish"
-version = "0.9.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e412e2cd0f2b2d93e02543ceae7917b3c70331573df19ee046bcbc35e45e87d7"
-dependencies = [
- "byteorder",
- "cipher",
 ]
 
 [[package]]
@@ -346,12 +323,6 @@ name = "bytemuck"
 version = "1.25.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6aedf8ae72766347502cf3cb4f41cf5e9cc37d28bee90f1fdaaae15f9cf9424"
-
-[[package]]
-name = "byteorder"
-version = "1.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1fd0f2584146f6f2ef48085050886acf353beff7305ebd1ae69500e27c67f64b"
 
 [[package]]
 name = "byteorder-lite"
@@ -3714,9 +3685,9 @@ dependencies = [
  "async-trait",
  "axum",
  "base64",
- "bcrypt",
  "getrandom 0.2.17",
  "redis",
+ "reqwest 0.12.28",
  "rusqlite",
  "serde",
  "serde_json",
@@ -4198,6 +4169,7 @@ name = "yuuka-settings"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "chrono",
  "rusqlite",
  "serde",
  "serde_json",
@@ -4212,6 +4184,7 @@ dependencies = [
  "yuuka-google",
  "yuuka-types",
  "yuuka-web",
+ "zip",
 ]
 
 [[package]]
@@ -4356,6 +4329,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "thiserror",
  "tokio",
  "tower",
  "tower-http",

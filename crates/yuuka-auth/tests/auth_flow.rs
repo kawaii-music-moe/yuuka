@@ -1,225 +1,399 @@
-//! P1-1 認証発行の end-to-end 統合テスト。
-//!
-//! 実配線を検証する: `AuthRuntime` が発行したセッションを、**同一の in-memory `SessionStore`** を
-//! 共有する `CompositeAuth` が `/api/me` で検証できること。setup（自動ログイン）→ /api/me、login →
-//! /api/me、誤パスワード 401、未認証 401 を通す。
-//!
-//! テストバイナリ全体を test コンテキストとして扱う（`clippy.toml` の `allow-*-in-tests` は
-//! `tests/` のヘルパ関数までは緩めないため、ファイル冒頭で明示的に許可する）。
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![allow(clippy::expect_used)]
 
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::body::Body;
-use axum::extract::connect_info::ConnectInfo;
-use axum::http::{Request, StatusCode};
-use axum::Router;
+use axum::http::{
+    header::{COOKIE, LOCATION, SET_COOKIE},
+    Request, StatusCode,
+};
+use axum::routing::post;
+use axum::Json;
 use serde_json::{json, Value};
 use tower::ServiceExt;
-use yuuka_auth::{AuthRuntime, CompositeAuth, NullRegistrationDm, SessionStore};
-use yuuka_core::secrets::SecretString;
-use yuuka_crypto::SystemCrypto;
-use yuuka_web::{apply_common_layers, framework_routes, AppState, Db, WebConfig};
+use yuuka_auth::{AuthRuntime, CompositeAuth, SessionStore};
+use yuuka_web::{framework_routes, AppState, Db, WebConfig};
 
-static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-
-/// migrations 適用済みの一時 DB を開く（本番 open は CREATE しないので先にファイルを作る）。
-fn fresh_db() -> Db {
-    let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let path =
-        std::env::temp_dir().join(format!("yuuka_auth_it_{}_{n}.sqlite", std::process::id()));
-    {
-        rusqlite::Connection::open(&path).expect("seed file");
-    }
-    Db::open(&path).expect("open db")
+struct TestApp {
+    router: axum::Router,
+    db_path: PathBuf,
+    _file: tempfile::NamedTempFile,
 }
 
-/// framework（/api/me）+ 認証発行ルータを組み、in-memory セッションを発行↔検証で共有する app を作る。
-fn build() -> Router {
-    let db = fresh_db();
+fn app_with(sk_internal_url: &str, admin_ids: Vec<String>) -> TestApp {
+    app_with_config(sk_internal_url, admin_ids, WebConfig::default())
+}
+
+fn app_with_config(sk_internal_url: &str, admin_ids: Vec<String>, config: WebConfig) -> TestApp {
+    let file = tempfile::NamedTempFile::new().expect("temp db");
+    let db = Db::open(file.path()).expect("open db");
     let sessions = SessionStore::in_memory();
-    let crypto = Arc::new(
-        SystemCrypto::new(SecretString::from("integration-test-secret".to_owned()))
-            .expect("crypto"),
-    );
-    // /api/me の検証側（CompositeAuth）と発行側（AuthRuntime）が同じ sessions を共有するのが要。
     let auth = Arc::new(CompositeAuth::new(db.clone(), sessions.clone(), 7));
-    let state = AppState::new(auth, WebConfig::default(), db);
+    let state = AppState::new(auth, config, db);
     let runtime = Arc::new(AuthRuntime::new(
         sessions,
         7,
-        Some(crypto),
-        Arc::new(NullRegistrationDm),
-        Vec::new(),
+        "https://account.sk-9.net".to_owned(),
+        sk_internal_url.to_owned(),
+        admin_ids,
     ));
-    apply_common_layers(
-        framework_routes().merge(yuuka_auth::routes(runtime)),
-        false,
-        None,
-    )
-    .with_state(state)
-}
-
-/// ConnectInfo（peer アドレス）を載せた JSON リクエストを 1 発投げる。
-async fn call(
-    app: &Router,
-    method: &str,
-    uri: &str,
-    cookie: Option<&str>,
-    body: Option<Value>,
-) -> (StatusCode, Option<String>, Value) {
-    let mut builder = Request::builder().method(method).uri(uri);
-    if let Some(c) = cookie {
-        builder = builder.header("cookie", c);
+    TestApp {
+        router: framework_routes()
+            .merge(yuuka_auth::routes(runtime))
+            .with_state(state),
+        db_path: file.path().to_owned(),
+        _file: file,
     }
-    let req = if let Some(b) = body {
-        builder
-            .header("content-type", "application/json")
-            .body(Body::from(b.to_string()))
-            .unwrap()
-    } else {
-        builder.body(Body::empty()).unwrap()
-    };
-    // 本番同様に ConnectInfo<SocketAddr> を注入（レート制限のクライアント IP 解決経路を通す）。
-    let mut req = req;
-    req.extensions_mut().insert(ConnectInfo(SocketAddr::new(
-        IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
-        40000,
-    )));
+}
 
-    let resp = app.clone().oneshot(req).await.expect("response");
-    let status = resp.status();
-    let set_cookie = resp
-        .headers()
-        .get("set-cookie")
-        .and_then(|v| v.to_str().ok())
-        .map(str::to_owned);
-    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+fn app() -> axum::Router {
+    app_with("http://127.0.0.1:3100", Vec::new()).router
+}
+
+/// sk-account の交換エンドポイントを模したサーバー。`good-<n>` だけを受け付け、
+/// `accounts[n]` のアカウントを返す。
+async fn mock_sk_account(accounts: Vec<Value>) -> String {
+    let accounts = Arc::new(accounts);
+    let router = axum::Router::new().route(
+        "/api/services/yuuka/exchange",
+        post(move |Json(body): Json<Value>| {
+            let accounts = accounts.clone();
+            async move {
+                let code = body.get("code").and_then(Value::as_str).unwrap_or_default();
+                match code
+                    .strip_prefix("good-")
+                    .and_then(|n| n.parse::<usize>().ok())
+                    .and_then(|n| accounts.get(n))
+                {
+                    Some(account) => (StatusCode::OK, Json(json!({ "account": account }))),
+                    None => (
+                        StatusCode::UNAUTHORIZED,
+                        Json(json!({ "error": "invalid or expired code" })),
+                    ),
+                }
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
-        .expect("body");
-    let value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
-    (status, set_cookie, value)
+        .expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    tokio::spawn(async move {
+        axum::serve(listener, router).await.expect("serve");
+    });
+    format!("http://{addr}")
 }
 
-/// `Set-Cookie` から `name=token` の先頭ペアだけを取り出して Cookie ヘッダ用に整形する。
-fn cookie_pair(set_cookie: &str) -> String {
-    set_cookie.split(';').next().unwrap_or("").trim().to_owned()
-}
-
-const DISCORD_ID: &str = "123456789012345678";
-const PASSWORD: &str = "Password1!";
-
-fn setup_body() -> Value {
+fn account(id: &str, discord: &str, name: &str) -> Value {
     json!({
-        "discordId": DISCORD_ID,
-        "username": "admin",
-        "password": PASSWORD,
-        "geminiApiKey": "test-gemini-key",
+        "id": id,
+        "discordUserId": discord,
+        "username": name,
+        "displayName": name,
+        "avatarUrl": null,
+        "role": "user",
     })
 }
 
+async fn get(router: &axum::Router, uri: &str, cookie: Option<&str>) -> axum::response::Response {
+    let mut request = Request::builder().uri(uri);
+    if let Some(cookie) = cookie {
+        request = request.header(COOKIE, cookie);
+    }
+    router
+        .clone()
+        .oneshot(request.body(Body::empty()).expect("request"))
+        .await
+        .expect("response")
+}
+
+fn set_cookies(response: &axum::response::Response) -> Vec<String> {
+    response
+        .headers()
+        .get_all(SET_COOKIE)
+        .iter()
+        .map(|v| v.to_str().expect("ascii").to_owned())
+        .collect()
+}
+
+/// `start` を通して `(state, ブラウザが返す Cookie ヘッダー)` を得る。
+async fn begin_login(router: &axum::Router) -> (String, String) {
+    let response = get(router, "/api/auth/sk/start", None).await;
+    let location = response
+        .headers()
+        .get(LOCATION)
+        .expect("location")
+        .to_str()
+        .expect("ascii")
+        .to_owned();
+    let state = location
+        .split_once("?state=")
+        .expect("state in authorize url")
+        .1
+        .to_owned();
+    let cookie = set_cookies(&response)
+        .into_iter()
+        .next()
+        .expect("state cookie");
+    let pair = cookie.split(';').next().expect("name=value").to_owned();
+    (state, pair)
+}
+
+/// ログインを始めたブラウザが sk-account から戻ってくる callback。
+async fn callback(router: &axum::Router, code: &str) -> axum::response::Response {
+    let (state, cookie) = begin_login(router).await;
+    get(
+        router,
+        &format!("/api/auth/sk/callback?code={code}&state={state}"),
+        Some(&cookie),
+    )
+    .await
+}
+
+/// `(sk_account_id, username, role)` を返す。
+fn user_row(path: &PathBuf, discord_id: &str) -> Option<(Option<String>, String, String)> {
+    let conn = rusqlite::Connection::open(path).expect("open");
+    conn.query_row(
+        "SELECT sk_account_id, username, role FROM users WHERE discord_id = ?1",
+        [discord_id],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+    )
+    .ok()
+}
+
+fn seed_user(path: &PathBuf, discord_id: &str, role: &str, sk_account_id: Option<&str>) {
+    let conn = rusqlite::Connection::open(path).expect("open");
+    conn.execute(
+        "INSERT INTO users (discord_id, username, salt, role, sk_account_id) \
+         VALUES (?1, 'old-name', '00ff', ?2, ?3)",
+        rusqlite::params![discord_id, role, sk_account_id],
+    )
+    .expect("seed user");
+}
+
 #[tokio::test]
-async fn setup_status_reports_need_setup_then_flips() {
-    let app = build();
-    let (status, _, body) = call(&app, "GET", "/api/setup/status", None, None).await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["needSetup"], json!(true));
+async fn sk_login_start_redirects_to_the_only_identity_provider() {
+    let response = get(&app(), "/api/auth/sk/start", None).await;
+    assert_eq!(response.status(), StatusCode::FOUND);
+    let location = response
+        .headers()
+        .get(LOCATION)
+        .expect("location")
+        .to_str()
+        .expect("ascii");
+    let state = location
+        .strip_prefix("https://account.sk-9.net/api/services/yuuka/authorize?state=")
+        .expect("authorize url with state");
+    assert_eq!(state.len(), 43, "{state}");
 
-    let (status, _, _) = call(&app, "POST", "/api/setup", None, Some(setup_body())).await;
-    assert_eq!(status, StatusCode::OK);
+    let cookies = set_cookies(&response);
+    assert_eq!(cookies.len(), 1, "{cookies:?}");
+    let cookie = &cookies[0];
+    assert!(
+        cookie.starts_with(&format!("yuuka-sk-state={state};")),
+        "{cookie}"
+    );
+    for attr in ["HttpOnly", "SameSite=Lax", "Path=/", "Max-Age=600"] {
+        assert!(cookie.contains(attr), "{attr}: {cookie}");
+    }
+}
 
-    let (_, _, body) = call(&app, "GET", "/api/setup/status", None, None).await;
-    assert_eq!(
-        body["needSetup"],
-        json!(false),
-        "セットアップ後は needSetup=false"
+#[tokio::test]
+async fn sk_login_start_uses_host_prefixed_secure_state_cookie_over_https() {
+    let config = WebConfig {
+        https: true,
+        ..WebConfig::default()
+    };
+    let t = app_with_config("http://127.0.0.1:3100", Vec::new(), config);
+    let response = get(&t.router, "/api/auth/sk/start", None).await;
+    let cookie = set_cookies(&response).pop().expect("state cookie");
+    assert!(cookie.starts_with("__Host-yuuka-sk-state="), "{cookie}");
+    assert!(cookie.contains("; Secure"), "{cookie}");
+    // __Host- は Path=/ かつ Domain 無しでないとブラウザに拒否される。
+    assert!(cookie.contains("Path=/;"), "{cookie}");
+    assert!(!cookie.contains("Domain="), "{cookie}");
+}
+
+fn has_session_cookie(response: &axum::response::Response) -> bool {
+    set_cookies(response)
+        .iter()
+        .any(|c| c.starts_with("yuuka-session="))
+}
+
+fn clears_state_cookie(response: &axum::response::Response) -> bool {
+    set_cookies(response)
+        .iter()
+        .any(|c| c.starts_with("yuuka-sk-state=;") && c.contains("Max-Age=0"))
+}
+
+#[tokio::test]
+async fn callback_rejects_code_without_matching_state() {
+    let sk = mock_sk_account(vec![account("acc-6", "600", "Mallory")]).await;
+    let t = app_with(&sk, Vec::new());
+    let (state, cookie) = begin_login(&t.router).await;
+    let (other_state, _) = begin_login(&t.router).await;
+
+    // 攻撃者が自分の code を載せた callback へ被害者を送り込む場合（被害者は state Cookie を
+    // 持たない／別のログインの state を持つ）を含め、どれも code を交換しない。
+    let cases = [
+        (
+            format!("/api/auth/sk/callback?code=good-0&state={state}"),
+            None,
+        ),
+        (
+            "/api/auth/sk/callback?code=good-0".to_owned(),
+            Some(cookie.clone()),
+        ),
+        (
+            format!("/api/auth/sk/callback?code=good-0&state={other_state}"),
+            Some(cookie.clone()),
+        ),
+        (
+            format!("/api/auth/sk/callback?code=good-0&state={}", &state[..42]),
+            Some(cookie.clone()),
+        ),
+    ];
+    for (uri, cookie) in cases {
+        let response = get(&t.router, &uri, cookie.as_deref()).await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{uri}");
+        assert!(!has_session_cookie(&response), "{uri}");
+        assert!(clears_state_cookie(&response), "{uri}");
+    }
+    assert!(
+        user_row(&t.db_path, "600").is_none(),
+        "state が合わなければ code は交換されない"
     );
 }
 
 #[tokio::test]
-async fn setup_issues_session_and_me_verifies_it() {
-    let app = build();
-    // setup → 200 + Set-Cookie（自動ログイン）。
-    let (status, set_cookie, body) =
-        call(&app, "POST", "/api/setup", None, Some(setup_body())).await;
-    assert_eq!(status, StatusCode::OK, "setup 応答: {body}");
-    let cookie = cookie_pair(&set_cookie.expect("setup が Set-Cookie を返す"));
-    assert!(cookie.starts_with("yuuka-session="), "cookie = {cookie}");
-
-    // 発行されたセッションで /api/me が 200（発行↔検証が同一ストアを共有している証拠）。
-    let (status, _, body) = call(&app, "GET", "/api/me", Some(&cookie), None).await;
-    assert_eq!(status, StatusCode::OK, "me 応答: {body}");
-    assert_eq!(body["success"], json!(true));
-    assert_eq!(body["user"]["discordId"], json!(DISCORD_ID));
-    assert_eq!(body["user"]["username"], json!("admin"));
-    // 最初のユーザーは admin。
-    assert_eq!(body["user"]["role"], json!("admin"));
+async fn callback_with_matching_state_logs_in_and_clears_state_cookie() {
+    let sk = mock_sk_account(vec![account("acc-7", "700", "Trent")]).await;
+    let t = app_with(&sk, Vec::new());
+    let response = callback(&t.router, "good-0").await;
+    assert_eq!(response.status(), StatusCode::FOUND);
+    assert!(has_session_cookie(&response));
+    assert!(clears_state_cookie(&response));
 }
 
 #[tokio::test]
-async fn login_after_setup_then_me_ok_and_wrong_password_401() {
-    let app = build();
-    let (status, _, _) = call(&app, "POST", "/api/setup", None, Some(setup_body())).await;
-    assert_eq!(status, StatusCode::OK);
-
-    // 正しい資格情報 → 200 + Cookie。
-    let login = json!({ "discordId": DISCORD_ID, "password": PASSWORD });
-    let (status, set_cookie, body) = call(&app, "POST", "/api/login", None, Some(login)).await;
-    assert_eq!(status, StatusCode::OK, "login 応答: {body}");
-    let cookie = cookie_pair(&set_cookie.expect("login が Set-Cookie を返す"));
-    let (status, _, _) = call(&app, "GET", "/api/me", Some(&cookie), None).await;
-    assert_eq!(status, StatusCode::OK);
-
-    // 誤ったパスワード → 401（Cookie を発行しない）。
-    let bad = json!({ "discordId": DISCORD_ID, "password": "WrongPass9!" });
-    let (status, set_cookie, body) = call(&app, "POST", "/api/login", None, Some(bad)).await;
-    assert_eq!(status, StatusCode::UNAUTHORIZED, "誤パスワードは 401");
-    assert_eq!(body["success"], json!(false));
-    assert!(set_cookie.is_none(), "失敗時は Set-Cookie を返さない");
+async fn password_login_and_registration_routes_do_not_exist() {
+    for uri in [
+        "/api/login",
+        "/api/register",
+        "/api/register/verify",
+        "/api/setup",
+        "/api/settings/password",
+    ] {
+        let response = app()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(uri)
+                    .header("content-type", "application/json")
+                    .body(Body::from("{}"))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::NOT_FOUND, "{uri}");
+    }
 }
 
 #[tokio::test]
-async fn me_without_cookie_is_401() {
-    let app = build();
-    let (status, _, _) = call(&app, "GET", "/api/me", None, None).await;
-    assert_eq!(status, StatusCode::UNAUTHORIZED);
+async fn callback_creates_first_user_as_admin_and_issues_session() {
+    let sk = mock_sk_account(vec![account("acc-1", "100", "Alice")]).await;
+    let t = app_with(&sk, Vec::new());
+
+    let response = callback(&t.router, "good-0").await;
+    assert_eq!(response.status(), StatusCode::FOUND);
+    assert_eq!(response.headers().get(LOCATION).expect("location"), "/");
+    let cookie = set_cookies(&response)
+        .into_iter()
+        .find(|c| c.starts_with("yuuka-session="))
+        .expect("session cookie");
+    assert!(cookie.contains("HttpOnly"), "{cookie}");
+
+    let (sk_id, name, role) = user_row(&t.db_path, "100").expect("user created");
+    assert_eq!(sk_id.as_deref(), Some("acc-1"));
+    assert_eq!(name, "Alice");
+    assert_eq!(role, "admin", "最初の利用者は admin");
 }
 
 #[tokio::test]
-async fn logout_destroys_session() {
-    let app = build();
-    let (_, set_cookie, _) = call(&app, "POST", "/api/setup", None, Some(setup_body())).await;
-    let cookie = cookie_pair(&set_cookie.expect("cookie"));
+async fn callback_creates_later_users_as_user_unless_listed_admin() {
+    let sk = mock_sk_account(vec![
+        account("acc-2", "200", "Bob"),
+        account("acc-3", "300", "Carol"),
+    ])
+    .await;
+    let t = app_with(&sk, vec!["300".to_owned()]);
+    seed_user(&t.db_path, "999", "admin", None);
 
-    // ログアウト前は /api/me 200。
-    let (status, _, _) = call(&app, "GET", "/api/me", Some(&cookie), None).await;
-    assert_eq!(status, StatusCode::OK);
-
-    // ログアウト（同一 Cookie 認証・same-origin なので CSRF は通る）。
-    let (status, _, _) = call(&app, "POST", "/api/logout", Some(&cookie), None).await;
-    assert_eq!(status, StatusCode::OK);
-
-    // 失効後は /api/me 401。
-    let (status, _, _) = call(&app, "GET", "/api/me", Some(&cookie), None).await;
-    assert_eq!(status, StatusCode::UNAUTHORIZED, "ログアウト後は 401");
-}
-
-#[tokio::test]
-async fn register_without_discord_returns_502_via_null_dm() {
-    // 招待コードが無効なので、DM 到達前に 400（招待コード検証で弾かれる）。
-    let app = build();
-    let body = json!({
-        "discordId": DISCORD_ID,
-        "username": "u",
-        "password": PASSWORD,
-        "inviteCode": "NOPE",
-        "geminiApiKey": "k",
-    });
-    let (status, _, body) = call(&app, "POST", "/api/register", None, Some(body)).await;
     assert_eq!(
-        status,
-        StatusCode::BAD_REQUEST,
-        "無効招待コードは 400: {body}"
+        callback(&t.router, "good-0").await.status(),
+        StatusCode::FOUND
     );
+    assert_eq!(
+        callback(&t.router, "good-1").await.status(),
+        StatusCode::FOUND
+    );
+    assert_eq!(user_row(&t.db_path, "200").expect("bob").2, "user");
+    assert_eq!(user_row(&t.db_path, "300").expect("carol").2, "admin");
+}
+
+#[tokio::test]
+async fn callback_claims_unlinked_user_row_with_same_discord_id() {
+    let sk = mock_sk_account(vec![account("acc-4", "400", "Dave")]).await;
+    let t = app_with(&sk, Vec::new());
+    seed_user(&t.db_path, "400", "admin", None);
+
+    assert_eq!(
+        callback(&t.router, "good-0").await.status(),
+        StatusCode::FOUND
+    );
+    let (sk_id, name, role) = user_row(&t.db_path, "400").expect("user");
+    assert_eq!(sk_id.as_deref(), Some("acc-4"));
+    assert_eq!(name, "Dave");
+    assert_eq!(role, "admin", "既存のロールを保つ");
+
+    // 二回目以降も同じ組み合わせならログインできる。
+    assert_eq!(
+        callback(&t.router, "good-0").await.status(),
+        StatusCode::FOUND
+    );
+}
+
+#[tokio::test]
+async fn callback_rejects_discord_id_linked_to_another_sk_account() {
+    let sk = mock_sk_account(vec![account("acc-intruder", "500", "Eve")]).await;
+    let t = app_with(&sk, Vec::new());
+    seed_user(&t.db_path, "500", "user", Some("acc-owner"));
+
+    let response = callback(&t.router, "good-0").await;
+    assert_ne!(response.status(), StatusCode::FOUND);
+    assert!(!has_session_cookie(&response));
+    assert_eq!(
+        user_row(&t.db_path, "500").expect("user").0.as_deref(),
+        Some("acc-owner")
+    );
+}
+
+#[tokio::test]
+async fn callback_rejects_invalid_or_missing_code() {
+    let sk = mock_sk_account(Vec::new()).await;
+    let t = app_with(&sk, Vec::new());
+
+    let response = callback(&t.router, "bogus").await;
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert!(!has_session_cookie(&response));
+
+    let (state, cookie) = begin_login(&t.router).await;
+    let response = get(
+        &t.router,
+        &format!("/api/auth/sk/callback?state={state}"),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }

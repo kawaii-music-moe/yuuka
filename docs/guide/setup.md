@@ -37,13 +37,13 @@ cp example.yaml config.yaml
 
 主な項目:
 
-- **`INVITE_CODES`**: ユーザー登録に必須の招待コード。推測されにくい独自の値に変更してください。
 - **`DB_PATH`**: SQLite データベースの保存パス（デフォルト: `./data/yuuka.db`）。`DB_PATH` が指すファイルが無い状態で起動すると既定では即エラーになる。新規インスタンスの初回起動のみ、環境変数 `YUUKA_INIT_DB=1`（`.env` ではなく実際の環境変数として設定）を付けて起動すると、無ければ DB を新規作成して migrations を適用する（詳細は後述）。
 - **`REDIS_URL`**: 会話コンテキスト・セッション管理用の Redis 接続 URL。
 - **`PORT` / `HOST`**: バックエンドサーバーがリスンするポートとホスト名。デフォルトはローカル接続のみ (`127.0.0.1` / `7854`)。リバースプロキシ経由で公開する場合は `HOST` を `"0.0.0.0"` に変更します。
 - **`GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`**: Google OAuth 認証情報（カレンダー/Drive 連携用のシステム共通設定、任意）。
 - **`BASE_URL`**: 外部公開 HTTPS ベース URL（OAuth リダイレクト・Cookie ハードニング判定に使用）。
-- **`ADMIN_DISCORD_IDS`**: 初期 Admin に昇格する Discord ユーザー ID（任意。未設定なら最初の登録者が Admin）。
+- **`SK_ACCOUNT_URL` / `SK_ACCOUNT_INTERNAL_URL`**: ログインに使う sk-account の公開 URL（ブラウザの遷移先・既定 `https://account.sk-9.net`）と、サーバーから認可コードを交換する内部 URL（既定 `http://127.0.0.1:3100`）。Yuuka はパスワードを持たず、本人認証は sk-account のパスキーだけで行う。
+- **`ADMIN_DISCORD_IDS`**: 初回ログイン時に Admin として作成する Discord ユーザー ID（任意。未設定なら最初のログイン者が Admin）。
 
 ### 環境変数（機密設定）
 

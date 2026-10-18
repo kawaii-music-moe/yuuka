@@ -37,20 +37,20 @@ let servers = $state<McpServerView[]>([]);
 let dashAvailable = $state<Record<number, boolean>>({});
 let loading = $state(false);
 
-// 共有Bot（system_default 以外の実Bot）が利用する MCP（bot-canonical・共同編集）。
+// 選択中の Bot が利用する MCP（bot-canonical・共同編集）。システム Bot は選べない（案内役）。
 let botServers = $state<BotMcpGrantServer[]>([]);
 let ownGrantable = $state<BotMcpOwnServer[]>([]);
 let grantsLoading = $state(false);
-const isRealBot = $derived(!!$activeBot && $activeBot.id !== "system_default");
+const isRealBot = $derived(!!$activeBot);
 
 let dashOpen = $state(false);
 let dashServer = $state<{ id: number; name: string } | null>(null);
 
 // 現在の Bot 表示ラベル（旧 mcp-current-bot-label）。
 const currentBotLabel = $derived(
-	$activeBot && $activeBot.id !== "system_default" && $activeBot.name
+	$activeBot?.name
 		? `現在のBot: ${$activeBot.name}`
-		: "現在のBot: 既定の秘書（早瀬ユウカ）",
+		: "Bot が選択されていません",
 );
 
 function reportError(e: unknown) {

@@ -18,7 +18,7 @@ dev server (the admin SPA is only served under `/admin/`), and `/login`
 redirects to `/admin/login`. Everything stays on the Client's origin, so it also
 works when the Client is opened through a tunnel hostname. Unauthenticated users
 are sent to `/admin/login` with a `returnTo` of the current page and come back
-to the Client after signing in. In mock mode sign in with `admin` / `pass`.
+to the Client after signing in. In mock mode the sk-account sign-in button logs you in as `admin` immediately.
 
 ```bash
 pnpm dev
@@ -46,7 +46,7 @@ VITE_API_TARGET=http://localhost:8787 VITE_PWA_DEV_SERVER=http://localhost:5173 
   pnpm exec vite --config frontend/vite.config.ts --port 5174 --strictPort
 ```
 
-`http://localhost:5173` を開くと `/admin/login` へ送られ、`admin` / `pass` でログインすると PWA へ戻ります。
+`http://localhost:5173` を開くと `/admin/login` へ送られ、「sk-9 Accountでログイン」を押すと（モックでは sk-account を経由せず）`admin` でログインして PWA へ戻ります。
 
 開発サーバーは `/api` を `VITE_API_PROXY_TARGET`（未設定時は `http://localhost:3000`。`client/pwa/vite.config.ts`）へプロキシし、`/admin` 配下を `VITE_ADMIN_DEV_SERVER`（未設定時は `http://localhost:5174`）へプロキシし、`/login` を同一オリジンの `/admin/login` へリダイレクトします。`VITE_API_PROXY_TARGET` を付けない `npm run dev` はモックに接続しません。
 
