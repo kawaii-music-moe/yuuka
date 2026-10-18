@@ -1072,14 +1072,18 @@ impl Tool for SettlePlannedPaymentTool {
     fn declaration(&self) -> FunctionDeclaration {
         FunctionDeclaration {
             name: self.name.clone(),
-            description: "支払い予定を「支払い済み」にして家計簿に実支出として記帳する（消込）。\
-                「家賃払った」等で呼ぶ。紐付く未完了 ToDo があれば自動で完了になる。\
+            description: "支払い予定を「支払い済み」にする（消込）。「家賃払った」等で呼ぶ。\
+                expense_id を渡すと、その記帳済みの支出記録と紐付けて消込する（新しい支出は記録しない）。\
+                省くと予定の金額・カテゴリで新しい支出を家計簿に記帳して消込する。\
+                レシート等で先に記帳した支払いを消込む時は、二重計上を避けるため expense_id を渡す。\
+                紐付く未完了 ToDo があれば自動で完了になる。\
                 まだ払っていない予定を取り消すだけなら cancelPlannedPayment を使う。"
                 .to_owned(),
             parameters_json_schema: json!({
                 "type": "object",
                 "properties": {
-                    "plan_id": { "type": "number", "description": "消込する支払い予定のID（#のあとの番号）" }
+                    "plan_id": { "type": "number", "description": "消込する支払い予定のID（#のあとの番号）" },
+                    "expense_id": { "type": "number", "description": "紐付ける記帳済みの支出記録の ID（addExpense / listRecentExpenses が返す #番号）。省略=予定の内容で支出を新しく記録して消込する（任意）" }
                 },
                 "required": ["plan_id"]
             }),
@@ -1090,6 +1094,19 @@ impl Tool for SettlePlannedPaymentTool {
     async fn call(&self, ctx: &ToolContext, args: Value) -> Result<ToolOutcome, ToolError> {
         let Some(plan_id) = arg_int(&args, "plan_id") else {
             return Ok(fail_payload("plan_id を指定してください。"));
+        };
+        // expense_id が渡されたのに数値として読めない時は、新規記帳へ落とさず失敗にする
+        // （黙って新しい支出を作ると二重計上になるため）。
+        let existing_expense_id = match args.get("expense_id") {
+            None | Some(Value::Null) => None,
+            Some(_) => match arg_i64(&args, "expense_id") {
+                Some(id) => Some(id),
+                None => {
+                    return Ok(fail_payload(
+                        "expense_id は支出記録の ID（#のあとの番号）で指定してください。",
+                    ))
+                }
+            },
         };
         let scope = scope_of(ctx);
         let repo = ExpenseRepo::new(&self.db);
@@ -1108,23 +1125,61 @@ impl Tool for SettlePlannedPaymentTool {
                 "支払い予定 #{plan_id} は既に{state}です。"
             )));
         }
-        // 予定内容で新規記帳 + 消込 + 紐付き ToDo 自動完了（expense_id 指定での既存記録紐付けは deferred）。
+
+        // expense_id 指定: 記帳済みの支出と紐付けて消込 + 紐付き ToDo 自動完了（新規記帳しない・R14）。
+        if let Some(expense_id) = existing_expense_id {
+            let Some(expense) = repo.get(&scope, expense_id).await.map_err(exec_err)? else {
+                return Ok(fail_payload(format!(
+                    "支出記録 #{expense_id} が見つかりません。"
+                )));
+            };
+            if expense.r#type != "expense" {
+                return Ok(fail_payload(format!(
+                    "記録 #{expense_id} は収入のため消込に使えません。"
+                )));
+            }
+            let Some(completed) = repo
+                .settle_plan_with_expense(&scope, plan_id, expense_id)
+                .await
+                .map_err(exec_err)?
+            else {
+                return Ok(fail_payload(format!(
+                    "支払い予定 #{plan_id} の消込に失敗しました。"
+                )));
+            };
+            return Ok(ToolOutcome::from_payload(ok_payload(
+                format!(
+                    "支払い予定「{}」({}) を消込しました✅ 支出記録 #{expense_id} と紐付けました。{}",
+                    plan.title,
+                    format_yen(plan.amount),
+                    completed_todo_note(completed),
+                ),
+                json!({ "expense": expense, "completed_todos": completed }),
+            )));
+        }
+
+        // expense_id 省略: 予定内容で新規記帳 + 消込 + 紐付き ToDo 自動完了。
         let (expense_id, completed) = repo.settle_plan(&scope, &plan).await.map_err(exec_err)?;
         let expense = repo.get(&scope, expense_id).await.map_err(exec_err)?;
-        let todo_note = if completed > 0 {
-            format!(" 紐付きToDo {completed} 件を自動的に完了にしました✅")
-        } else {
-            String::new()
-        };
         Ok(ToolOutcome::from_payload(ok_payload(
             format!(
-                "支払い予定「{}」({}) を消込しました✅ 支出 {} を新規記帳しました (ID: #{expense_id})。{todo_note}",
+                "支払い予定「{}」({}) を消込しました✅ 支出 {} を新規記帳しました (ID: #{expense_id})。{}",
                 plan.title,
                 format_yen(plan.amount),
                 format_yen(plan.amount),
+                completed_todo_note(completed),
             ),
             json!({ "expense": expense, "completed_todos": completed }),
         )))
+    }
+}
+
+/// 消込で自動完了した ToDo の補足文（0 件なら空）。
+fn completed_todo_note(completed: i64) -> String {
+    if completed > 0 {
+        format!(" 紐付きToDo {completed} 件を自動的に完了にしました✅")
+    } else {
+        String::new()
     }
 }
 
@@ -1897,6 +1952,110 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(out.payload["plans"].as_array().unwrap().len(), 1);
+    }
+
+    /// R14: expense_id を渡すと記帳済みの支出に紐付けて消込し、新しい支出を作らない（二重計上防止）。
+    #[tokio::test]
+    async fn settle_with_existing_expense_does_not_record_again() {
+        let db = seed_db();
+        let tools = tools(db).unwrap();
+        let add_expense = find(&tools, "addExpense");
+        let list_expenses = find(&tools, "listRecentExpenses");
+        let add = find(&tools, "addPlannedPayment");
+        let link = find(&tools, "linkPlannedPaymentTodo");
+        let list = find(&tools, "listPlannedPayments");
+        let settle = find(&tools, "settlePlannedPayment");
+
+        // 先にレシート等で記帳した支払い・収入・他ユーザーの支出。
+        let out = add_expense
+            .call(
+                &ctx(),
+                json!({"amount": 80000, "category": "その他", "memo": "家賃"}),
+            )
+            .await
+            .unwrap();
+        let paid = out.payload["expense"]["id"].as_i64().unwrap();
+        let out = add_expense
+            .call(
+                &ctx(),
+                json!({"amount": 80000, "category": "その他", "type": "income"}),
+            )
+            .await
+            .unwrap();
+        let income = out.payload["expense"]["id"].as_i64().unwrap();
+        let other = ToolContext::new(BotId::system_default(), UserId::new("userB"));
+        let out = add_expense
+            .call(&other, json!({"amount": 80000, "category": "その他"}))
+            .await
+            .unwrap();
+        let others = out.payload["expense"]["id"].as_i64().unwrap();
+
+        let out = add.call(&ctx(), json!({"title": "家賃", "amount": 80000, "category": "その他", "due_date": "2026-08-27"})).await.unwrap();
+        let plan_id = out.payload["plan"]["id"].as_i64().unwrap();
+        link.call(&ctx(), json!({"plan_id": plan_id}))
+            .await
+            .unwrap();
+
+        // 使えない expense_id は失敗し、新規記帳にも落ちない（予定は pending のまま）。
+        for bad in [
+            json!(99999),
+            json!(income),
+            json!(others),
+            json!("abc"),
+            json!(true),
+        ] {
+            let out = settle
+                .call(&ctx(), json!({"plan_id": plan_id, "expense_id": bad}))
+                .await
+                .unwrap();
+            assert_eq!(out.payload["success"], false, "expense_id={bad}");
+        }
+        let out = list.call(&ctx(), json!({})).await.unwrap();
+        assert_eq!(out.payload["plans"][0]["status"], "pending");
+        let out = list_expenses.call(&ctx(), json!({})).await.unwrap();
+        assert_eq!(out.payload["expenses"].as_array().unwrap().len(), 2);
+
+        // 記帳済みの支出で消込: その支出を返し、紐付き ToDo を完了し、支出は増えない。
+        let out = settle
+            .call(&ctx(), json!({"plan_id": plan_id, "expense_id": paid}))
+            .await
+            .unwrap();
+        assert_eq!(out.payload["success"], true);
+        assert_eq!(out.payload["expense"]["id"].as_i64(), Some(paid));
+        assert_eq!(out.payload["completed_todos"], 1);
+        assert!(out.payload["message"]
+            .as_str()
+            .unwrap()
+            .contains(&format!("支出記録 #{paid} と紐付けました")));
+        let out = list_expenses.call(&ctx(), json!({})).await.unwrap();
+        assert_eq!(out.payload["expenses"].as_array().unwrap().len(), 2);
+        let out = list
+            .call(&ctx(), json!({"status": "settled"}))
+            .await
+            .unwrap();
+        assert_eq!(
+            out.payload["plans"][0]["settled_expense_id"].as_i64(),
+            Some(paid)
+        );
+
+        // 数値文字列の ID も受け付ける（別の予定・別の支出で確認）。
+        let out = add_expense
+            .call(&ctx(), json!({"amount": 5000, "category": "光熱費"}))
+            .await
+            .unwrap();
+        let paid2 = out.payload["expense"]["id"].as_i64().unwrap();
+        let out = add.call(&ctx(), json!({"title": "電気代", "amount": 5000, "category": "光熱費", "due_date": "2026-08-27"})).await.unwrap();
+        let plan2 = out.payload["plan"]["id"].as_i64().unwrap();
+        let out = settle
+            .call(
+                &ctx(),
+                json!({"plan_id": plan2, "expense_id": paid2.to_string()}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(out.payload["success"], true);
+        assert_eq!(out.payload["expense"]["id"].as_i64(), Some(paid2));
+        assert_eq!(out.payload["completed_todos"], 0);
     }
 
     #[tokio::test]

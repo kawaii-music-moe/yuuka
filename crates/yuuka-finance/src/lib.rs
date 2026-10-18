@@ -698,6 +698,66 @@ mod tests {
         assert_eq!(todo_status(&db, plan_id).await, "done");
     }
 
+    /// R14: 記帳済みの支出で消込すると新しい支出を作らず、その支出を settled_expense_id に記録する。
+    /// 他ユーザーの支出・収入・存在しない ID では何も変更しない。
+    #[tokio::test]
+    async fn settle_with_existing_expense_links_without_new_record() {
+        let db = seed_db();
+        let plan_id = insert_plan_with_todo(&db, true).await;
+        let repo = ExpenseRepo::new(&db);
+        let s = scope("u");
+
+        let existing = repo.add(&s, new_expense(5000, "光熱費")).await.unwrap();
+        let income = repo
+            .add(
+                &s,
+                NewExpense {
+                    r#type: Some("income".to_owned()),
+                    ..new_expense(5000, "その他")
+                },
+            )
+            .await
+            .unwrap();
+        let others = repo
+            .add(&scope("other"), new_expense(5000, "光熱費"))
+            .await
+            .unwrap();
+
+        // 条件を満たさない支出では None・予定は pending のまま・ToDo も未完了。
+        for bad in [others.id, income.id, 99_999] {
+            assert_eq!(
+                repo.settle_plan_with_expense(&s, plan_id, bad)
+                    .await
+                    .unwrap(),
+                None
+            );
+        }
+        let plan = repo.get_plan(&s, plan_id).await.unwrap().expect("plan");
+        assert_eq!(plan.status, "pending");
+        assert_eq!(plan.settled_expense_id, None);
+        assert_eq!(todo_status(&db, plan_id).await, "open");
+
+        // 記帳済みの支出で消込: 紐付き ToDo を完了し、支出は増えない。
+        let completed = repo
+            .settle_plan_with_expense(&s, plan_id, existing.id)
+            .await
+            .unwrap();
+        assert_eq!(completed, Some(1));
+        let settled = repo.get_plan(&s, plan_id).await.unwrap().expect("plan");
+        assert_eq!(settled.status, "settled");
+        assert_eq!(settled.settled_expense_id, Some(existing.id));
+        assert_eq!(todo_status(&db, plan_id).await, "done");
+        assert_eq!(repo.list(&s).await.unwrap().len(), 2); // existing + income のみ
+
+        // 消込済みの予定はもう一度消込できない。
+        assert_eq!(
+            repo.settle_plan_with_expense(&s, plan_id, existing.id)
+                .await
+                .unwrap(),
+            None
+        );
+    }
+
     #[tokio::test]
     async fn route_pay_settles_and_reports_todo_count() {
         let db = seed_db();
