@@ -199,6 +199,9 @@ struct NewsItem {
 async fn fetch_news(feeds: &[String], keywords: &[String]) -> Vec<NewsItem> {
     let client = match reqwest::Client::builder()
         .timeout(Duration::from_secs(10))
+        // The destination check below only covers the original URL. Following redirects here
+        // would let an otherwise public feed redirect the request to a loopback/link-local host.
+        .redirect(reqwest::redirect::Policy::none())
         .build()
     {
         Ok(c) => c,
@@ -424,6 +427,59 @@ mod tests {
 
         assert!(items.is_empty());
         assert_eq!(hits.load(Ordering::SeqCst), 0, "内部アドレスへ接続した");
+    }
+
+    /// R25: a feed URL which passed the initial safety check must not be allowed to redirect the
+    /// HTTP client to an internal address. The production client intentionally returns the 302
+    /// response to `fetch_news`, which then ignores it as a non-success response.
+    #[tokio::test]
+    async fn news_client_does_not_follow_redirects_to_internal_address() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let internal = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let internal_addr = internal.local_addr().unwrap();
+        let internal_hits = Arc::new(AtomicUsize::new(0));
+        let server_hits = Arc::clone(&internal_hits);
+        let internal_server = tokio::spawn(async move {
+            if let Ok((mut sock, _)) = internal.accept().await {
+                server_hits.fetch_add(1, Ordering::SeqCst);
+                let mut buf = [0u8; 1024];
+                let _ = sock.read(&mut buf).await;
+                let _ = sock
+                    .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+                    .await;
+            }
+        });
+
+        let redirector = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let redirector_addr = redirector.local_addr().unwrap();
+        let redirect_server = tokio::spawn(async move {
+            let (mut sock, _) = redirector.accept().await.unwrap();
+            let mut buf = [0u8; 1024];
+            let _ = sock.read(&mut buf).await;
+            let response = format!(
+                "HTTP/1.1 302 Found\r\nLocation: http://{internal_addr}/feed.xml\r\nContent-Length: 0\r\n\r\n"
+            );
+            sock.write_all(response.as_bytes()).await.unwrap();
+        });
+
+        let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .unwrap();
+        let response = client
+            .get(format!("http://{redirector_addr}/feed.xml"))
+            .send()
+            .await
+            .unwrap();
+
+        redirect_server.await.unwrap();
+        tokio::task::yield_now().await;
+        internal_server.abort();
+        assert_eq!(response.status(), reqwest::StatusCode::FOUND);
+        assert_eq!(internal_hits.load(Ordering::SeqCst), 0);
     }
 
     #[test]
