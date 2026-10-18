@@ -155,8 +155,7 @@ function botChip(b: IntegratedBotView): { status: ChipStatus; label: string } {
 	if (b.suspended) return { status: "stopped", label: "停止中(管理者)" };
 	if (b.connected) return { status: "running", label: "稼働中" };
 	if (b.running) return { status: "pending", label: "接続中…" };
-	if (!b.has_token && !b.is_system_default)
-		return { status: "unset", label: "トークン未設定" };
+	if (!b.has_token) return { status: "unset", label: "トークン未設定" };
 	return { status: "unset", label: "停止" };
 }
 
@@ -331,7 +330,8 @@ async function saveCalendars(payload: {
 }
 
 // Bot 別 使用 Google アカウント割当（primary / none / account）。
-const ownedBots = $derived(bots.filter((b) => !b.is_system_default));
+// overview はシステム Bot を含まない（案内役のため・issue #143）ので、bots はすべて所有 Bot。
+const ownedBots = $derived(bots);
 function assignValue(b: IntegratedBotView): string {
 	const gs = b.google_setting;
 	return gs === "primary" || gs === "none" ? String(gs) : `acct:${gs}`;
@@ -384,16 +384,9 @@ async function connectGoogle() {
 				{@const chip = botChip(b)}
 				<div class="glass int-bot-row">
 					<div class="int-bot-info">
-						<Icon
-							name={b.is_system_default ? "shield_person" : "smart_toy"}
-							class="int-bot-icon"
-						/>
+						<Icon name="smart_toy" class="int-bot-icon" />
 						<div class="int-bot-meta">
-							<div class="int-bot-name">
-								{b.name}
-								{#if b.is_system_default}<span class="int-bot-sub">(共有秘書)</span
-									>{/if}
-							</div>
+							<div class="int-bot-name">{b.name}</div>
 							<div class="int-bot-detail">
 								{b.preset}・{b.discord_username || b.id}
 							</div>
@@ -401,20 +394,18 @@ async function connectGoogle() {
 					</div>
 					<div class="int-bot-actions">
 						<StatusChip status={chip.status} label={chip.label} />
-						{#if !b.is_system_default}
-							{#if b.suspended || !b.has_token}
-								<Button variant="secondary" small disabled
-									>{b.running ? "停止" : "起動"}</Button
-								>
-							{:else if b.running}
-								<Button variant="secondary" small onclick={() => botAction("stop", b.id)}
-									>停止</Button
-								>
-							{:else}
-								<Button variant="secondary" small onclick={() => botAction("start", b.id)}
-									>起動</Button
-								>
-							{/if}
+						{#if b.suspended || !b.has_token}
+							<Button variant="secondary" small disabled
+								>{b.running ? "停止" : "起動"}</Button
+							>
+						{:else if b.running}
+							<Button variant="secondary" small onclick={() => botAction("stop", b.id)}
+								>停止</Button
+							>
+						{:else}
+							<Button variant="secondary" small onclick={() => botAction("start", b.id)}
+								>起動</Button
+							>
 						{/if}
 						<div class="int-menu-wrap">
 							<button
@@ -429,17 +420,15 @@ async function connectGoogle() {
 							>
 							{#if openMenuId === b.id}
 								<div class="int-action-menu open" role="menu">
-									{#if !b.is_system_default}
-										<button
-											type="button"
-											class="int-menu-item"
-											disabled={b.suspended || !b.has_token}
-											onclick={(e) => {
-												e.stopPropagation();
-												botAction("restart", b.id);
-											}}>再起動</button
-										>
-									{/if}
+									<button
+										type="button"
+										class="int-menu-item"
+										disabled={b.suspended || !b.has_token}
+										onclick={(e) => {
+											e.stopPropagation();
+											botAction("restart", b.id);
+										}}>再起動</button
+									>
 									<button
 										type="button"
 										class="int-menu-item int-menu-danger"
@@ -738,10 +727,6 @@ async function connectGoogle() {
 	}
 	.int-bot-name {
 		font-weight: 600;
-	}
-	.int-bot-sub {
-		font-size: 0.7rem;
-		color: var(--color-zinc-muted, #a1a1aa);
 	}
 	.int-bot-detail {
 		font-size: 0.75rem;

@@ -43,8 +43,8 @@ fn fresh_db() -> (Db, std::path::PathBuf) {
     let db = Db::open(&path).expect("open db");
     let conn = rusqlite::Connection::open(&path).expect("open seed");
     conn.execute_batch(
-        "INSERT INTO users (discord_id, username, password_hash, salt, role) \
-            VALUES ('u1', 'u1', 'x', '00', 'user'), ('u2', 'u2', 'x', '00', 'user');
+        "INSERT INTO users (discord_id, username, salt, role) \
+            VALUES ('u1', 'u1', '00', 'user'), ('u2', 'u2', '00', 'user');
          INSERT INTO bots (id, user_id, name) VALUES \
             ('mybot', 'u1', 'Mine'), ('otherbot', 'u2', 'Not shared'), \
             ('sharedbot', 'u2', 'Shared'), ('revokedbot', 'u2', 'Revoked');

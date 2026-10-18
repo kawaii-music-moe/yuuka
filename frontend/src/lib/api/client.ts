@@ -14,7 +14,7 @@
 //   - scope:'user' … botId を絶対に注入しない（auth/me/bots系/device/setup/admin/
 //                     settings）。stale な botId を混ぜると別 Bot のデータに化ける。
 //   - 除外は「プレフィックス一致」なので、サービス層で正しい scope を付ける責務。
-//     （/api/bots 配下・/api/login|register|logout|me・/api/auth/device/*・
+//     （/api/bots 配下・/api/logout|me・/api/auth/device/*・
 //       device-management 3本・/api/setup* は scope:'user'）
 //
 //   - credentials:'same-origin' を明示。dev は Vite proxy(changeOrigin:false)で
@@ -151,4 +151,23 @@ export const api = {
 		request<T>("POST", path, { ...(opts as RequestOpts), body }),
 	del: <T>(path: string, opts: NoBodyOpts) =>
 		request<T>("DELETE", path, opts as RequestOpts),
+	/** JSON POST の結果をファイルとして受け取る（暗号化パッケージ等）。 */
+	downloadPost: async (
+		path: string,
+		body: Record<string, unknown>,
+	): Promise<{ blob: Blob; filename: string | null }> => {
+		const res = await fetch(new URL(path, location.origin), {
+			method: "POST",
+			credentials: "same-origin",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify(body),
+		});
+		if (!res.ok) {
+			const data = (await res.json().catch(() => ({}))) as { message?: string };
+			throw new ApiError(res.status, data.message ?? "ダウンロードに失敗しました");
+		}
+		const disposition = res.headers.get("Content-Disposition");
+		const filename = disposition?.match(/filename="([^"]+)"/)?.[1] ?? null;
+		return { blob: await res.blob(), filename };
+	},
 };

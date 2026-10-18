@@ -4,7 +4,7 @@
 //
 // 移植方針:
 //   - 8 セクションを $effect で並列取得（旧 fetchAdminData の Promise.all）。
-//   - テーブル行は createElement 全廃 → {#each}。ロール/ステータス/招待バッジは既存クラス再利用。
+//   - テーブル行は createElement 全廃 → {#each}。ロール/ステータスバッジは既存クラス再利用。
 //   - confirm()/alert() → confirmDialog / pushToast。
 //   - 自己保護（自分の行は操作ボタンを出さず「自分」表示）は旧仕様どおり currentUser.discordId で判定。
 //   - 監査ログは直近5件をインライン、全件は AuditModal（自前ページング）。
@@ -17,7 +17,6 @@ import type {
 	AdminStats,
 	AdminUserView,
 	AuditLogEntry,
-	InviteCode,
 	PublicPersonaView,
 } from "$lib/api/types";
 import { Button, confirmDialog, Icon } from "$lib/components/ui";
@@ -34,7 +33,6 @@ const AUDIT_PREVIEW_LIMIT = 5;
 let stats = $state<AdminStats | null>(null);
 let users = $state<AdminUserView[]>([]);
 let botsList = $state<AdminBotView[]>([]);
-let inviteCodes = $state<InviteCode[]>([]);
 let auditPreview = $state<AuditLogEntry[]>([]);
 let personas = $state<PublicPersonaView[]>([]);
 
@@ -47,7 +45,6 @@ let presetMcp = $state("");
 let rateUserMin = $state<number | "">("");
 let rateUserDay = $state<number | "">("");
 let rateGuildDay = $state<number | "">("");
-let inviteCodeInput = $state("");
 
 let auditOpen = $state(false);
 
@@ -78,13 +75,6 @@ async function loadUsers() {
 async function loadBots() {
 	try {
 		botsList = (await adminApi.bots()).bots ?? [];
-	} catch (e) {
-		reportError(e);
-	}
-}
-async function loadInvites() {
-	try {
-		inviteCodes = (await adminApi.inviteCodes()).codes ?? [];
 	} catch (e) {
 		reportError(e);
 	}
@@ -133,7 +123,6 @@ $effect(() => {
 	void loadStats();
 	void loadUsers();
 	void loadBots();
-	void loadInvites();
 	void loadSystemSettings();
 	void loadAuditPreview();
 	void loadPersonas();
@@ -211,49 +200,6 @@ async function unsuspendBot(bot: AdminBotView) {
 	}
 }
 
-// ── 招待コード: 作成 / 無効化 / 削除 ──
-async function createInvite(e: SubmitEvent) {
-	e.preventDefault();
-	const code = inviteCodeInput.trim();
-	if (!code) return;
-	try {
-		await adminApi.createInviteCode(code);
-		inviteCodeInput = "";
-		await loadInvites();
-		await loadStats();
-	} catch (err) {
-		reportError(err);
-	}
-}
-async function revokeInvite(code: InviteCode) {
-	const ok = await confirmDialog({
-		message: `招待コード「${code.code}」を無効化しますか？\n記録は残りますが、登録には使用できなくなります。`,
-		confirmLabel: "無効化",
-	});
-	if (!ok) return;
-	try {
-		await adminApi.revokeInviteCode(code.code);
-		await loadInvites();
-		await loadStats();
-	} catch (e) {
-		reportError(e);
-	}
-}
-async function deleteInvite(code: InviteCode) {
-	const ok = await confirmDialog({
-		message: `招待コード「${code.code}」を完全に削除しますか？\nこの操作は元に戻せません。`,
-		danger: true,
-		confirmLabel: "削除",
-	});
-	if (!ok) return;
-	try {
-		await adminApi.deleteInviteCode(code.code);
-		await loadInvites();
-		await loadStats();
-	} catch (e) {
-		reportError(e);
-	}
-}
 
 // ── ペルソナ: 非公開化 / 削除 ──
 async function unpublishPersona(p: PublicPersonaView) {
@@ -359,13 +305,6 @@ function botStatus(bot: AdminBotView): { label: string; tone: string } {
 		<div class="admin-kpi">
 			<span class="admin-kpi-value">{stats?.suspendedBots ?? 0}</span>
 			<span class="admin-kpi-label"><Icon name="block" size={14} />差し押さえ</span>
-		</div>
-		<div class="admin-kpi-sep"></div>
-		<div class="admin-kpi">
-			<span class="admin-kpi-value">{stats?.availableInviteCodes ?? 0}</span>
-			<span class="admin-kpi-label"
-				><Icon name="confirmation_number" size={14} />招待コード残</span
-			>
 		</div>
 	</div>
 
@@ -672,78 +611,6 @@ function botStatus(bot: AdminBotView): { label: string; tone: string } {
 			</Button>
 		</div>
 	{/if}
-
-	<!-- Invite Codes -->
-	{#if section === "invites"}
-		<p class="description-text">新規ユーザー登録に必要な招待コードの管理を行います。</p>
-		<form class="admin-invite-form" onsubmit={createInvite}>
-			<input
-				type="text"
-				bind:value={inviteCodeInput}
-				required
-				placeholder="新しい招待コードを入力"
-				class="admin-grow"
-			/>
-			<Button variant="primary" type="submit">コード作成</Button>
-		</form>
-		<div class="table-responsive">
-			<table class="expense-table admin-table-full">
-				<thead>
-					<tr>
-						<th class="admin-table-th">コード</th>
-						<th class="admin-table-th">ステータス</th>
-						<th class="admin-table-th">使用者</th>
-						<th class="admin-table-th">作成日</th>
-						<th class="admin-table-th">操作</th>
-					</tr>
-				</thead>
-				<tbody>
-					{#if inviteCodes.length === 0}
-						<tr><td colspan="5" class="admin-empty">招待コードは登録されていません。</td></tr>
-					{:else}
-						{#each inviteCodes as code (code.code)}
-							<tr>
-								<td class="admin-table-td admin-code">{code.code}</td>
-								<td class="admin-table-td">
-									{#if code.used_by}
-										<span class="invite-status-used">使用済み</span>
-									{:else if code.revoked_at}
-										<span class="invite-status-revoked">無効</span>
-									{:else}
-										<span class="invite-status-available">利用可能</span>
-									{/if}
-								</td>
-								<td class="admin-table-td admin-td-muted"
-									>{code.used_by ? maskDiscordId(code.used_by) : "—"}</td
-								>
-								<td class="admin-table-td admin-td-date">{code.created_at}</td>
-								<td class="admin-table-td">
-									{#if !code.used_by}
-										<div class="admin-action-group">
-											{#if !code.revoked_at}
-												<button
-													type="button"
-													class="admin-btn-action"
-													onclick={() => revokeInvite(code)}>無効化</button
-												>
-											{/if}
-											<button
-												type="button"
-												class="admin-btn-action btn-danger"
-												onclick={() => deleteInvite(code)}>削除</button
-											>
-										</div>
-									{:else}
-										<span class="admin-td-muted">—</span>
-									{/if}
-								</td>
-							</tr>
-						{/each}
-					{/if}
-				</tbody>
-			</table>
-		</div>
-	{/if}
 </section>
 	{/snippet}
 </ManagementOverlayShell>
@@ -783,12 +650,8 @@ function botStatus(bot: AdminBotView): { label: string; tone: string } {
 		font-size: 0.75rem;
 		color: var(--color-zinc-muted);
 	}
-	.admin-mono,
-	.admin-code {
+	.admin-mono {
 		font-family: var(--font-family-mono);
-	}
-	.admin-code {
-		font-weight: 600;
 	}
 	.admin-mt {
 		margin-top: 16px;
@@ -806,12 +669,6 @@ function botStatus(bot: AdminBotView): { label: string; tone: string } {
 	}
 	.admin-grow {
 		flex-grow: 1;
-	}
-	.admin-invite-form {
-		display: flex;
-		gap: 12px;
-		margin-top: 16px;
-		margin-bottom: 20px;
 	}
 	.admin-audit-date,
 	.admin-audit-muted,

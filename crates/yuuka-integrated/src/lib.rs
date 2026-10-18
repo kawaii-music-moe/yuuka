@@ -190,8 +190,8 @@ mod tests {
         Connection::open(path)
             .expect("open")
             .execute(
-                "INSERT OR IGNORE INTO users (discord_id, username, password_hash, salt) \
-                 VALUES (?1, ?1, 'h', 's')",
+                "INSERT OR IGNORE INTO users (discord_id, username, salt) \
+                 VALUES (?1, ?1, 's')",
                 params![user],
             )
             .expect("seed user");
@@ -216,11 +216,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn overview_lists_system_default_and_owned() {
+    async fn overview_lists_owned_bots_without_system_default() {
         let (db, path) = fresh_db();
         seed_user(&path, "owner");
-        seed_user(&path, "admin");
-        seed_bot(&path, "system_default", "admin", None);
+        // owner がシステム Bot の持ち主（トークンを設定した管理者）でも一覧には出さない（issue #143）。
+        seed_bot(&path, "system_default", "owner", Some("ENC"));
         seed_bot(&path, "b1", "owner", Some("ENC"));
         let app = app_for(db, "owner");
 
@@ -238,19 +238,17 @@ mod tests {
         let j = body_json(resp).await;
         assert_eq!(j["success"], Value::Bool(true));
         let bots = j["bots"].as_array().unwrap();
-        // system_default（health のみ・is_system_default:true）＋所有 b1。
-        assert_eq!(bots.len(), 2);
-        assert_eq!(bots[0]["id"], "system_default");
-        assert_eq!(bots[0]["is_system_default"], Value::Bool(true));
-        assert_eq!(bots[1]["id"], "b1");
-        assert_eq!(bots[1]["is_system_default"], Value::Bool(false));
+        // 所有 b1 のみ。
+        assert_eq!(bots.len(), 1);
+        assert_eq!(bots[0]["id"], "b1");
+        assert!(bots[0].get("is_system_default").is_none());
         // Null シーム → running/connected は false。
-        assert_eq!(bots[1]["running"], Value::Bool(false));
-        assert_eq!(bots[1]["connected"], Value::Bool(false));
+        assert_eq!(bots[0]["running"], Value::Bool(false));
+        assert_eq!(bots[0]["connected"], Value::Bool(false));
         // b1 は has_token:true、preset は既定 capabilities（secretary）。
-        assert_eq!(bots[1]["has_token"], Value::Bool(true));
-        assert_eq!(bots[1]["preset"], "secretary");
-        assert_eq!(bots[1]["google_setting"], "primary");
+        assert_eq!(bots[0]["has_token"], Value::Bool(true));
+        assert_eq!(bots[0]["preset"], "secretary");
+        assert_eq!(bots[0]["google_setting"], "primary");
     }
 
     #[tokio::test]
@@ -413,5 +411,76 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
         let j = body_json(resp).await;
         assert_eq!(j["message"], "対象の認証情報が見つかりません。");
+    }
+
+    /// issue #143: システム Bot へは持ち主（管理者）でも MCP・認証情報を許可できず、
+    /// 許可のための bots 行の自動作成もしない。
+    #[tokio::test]
+    async fn grants_reject_system_default_and_do_not_seed_it() {
+        let (db, path) = fresh_db();
+        seed_user(&path, "owner");
+        let conn = Connection::open(&path).unwrap();
+        conn.execute(
+            "INSERT INTO mcp_servers (id, user_id, name, endpoint_url) \
+             VALUES (7, 'owner', 'srv', 'https://ex.test')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO credentials (user_id, service_name, username, encrypted_password, iv, auth_tag) \
+             VALUES ('owner', 'github', 'me', 'e', 'i', 't')",
+            [],
+        )
+        .unwrap();
+        let app = app_for(db, "owner");
+        let post = |uri: &'static str, body: &'static str| {
+            Request::builder()
+                .method("POST")
+                .uri(uri)
+                .header("cookie", "__Host-yuuka-session=good")
+                .header("content-type", "application/json")
+                .body(Body::from(body))
+                .unwrap()
+        };
+
+        let resp = app
+            .clone()
+            .oneshot(post(
+                "/api/integrated/grants/mcp",
+                "{\"botId\":\"system_default\",\"serverId\":7,\"granted\":true}",
+            ))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        let resp = app
+            .clone()
+            .oneshot(post(
+                "/api/integrated/grants/credential",
+                "{\"botId\":\"system_default\",\"serviceName\":\"github\",\"granted\":true}",
+            ))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/integrated/bots/mcp?botId=system_default")
+                    .header("cookie", "__Host-yuuka-session=good")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+        // 操作したユーザーを持ち主にした system_default 行が作られていない。
+        let n: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM bots WHERE id = 'system_default'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, 0);
     }
 }

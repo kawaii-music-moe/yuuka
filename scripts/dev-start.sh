@@ -89,9 +89,11 @@ fi
 echo "Waiting for $entry ..."
 for _ in $(seq 1 60); do
   ok=1
-  for path in / /admin/ /api/setup/status; do
+  # 未ログインの /api/me は 401（バックエンドまで届いていることの確認）。
+  for probe in /:200 /admin/:200 /api/me:401; do
+    path="${probe%:*}"
     code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 4 "$entry$path" || true)"
-    [[ "$code" == "200" ]] || { ok=0; break; }
+    [[ "$code" == "${probe##*:}" ]] || { ok=0; break; }
   done
   (( ok )) && break
   sleep 2

@@ -299,7 +299,7 @@ mod tests {
     ///
     /// `users` は core テーブルで migrations（V17 baseline）が backup 列込みで作る。テスト用の
     /// 縮小 DDL を先置きすると `idx_users_username` 作成でスキーマ衝突するため、空ファイルから
-    /// migrations に作らせてから INSERT する（NOT NULL の username/password_hash/salt はダミー値）。
+    /// migrations に作らせてから INSERT する（NOT NULL の username/salt はダミー値）。
     async fn seed(rows: &[(&str, i64, i64, Option<&str>)]) -> (Db, tempfile::TempDir) {
         let dir = tempfile::tempdir().expect("tempdir");
         let seq = SEQ.fetch_add(1, Ordering::Relaxed);
@@ -314,9 +314,9 @@ mod tests {
                 .execute(move |conn| {
                     conn.execute(
                         "INSERT INTO users \
-                         (discord_id, username, password_hash, salt, backup_enabled, \
+                         (discord_id, username, salt, backup_enabled, \
                           backup_interval_hours, backup_last_run_at) \
-                         VALUES (?1, ?1, 'x', 'x', ?2, ?3, ?4)",
+                         VALUES (?1, ?1, 'x', ?2, ?3, ?4)",
                         rusqlite::params![uid, enabled, interval, last_run],
                     )
                     .map_err(yuuka_db::map_sqlite)?;

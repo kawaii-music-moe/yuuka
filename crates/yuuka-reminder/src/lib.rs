@@ -52,6 +52,7 @@ mod tests {
     use tower::ServiceExt;
     use yuuka_core::{AuthError, BotId, UserId, UserScope};
     use yuuka_types::{Role, SessionUser};
+    use yuuka_web::test_support::{with_bot_query, TEST_BOT_ID};
     use yuuka_web::{AppState, AuthBackend, Db, WebConfig};
 
     use crate::dto::NewReminder;
@@ -258,7 +259,7 @@ mod tests {
         }
     }
 
-    fn app() -> axum::Router {
+    async fn app() -> axum::Router {
         let auth = Arc::new(FakeAuth {
             user: SessionUser {
                 discord_id: "u".to_owned(),
@@ -266,13 +267,15 @@ mod tests {
                 role: Role::User,
             },
         });
-        let state = AppState::new(auth, WebConfig::default(), seed_db());
-        super::routes().with_state(state)
+        let db = seed_db();
+        yuuka_web::test_support::seed_bot(&db, TEST_BOT_ID, "u").await;
+        let state = AppState::new(auth, WebConfig::default(), db);
+        with_bot_query(super::routes().with_state(state), TEST_BOT_ID)
     }
 
     #[tokio::test]
     async fn route_add_then_list() {
-        let app = app();
+        let app = app().await;
         let add = app
             .clone()
             .oneshot(
@@ -316,6 +319,7 @@ mod tests {
     #[tokio::test]
     async fn route_requires_auth() {
         let resp = app()
+            .await
             .oneshot(
                 Request::builder()
                     .uri("/api/reminders")
@@ -353,7 +357,7 @@ mod tests {
     /// 不在 → **404**、実在するが pending でない（キャンセル済み）→ **409**。
     #[tokio::test]
     async fn route_cancel_missing_is_404_and_nonpending_is_409() {
-        let app = app();
+        let app = app().await;
 
         // 不在 ID → 404。
         let missing = app
