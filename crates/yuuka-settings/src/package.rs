@@ -132,7 +132,7 @@ fn zip_payload(
     let mut cursor = std::io::Cursor::new(Vec::new());
     {
         let mut zip = zip::ZipWriter::new(&mut cursor);
-        let options: zip::write::FileOptions<'_, ()> =
+        let options: zip::write::FileOptions<'_, '_, ()> =
             zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
         zip.start_file("data/yuuka.db", options)?;
         zip.write_all(database)?;
