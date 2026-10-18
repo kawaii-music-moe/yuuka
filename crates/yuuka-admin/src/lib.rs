@@ -15,7 +15,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use axum::routing::{delete, get, post};
+use axum::routing::{get, post};
 use axum::{Extension, Router};
 use yuuka_auth::SessionStore;
 use yuuka_crypto::SystemCrypto;
@@ -25,7 +25,7 @@ mod dto;
 mod repo;
 mod routes;
 
-pub use dto::{AdminBotView, AdminStats, AdminUserView, AuditLogView, InviteCodeView};
+pub use dto::{AdminBotView, AdminStats, AdminUserView, AuditLogView};
 
 /// 稼働中 Discord クライアントへの runtime 効果ポート（Node `customClients`/`restartDefaultBot`/
 /// `stopCustomBot` 相当）。gateway 未配線時は [`NullBotRuntime`] へ縮退する。
@@ -106,17 +106,5 @@ pub fn routes(runtime: Arc<AdminRuntime>) -> Router<AppState> {
         .route("/api/admin/bots", get(routes::bots))
         .route("/api/admin/bots/suspend", post(routes::bots_suspend))
         .route("/api/admin/bots/unsuspend", post(routes::bots_unsuspend))
-        .route(
-            "/api/admin/invite-codes",
-            get(routes::invite_codes_list).post(routes::invite_codes_create),
-        )
-        .route(
-            "/api/admin/invite-codes/{code}/revoke",
-            post(routes::invite_codes_revoke),
-        )
-        .route(
-            "/api/admin/invite-codes/{code}",
-            delete(routes::invite_codes_delete),
-        )
         .layer(Extension(runtime))
 }

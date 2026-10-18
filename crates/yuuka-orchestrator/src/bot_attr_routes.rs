@@ -129,11 +129,11 @@ async fn get_usage(
     State(db): State<Db>,
     Query(q): Query<UsageQuery>,
 ) -> Response {
-    // botId をアクセス認可つきで解決（未指定・アクセス不可は system_default へフォールバック＝
+    // botId をアクセス認可つきで解決（未指定・system_default は 403、アクセス不可は 404＝
     // 他人の Bot の利用量を覗かせない・Node `resolveBotId`）。書き込みは無いので owner 限定にしない。
     let bot_id = match yuuka_web::resolve_scope(&user.0, &db, q.bot_id.as_deref()).await {
         Ok(scope) => scope.bot_id().as_str().to_owned(),
-        Err(_) => return server_error(),
+        Err(e) => return e.into_response(),
     };
     // days = parseInt(days || "14"); 有限>0 なら min(,90)、それ以外は 14（Node）。
     let days = match q.days.as_deref().and_then(parse_int_prefix) {
@@ -1621,8 +1621,8 @@ mod tests {
             let conn = rusqlite::Connection::open(&path).expect("seed conn");
             for (uid, role) in [("owner", "user"), ("admin", "admin"), ("other", "user")] {
                 conn.execute(
-                    "INSERT OR IGNORE INTO users (discord_id, username, password_hash, salt, role) \
-                     VALUES (?1, ?1, 'x', 'x', ?2)",
+                    "INSERT OR IGNORE INTO users (discord_id, username, salt, role) \
+                     VALUES (?1, ?1, 'x', ?2)",
                     rusqlite::params![uid, role],
                 )
                 .expect("seed user");
@@ -2279,8 +2279,8 @@ mod tests {
     #[tokio::test]
     async fn usage_route_shape_days_clamp_and_auth() {
         let app = app();
-        // 既定 days=14・ログ無し system_default（未指定 botId）→ 全0・rate_limits あり。
-        let (st, j) = send(&app, "GET", "/api/bots/usage", "owner", "").await;
+        // 既定 days=14・ログ無しの所有 Bot → 全0・rate_limits あり。
+        let (st, j) = send(&app, "GET", "/api/bots/usage?botId=b1", "owner", "").await;
         assert_eq!(st, StatusCode::OK);
         assert_eq!(j["success"], serde_json::json!(true));
         assert_eq!(j["days"], serde_json::json!(14));
@@ -2293,16 +2293,45 @@ mod tests {
         assert!(p0["requests"].is_number() && p0["responses"].is_number());
 
         // days=5 → 長さ5。
-        let (_, j) = send(&app, "GET", "/api/bots/usage?days=5", "owner", "").await;
+        let (_, j) = send(&app, "GET", "/api/bots/usage?botId=b1&days=5", "owner", "").await;
         assert_eq!(j["days"], serde_json::json!(5));
         assert_eq!(j["series"].as_array().unwrap().len(), 5);
         // days>90 → 90 にクランプ。
-        let (_, j) = send(&app, "GET", "/api/bots/usage?days=365", "owner", "").await;
+        let (_, j) = send(
+            &app,
+            "GET",
+            "/api/bots/usage?botId=b1&days=365",
+            "owner",
+            "",
+        )
+        .await;
         assert_eq!(j["days"], serde_json::json!(90));
         assert_eq!(j["series"].as_array().unwrap().len(), 90);
         // 非数値 days → 14（Node parseInt NaN フォールバック）。
-        let (_, j) = send(&app, "GET", "/api/bots/usage?days=abc", "owner", "").await;
+        let (_, j) = send(
+            &app,
+            "GET",
+            "/api/bots/usage?botId=b1&days=abc",
+            "owner",
+            "",
+        )
+        .await;
         assert_eq!(j["days"], serde_json::json!(14));
+
+        // Bot 未指定・システム Bot は 403、アクセスできない Bot は 404（システム Bot へ落とさない）。
+        let (st, _) = send(&app, "GET", "/api/bots/usage", "owner", "").await;
+        assert_eq!(st, StatusCode::FORBIDDEN);
+        let (st, _) = send(
+            &app,
+            "GET",
+            "/api/bots/usage?botId=system_default",
+            "owner",
+            "",
+        )
+        .await;
+        assert_eq!(st, StatusCode::FORBIDDEN);
+        let (st, _) = send(&app, "GET", "/api/bots/usage?botId=b1", "other", "").await;
+        assert_eq!(st, StatusCode::NOT_FOUND);
 
         // 認証必須（不明トークン → 401）。
         let (st, _) = send(&app, "GET", "/api/bots/usage", "nobody", "").await;
@@ -2326,16 +2355,21 @@ mod tests {
         {
             let conn = rusqlite::Connection::open(&path).expect("seed conn");
             conn.execute(
-                "INSERT OR IGNORE INTO users (discord_id, username, password_hash, salt, role) \
-                 VALUES ('owner', 'owner', 'x', 'x', 'user')",
+                "INSERT OR IGNORE INTO users (discord_id, username, salt, role) \
+                 VALUES ('owner', 'owner', 'x', 'user')",
                 [],
             )
             .expect("seed user");
-            // 未指定 botId → system_default 宛の今日ぶん（user×1, assistant×1）。
+            conn.execute(
+                "INSERT INTO bots (id, user_id, name) VALUES ('b1', 'owner', 'TestBot')",
+                [],
+            )
+            .expect("seed bot");
+            // b1 宛の今日ぶん（user×1, assistant×1）。
             for role in ["user", "assistant"] {
                 conn.execute(
                     "INSERT INTO message_logs (user_id, bot_id, role, content) \
-                     VALUES ('owner', 'system_default', ?1, 'c')",
+                     VALUES ('owner', 'b1', ?1, 'c')",
                     rusqlite::params![role],
                 )
                 .expect("seed log");
@@ -2344,7 +2378,7 @@ mod tests {
         let app =
             super::routes().with_state(AppState::new(Arc::new(FakeAuth), WebConfig::default(), db));
 
-        let (st, j) = send(&app, "GET", "/api/bots/usage?days=1", "owner", "").await;
+        let (st, j) = send(&app, "GET", "/api/bots/usage?botId=b1&days=1", "owner", "").await;
         assert_eq!(st, StatusCode::OK);
         let series = j["series"].as_array().unwrap();
         assert_eq!(series.len(), 1);

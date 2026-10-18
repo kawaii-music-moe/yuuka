@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use hmac::{Hmac, Mac};
+use rusqlite::OptionalExtension;
 use serde::de::{Deserializer, MapAccess, Visitor};
 use serde::Deserialize;
 use serde_json::Value;
@@ -54,7 +55,7 @@ pub struct WebhookNotice {
 /// Webhook 通知の配信ポート（Node `sendToUser`）。送信成功なら `true`。
 #[async_trait]
 pub trait WebhookNotifier: Send + Sync {
-    async fn notify(&self, user_id: &str, notice: WebhookNotice) -> bool;
+    async fn notify(&self, user_id: &str, bot_id: &str, notice: WebhookNotice) -> bool;
 }
 
 /// 補助 LLM のテキスト生成ポート（Node `generateAuxText`）。ユーザー本人の Gemini キーで生成し、
@@ -179,6 +180,15 @@ impl RealWebhookProcessor {
         let interpreted = summary.is_some();
         let notify_text = summary.unwrap_or_else(|| fallback_summary(&payload_text));
 
+        // Webhook endpoints are user-wide, but the generated personal data must belong to one of
+        // the user's actual bots. `system_default` is an unscoped guide and cannot own data.
+        let Some(bot_id) = self.first_owned_bot(user_id).await else {
+            let detail = "通知先として使用できる Bot がありません";
+            return self
+                .finish(endpoint, &payload_text, DeliveryStatus::Failed, detail)
+                .await;
+        };
+
         // 4. Discord へ通知する。
         let notice = WebhookNotice {
             title: format!("🪝 {}", endpoint.name),
@@ -187,7 +197,7 @@ impl RealWebhookProcessor {
             footer: NOTICE_FOOTER.to_owned(),
             target: notify_target(endpoint),
         };
-        if !self.notifier.notify(user_id, notice).await {
+        if !self.notifier.notify(user_id, &bot_id, notice).await {
             let detail = "Discord通知の送信に失敗しました";
             tracing::warn!(endpoint_id = endpoint.id, "Webhook: {detail}");
             return self
@@ -195,14 +205,12 @@ impl RealWebhookProcessor {
                 .await;
         }
 
-        // Webhook は全 Bot 共有のため、生成する ToDo/リマインドは既定の秘書に帰属させる（§v3）。
-        let bot_id = BotId::system_default();
         let first_line = notify_text.split('\n').next().unwrap_or_default();
         let mut conversions: Vec<&str> = Vec::new();
 
         // 5. ToDo への変換（§3.13.3）。
         if endpoint.create_todo {
-            let scope = UserScope::new(UserId::new(user_id), bot_id.clone());
+            let scope = UserScope::new(UserId::new(user_id), BotId::new(bot_id.clone()));
             let input = NewTodo {
                 title: format!("[Webhook] {}", truncate_chars(first_line, 80)),
                 description: Some(format!(
@@ -228,7 +236,7 @@ impl RealWebhookProcessor {
                 endpoint.name,
                 truncate_chars(first_line, 100)
             );
-            match repo::add_webhook_reminder(&self.db, endpoint, bot_id.as_str(), &message).await {
+            match repo::add_webhook_reminder(&self.db, endpoint, &bot_id, &message).await {
                 Ok(_) => conversions.push("リマインド設定(1時間後)"),
                 Err(e) => {
                     tracing::error!(endpoint_id = endpoint.id, error = %e, "Webhook: リマインド変換に失敗しました");
@@ -246,6 +254,24 @@ impl RealWebhookProcessor {
         tracing::info!(endpoint_id = endpoint.id, "Webhook: {detail}");
         self.finish(endpoint, &payload_text, DeliveryStatus::Notified, &detail)
             .await
+    }
+
+    async fn first_owned_bot(&self, user_id: &str) -> Option<String> {
+        let user_id = user_id.to_owned();
+        self.db
+            .read
+            .read(move |conn| {
+                conn.query_row(
+                    "SELECT id FROM bots WHERE user_id = ?1 AND id != 'system_default' ORDER BY id LIMIT 1",
+                    rusqlite::params![user_id],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(yuuka_db::map_sqlite)
+            })
+            .await
+            .ok()
+            .flatten()
     }
 
     /// 受信履歴へ記録して結果を返す（記録の失敗は処理結果を変えない）。
@@ -578,24 +604,32 @@ mod tests {
         let db = Db::open(&path).expect("open");
         let conn = rusqlite::Connection::open(&path).expect("seed conn");
         conn.execute(
-            "INSERT OR IGNORE INTO users (discord_id, username, password_hash, salt) \
-             VALUES ('u', 'u', 'x', 'x')",
+            "INSERT OR IGNORE INTO users (discord_id, username, salt) \
+             VALUES ('u', 'u', '')",
             [],
         )
         .expect("seed user");
+        conn.execute(
+            "INSERT OR IGNORE INTO bots (id, user_id, name) VALUES ('test_bot', 'u', 'Test Bot')",
+            [],
+        )
+        .expect("seed bot");
         db
     }
 
     #[derive(Default)]
     struct FakeNotifier {
         fail: bool,
-        sent: Mutex<Vec<(String, WebhookNotice)>>,
+        sent: Mutex<Vec<(String, String, WebhookNotice)>>,
     }
 
     #[async_trait]
     impl WebhookNotifier for FakeNotifier {
-        async fn notify(&self, user_id: &str, notice: WebhookNotice) -> bool {
-            self.sent.lock().unwrap().push((user_id.to_owned(), notice));
+        async fn notify(&self, user_id: &str, bot_id: &str, notice: WebhookNotice) -> bool {
+            self.sent
+                .lock()
+                .unwrap()
+                .push((user_id.to_owned(), bot_id.to_owned(), notice));
             !self.fail
         }
     }
@@ -755,8 +789,9 @@ mod tests {
 
         let sent = fx.notifier.sent.lock().unwrap().clone();
         assert_eq!(sent.len(), 1);
-        let (user, notice) = &sent[0];
+        let (user, bot_id, notice) = &sent[0];
         assert_eq!(user, "u");
+        assert_eq!(bot_id, "test_bot");
         assert_eq!(notice.title, "🪝 CI");
         assert_eq!(notice.description, "ビルドが成功しました\n詳細: main");
         assert_eq!(notice.footer, "外部Webhook通知");
@@ -777,7 +812,7 @@ mod tests {
             .unwrap();
         assert_eq!(title, "[Webhook] ビルドが成功しました");
         assert_eq!(tags, r#"["webhook","CI"]"#);
-        assert_eq!(bot, "system_default");
+        assert_eq!(bot, "test_bot");
 
         let (message, target_type, target_id, source, source_id, in_future): (
             String,
@@ -885,8 +920,8 @@ mod tests {
         assert_eq!(out.status, DeliveryStatus::Notified);
         assert_eq!(out.detail, "通知済み（LLM解釈なし・フォールバック整形）");
         let sent = fx.notifier.sent.lock().unwrap().clone();
-        assert_eq!(sent[0].1.description, "- **order**: A-1\n- **total**: 1200");
-        assert_eq!(sent[0].1.target, WebhookTarget::Dm);
+        assert_eq!(sent[0].2.description, "- **order**: A-1\n- **total**: 1200");
+        assert_eq!(sent[0].2.target, WebhookTarget::Dm);
         assert_eq!(count(&fx.db, "SELECT COUNT(*) FROM todos").await, 0);
         assert_eq!(count(&fx.db, "SELECT COUNT(*) FROM reminders").await, 0);
     }

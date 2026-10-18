@@ -47,7 +47,7 @@ use yuuka_schedule::dto::Schedule;
 use yuuka_schedule::repo::ScheduleRepo;
 use yuuka_todo::dto::{NewTodo, Todo, TodoUpdate};
 use yuuka_todo::repo::TodoRepo;
-use yuuka_web::{resolve_scope, AppState, AuthenticatedUser, Db};
+use yuuka_web::{resolve_scope, AppState, AuthenticatedUser, Db, ScopeError};
 
 use crate::date_util::{
     day_start, local_to_utc_iso, next_day_start, parse_local_date, parse_local_datetime,
@@ -320,23 +320,19 @@ impl FromRequestParts<AppState> for ClientScope {
 }
 
 /// `botId` を [`resolve_scope`] で解決する。未指定・空・`system_default` はシステム Bot 宛てなので 403
-/// （PWA はシステム Bot を扱わない）。指定した Bot にアクセスできない（未知・他人の未共有 Bot）場合、
-/// [`resolve_scope`] はシステム Bot へフォールバックするが、PWA では選択中のエージェントと違う Bot を
-/// 黙って読み書きしないよう 404 にする。
+/// （PWA はシステム Bot を扱わない）。指定した Bot にアクセスできない（未知・他人の未共有 Bot）場合は 404。
 async fn client_scope(
     db: &Db,
     user: &AuthenticatedUser,
     raw_bot_id: Option<&str>,
 ) -> Result<UserScope, ClientApiError> {
-    let requested = raw_bot_id
-        .map(str::trim)
-        .filter(|b| !b.is_empty() && *b != BotId::SYSTEM_DEFAULT)
-        .ok_or_else(|| ClientApiError::forbidden("agent required"))?;
-    let scope = resolve_scope(&user.0, db, Some(requested)).await?;
-    if scope.bot_id().as_str() != requested {
-        return Err(ClientApiError::not_found("agent not found"));
-    }
-    Ok(scope)
+    resolve_scope(&user.0, db, raw_bot_id)
+        .await
+        .map_err(|e| match e {
+            ScopeError::BotRequired => ClientApiError::forbidden("agent required"),
+            ScopeError::BotNotFound => ClientApiError::not_found("agent not found"),
+            ScopeError::Db(e) => e.into(),
+        })
 }
 
 // ─── status ──────────────────────────────────────────────────────────────────
@@ -393,7 +389,7 @@ async fn settings_view(
 
 /// `users` 行が無いユーザーの設定更新を拒否するエラー（issue #39）。
 ///
-/// `users` 行は認証（`yuuka-auth`）が `password_hash`/`salt` 付きで作る唯一の正で、PWA 設定の
+/// `users` 行は認証（`yuuka-auth`）が `salt`・sk-account ID 付きで作る唯一の正で、PWA 設定の
 /// 書き込みが仮の認証情報で行を作ることはしない。行が無いまま黙ってスキップして「保存した」と
 /// 応答するのは不正確なので、明示的に 404 を返す。
 fn user_settings_not_found() -> ClientApiError {
@@ -1518,9 +1514,9 @@ mod tests {
         let enc = crypto.encrypt_text("fake-gemini-key").expect("encrypt");
         let conn = rusqlite::Connection::open(path).expect("open seed");
         conn.execute(
-            "INSERT INTO users (discord_id, username, password_hash, salt, role, \
+            "INSERT INTO users (discord_id, username, salt, role, \
              gemini_api_key_encrypted, gemini_api_key_iv, gemini_api_key_tag, gemini_model) \
-             VALUES (?1, 'yuu', 'x', '00', 'user', ?2, ?3, ?4, 'gemini-3.1-flash-lite')",
+             VALUES (?1, 'yuu', '00', 'user', ?2, ?3, ?4, 'gemini-3.1-flash-lite')",
             rusqlite::params![discord_id, enc.encrypted, enc.iv, enc.auth_tag],
         )
         .expect("seed user");

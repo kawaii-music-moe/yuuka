@@ -24,6 +24,7 @@ chrono.workspace = true              # 優先度整理 1 段目が LLM へ渡す
 tokio.workspace = true
 tower = { workspace = true, features = ["util"] }
 tempfile = "3"
+yuuka-web = { workspace = true, features = ["test-support"] }
 
 [lints]
 workspace = true

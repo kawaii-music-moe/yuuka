@@ -25,9 +25,8 @@ use yuuka_orchestrator::{ChatEngine, DbBotDirectory, DbMembership, InMemoryRateL
 use yuuka_services::{MetricsRegistry, ServiceContext};
 use yuuka_supervisor::{
     build_app, build_supervised_services, build_tool_registry, ws_routes, GeminiAuxText,
-    MessengerRegistrationDm, MessengerWebhookNotifier, RegistryBotRuntime, RegistryBotViewRuntime,
-    RegistryDiscordLive, RegistryLifecycle, ServiceError, ShutdownToken, SupervisedService,
-    Supervisor, TenantRegistry,
+    MessengerWebhookNotifier, RegistryBotRuntime, RegistryBotViewRuntime, RegistryDiscordLive,
+    RegistryLifecycle, ServiceError, ShutdownToken, SupervisedService, Supervisor, TenantRegistry,
 };
 use yuuka_web::{AppState, Db, WebConfig};
 
@@ -119,14 +118,12 @@ async fn run() -> Result<(), String> {
     let web_config = WebConfig::from_core(&cfg);
     let state = AppState::new(auth, web_config, db.clone());
 
-    // 4.5) 認証発行ランタイム（P1-1）。セッション発行・Gemini キー暗号化・保留登録・DM ポート・
-    //      レート制限を束ねる。暗号は `YUUKA_ENCRYPTION_SECRET` 未設定なら `None`（setup/verify のみ
-    //      500 に縮退・login 等は動作）。DM は Discord live（P1-3）まで `NullRegistrationDm`（register は
-    //      502）。招待コードは起動時に冪等シードする。
+    // 4.5) 共有暗号（Gemini キー・Bot トークン等の暗号化）。`YUUKA_ENCRYPTION_SECRET` 未設定なら `None`
+    //      （暗号を要する機能のみ縮退）。
     let crypto = match SystemCrypto::from_config(&cfg) {
         Ok(c) => Some(Arc::new(c)),
         Err(e) => {
-            tracing::warn!(error = %e, "SystemCrypto を構築できません（setup/register は 500 に縮退・login 等は動作）");
+            tracing::warn!(error = %e, "SystemCrypto を構築できません（暗号を要する機能のみ縮退）");
             None
         }
     };
@@ -249,13 +246,6 @@ async fn run() -> Result<(), String> {
         ))
     });
 
-    match yuuka_auth::invite::seed_initial_codes(&db, &cfg.invite_codes).await {
-        Ok(n) if n > 0 => tracing::info!(seeded = n, "招待コードをシードしました"),
-        Ok(_) => {}
-        Err(e) => tracing::warn!(error = %e, "招待コードのシードに失敗（起動は継続）"),
-    }
-    // 登録コード DM は Discord Messenger 経由（P1-1 の `NullRegistrationDm` を差し替え）。デフォルト Bot
-    // が未起動（トークン未登録）なら送信は false を返し `/api/register` は 502 に縮退する（従来と同挙動）。
     // 管理ルータ（/api/admin/*）。セッション一括失効は auth と同一ストアを共有（ロール変更/削除の
     // 即時反映）、デフォルト Bot トークン暗号化は同じ crypto を使う。runtime 効果（Bot 再起動/停止/
     // 稼働状態）は Rust が gateway を所有する時のみ live（TenantRegistry）、Node 所有時は
@@ -344,9 +334,7 @@ async fn run() -> Result<(), String> {
         rate_limiter: Arc::new(InMemoryRateLimiter::new(db.clone())),
     }));
 
-    // Webhook ルータ（シークレット暗号化に crypto を注入）。受信の実処理（署名検証・通知・ToDo/リマインド化・
-    // 受信履歴）は RealWebhookProcessor が行い、通知は Discord Messenger（gateway 非依存の REST 送信）、
-    // ペイロード解釈は受信先ユーザー本人の Gemini キーによる補助生成で行う。
+    // Webhook ルータ（署名検証・通知・ToDo/リマインド化・受信履歴を実処理へ配線）。
     let webhook_routes = yuuka_webhook::routes_with(
         crypto.clone(),
         Arc::new(yuuka_webhook::RealWebhookProcessor::new(
@@ -398,8 +386,8 @@ async fn run() -> Result<(), String> {
     let auth_runtime = Arc::new(AuthRuntime::new(
         sessions,
         cfg.session_ttl_days,
-        crypto,
-        Arc::new(MessengerRegistrationDm::new(messenger.clone())),
+        cfg.sk_account_url.clone(),
+        cfg.sk_account_internal_url.clone(),
         cfg.admin_discord_ids.clone(),
     ));
     let auth_routes = yuuka_auth::routes(auth_runtime);

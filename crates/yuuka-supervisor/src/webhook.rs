@@ -17,8 +17,7 @@ use yuuka_webhook::{AuxTextGenerator, WebhookNotice, WebhookNotifier, WebhookTar
 
 /// Webhook 通知を [`DiscordMessenger`] で Embed として届ける（Node `sendToUser`）。
 ///
-/// Webhook は全 Bot 共有の受信口なので、生成する ToDo/リマインドと同じく既定 Bot（`system_default`）から
-/// 送る。チャンネル宛が解決できない・本人が閲覧できない場合の DM フォールバックは messenger が担う。
+/// 通知は、生成する ToDo/リマインドと同じユーザー所有 Bot から送る。
 pub struct MessengerWebhookNotifier {
     messenger: Arc<DiscordMessenger>,
 }
@@ -33,7 +32,7 @@ impl MessengerWebhookNotifier {
 
 #[async_trait]
 impl WebhookNotifier for MessengerWebhookNotifier {
-    async fn notify(&self, user_id: &str, notice: WebhookNotice) -> bool {
+    async fn notify(&self, user_id: &str, bot_id: &str, notice: WebhookNotice) -> bool {
         let target = match notice.target {
             WebhookTarget::Dm => DeliverTarget::Dm,
             WebhookTarget::Channel(id) => DeliverTarget::Channel(id),
@@ -53,7 +52,7 @@ impl WebhookNotifier for MessengerWebhookNotifier {
             &UserId::new(user_id),
             reply,
             target,
-            &BotId::system_default(),
+            &BotId::new(bot_id),
         )
         .await
     }

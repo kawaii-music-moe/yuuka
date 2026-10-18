@@ -53,6 +53,7 @@ mod tests {
     use tower::ServiceExt;
     use yuuka_core::{AuthError, BotId, UserId, UserScope};
     use yuuka_types::{Role, SessionUser};
+    use yuuka_web::test_support::{with_bot_query, TEST_BOT_ID};
     use yuuka_web::{AppState, AuthBackend, Db, WebConfig};
 
     use crate::repo::CredentialRepo;
@@ -148,11 +149,14 @@ mod tests {
         }
     }
 
-    fn app_with(db: Db) -> axum::Router {
-        app_with_crypto(db, None)
+    async fn app_with(db: Db) -> axum::Router {
+        app_with_crypto(db, None).await
     }
 
-    fn app_with_crypto(db: Db, crypto: Option<Arc<yuuka_crypto::SystemCrypto>>) -> axum::Router {
+    async fn app_with_crypto(
+        db: Db,
+        crypto: Option<Arc<yuuka_crypto::SystemCrypto>>,
+    ) -> axum::Router {
         let auth = Arc::new(FakeAuth {
             user: SessionUser {
                 discord_id: "u".to_owned(),
@@ -160,17 +164,18 @@ mod tests {
                 role: Role::User,
             },
         });
+        yuuka_web::test_support::seed_bot(&db, TEST_BOT_ID, "u").await;
         let state = AppState::new(auth, WebConfig::default(), db);
-        super::routes_with(crypto).with_state(state)
+        with_bot_query(super::routes_with(crypto).with_state(state), TEST_BOT_ID)
     }
 
     #[tokio::test]
     async fn route_list_returns_clean_view() {
         let (db, path) = seed_db_at();
         insert_at(&path, "u", "github", "alice");
-        // v5: 応対 Bot（未指定 → system_default）へ許可済みの service だけ返る。
-        grant_at(&path, "system_default", "u", "github");
-        let app = app_with(db);
+        // v5: 応対 Bot（テスト用 Bot）へ許可済みの service だけ返る。
+        grant_at(&path, TEST_BOT_ID, "u", "github");
+        let app = app_with(db).await;
 
         let list = app
             .oneshot(
@@ -207,8 +212,8 @@ mod tests {
         insert_at(&path, "u", "github", "alice");
         insert_at(&path, "u", "aws", "alice2");
         // github だけ許可（aws は未許可 → 一覧に出ない）。
-        grant_at(&path, "system_default", "u", "github");
-        let app = app_with(db);
+        grant_at(&path, TEST_BOT_ID, "u", "github");
+        let app = app_with(db).await;
 
         let list = app
             .oneshot(
@@ -233,8 +238,8 @@ mod tests {
     async fn route_delete_then_list_empty() {
         let (db, path) = seed_db_at();
         insert_at(&path, "u", "github", "alice");
-        grant_at(&path, "system_default", "u", "github");
-        let app = app_with(db);
+        grant_at(&path, TEST_BOT_ID, "u", "github");
+        let app = app_with(db).await;
 
         let del = app
             .clone()
@@ -275,7 +280,7 @@ mod tests {
     #[tokio::test]
     async fn route_delete_missing_is_bare_success_false() {
         let (db, _path) = seed_db_at();
-        let app = app_with(db);
+        let app = app_with(db).await;
         let del = app
             .oneshot(
                 Request::builder()
@@ -303,7 +308,7 @@ mod tests {
     #[tokio::test]
     async fn route_delete_guard_matches_node() {
         let (db, _path) = seed_db_at();
-        let app = app_with(db);
+        let app = app_with(db).await;
 
         // 空文字 → 400 + 日本語メッセージ。
         let empty = app
@@ -351,6 +356,7 @@ mod tests {
     async fn route_requires_auth() {
         let (db, _path) = seed_db_at();
         let resp = app_with(db)
+            .await
             .oneshot(
                 Request::builder()
                     .uri("/api/credentials")
@@ -362,7 +368,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
 
-    /// register: 暗号化保存 + owner 本人の全 Bot(system_default,b1) へ付与 + GET 一覧へ反映。
+    /// register: 暗号化保存 + owner 本人の全 Bot（b1・テスト用 Bot。持ち主でも system_default は除く）へ付与 + GET 一覧へ反映。
     /// 必須欠落は Node と同じ 400 `{success:false}`。
     #[tokio::test]
     async fn route_register_encrypts_and_grants_to_owner_bots() {
@@ -372,8 +378,8 @@ mod tests {
         {
             let conn = rusqlite::Connection::open(&path).unwrap();
             conn.execute(
-                "INSERT OR IGNORE INTO users (discord_id, username, password_hash, salt) \
-                 VALUES ('u','u','x',?1)",
+                "INSERT OR IGNORE INTO users (discord_id, username, salt) \
+                 VALUES ('u','u',?1)",
                 params![salt],
             )
             .unwrap();
@@ -388,7 +394,7 @@ mod tests {
         let crypto = Arc::new(
             yuuka_crypto::SystemCrypto::new(secrecy::SecretString::from("master-secret")).unwrap(),
         );
-        let app = app_with_crypto(db, Some(crypto));
+        let app = app_with_crypto(db, Some(crypto)).await;
 
         // 必須欠落 → 400 {success:false, message}。
         let bad = app
@@ -435,10 +441,10 @@ mod tests {
         assert_eq!(j["success"], serde_json::json!(true));
         assert_eq!(
             granted_bots(&path, "u", "github"),
-            vec!["b1".to_owned(), "system_default".to_owned()]
+            vec!["b1".to_owned(), TEST_BOT_ID.to_owned()]
         );
 
-        // GET 一覧へ反映（system_default へ許可済み）。暗号化列は出ない。
+        // GET 一覧へ反映（テスト用 Bot へ許可済み）。暗号化列は出ない。
         let list = app
             .oneshot(
                 Request::builder()
