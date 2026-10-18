@@ -4,9 +4,8 @@
 //! DAG: `reminder → web, db, types, core`。ルータは supervisor が共通レイヤ配下にマージする。
 //!
 //! Phase 1 スコープ = コア CRUD（list/add/cancel/delete）。cron 用の全件走査
-//! （listDuePending / markSent / rescheduleRepeat）は Phase 4 で [`cron`] に追加済み。deferred（後回し）:
-//! - repeat_rule の cron 式**厳密**検証・過去日時の次回時刻補正（cron 依存・cron_util は上位 crate）
-//! - source/source_id の各機能連携
+//! （listDuePending / markSent / rescheduleRepeat）は Phase 4 で [`cron`] に追加済み。
+//! source/source_id の各機能連携は deferred（後回し）。
 //!
 //! trigger_at の DB 形式正規化（`T`/空白/日付のみ）は [`datetime::to_db_datetime`] で実装済み（B4 修正）。
 //! 送信先省略時の既定送信先解決（users.notify_target_*）は [`notify_target`] で実装済み（R17）。
@@ -96,8 +95,8 @@ mod tests {
             .execute(move |conn| {
                 conn.execute(
                     "INSERT INTO users \
-                       (discord_id, username, password_hash, salt, notify_target_type, notify_target_id) \
-                     VALUES (?1, ?1, 'x', 'x', 'channel', ?2)",
+                       (discord_id, username, salt, notify_target_type, notify_target_id) \
+                     VALUES (?1, ?1, '', 'channel', ?2)",
                     rusqlite::params![user, channel_id],
                 )
                 .map_err(yuuka_db::map_sqlite)?;

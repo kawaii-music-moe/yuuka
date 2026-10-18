@@ -109,7 +109,7 @@ impl<'a> ReminderRepo<'a> {
     /// （現行 `reminderFunctions.ts` / `reminderRoutes.ts` の送信先解決）。`source` は `"manual"` 固定。
     /// trigger_at は [`crate::datetime::to_db_datetime`] で DB 形式へ正規化する（**B4**: Node
     /// `reminderRepo.add` と同位置。LLM/Web の `T` 区切り ISO を空白区切りへ揃え cron の字句比較を
-    /// 正す）。cron 検証・過去日時補正は deferred。
+    /// 正す）。
     ///
     /// # Errors
     /// 既定送信先の取得・挿入・作成後の取得失敗時 [`DbError`]。

@@ -137,8 +137,8 @@ mod tests {
             .execute(move |conn| {
                 conn.execute(
                     "INSERT INTO users \
-                       (discord_id, username, password_hash, salt, notify_target_type, notify_target_id) \
-                     VALUES (?1, ?1, 'x', 'x', ?2, ?3)",
+                       (discord_id, username, salt, notify_target_type, notify_target_id) \
+                     VALUES (?1, ?1, '', ?2, ?3)",
                     rusqlite::params![user, kind, id],
                 )
                 .map_err(map_sqlite)?;

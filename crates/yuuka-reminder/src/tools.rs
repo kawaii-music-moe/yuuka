@@ -9,9 +9,7 @@
 //! system prompt が参照する **bare 名**（`addReminder` 等・namespace 無し）を使う。
 //!
 //! 移植済み: addReminder / listReminders / cancelReminder（Node reminderFunctions の全 3 ツール）。
-//! 各ツールが依存する副機能のうち repo が持たないものは deferred（repo.rs / lib.rs の deferred
-//! 記述と同一）: trigger_at の ISO/Date 正規化（`toDbDateTime`）・過去日時の次回時刻補正・
-//! cron 式の厳密検証（cron-parser。ここでは todo と同じ 5 フィールドの簡易検証）。
+//! trigger_at の ISO/Date 正規化、過去日時補正、cron 式検証、既定送信先解決を実装済み。
 //! 送信先省略時の既定送信先解決（`getUserNotifyTarget`）は repo の `add` が行う（R17）。
 
 use std::sync::Arc;
@@ -249,7 +247,7 @@ impl Tool for AddReminderTool {
             )));
         }
 
-        // 繰り返しの cron 式は簡易検証（厳密検証・過去日時の次回時刻補正は deferred）。
+        // 繰り返しの cron 式を検証する。過去日時は repo が次回の未来時刻へ補正する。
         let repeat_rule = arg_str(&args, "repeat_rule");
         if let Some(rule) = &repeat_rule {
             if !is_valid_cron_basic(rule) {
@@ -649,8 +647,8 @@ mod tests {
             .execute(|conn| {
                 conn.execute(
                     "INSERT INTO users \
-                       (discord_id, username, password_hash, salt, notify_target_type, notify_target_id) \
-                     VALUES ('userA', 'userA', 'x', 'x', 'channel', 'chan-1')",
+                       (discord_id, username, salt, notify_target_type, notify_target_id) \
+                     VALUES ('userA', 'userA', '', 'channel', 'chan-1')",
                     [],
                 )
                 .map_err(yuuka_db::map_sqlite)?;
