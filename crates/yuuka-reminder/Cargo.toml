@@ -19,6 +19,7 @@ serde_json.workspace = true
 ts-rs.workspace = true
 async-trait.workspace = true
 chrono.workspace = true
+croner.workspace = true                  # 過去日時の繰り返しリマインドを次回時刻へ補正（cron-parser `.next()` パリティ）
 
 [dev-dependencies]
 tokio.workspace = true
