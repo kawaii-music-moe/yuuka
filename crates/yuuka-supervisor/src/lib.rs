@@ -45,6 +45,9 @@ pub use ws::ws_routes;
 /// `client_api_routes` は [`yuuka_client_api::routes_with`] が返す `/api/client/*` ルータ（`ChatEngine`/
 /// `RateLimiter` を `Extension` で内包済み・チャット送信 issue #41）。
 ///
+/// `briefing_routes` は [`yuuka_briefing::routes_with`] が返す配信設定ルータ（テスト配信の
+/// `DeliveryRunner` を `Extension` で内包済み・issue #99）。
+///
 /// `member_share_routes` は利用申請 + Bot 共有招待ルータ（[`yuuka_orchestrator::member_request_routes_with`]
 /// と [`yuuka_orchestrator::bot_share_routes_with`] を merge したもの・DM sender を `Extension` で内包済み）。
 ///
@@ -69,6 +72,7 @@ pub fn build_app(
     bot_management_routes: Router<AppState>,
     member_share_routes: Router<AppState>,
     client_api_routes: Router<AppState>,
+    briefing_routes: Router<AppState>,
     dist_dir: Option<&Path>,
     pwa_dist_dir: Option<&Path>,
 ) -> Router {
@@ -91,7 +95,7 @@ pub fn build_app(
         .merge(yuuka_personal::routes())
         .merge(yuuka_playbook::routes())
         .merge(yuuka_persona::routes())
-        .merge(yuuka_briefing::routes())
+        .merge(briefing_routes)
         .merge(yuuka_auth::device_routes())
         .merge(member_share_routes)
         .merge(client_api_routes)
@@ -272,6 +276,8 @@ mod tests {
                 .merge(yuuka_orchestrator::bot_share_routes()),
             // client-api ルータ（fake ChatEngine・InMemoryRateLimiter）。上のコメント参照。
             yuuka_client_api::routes_with(client_api_engine, client_api_rate_limiter),
+            // 配信設定ルータ（既定 NullDeliveryRunner）を merge して検証する。
+            yuuka_briefing::routes(),
             dist_dir,
             pwa_dist_dir,
         )

@@ -25,9 +25,10 @@ use yuuka_briefing::{
     build_briefing, list_enabled_briefings, render_briefing_text, EnabledBriefing,
 };
 use yuuka_core::{BotId, DbError, UserId};
+use yuuka_web::Db;
 
 use crate::context::ServiceContext;
-use crate::notifier::{Notification, NotifyTarget};
+use crate::notifier::{Notification, Notifier, NotifyTarget};
 use crate::schedule::{CronService, Schedule};
 use yuuka_core::cron_util;
 
@@ -66,7 +67,7 @@ async fn process_due_briefings(ctx: &ServiceContext) -> Result<(), DbError> {
             continue;
         }
         tracing::info!(user = %config.user_id, "🌅 朝報を配信します");
-        if let Err(e) = deliver(ctx, &config).await {
+        if let Err(e) = deliver(&ctx.db, ctx.notifier.as_ref(), &config).await {
             // 1 件の DB エラーで tick 全体を止めない（次設定・次 tick で復帰・Node の per-user try/catch）。
             tracing::error!(user = %config.user_id, error = %e, "❌ 朝報配信に失敗");
         }
@@ -74,11 +75,18 @@ async fn process_due_briefings(ctx: &ServiceContext) -> Result<(), DbError> {
     Ok(())
 }
 
-/// 1 件の朝報を生成して配信先へ送る（Node `runBriefingForUser`）。
-async fn deliver(ctx: &ServiceContext, config: &EnabledBriefing) -> Result<(), DbError> {
+/// 1 件の朝報を生成して配信先へ送る（Node `runBriefingForUser`）。送信できたら `true`。
+///
+/// 定時配信（[`process_due_briefings`]）とテスト配信（[`crate::delivery::NotifierDeliveryRunner`]）の
+/// 共通経路。`config` の `user_id`/`bot_id` の設定だけを読み、その本人へ送る。
+pub(crate) async fn deliver(
+    db: &Db,
+    notifier: &dyn Notifier,
+    config: &EnabledBriefing,
+) -> Result<bool, DbError> {
     // 本人設定を再読込して天気/RSS を生成（走査行の直後に設定が消えた等は None → 何もしない）。
-    let Some(content) = build_briefing(&ctx.db, &config.user_id, &config.bot_id).await? else {
-        return Ok(());
+    let Some(content) = build_briefing(db, &config.user_id, &config.bot_id).await? else {
+        return Ok(false);
     };
 
     let body = render_briefing_text(&content);
@@ -91,10 +99,11 @@ async fn deliver(ctx: &ServiceContext, config: &EnabledBriefing) -> Result<(), D
 
     // 配信不可（Discord 未配線 = NullNotifier / クライアント無し）は false。朝報は last_run を持たず
     // 「この分だけ配信」のため、失敗しても再スケジュールはしない（Node も送信結果を保存しない）。
-    if !ctx.notifier.send(notification).await {
+    let sent = notifier.send(notification).await;
+    if !sent {
         tracing::warn!(user = %config.user_id, "⚠️ 朝報の通知に失敗（配信先未配線などで未送信）");
     }
-    Ok(())
+    Ok(sent)
 }
 
 /// 配信先を解決する（Node `{ type: target_type, id: target_id }`）。

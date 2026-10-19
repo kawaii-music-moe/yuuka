@@ -168,6 +168,8 @@ async fn ws_chat_ready_then_msg_returns_done() {
         axum::Router::new(),
         axum::Router::new(),
         axum::Router::new(),
+        // 配信設定ルータ（本テストでは不要・空ルータ）。
+        axum::Router::new(),
         None,
         None,
     );
@@ -268,6 +270,8 @@ async fn ws_chat_rejects_cookie_only_auth() {
         axum::Router::new(),
         axum::Router::new(),
         axum::Router::new(),
+        axum::Router::new(),
+        // 配信設定ルータ（本テストでは不要・空ルータ）。
         axum::Router::new(),
         None,
         None,

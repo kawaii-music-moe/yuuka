@@ -35,7 +35,7 @@ use yuuka_db::map_sqlite;
 use yuuka_web::Db;
 
 use crate::context::ServiceContext;
-use crate::notifier::{Notification, NotifyTarget};
+use crate::notifier::{Notification, Notifier, NotifyTarget};
 use crate::schedule::{CronService, Schedule};
 use yuuka_core::{cron_util, datetime};
 
@@ -74,7 +74,7 @@ async fn process_due_reports(ctx: &ServiceContext) -> Result<(), DbError> {
             continue;
         }
         tracing::info!(user = %config.user_id, r#type = %config.r#type, "📋 レポートを生成します");
-        if let Err(e) = deliver(ctx, &config).await {
+        if let Err(e) = deliver(&ctx.db, ctx.notifier.as_ref(), &config).await {
             // 1 件の DB エラーで tick 全体を止めない（次設定・次 tick で復帰・Node の per-user try/catch）。
             tracing::error!(user = %config.user_id, error = %e, "❌ レポート配信に失敗");
         }
@@ -83,9 +83,29 @@ async fn process_due_reports(ctx: &ServiceContext) -> Result<(), DbError> {
 }
 
 /// 1 件のレポートを生成して配信先へ送る（Node `runReportForUser` の生データフォールバック経路）。
-async fn deliver(ctx: &ServiceContext, config: &EnabledReport) -> Result<(), DbError> {
+/// 送信できたら `true`。
+///
+/// 定時配信（[`process_due_reports`]）とテスト配信（[`crate::delivery::NotifierDeliveryRunner`]）の
+/// 共通経路。`config` の `user_id`/`bot_id` のデータだけを集約し、その本人へ送る。
+/// 送信先は配信設定（`target_type`/`target_id`）から解決する。
+pub(crate) async fn deliver(
+    db: &Db,
+    notifier: &dyn Notifier,
+    config: &EnabledReport,
+) -> Result<bool, DbError> {
+    deliver_to(db, notifier, config, resolve_target(config)).await
+}
+
+/// [`deliver`] の送信先指定版。テスト配信で設定行が無いとき、[`NotifyTarget::Default`]
+/// （ユーザー既定送信先）で送るために使う（Node は `config ? {...} : undefined` で送信先を省略）。
+pub(crate) async fn deliver_to(
+    db: &Db,
+    notifier: &dyn Notifier,
+    config: &EnabledReport,
+    target: NotifyTarget,
+) -> Result<bool, DbError> {
     let is_weekly = config.r#type == "weekly";
-    let data = collect_report_data(&ctx.db, &config.user_id, &config.bot_id, is_weekly).await?;
+    let data = collect_report_data(db, &config.user_id, &config.bot_id, is_weekly).await?;
 
     // LLM 要約は未配線＝Node の `buildFallbackText(data)` 経路（フッタ「Yuuka レポート（生データ）」）。
     let body = render_report_text(&data);
@@ -94,14 +114,15 @@ async fn deliver(ctx: &ServiceContext, config: &EnabledReport) -> Result<(), DbE
         BotId::new(config.bot_id.clone()),
         body,
     )
-    .with_target(resolve_target(config));
+    .with_target(target);
 
     // 配信不可（Discord 未配線 = NullNotifier / クライアント無し）は false。レポートは last_run を持たず
     // 「この分だけ配信」のため、失敗しても再スケジュールはしない（Node も送信結果を保存しない）。
-    if !ctx.notifier.send(notification).await {
+    let sent = notifier.send(notification).await;
+    if !sent {
         tracing::warn!(user = %config.user_id, "⚠️ レポートの通知に失敗（配信先未配線などで未送信）");
     }
-    Ok(())
+    Ok(sent)
 }
 
 /// 配信先を解決する（Node `{ type: target_type, id: target_id }`）。

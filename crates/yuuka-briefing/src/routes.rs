@@ -6,10 +6,10 @@
 //! レスポンス形は Node `sendJson` にバイト単位で合わせる（フラット `{success, ...}`・日本語 verbatim）。
 //!
 //! **配信サービスのシーム**: `/api/briefing/test`・`/api/report-configs/test` の実配信は
-//! [`DeliveryRunner`] ポート越しに委譲する。サービス本体（天気/RSS 取得・Discord 送信）は未移植のため、
-//! 既定は [`NullDeliveryRunner`]（常に `false`＝未配信）へ縮退する（route surface・検証・設定存在チェックは
-//! 完全に働く）。サービス配線時に実 runner を [`routes_with`] へ注入すれば live 化する。
-//! これは admin/settings の `BotRuntime`/`NullBotRuntime` と同じ縮退方針。
+//! [`DeliveryRunner`] ポート越しに委譲する。実 runner（`yuuka_services::NotifierDeliveryRunner`＝定時配信と
+//! 同じ生成・送信経路）は supervisor が [`routes_with`] で注入する。[`routes`] の既定は
+//! [`NullDeliveryRunner`]（常に `false`＝未配信）で、route surface・検証・設定存在チェックだけが働く
+//! （admin/settings の `BotRuntime`/`NullBotRuntime` と同じ縮退方針）。
 
 use std::sync::Arc;
 

@@ -342,8 +342,12 @@ pub async fn get_reports(
         .await
 }
 
-/// 指定 type の report 設定を取得（partial merge の現在値用）。
-async fn get_report(
+/// 指定 type の report 設定を取得する（**行が無ければ `None`**・Node `getReportConfig`）。
+/// partial merge の現在値と、テスト配信（`yuuka-services` の配信ランナー）の送信先解決に使う。
+///
+/// # Errors
+/// 読み取り失敗時 [`DbError`]。
+pub async fn find_report(
     db: &Db,
     user_id: &str,
     bot_id: &str,
@@ -400,7 +404,7 @@ pub async fn upsert_report(
     patch: ReportPatch,
 ) -> Result<ReportConfig, DbError> {
     // 現在値（無ければ既定）にpartialを重ねる。
-    let current = get_report(db, user_id, bot_id, r#type).await?;
+    let current = find_report(db, user_id, bot_id, r#type).await?;
     let enabled = patch
         .enabled
         .unwrap_or_else(|| current.as_ref().is_some_and(|c| c.enabled));

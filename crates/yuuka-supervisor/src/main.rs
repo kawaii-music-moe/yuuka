@@ -22,7 +22,7 @@ use yuuka_core::{Config, DbError};
 use yuuka_crypto::{rotate_secret_key, SystemCrypto, LEGACY_FALLBACK_SECRET};
 use yuuka_discord::{rate_limit_message, DiscordManager, ManagerPorts, Prepared, RateLimiter};
 use yuuka_orchestrator::{ChatEngine, DbBotDirectory, DbMembership, InMemoryRateLimiter};
-use yuuka_services::{MetricsRegistry, ServiceContext};
+use yuuka_services::{MetricsRegistry, NotifierDeliveryRunner, ServiceContext};
 use yuuka_supervisor::{
     build_app, build_supervised_services, build_tool_registry, ws_routes, RegistryBotRuntime,
     RegistryBotViewRuntime, RegistryDiscordLive, RegistryLifecycle, ServiceError, ShutdownToken,
@@ -375,6 +375,13 @@ async fn run() -> Result<(), String> {
         discord_live,
     );
 
+    // 配信設定ルータ（issue #99）: 朝報・日報/週報のテスト配信を、定時配信と同じ生成・送信経路で
+    // Discord Messenger へ送る。REST 送信は gateway 非依存のため YUUKA_RUST_CRON/DISCORD に関わらず live。
+    let briefing_routes = yuuka_briefing::routes_with(Arc::new(NotifierDeliveryRunner::new(
+        db.clone(),
+        messenger.clone(),
+    )));
+
     // 利用申請 + Bot 共有招待ルータ（issue #100/#101）。DM は Discord ボタン経路（interaction）と同じ
     // messenger（共有デフォルト Bot）から送り、入口（Web / Discord）によらず同じ通知が届くようにする。
     // gateway ゲート非依存（REST 送信のみ）。デフォルト Bot 未起動なら送信 false → warn のみで応答は成功。
@@ -442,6 +449,7 @@ async fn run() -> Result<(), String> {
         bot_management_routes,
         member_share_routes,
         client_api_routes,
+        briefing_routes,
         addr,
         dist_dir,
         pwa_dist_dir,
@@ -830,6 +838,8 @@ struct WebService {
     /// PWA クライアント API ルータ（`ChatEngine`/`RateLimiter` を `Extension` で内包済み・
     /// `/api/client/*`・チャット送信は issue #41）。
     client_api_routes: Router<AppState>,
+    /// 配信設定ルータ（`DeliveryRunner` を `Extension` で内包済み・`/api/briefing*` + `/api/report-configs*`）。
+    briefing_routes: Router<AppState>,
     addr: SocketAddr,
     dist_dir: Option<PathBuf>,
     /// PWA（issue #33）配信元。`None` なら PWA 静的配信を無効化（`/api/client/*` のみ動作）。
@@ -860,6 +870,7 @@ impl SupervisedService for WebService {
             self.bot_management_routes.clone(),
             self.member_share_routes.clone(),
             self.client_api_routes.clone(),
+            self.briefing_routes.clone(),
             self.dist_dir.as_deref(),
             self.pwa_dist_dir.as_deref(),
         );
