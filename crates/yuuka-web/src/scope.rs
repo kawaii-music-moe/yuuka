@@ -142,7 +142,8 @@ mod tests {
         {
             let conn = rusqlite::Connection::open(&path).expect("seed");
             conn.execute_batch(
-                "CREATE TABLE bots(id TEXT PRIMARY KEY, user_id TEXT NOT NULL);
+                "CREATE TABLE bots(id TEXT PRIMARY KEY, user_id TEXT NOT NULL, \
+                    created_at TEXT NOT NULL DEFAULT (datetime('now')));
                  CREATE TABLE bot_shares(id INTEGER PRIMARY KEY AUTOINCREMENT, bot_id TEXT, \
                     shared_user_id TEXT, status TEXT);
                  INSERT INTO bots(id, user_id) VALUES('mybot', 'owner');
