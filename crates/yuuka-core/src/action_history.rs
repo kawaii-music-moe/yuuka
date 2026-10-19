@@ -2,8 +2,8 @@
 //!
 //! gemini FC ループが dispatch 毎に [`ActionRecorder::record`] し、`getRecentActionHistory` ツールが
 //! [`ActionRecorder::recent`] で直近列を読む。Node は Redis `fc_history:{userId}`（直近 30 件・TTL 2h）
-//! ＋ in-memory フォールバック。**本実装は in-memory フォールバック相当**（Redis interop は経路 B・
-//! 別途）。プロセス内で `Arc<ActionRecorder>` を 1 つ共有し、FC ループとツールへ注入する。
+//! ＋ in-memory フォールバック。**本実装は in-memory フォールバック相当**（Redis 保存は仕様として
+//! 持たない・X01 #133）。プロセス内で `Arc<ActionRecorder>` を 1 つ共有し、FC ループとツールへ注入する。
 //!
 //! 秘匿・除外は Node と同一契約: 認証情報系ツール／記録系自身／マクロ管理系は記録しない
 //! （[`is_excluded`]）。引数のうち秘匿キー（password/secret/token/api key/credential_value）は
