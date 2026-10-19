@@ -23,6 +23,9 @@ pub struct EncryptedSecret {
 pub struct WebhookEndpoint {
     pub id: i64,
     pub user_id: String,
+    /// 帰属 Bot（受信で作る通知・ToDo・リマインドの Bot）。V26 以前の行で持ち主に所有 Bot が無かった
+    /// 場合だけ `None`。
+    pub bot_id: Option<String>,
     pub name: String,
     pub token: String,
     pub secret_encrypted: Option<String>,
@@ -100,6 +103,7 @@ fn row_to_endpoint(row: &Row) -> rusqlite::Result<WebhookEndpoint> {
     Ok(WebhookEndpoint {
         id: row.get("id")?,
         user_id: row.get("user_id")?,
+        bot_id: row.get("bot_id")?,
         name: row.get("name")?,
         token: row.get("token")?,
         secret_encrypted: row.get("secret_encrypted")?,
@@ -116,16 +120,19 @@ fn row_to_endpoint(row: &Row) -> rusqlite::Result<WebhookEndpoint> {
     })
 }
 
-/// エンドポイントを作成し、作成後の行を返す（Node `createEndpoint`）。
+/// エンドポイントを作成し、作成後の行を返す（Node `createEndpoint`）。`bot_id` は作成時に選択中の
+/// Bot（ルートが `resolve_scope` で解決済み）で、受信で作る通知・ToDo・リマインドの帰属先になる。
 ///
 /// # Errors
 /// 書き込み・取得失敗時 [`DbError`]。
 pub async fn create_endpoint(
     db: &Db,
     user_id: &str,
+    bot_id: &str,
     input: EndpointCreate,
 ) -> Result<WebhookEndpoint, DbError> {
     let uid = user_id.to_owned();
+    let bid = bot_id.to_owned();
     let token = generate_token();
     db.writer
         .transaction(move |tx| {
@@ -137,8 +144,8 @@ pub async fn create_endpoint(
                 "INSERT INTO webhook_endpoints \
                    (user_id, name, token, secret_encrypted, secret_iv, secret_tag, \
                     notify_target_type, notify_target_id, template, filter_keyword, \
-                    create_todo, create_reminder) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                    create_todo, create_reminder, bot_id) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
                 params![
                     uid,
                     input.name,
@@ -152,6 +159,7 @@ pub async fn create_endpoint(
                     input.filter_keyword,
                     i64::from(input.create_todo),
                     i64::from(input.create_reminder),
+                    bid,
                 ],
             )
             .map_err(map_sqlite)?;
@@ -211,21 +219,29 @@ pub async fn get_endpoint_by_token(
         .await
 }
 
-/// 本人のエンドポイント一覧（created_at DESC・Node `listEndpoints`）。
+/// 本人・選択中 Bot のエンドポイント一覧（created_at DESC・Node `listEndpoints`）。
+/// 帰属 Bot が無い行（V26 で寄せ先が無かった旧行）も、管理できるよう含める。
 ///
 /// # Errors
 /// 読み取り失敗時 [`DbError`]。
-pub async fn list_endpoints(db: &Db, user_id: &str) -> Result<Vec<WebhookEndpoint>, DbError> {
+pub async fn list_endpoints(
+    db: &Db,
+    user_id: &str,
+    bot_id: &str,
+) -> Result<Vec<WebhookEndpoint>, DbError> {
     let uid = user_id.to_owned();
+    let bid = bot_id.to_owned();
     db.read
         .read(move |conn| {
             let mut stmt = conn
                 .prepare(
-                    "SELECT * FROM webhook_endpoints WHERE user_id = ?1 ORDER BY created_at DESC",
+                    "SELECT * FROM webhook_endpoints \
+                     WHERE user_id = ?1 AND (bot_id = ?2 OR bot_id IS NULL) \
+                     ORDER BY created_at DESC",
                 )
                 .map_err(map_sqlite)?;
             let rows = stmt
-                .query_map(params![uid], row_to_endpoint)
+                .query_map(params![uid, bid], row_to_endpoint)
                 .map_err(map_sqlite)?;
             let mut out = Vec::new();
             for row in rows {
@@ -406,56 +422,46 @@ pub async fn add_webhook_reminder(
 }
 
 /// 受信履歴（id DESC・`endpoint_id` 絞り込み可・Node `listDeliveries`）。
+/// 選択中 Bot のエンドポイント（帰属 Bot が無い旧行を含む）の分だけ返す。
 ///
 /// # Errors
 /// 読み取り失敗時 [`DbError`]。
 pub async fn list_deliveries(
     db: &Db,
     user_id: &str,
+    bot_id: &str,
     endpoint_id: Option<i64>,
     limit: i64,
 ) -> Result<Vec<WebhookDelivery>, DbError> {
     let uid = user_id.to_owned();
+    let bid = bot_id.to_owned();
     db.read
         .read(move |conn| {
-            let mut out = Vec::new();
-            let map = |row: &Row| {
-                Ok(WebhookDelivery {
-                    id: row.get("id")?,
-                    endpoint_id: row.get("endpoint_id")?,
-                    user_id: row.get("user_id")?,
-                    payload: row.get("payload")?,
-                    status: row.get("status")?,
-                    detail: row.get("detail")?,
-                    created_at: row.get("created_at")?,
+            let mut stmt = conn
+                .prepare(
+                    "SELECT * FROM webhook_deliveries \
+                     WHERE user_id = ?1 AND (?3 IS NULL OR endpoint_id = ?3) \
+                       AND endpoint_id IN (SELECT id FROM webhook_endpoints \
+                                            WHERE user_id = ?1 AND (bot_id = ?2 OR bot_id IS NULL)) \
+                     ORDER BY id DESC LIMIT ?4",
+                )
+                .map_err(map_sqlite)?;
+            let rows = stmt
+                .query_map(params![uid, bid, endpoint_id, limit], |row: &Row| {
+                    Ok(WebhookDelivery {
+                        id: row.get("id")?,
+                        endpoint_id: row.get("endpoint_id")?,
+                        user_id: row.get("user_id")?,
+                        payload: row.get("payload")?,
+                        status: row.get("status")?,
+                        detail: row.get("detail")?,
+                        created_at: row.get("created_at")?,
+                    })
                 })
-            };
-            if let Some(eid) = endpoint_id {
-                let mut stmt = conn
-                    .prepare(
-                        "SELECT * FROM webhook_deliveries WHERE user_id = ?1 AND endpoint_id = ?2 \
-                         ORDER BY id DESC LIMIT ?3",
-                    )
-                    .map_err(map_sqlite)?;
-                let rows = stmt
-                    .query_map(params![uid, eid, limit], map)
-                    .map_err(map_sqlite)?;
-                for row in rows {
-                    out.push(row.map_err(map_sqlite)?);
-                }
-            } else {
-                let mut stmt = conn
-                    .prepare(
-                        "SELECT * FROM webhook_deliveries WHERE user_id = ?1 \
-                         ORDER BY id DESC LIMIT ?2",
-                    )
-                    .map_err(map_sqlite)?;
-                let rows = stmt
-                    .query_map(params![uid, limit], map)
-                    .map_err(map_sqlite)?;
-                for row in rows {
-                    out.push(row.map_err(map_sqlite)?);
-                }
+                .map_err(map_sqlite)?;
+            let mut out = Vec::new();
+            for row in rows {
+                out.push(row.map_err(map_sqlite)?);
             }
             Ok(out)
         })

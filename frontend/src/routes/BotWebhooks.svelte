@@ -1,11 +1,11 @@
 <script lang="ts">
 // ─────────────────────────────────────────────────────────────────────────
 // Webhook タブ（旧 app.js fetchWebhooksList / fetchWebhookDeliveries +
-//  index.html #tab-webhooks を移植）。webhookApi 使用（scope:'user'）。
+//  index.html #tab-webhooks を移植）。webhookApi 使用（一覧・作成・受信履歴は選択中 Bot）。
 //   - エンドポイント一覧（URL コピー・有効/無効トグル・削除）
 //   - 受信履歴（直近50件）
 //   - 作成モーダル
-// user-scoped のため activeBot に依存しない（$effect で一度だけ取得）。
+// エンドポイントは Bot ごとの設定のため、選択中 Bot が変わったら取り直す。
 // ─────────────────────────────────────────────────────────────────────────
 
 import { ApiError } from "$lib/api/client";
@@ -21,6 +21,7 @@ import {
 	EmptyState,
 	Icon,
 } from "$lib/components/ui";
+import { activeBot } from "$lib/stores/activeBot";
 import { pushToast } from "$lib/stores/toast";
 import WebhookCreateModal from "./webhooks/WebhookCreateModal.svelte";
 import {
@@ -59,8 +60,9 @@ async function loadDeliveries() {
 	}
 }
 
-// user-scoped。マウント時に一度取得（activeBot 非依存）。
+// 選択中 Bot のエンドポイント・受信履歴を取得（Bot 切り替えで取り直す）。
 $effect(() => {
+	void $activeBot?.id;
 	void loadEndpoints();
 	void loadDeliveries();
 });

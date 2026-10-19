@@ -146,7 +146,9 @@ mod tests {
              ALTER TABLE context_notes DROP COLUMN title; \
              DROP INDEX idx_users_sk_account_id; \
              ALTER TABLE users DROP COLUMN sk_account_id; \
-             ALTER TABLE users ADD COLUMN password_hash TEXT NOT NULL DEFAULT '';",
+             ALTER TABLE users ADD COLUMN password_hash TEXT NOT NULL DEFAULT ''; \
+             DROP INDEX idx_webhook_endpoints_user_bot; \
+             ALTER TABLE webhook_endpoints DROP COLUMN bot_id;",
         )
         .unwrap();
 
@@ -250,6 +252,16 @@ mod tests {
             )
             .unwrap();
         assert_eq!(invite_table, 0, "V25: invite_codes 削除");
+
+        // V26: Webhook エンドポイントが帰属 Bot を持つ。
+        let webhook_bot_col: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('webhook_endpoints') WHERE name='bot_id'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(webhook_bot_col, 1, "V26: webhook_endpoints.bot_id 追加");
     }
 
     #[tokio::test]

@@ -20,7 +20,7 @@ use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use yuuka_crypto::SystemCrypto;
-use yuuka_web::{AppState, AuthenticatedUser};
+use yuuka_web::{resolve_scope, AppState, AuthenticatedUser};
 
 use crate::repo::{self, EncryptedSecret, EndpointCreate, EndpointPatch, WebhookEndpoint};
 
@@ -138,13 +138,28 @@ async fn receive(
         .into_response()
 }
 
-// ─── GET /api/webhooks（一覧・auth:user） ────────────────────────────────────
+// ─── GET /api/webhooks（一覧・auth:user・選択中 Bot） ─────────────────────────────
 
-async fn list(user: AuthenticatedUser, State(state): State<AppState>) -> Response {
-    let endpoints = match repo::list_endpoints(&state.db, &user.0.discord_id).await {
-        Ok(e) => e,
-        Err(_) => return server_error(),
+#[derive(Debug, Deserialize)]
+struct BotQuery {
+    #[serde(default, rename = "botId")]
+    bot_id: Option<String>,
+}
+
+async fn list(
+    user: AuthenticatedUser,
+    State(state): State<AppState>,
+    Query(q): Query<BotQuery>,
+) -> Response {
+    let scope = match resolve_scope(&user.0, &state.db, q.bot_id.as_deref()).await {
+        Ok(s) => s,
+        Err(e) => return e.into_response(),
     };
+    let endpoints =
+        match repo::list_endpoints(&state.db, &user.0.discord_id, scope.bot_id().as_str()).await {
+            Ok(e) => e,
+            Err(_) => return server_error(),
+        };
     let base = state.config.base_url.as_deref();
     let views: Vec<Value> = endpoints.iter().map(|e| endpoint_view(e, base)).collect();
     (
@@ -154,12 +169,13 @@ async fn list(user: AuthenticatedUser, State(state): State<AppState>) -> Respons
         .into_response()
 }
 
-// ─── POST /api/webhooks/create（作成・auth:user） ────────────────────────────
+// ─── POST /api/webhooks/create（作成・auth:user・選択中 Bot へ帰属） ─────────────
 
 async fn create(
     user: AuthenticatedUser,
     State(state): State<AppState>,
     Extension(WebhookCrypto(crypto)): Extension<WebhookCrypto>,
+    Query(q): Query<BotQuery>,
     Json(body): Json<Value>,
 ) -> Response {
     let name = str_field(&body, "name");
@@ -173,6 +189,15 @@ async fn create(
             "Webhookシークレット（16文字以上）は必須です。受信は HMAC-SHA256 署名で検証されます。",
         );
     }
+    // 帰属 Bot は選択中の Bot（受信で作る通知・ToDo・リマインドの Bot）。system_default は不可。
+    let raw_bot = body
+        .get("botId")
+        .and_then(Value::as_str)
+        .or(q.bot_id.as_deref());
+    let scope = match resolve_scope(&user.0, &state.db, raw_bot).await {
+        Ok(s) => s,
+        Err(e) => return e.into_response(),
+    };
     let enc = match encrypt_secret(crypto.as_deref(), &secret) {
         Ok(e) => e,
         Err(_) => return server_error(),
@@ -188,7 +213,14 @@ async fn create(
         create_todo: bool_field(&body, "createTodo"),
         create_reminder: bool_field(&body, "createReminder"),
     };
-    let endpoint = match repo::create_endpoint(&state.db, &user.0.discord_id, input).await {
+    let endpoint = match repo::create_endpoint(
+        &state.db,
+        &user.0.discord_id,
+        scope.bot_id().as_str(),
+        input,
+    )
+    .await
+    {
         Ok(e) => e,
         Err(_) => return server_error(),
     };
@@ -301,12 +333,14 @@ async fn delete(
         .into_response()
 }
 
-// ─── GET /api/webhooks/deliveries（受信履歴・auth:user） ─────────────────────
+// ─── GET /api/webhooks/deliveries（受信履歴・auth:user・選択中 Bot） ─────────────
 
 #[derive(Debug, Deserialize)]
 struct DeliveriesQuery {
     #[serde(default, rename = "endpointId")]
     endpoint_id: Option<String>,
+    #[serde(default, rename = "botId")]
+    bot_id: Option<String>,
 }
 
 async fn deliveries(
@@ -316,7 +350,19 @@ async fn deliveries(
 ) -> Response {
     // Node: `endpointId ? Number(endpointId) : undefined`・整数のみ有効。
     let endpoint_id = q.endpoint_id.as_deref().and_then(|s| s.parse::<i64>().ok());
-    let list = match repo::list_deliveries(&state.db, &user.0.discord_id, endpoint_id, 50).await {
+    let scope = match resolve_scope(&user.0, &state.db, q.bot_id.as_deref()).await {
+        Ok(s) => s,
+        Err(e) => return e.into_response(),
+    };
+    let list = match repo::list_deliveries(
+        &state.db,
+        &user.0.discord_id,
+        scope.bot_id().as_str(),
+        endpoint_id,
+        50,
+    )
+    .await
+    {
         Ok(v) => v,
         Err(_) => return server_error(),
     };
@@ -347,6 +393,7 @@ async fn deliveries(
 fn endpoint_view(e: &WebhookEndpoint, base_url: Option<&str>) -> Value {
     json!({
         "id": e.id,
+        "bot_id": e.bot_id,
         "name": e.name,
         "token": e.token,
         "has_secret": e.has_secret(),
@@ -508,6 +555,10 @@ mod tests {
                 [],
             )
             .expect("seed user");
+            conn.execute_batch(
+                "INSERT INTO bots (id, user_id, name) VALUES ('b1', 'u', 'Bot 1'), ('b2', 'u', 'Bot 2');",
+            )
+            .expect("seed bots");
         }
         db
     }
@@ -568,19 +619,28 @@ mod tests {
         )
         .await;
         assert_eq!(st, StatusCode::BAD_REQUEST);
+        // 帰属 Bot（選択中 Bot）が無い・system_default は拒否。
+        for body in [
+            r#"{"name":"CI","secret":"abcdef0123456789xyz"}"#,
+            r#"{"name":"CI","secret":"abcdef0123456789xyz","botId":"system_default"}"#,
+        ] {
+            let (st, _) = send(&app, "POST", "/api/webhooks/create", true, body).await;
+            assert_eq!(st, StatusCode::FORBIDDEN);
+        }
 
-        // 作成。
+        // 作成（選択中 Bot b2 へ帰属）。
         let (st, j) = send(
             &app,
             "POST",
             "/api/webhooks/create",
             true,
-            r#"{"name":"CI","secret":"abcdef0123456789xyz","createTodo":true}"#,
+            r#"{"name":"CI","secret":"abcdef0123456789xyz","createTodo":true,"botId":"b2"}"#,
         )
         .await;
         assert_eq!(st, StatusCode::OK);
         let ep = &j["endpoint"];
         assert_eq!(ep["name"], "CI");
+        assert_eq!(ep["bot_id"], "b2");
         assert_eq!(ep["has_secret"], true);
         assert_eq!(ep["create_todo"], true);
         assert_eq!(ep["enabled"], true);
@@ -589,9 +649,13 @@ mod tests {
         assert_eq!(ep["url"], format!("https://x.test/hook/{token}"));
         let id = ep["id"].as_i64().unwrap();
 
-        // 一覧に出る。
-        let (_st, j) = send(&app, "GET", "/api/webhooks", true, "").await;
+        // 一覧は選択中 Bot の分だけ（b2 には出る・b1 には出ない・未指定は 403）。
+        let (_st, j) = send(&app, "GET", "/api/webhooks?botId=b2", true, "").await;
         assert_eq!(j["endpoints"].as_array().unwrap().len(), 1);
+        let (_st, j) = send(&app, "GET", "/api/webhooks?botId=b1", true, "").await;
+        assert_eq!(j["endpoints"].as_array().unwrap().len(), 0);
+        let (st, _) = send(&app, "GET", "/api/webhooks", true, "").await;
+        assert_eq!(st, StatusCode::FORBIDDEN);
 
         // 更新: id 必須。
         let (st, _) = send(&app, "POST", "/api/webhooks/update", true, "{}").await;
@@ -621,7 +685,7 @@ mod tests {
         assert_eq!(j["endpoint"]["enabled"], false);
 
         // deliveries は空。
-        let (st, j) = send(&app, "GET", "/api/webhooks/deliveries", true, "").await;
+        let (st, j) = send(&app, "GET", "/api/webhooks/deliveries?botId=b2", true, "").await;
         assert_eq!(st, StatusCode::OK);
         assert_eq!(j["deliveries"].as_array().unwrap().len(), 0);
 
@@ -661,7 +725,7 @@ mod tests {
             "POST",
             "/api/webhooks/create",
             true,
-            r#"{"name":"H","secret":"abcdefghij0123456789"}"#,
+            r#"{"name":"H","secret":"abcdefghij0123456789","botId":"b1"}"#,
         )
         .await;
         let token = j["endpoint"]["token"].as_str().unwrap().to_owned();

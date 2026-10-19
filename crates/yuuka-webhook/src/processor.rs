@@ -11,7 +11,6 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use hmac::{Hmac, Mac};
-use rusqlite::OptionalExtension;
 use serde::de::{Deserializer, MapAccess, Visitor};
 use serde::Deserialize;
 use serde_json::Value;
@@ -20,7 +19,7 @@ use yuuka_core::{BotId, UserId, UserScope};
 use yuuka_crypto::SystemCrypto;
 use yuuka_todo::dto::NewTodo;
 use yuuka_todo::repo::TodoRepo;
-use yuuka_web::Db;
+use yuuka_web::{has_bot_access, Db};
 
 use crate::repo::{self, WebhookEndpoint};
 use crate::routes::WebhookProcessor;
@@ -180,13 +179,17 @@ impl RealWebhookProcessor {
         let interpreted = summary.is_some();
         let notify_text = summary.unwrap_or_else(|| fallback_summary(&payload_text));
 
-        // Webhook endpoints are user-wide, but the generated personal data must belong to one of
-        // the user's actual bots. `system_default` is an unscoped guide and cannot own data.
-        let Some(bot_id) = self.first_owned_bot(user_id).await else {
-            let detail = "通知先として使用できる Bot がありません";
-            return self
-                .finish(endpoint, &payload_text, DeliveryStatus::Failed, detail)
-                .await;
+        // 通知・ToDo・リマインドはエンドポイントの帰属 Bot（作成時に選択中だった Bot）に紐付ける。
+        // system_default は個人データを持たない案内役（#138）なので帰属先にしない。共有が外れたなど
+        // 本人がもう使えない Bot なら、見えないデータを作らず失敗として記録する。
+        let bot_id = match self.usable_bot(endpoint).await {
+            Ok(bot_id) => bot_id,
+            Err(detail) => {
+                tracing::warn!(endpoint_id = endpoint.id, "Webhook: {detail}");
+                return self
+                    .finish(endpoint, &payload_text, DeliveryStatus::Failed, detail)
+                    .await;
+            }
         };
 
         // 4. Discord へ通知する。
@@ -256,22 +259,21 @@ impl RealWebhookProcessor {
             .await
     }
 
-    async fn first_owned_bot(&self, user_id: &str) -> Option<String> {
-        let user_id = user_id.to_owned();
-        self.db
-            .read
-            .read(move |conn| {
-                conn.query_row(
-                    "SELECT id FROM bots WHERE user_id = ?1 AND id != 'system_default' ORDER BY id LIMIT 1",
-                    rusqlite::params![user_id],
-                    |row| row.get(0),
-                )
-                .optional()
-                .map_err(yuuka_db::map_sqlite)
-            })
-            .await
-            .ok()
-            .flatten()
+    /// エンドポイントの帰属 Bot が本人にまだ使えるか（所有・共有）を確かめて返す。
+    async fn usable_bot(&self, endpoint: &WebhookEndpoint) -> Result<String, &'static str> {
+        let bot_id = endpoint
+            .bot_id
+            .as_deref()
+            .filter(|b| !b.is_empty() && *b != BotId::SYSTEM_DEFAULT)
+            .ok_or("通知に使う Bot が設定されていません（Webhook を作り直してください）")?;
+        match has_bot_access(&self.db, &endpoint.user_id, bot_id).await {
+            Ok(true) => Ok(bot_id.to_owned()),
+            Ok(false) => Err("通知に使う Bot が見つからないか、利用できなくなりました"),
+            Err(e) => {
+                tracing::error!(endpoint_id = endpoint.id, error = %e, "Webhook: Bot の確認に失敗");
+                Err("通知に使う Bot を確認できませんでした")
+            }
+        }
     }
 
     /// 受信履歴へ記録して結果を返す（記録の失敗は処理結果を変えない）。
@@ -686,7 +688,9 @@ mod tests {
             }),
             ..input
         };
-        repo::create_endpoint(&fx.db, "u", input).await.unwrap()
+        repo::create_endpoint(&fx.db, "u", "test_bot", input)
+            .await
+            .unwrap()
     }
 
     fn named(name: &str) -> EndpointCreate {
@@ -720,7 +724,7 @@ mod tests {
         assert_eq!(out.status, DeliveryStatus::Failed);
 
         assert!(fx.notifier.sent.lock().unwrap().is_empty());
-        let deliveries = repo::list_deliveries(&fx.db, "u", Some(ep.id), 50)
+        let deliveries = repo::list_deliveries(&fx.db, "u", "test_bot", Some(ep.id), 50)
             .await
             .unwrap();
         assert_eq!(deliveries.len(), 2);
@@ -735,10 +739,98 @@ mod tests {
         );
     }
 
+    /// 帰属 Bot は作成時の選択中 Bot。id 順で先に来る別の所有 Bot があっても、そちらへは入れない。
+    #[tokio::test]
+    async fn uses_endpoint_bot_even_if_user_owns_other_bots() {
+        let fx = fixture(FakeNotifier::default(), FakeAux::default());
+        fx.db
+            .writer
+            .execute(|conn| {
+                conn.execute(
+                    "INSERT INTO bots (id, user_id, name) VALUES ('a_first', 'u', 'First Bot')",
+                    [],
+                )
+                .map_err(yuuka_db::map_sqlite)?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+        let ep = endpoint(
+            &fx,
+            EndpointCreate {
+                create_todo: true,
+                ..named("CI")
+            },
+        )
+        .await;
+        assert_eq!(ep.bot_id.as_deref(), Some("test_bot"));
+        let body = br#"{"status":"success"}"#;
+
+        let out = fx
+            .processor
+            .handle(&ep, body, Some(&sign(SECRET, body)))
+            .await;
+        assert_eq!(out.status, DeliveryStatus::Notified);
+        assert_eq!(fx.notifier.sent.lock().unwrap()[0].1, "test_bot");
+        assert_eq!(
+            count(
+                &fx.db,
+                "SELECT COUNT(*) FROM todos WHERE user_id = 'u' AND bot_id = 'test_bot'"
+            )
+            .await,
+            1
+        );
+    }
+
+    /// 帰属 Bot が無い旧行・使えなくなった Bot では、見えないデータを作らず失敗として記録する。
+    #[tokio::test]
+    async fn fails_without_usable_bot() {
+        let fx = fixture(FakeNotifier::default(), FakeAux::default());
+        let mut ep = endpoint(
+            &fx,
+            EndpointCreate {
+                create_todo: true,
+                ..named("CI")
+            },
+        )
+        .await;
+        let body = br#"{"n":1}"#;
+
+        ep.bot_id = None;
+        let out = fx
+            .processor
+            .handle(&ep, body, Some(&sign(SECRET, body)))
+            .await;
+        assert_eq!(out.status, DeliveryStatus::Failed);
+        assert_eq!(
+            out.detail,
+            "通知に使う Bot が設定されていません（Webhook を作り直してください）"
+        );
+
+        ep.bot_id = Some("someone_elses_bot".to_owned());
+        let body = br#"{"n":2}"#;
+        let out = fx
+            .processor
+            .handle(&ep, body, Some(&sign(SECRET, body)))
+            .await;
+        assert_eq!(out.status, DeliveryStatus::Failed);
+        assert_eq!(
+            out.detail,
+            "通知に使う Bot が見つからないか、利用できなくなりました"
+        );
+
+        assert!(fx.notifier.sent.lock().unwrap().is_empty());
+        assert_eq!(count(&fx.db, "SELECT COUNT(*) FROM todos").await, 0);
+        let deliveries = repo::list_deliveries(&fx.db, "u", "test_bot", Some(ep.id), 50)
+            .await
+            .unwrap();
+        assert_eq!(deliveries.len(), 2);
+    }
+
     #[tokio::test]
     async fn rejects_endpoint_without_secret() {
         let fx = fixture(FakeNotifier::default(), FakeAux::default());
-        let ep = repo::create_endpoint(&fx.db, "u", named("legacy"))
+        let ep = repo::create_endpoint(&fx.db, "u", "test_bot", named("legacy"))
             .await
             .unwrap();
         let body = b"{}";
@@ -860,7 +952,7 @@ mod tests {
             .await,
             1
         );
-        let deliveries = repo::list_deliveries(&fx.db, "u", Some(ep.id), 50)
+        let deliveries = repo::list_deliveries(&fx.db, "u", "test_bot", Some(ep.id), 50)
             .await
             .unwrap();
         assert_eq!(deliveries[0].status, "notified");
