@@ -43,8 +43,9 @@ function reportError(e: unknown): void {
 	);
 }
 
+// 一覧（/api/bots）はシステムデフォルト Bot を含まない（案内役で個人データを持たないため・issue #140）。
 function isDefaultBot(id: string): boolean {
-	return id.startsWith("bot_default_") || id === "system_default";
+	return id.startsWith("bot_default_");
 }
 
 async function loadBots(): Promise<void> {

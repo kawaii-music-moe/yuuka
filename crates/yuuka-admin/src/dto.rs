@@ -47,13 +47,6 @@ pub(crate) struct BotIdInput {
     pub bot_id: Option<String>,
 }
 
-/// `POST /api/admin/invite-codes`。
-#[derive(Debug, Default, Deserialize)]
-pub(crate) struct CodeInput {
-    #[serde(default)]
-    pub code: Option<String>,
-}
-
 /// `GET /api/admin/audit-logs` のクエリ（Node は parseInt 寛容パース・action は前方一致）。
 #[derive(Debug, Default, Deserialize)]
 pub(crate) struct AuditQuery {
@@ -76,12 +69,6 @@ pub struct AdminStats {
     pub total_bots: i64,
     #[serde(rename = "suspendedBots")]
     pub suspended_bots: i64,
-    #[serde(rename = "totalInviteCodes")]
-    pub total_invite_codes: i64,
-    #[serde(rename = "usedInviteCodes")]
-    pub used_invite_codes: i64,
-    #[serde(rename = "availableInviteCodes")]
-    pub available_invite_codes: i64,
 }
 
 /// `GET /api/admin/users` の 1 行（Node `listAllUsers`＝秘密値を含まない列のみ）。
@@ -110,17 +97,6 @@ pub struct AdminBotView {
     pub is_running: bool,
     pub created_at: Option<String>,
     pub updated_at: Option<String>,
-}
-
-/// `GET /api/admin/invite-codes` の 1 行（Node `listInviteCodes`＝`SELECT *`）。
-#[derive(Debug, Serialize)]
-pub struct InviteCodeView {
-    pub code: String,
-    pub created_by: Option<String>,
-    pub used_by: Option<String>,
-    pub used_at: Option<String>,
-    pub revoked_at: Option<String>,
-    pub created_at: Option<String>,
 }
 
 /// `GET /api/admin/audit-logs` の 1 行（Node `listAuditLogs`＝`SELECT *`）。

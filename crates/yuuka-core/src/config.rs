@@ -2,8 +2,8 @@
 //!
 //! `config.yaml`（存在すれば）＋環境変数を **既存 Node `getSetting` と同一の優先順**
 //! （`yaml[KEY] ?? env[KEY] ?? default`・キーは **UPPERCASE**）で読み、型付き構造体へ
-//! 落とす。認証発行（P1-1）に必要な `INVITE_CODES`/`ADMIN_DISCORD_IDS` は取り込む
-//! （起動時の invite シード・初期 admin 昇格に使う）。それ以外の未知キー（`GOOGLE_*`/
+//! 落とす。認証発行（P1-1）に必要な `ADMIN_DISCORD_IDS` は取り込む（初期 admin 昇格に使う）。
+//! それ以外の未知キー（`GOOGLE_*`/
 //! `REMINDER_CRON` 等・bot/他系用）は **無視**する（web 起動に不要なため）。型不一致・不正値は起動時に fail-fast
 //! （`ConfigError`。§5.6 の唯一の致命ポイント）。機密は本 struct に平文で持たず
 //! [`crate::secrets`] の `SecretString` で扱う。
@@ -34,6 +34,10 @@ pub struct Config {
     pub session_ttl_days: u32,
     /// Redis 接続 URL（`REDIS_URL`・既定 `redis://127.0.0.1:6379`）。
     pub redis_url: String,
+    /// sk-account のブラウザ向け公開URL。
+    pub sk_account_url: String,
+    /// Yuuka サーバーから認可コードを交換する内部URL。
+    pub sk_account_internal_url: String,
     /// XFF 信頼判定に使う信頼プロキシ（`TRUSTED_PROXIES`・カンマ/YAML 配列）。
     pub trusted_proxies: Vec<IpAddr>,
     /// index.html へ差し込む google-site-verification 値（`GOOGLE_SITE_VERIFICATION`）。
@@ -49,8 +53,6 @@ pub struct Config {
     /// 鍵ローテーション用の新秘密（`YUUKA_ENCRYPTION_SECRET_NEW`）。設定時は起動時に
     /// 旧鍵→新鍵で全暗号化列を再暗号化する（Node `config.secretKeyNew` / `rotateSecretKey`）。
     pub encryption_secret_new: Option<SecretString>,
-    /// 起動時に DB へ投入する招待コード一覧（`INVITE_CODES`・カンマ/YAML 配列・Node `config.inviteCodes`）。
-    pub invite_codes: Vec<String>,
     /// 初期 admin に昇格する Discord ユーザー ID（`ADMIN_DISCORD_IDS`・任意・Node `config.adminDiscordIds`）。
     /// `createUser` はこのリストに含まれる ID（または最初のユーザー）を admin ロールで作成する。
     pub admin_discord_ids: Vec<String>,
@@ -105,6 +107,10 @@ impl Config {
             db_path,
             session_ttl_days,
             redis_url,
+            sk_account_url: get("SK_ACCOUNT_URL")
+                .unwrap_or_else(|| "https://account.sk-9.net".to_owned()),
+            sk_account_internal_url: get("SK_ACCOUNT_INTERNAL_URL")
+                .unwrap_or_else(|| "http://127.0.0.1:3100".to_owned()),
             trusted_proxies,
             google_site_verification: non_empty(get("GOOGLE_SITE_VERIFICATION")),
             privacy_policy_url: get("PRIVACY_POLICY_URL").unwrap_or_default(),
@@ -112,7 +118,6 @@ impl Config {
             encryption_secret: non_empty(get("YUUKA_ENCRYPTION_SECRET")).map(SecretString::from),
             encryption_secret_new: non_empty(get("YUUKA_ENCRYPTION_SECRET_NEW"))
                 .map(SecretString::from),
-            invite_codes: parse_string_list(get("INVITE_CODES").as_deref()),
             admin_discord_ids: parse_string_list(get("ADMIN_DISCORD_IDS").as_deref()),
             desktop_max_upload_mb: parse_field(
                 "DESKTOP_MAX_UPLOAD_MB",
@@ -262,8 +267,7 @@ mod tests {
         assert_eq!(cfg.redis_url, "redis://127.0.0.1:6379");
         assert_eq!(cfg.terms_url, "https://ex.test/terms");
         assert!(!cfg.is_https_deployment());
-        // P1-1: 招待コード（YAML 配列→カンマ結合→分割）と admin ID（カンマ区切り・trim）を取り込む。
-        assert_eq!(cfg.invite_codes, vec!["a".to_owned(), "b".to_owned()]);
+        // P1-1: admin ID（カンマ区切り・trim）を取り込む。廃止した INVITE_CODES は無視する。
         assert_eq!(
             cfg.admin_discord_ids,
             vec!["111".to_owned(), "222".to_owned()]

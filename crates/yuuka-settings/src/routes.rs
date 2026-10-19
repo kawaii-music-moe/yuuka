@@ -4,8 +4,8 @@
 //! `{success, message}`・日本語 verbatim）。想定内の業務エラー（400/401/404/409）は明示的な JSON
 //! レスポンス、想定外の [`DbError`](yuuka_core::DbError) のみ `?` で [`ApiError`] に写像（500）。
 //!
-//! プロフィール/パスワード変更は Node と同じく**セッションを再発行**して継続ログインさせる
-//! （プロフィールは現在のセッションを失効→新規発行、パスワードは全セッション失効→新規発行）。
+//! プロフィール変更は Node と同じく**セッションを再発行**して継続ログインさせる
+//! （現在のセッションを失効→新規発行）。
 
 use std::sync::Arc;
 
@@ -15,12 +15,12 @@ use axum::http::{HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::{Extension, Json};
 use serde_json::{json, Value};
-use yuuka_auth::{build_session_cookie, revoke_all_desktop_tokens, SessionCookieToken};
+use yuuka_auth::{build_session_cookie, SessionCookieToken};
 use yuuka_core::WebError;
 use yuuka_types::SessionUser;
 use yuuka_web::{ApiError, AppState, AuthenticatedUser};
 
-use crate::dto::{BackupInput, DeleteAccountInput, GeminiInput, PasswordInput, ProfileInput};
+use crate::dto::{BackupInput, GeminiInput, ProfileInput};
 use crate::repo::{self, UserSettingsPatch};
 use crate::SettingsRuntime;
 
@@ -58,82 +58,17 @@ pub(crate) async fn profile(
     ))
 }
 
-// ─── パスワード変更（変更時に全セッション + デスクトップトークンを即時失効） ─────
-
-pub(crate) async fn password(
-    user: AuthenticatedUser,
-    Extension(rt): Extension<Arc<SettingsRuntime>>,
-    State(state): State<AppState>,
-    Json(body): Json<PasswordInput>,
-) -> Result<Response, ApiError> {
-    let current_pw = body.current_password.unwrap_or_default();
-    let new_pw = body.new_password.unwrap_or_default();
-    if current_pw.is_empty() || new_pw.is_empty() {
-        return Ok(bad_request(
-            "現在のパスワードと新しいパスワードを入力してください。",
-        ));
-    }
-    let Some(u) = yuuka_auth::users::get_user_by_discord_id(&state.db, &user.0.discord_id).await?
-    else {
-        return Ok(unauthorized("現在のパスワードが正しくありません。"));
-    };
-    if !yuuka_auth::users::verify_password_constant_time(current_pw, Some(u.password_hash)).await {
-        return Ok(unauthorized("現在のパスワードが正しくありません。"));
-    }
-    if let Err(reason) = yuuka_auth::password_policy::validate_password(&new_pw) {
-        return Ok(bad_request(reason));
-    }
-
-    repo::update_password(&state.db, &user.0.discord_id, &new_pw).await?;
-    // 全セッション失効 + デスクトップトークン全失効（各端末は次回 401 で再ログイン）。
-    rt.sessions.destroy_all_for_user(&user.0.discord_id).await;
-    revoke_all_desktop_tokens(&state.db, &user.0.discord_id).await?;
-    yuuka_auth::audit::add_audit_log(
-        &state.db,
-        &user.0.discord_id,
-        "auth.password_change",
-        None,
-        None,
-    )
-    .await;
-
-    // 継続ログイン用に新しいセッションを発行する（全失効の後）。
-    let su = SessionUser {
-        discord_id: user.0.discord_id.clone(),
-        username: u.username,
-        role: user.0.role,
-    };
-    let cookie = reissue_cookie(&rt, &state, &su).await?;
-    Ok(json_with_cookie(
-        json!({
-            "success": true,
-            "message": "パスワードを変更しました。他の端末のセッションは無効化されました。",
-        }),
-        cookie,
-    ))
-}
-
 // ─── アカウント削除（本人による退会・最後の管理者は不可） ──────────────────────
 
 pub(crate) async fn delete_account(
     user: AuthenticatedUser,
     Extension(rt): Extension<Arc<SettingsRuntime>>,
     State(state): State<AppState>,
-    Json(body): Json<DeleteAccountInput>,
 ) -> Result<Response, ApiError> {
-    let password = body.password.unwrap_or_default();
-    if password.is_empty() {
-        return Ok(bad_request(
-            "削除を確定するには現在のパスワードを入力してください。",
-        ));
-    }
     let Some(u) = yuuka_auth::users::get_user_by_discord_id(&state.db, &user.0.discord_id).await?
     else {
-        return Ok(unauthorized("パスワードが正しくありません。"));
+        return Ok(not_found("アカウントが見つかりません。"));
     };
-    if !yuuka_auth::users::verify_password_constant_time(password, Some(u.password_hash)).await {
-        return Ok(unauthorized("パスワードが正しくありません。"));
-    }
     // 唯一の管理者ガード（管理者 0 人化を防ぐ・409）。
     if u.role.eq_ignore_ascii_case("admin") && repo::count_admins(&state.db).await? <= 1 {
         return Ok(conflict(
@@ -320,10 +255,6 @@ fn status_json(status: StatusCode, message: &str) -> Response {
 
 fn bad_request(message: &str) -> Response {
     status_json(StatusCode::BAD_REQUEST, message)
-}
-
-fn unauthorized(message: &str) -> Response {
-    status_json(StatusCode::UNAUTHORIZED, message)
 }
 
 fn conflict(message: &str) -> Response {

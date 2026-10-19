@@ -29,9 +29,8 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, patch, post};
 use axum::{Extension, Json, Router};
 use serde::Deserialize;
-use serde_json::json;
 use tokio::time::timeout;
-use yuuka_core::{BotId, GuildId, ToolContext, UserId, UserScope};
+use yuuka_core::{BotId, GuildId, UserId, UserScope};
 use yuuka_discord::{
     rate_limit_message, IncomingChat, InlineMedia, RateLimiter, RichEmbed, StatusSink,
 };
@@ -43,11 +42,12 @@ use yuuka_orchestrator::{
 };
 use yuuka_persona::dto::{SavePersona, PERSONA_MAX_LENGTH};
 use yuuka_persona::repo::PersonaRepo;
-use yuuka_schedule::dto::Schedule;
+use yuuka_schedule::dto::NewSchedule;
 use yuuka_schedule::repo::ScheduleRepo;
+use yuuka_schedule::service::{AddOptions, ScheduleService};
 use yuuka_todo::dto::{NewTodo, Todo, TodoUpdate};
 use yuuka_todo::repo::TodoRepo;
-use yuuka_web::{resolve_scope, AppState, AuthenticatedUser, Db};
+use yuuka_web::{resolve_scope, AppState, AuthenticatedUser, Db, ScopeError};
 
 use crate::date_util::{
     day_start, local_to_utc_iso, next_day_start, parse_local_date, parse_local_datetime,
@@ -320,23 +320,19 @@ impl FromRequestParts<AppState> for ClientScope {
 }
 
 /// `botId` を [`resolve_scope`] で解決する。未指定・空・`system_default` はシステム Bot 宛てなので 403
-/// （PWA はシステム Bot を扱わない）。指定した Bot にアクセスできない（未知・他人の未共有 Bot）場合、
-/// [`resolve_scope`] はシステム Bot へフォールバックするが、PWA では選択中のエージェントと違う Bot を
-/// 黙って読み書きしないよう 404 にする。
+/// （PWA はシステム Bot を扱わない）。指定した Bot にアクセスできない（未知・他人の未共有 Bot）場合は 404。
 async fn client_scope(
     db: &Db,
     user: &AuthenticatedUser,
     raw_bot_id: Option<&str>,
 ) -> Result<UserScope, ClientApiError> {
-    let requested = raw_bot_id
-        .map(str::trim)
-        .filter(|b| !b.is_empty() && *b != BotId::SYSTEM_DEFAULT)
-        .ok_or_else(|| ClientApiError::forbidden("agent required"))?;
-    let scope = resolve_scope(&user.0, db, Some(requested)).await?;
-    if scope.bot_id().as_str() != requested {
-        return Err(ClientApiError::not_found("agent not found"));
-    }
-    Ok(scope)
+    resolve_scope(&user.0, db, raw_bot_id)
+        .await
+        .map_err(|e| match e {
+            ScopeError::BotRequired => ClientApiError::forbidden("agent required"),
+            ScopeError::BotNotFound => ClientApiError::not_found("agent not found"),
+            ScopeError::Db(e) => e.into(),
+        })
 }
 
 // ─── status ──────────────────────────────────────────────────────────────────
@@ -393,7 +389,7 @@ async fn settings_view(
 
 /// `users` 行が無いユーザーの設定更新を拒否するエラー（issue #39）。
 ///
-/// `users` 行は認証（`yuuka-auth`）が `password_hash`/`salt` 付きで作る唯一の正で、PWA 設定の
+/// `users` 行は認証（`yuuka-auth`）が `salt`・sk-account ID 付きで作る唯一の正で、PWA 設定の
 /// 書き込みが仮の認証情報で行を作ることはしない。行が無いまま黙ってスキップして「保存した」と
 /// 応答するのは不正確なので、明示的に 404 を返す。
 fn user_settings_not_found() -> ClientApiError {
@@ -723,48 +719,6 @@ fn map_calendar_event(
     })
 }
 
-/// `addSchedule` ツールの成功応答（`{success, message, schedule}`）。
-#[derive(Debug, Deserialize)]
-struct AddScheduleOutcome {
-    success: bool,
-    #[serde(default)]
-    message: Option<String>,
-    #[serde(default)]
-    schedule: Option<Schedule>,
-}
-
-/// Discord（エージェント）と共通の `addSchedule` ツールで予定を登録し、作成された予定を返す。
-async fn call_add_schedule_tool(
-    db: &Db,
-    engine: &ChatEngine,
-    scope: &UserScope,
-    args: serde_json::Value,
-) -> Result<Schedule, ClientApiError> {
-    // Discord と同じく、エージェントに Google カレンダーが連携されていれば同期する。
-    let tools = yuuka_schedule::tools_with_calendar(db.clone(), engine.calendar_events())
-        .map_err(|e| ClientApiError::internal(format!("schedule tools: {e}")))?;
-    let tool = tools
-        .iter()
-        .find(|t| t.declaration().name.as_str() == "addSchedule")
-        .ok_or_else(|| ClientApiError::internal("addSchedule tool is not available"))?;
-    let ctx = ToolContext::new(scope.bot_id().clone(), scope.user_id().clone());
-    let outcome = tool
-        .call(&ctx, args)
-        .await
-        .map_err(|e| ClientApiError::internal(format!("addSchedule: {e}")))?;
-    let result: AddScheduleOutcome = serde_json::from_value(outcome.payload)
-        .map_err(|e| ClientApiError::internal(format!("addSchedule payload: {e}")))?;
-    match (result.success, result.schedule) {
-        (true, Some(schedule)) => Ok(schedule),
-        (true, None) => Err(ClientApiError::internal("addSchedule returned no schedule")),
-        (false, _) => Err(ClientApiError::bad_request(
-            result
-                .message
-                .unwrap_or_else(|| "addSchedule failed".to_owned()),
-        )),
-    }
-}
-
 /// PWA のカレンダー画面からの予定追加。日時はブラウザのローカル暦（`YYYY-MM-DDTHH:MM`）で受け、
 /// 一覧（[`calendar_events`]）と同じローカル暦文字列で `schedules` に保存する。
 async fn calendar_add(
@@ -795,15 +749,21 @@ async fn calendar_add(
             "endsAt must not be before startsAt",
         ));
     }
-    // 保存は Discord（エージェント）と同じ `addSchedule` ツールに任せ、登録経路を 1 本にする
-    // （リマインド既定・今後の Google カレンダー同期などもツール側の挙動がそのまま効く）。
-    let args = json!({
-        "title": title,
-        "start_at": start_at,
-        "end_at": end_at,
-        "description": body.description.filter(|s| !s.trim().is_empty()),
-    });
-    let created = call_add_schedule_tool(&db, &engine, &scope, args).await?;
+    // 保存は Discord（エージェント）・管理画面と同じ予定サービスに任せ、登録経路を 1 本にする
+    // （リマインド既定・Google カレンダー同期も同じ挙動になる・issue #127）。
+    let new = NewSchedule {
+        title,
+        start_at,
+        end_at,
+        remind_before_minutes: None,
+        description: body
+            .description
+            .map(|s| s.trim().to_owned())
+            .filter(|s| !s.is_empty()),
+    };
+    let (created, _sync) = ScheduleService::new(db, engine.calendar_events())
+        .add(&scope, new, AddOptions::default())
+        .await?;
     let event = map_calendar_event(
         created.id,
         created.title,
@@ -811,7 +771,7 @@ async fn calendar_add(
         created.end_at.as_deref(),
         None,
     )
-    .ok_or_else(|| ClientApiError::internal("addSchedule stored an unparsable start_at"))?;
+    .ok_or_else(|| ClientApiError::internal("stored schedule has an unparsable start_at"))?;
     Ok((StatusCode::CREATED, Json(event)))
 }
 
@@ -1518,9 +1478,9 @@ mod tests {
         let enc = crypto.encrypt_text("fake-gemini-key").expect("encrypt");
         let conn = rusqlite::Connection::open(path).expect("open seed");
         conn.execute(
-            "INSERT INTO users (discord_id, username, password_hash, salt, role, \
+            "INSERT INTO users (discord_id, username, salt, role, \
              gemini_api_key_encrypted, gemini_api_key_iv, gemini_api_key_tag, gemini_model) \
-             VALUES (?1, 'yuu', 'x', '00', 'user', ?2, ?3, ?4, 'gemini-3.1-flash-lite')",
+             VALUES (?1, 'yuu', '00', 'user', ?2, ?3, ?4, 'gemini-3.1-flash-lite')",
             rusqlite::params![discord_id, enc.encrypted, enc.iv, enc.auth_tag],
         )
         .expect("seed user");

@@ -17,7 +17,7 @@ const KNOWN_CAPABILITIES: [&str; 4] = ["persona", "memory", "mcp", "secretary"];
 /// Bot 1 件の統合管理ビュー（Node `BotRecord` のうち本ページで使う列のみ）。
 #[derive(Debug, Clone)]
 pub struct BotRow {
-    /// Bot ID（`system_default` を含む）。
+    /// Bot ID。
     pub id: String,
     /// Bot 作成者（オーナー）の discord_id。
     pub user_id: String,
@@ -148,23 +148,6 @@ pub async fn get_bot(db: &Db, bot_id: &str) -> Result<Option<BotRow>, DbError> {
         .await
 }
 
-/// `bots` テーブルに `system_default` 行が存在しない場合の合成エントリ（UI 表示専用）。
-/// 実際の権限付与操作の前に [`ensure_system_default_bot`] でシードする。
-#[must_use]
-pub fn synthetic_system_default(user_id: &str) -> BotRow {
-    BotRow {
-        id: "system_default".to_owned(),
-        user_id: user_id.to_owned(),
-        name: "早瀬ユウカ".to_owned(),
-        suspended: false,
-        stopped: false,
-        has_token: false,
-        discord_username: None,
-        discord_avatar_url: None,
-        capabilities: Some(r#"["persona","memory","mcp","secretary"]"#.to_owned()),
-    }
-}
-
 /// オーナー所有 Bot 一覧（Node `listBotsOwnedBy`・`created_at ASC`）。共有・system_default 由来は含めない。
 ///
 /// # Errors
@@ -207,15 +190,12 @@ fn map_bot_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<BotRow> {
     })
 }
 
-/// ユーザーが指定 Bot へアクセス可能か（Node `hasBotAccess`）。`system_default` は常に `true`。
-/// それ以外は所有 or `bot_shares` の active 共有を持つ場合に `true`。
+/// ユーザーが指定 Bot へアクセス可能か（Node `hasBotAccess`）。`system_default` も特別扱いせず、
+/// 所有 or `bot_shares` の active 共有を持つ場合に `true`。
 ///
 /// # Errors
 /// 読み取り失敗時 [`DbError`]。
 pub async fn has_bot_access(db: &Db, user_id: &str, bot_id: &str) -> Result<bool, DbError> {
-    if bot_id == "system_default" {
-        return Ok(true);
-    }
     let user_id = user_id.to_owned();
     let bot_id = bot_id.to_owned();
     db.read
@@ -361,28 +341,6 @@ pub async fn get_server_owner(db: &Db, server_id: i64) -> Result<Option<Option<S
         .await
 }
 
-/// `system_default` が `bots` に存在しない場合にシードする（FK 満足のためのランタイム補完）。
-/// `bot_mcp_access.bot_id` / `bot_credential_access.bot_id` の FK は `bots(id)` を参照するため、
-/// 付与操作の前に `system_default` を存在保証する。既に存在する場合は OR IGNORE で no-op。
-/// `owner_id` = 付与操作者（最初の一人が実質オーナーになる）。
-///
-/// # Errors
-/// 書き込み失敗時 [`DbError`]。
-pub async fn ensure_system_default_bot(db: &Db, owner_id: &str) -> Result<(), DbError> {
-    let owner_id = owner_id.to_owned();
-    db.writer
-        .transaction(move |tx| {
-            tx.execute(
-                "INSERT OR IGNORE INTO bots (id, user_id, name, capabilities) \
-                 VALUES ('system_default', ?1, '早瀬ユウカ', '[\"persona\",\"memory\",\"mcp\",\"secretary\"]')",
-                params![owner_id],
-            )
-            .map_err(map_sqlite)?;
-            Ok(())
-        })
-        .await
-}
-
 /// Bot に MCP サーバー利用を許可する（冪等・Node `grantMcpToBot`）。`owner_id` は付与した呼び出し元。
 ///
 /// # Errors
@@ -434,9 +392,8 @@ pub async fn revoke_mcp_from_bot(
 
 /// **bot-canonical な解除**：付与者（owner_id）を問わず、当該 bot から当該サーバーの許可を外す。
 ///
-/// 共有 bot（`system_default` 以外）の MCP 設定は共同編集のため、共有相手（A/B）のどちらが
-/// 付与したものでも解除できる（呼び出し側で bot アクセス権を検証済み前提）。**`system_default`
-/// には使わない**（共有秘書は発話者スコープ厳守＝[`revoke_mcp_from_bot`] で自分の付与分のみ解除）。
+/// 共有 bot の MCP 設定は共同編集のため、共有相手（A/B）のどちらが付与したものでも解除できる
+/// （呼び出し側で bot アクセス権を検証済み前提）。
 ///
 /// # Errors
 /// 書き込み失敗時 [`DbError`]。
@@ -769,8 +726,8 @@ mod tests {
     fn seed_owner_bot(path: &std::path::Path, user: &str, bot: &str) {
         let conn = raw(path);
         conn.execute(
-            "INSERT OR IGNORE INTO users (discord_id, username, password_hash, salt) \
-             VALUES (?1, ?1, 'h', 's')",
+            "INSERT OR IGNORE INTO users (discord_id, username, salt) \
+             VALUES (?1, ?1, 's')",
             rusqlite::params![user],
         )
         .expect("seed user");
@@ -874,8 +831,8 @@ mod tests {
         // 共有相手 friend と、owner 所有(7)・friend 所有(8)・システム(9) の MCP サーバー。
         let conn = raw(&path);
         conn.execute(
-            "INSERT OR IGNORE INTO users (discord_id, username, password_hash, salt) \
-             VALUES ('friend', 'friend', 'h', 's')",
+            "INSERT OR IGNORE INTO users (discord_id, username, salt) \
+             VALUES ('friend', 'friend', 's')",
             [],
         )
         .unwrap();

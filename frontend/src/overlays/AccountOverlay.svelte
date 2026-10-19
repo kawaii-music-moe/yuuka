@@ -27,17 +27,13 @@ let geminiModel = $state("gemini-3.1-flash-lite");
 // ── 表示名 ──
 // 初期値は現在のセッションユーザー名（旧 fetchAccountSettings）。
 let username = $state("");
+let packagePin = $state("");
+let packagePinConfirm = $state("");
+let packaging = $state(false);
 $effect(() => {
 	// currentUser 変化に追従（未編集時のみ埋める。空文字なら未初期化とみなす）。
 	if (!username && $currentUser?.username) username = $currentUser.username;
 });
-
-// ── パスワード変更 ──
-let currentPassword = $state("");
-let newPassword = $state("");
-
-// ── アカウント削除 ──
-let deletePassword = $state("");
 
 const THEMES: { value: Theme; label: string; preview: string }[] = [
 	{ value: "dark", label: "ダーク", preview: "dark-preview" },
@@ -80,24 +76,9 @@ async function saveProfile(e: SubmitEvent): Promise<void> {
 	}
 }
 
-// ── パスワード変更（旧 passwordConfigForm submit） ──
-async function savePassword(e: SubmitEvent): Promise<void> {
-	e.preventDefault();
-	if (!currentPassword || !newPassword) return;
-	try {
-		await settingsApi.changePassword({ currentPassword, newPassword });
-		pushToast("パスワードを変更しました。", "success");
-		currentPassword = "";
-		newPassword = "";
-	} catch (e) {
-		reportError(e);
-	}
-}
-
 // ── アカウント削除（旧 deleteAccountForm submit。confirm → confirmDialog） ──
 async function deleteAccount(e: SubmitEvent): Promise<void> {
 	e.preventDefault();
-	if (!deletePassword) return;
 	const ok = await confirmDialog({
 		message:
 			"本当にアカウントを削除しますか？\n所有するBotや秘書業務データを含むすべての関連データが削除され、この操作は取り消せません。",
@@ -106,13 +87,42 @@ async function deleteAccount(e: SubmitEvent): Promise<void> {
 	});
 	if (!ok) return;
 	try {
-		const res = await settingsApi.deleteAccount({ password: deletePassword });
+		const res = await settingsApi.deleteAccount();
 		pushToast(res.message ?? "アカウントを削除しました。", "success");
 		selectBot(null);
 		currentUser.set(null);
 		navigateTo("/login");
 	} catch (e) {
 		reportError(e);
+	}
+}
+
+async function downloadPackage(e: SubmitEvent): Promise<void> {
+	e.preventDefault();
+	if (!/^\d{6,12}$/.test(packagePin)) {
+		pushToast("PINコードは6〜12桁の半角数字で入力してください。", "error");
+		return;
+	}
+	if (packagePin !== packagePinConfirm) {
+		pushToast("確認用PINコードが一致しません。", "error");
+		return;
+	}
+	packaging = true;
+	try {
+		const { blob, filename } = await settingsApi.downloadPackage(packagePin);
+		const url = URL.createObjectURL(blob);
+		const link = document.createElement("a");
+		link.href = url;
+		link.download = filename ?? "yuuka-bots.yuuka";
+		link.click();
+		URL.revokeObjectURL(url);
+		packagePin = "";
+		packagePinConfirm = "";
+		pushToast("暗号化パッケージを作成しました。PINコードとファイルを別々に保管してください。", "success");
+	} catch (e) {
+		reportError(e);
+	} finally {
+		packaging = false;
 	}
 }
 </script>
@@ -197,40 +207,26 @@ async function deleteAccount(e: SubmitEvent): Promise<void> {
 					</div>
 				{/if}
 
-				<!-- パスワード変更 -->
-				{#if section === "password"}
+				{#if section === "package"}
 					<p class="description-text" style="margin-top:12px;">
-						管理画面ログイン用パスワードを変更します。変更すると他端末のセッションは無効化されます。
+						所有するすべてのBotと関連データを、PINコードで暗号化した移行用ファイルとしてダウンロードします。
+						復元にはファイルとPINコードの両方が必要です。
 					</p>
-					<form onsubmit={savePassword} style="display: flex; flex-direction: column; gap: 12px; margin-top: 16px;">
-						<div class="form-row">
-							<div class="form-group">
-								<label for="config-current-password">現在のパスワード *</label>
-								<input
-									type="password"
-									id="config-current-password"
-									required
-									placeholder="••••••••••••"
-									autocomplete="current-password"
-									bind:value={currentPassword}
-								/>
-							</div>
-							<div class="form-group">
-								<label for="config-new-password">新しいパスワード *</label>
-								<input
-									type="password"
-									id="config-new-password"
-									required
-									placeholder="••••••••••••"
-									autocomplete="new-password"
-									bind:value={newPassword}
-								/>
-							</div>
+					<form onsubmit={downloadPackage} class="package-form">
+						<div class="form-group">
+							<label for="package-pin">PINコード（6〜12桁）</label>
+							<input id="package-pin" type="password" inputmode="numeric" minlength="6" maxlength="12" autocomplete="new-password" required bind:value={packagePin} />
 						</div>
-						<button type="submit" class="btn btn-primary" style="align-self: flex-start;"
-							>パスワードを変更</button
-						>
+						<div class="form-group">
+							<label for="package-pin-confirm">PINコード（確認）</label>
+							<input id="package-pin-confirm" type="password" inputmode="numeric" minlength="6" maxlength="12" autocomplete="new-password" required bind:value={packagePinConfirm} />
+						</div>
+						<button type="submit" class="btn btn-primary" disabled={packaging}>
+							<Icon name="download" class="icon-button-left" />
+							{packaging ? "パッケージ作成中…" : "暗号化してダウンロード"}
+						</button>
 					</form>
+					<p class="field-sub">PINコードはサーバーに保存されません。紛失した場合、パッケージを復元できません。</p>
 				{/if}
 
 				<!-- アカウント削除 -->
@@ -241,17 +237,6 @@ async function deleteAccount(e: SubmitEvent): Promise<void> {
 						>
 					</p>
 					<form onsubmit={deleteAccount} style="display: flex; flex-direction: column; gap: 12px; margin-top: 16px;">
-						<div class="form-group">
-							<label for="config-delete-password">現在のパスワード *</label>
-							<input
-								type="password"
-								id="config-delete-password"
-								required
-								placeholder="••••••••••••"
-								autocomplete="current-password"
-								bind:value={deletePassword}
-							/>
-						</div>
 						<button type="submit" class="btn btn-danger" style="align-self: flex-start;">
 							<Icon name="delete_forever" class="icon-button-left" /> アカウントを削除する
 						</button>
@@ -266,5 +251,12 @@ async function deleteAccount(e: SubmitEvent): Promise<void> {
 	.theme-option {
 		cursor: pointer;
 		font: inherit;
+	}
+	.package-form {
+		display: flex;
+		flex-direction: column;
+		gap: 12px;
+		max-width: 480px;
+		margin-top: 16px;
 	}
 </style>
