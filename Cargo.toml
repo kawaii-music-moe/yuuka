@@ -127,7 +127,8 @@ regex                    = "1"                                                  
 async-trait              = "0.1"
 tracing                  = "0.1"
 tracing-subscriber       = { version = "0.3", features = ["env-filter", "fmt"] }
-serde_yaml               = "0.9"
+granit-parser            = { version = "2", default-features = false, features = ["std", "error_messages"] }  # config.yaml の構文解析（safe Rust・forbid(unsafe_code)。値の解釈は yuuka-core config/yaml.rs で serde_yaml 0.9 互換に実装）
+ryu                      = "1"                                                  # config.yaml の浮動小数を旧 serde_yaml と同一表記で文字列化
 chrono                   = { version = "0.4", default-features = false, features = ["clock", "std"] }  # cron スケジューラのローカル壁時計（node-cron はローカル時刻）。SQLite datetime とは別用途
 croner                   = "2"                                                  # 5-field cron 式の次回発火計算（node-cron / cron-parser パリティ）
 zip                      = { version = "9", default-features = false, features = ["deflate-flate2"] }  # バックアップ ZIP（Node archiver 相当）。deflate のみ（bzip2/zstd/lzma/aes 非有効＝MIT/Apache/Zlib のみに限定）
