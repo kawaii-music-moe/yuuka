@@ -393,6 +393,8 @@ export type PlaybookRunsResponse = ApiResponse<{ runs: PlaybookRunRecord[] }>;
 
 export interface WebhookEndpointView {
 	id: number;
+	/** 帰属 Bot（受信で作る通知・ToDo・リマインドの Bot）。帰属先が無い旧エンドポイントは null。 */
+	bot_id: string | null;
 	name: string;
 	token: string;
 	has_secret: boolean;

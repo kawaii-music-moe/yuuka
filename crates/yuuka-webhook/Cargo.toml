@@ -5,13 +5,15 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
-description = "yuuka 外部 Webhook 受信・管理 Web-API（Node webhookRoutes/webhookRepo パリティ）"
+description = "yuuka 外部 Webhook 受信・管理 Web-API（Node webhookRoutes/webhookRepo/webhookProcessor パリティ）"
 
 [dependencies]
 yuuka-core.workspace = true
 yuuka-db.workspace = true
 yuuka-web.workspace = true
 yuuka-crypto.workspace = true
+yuuka-auth.workspace = true         # 受信の監査ログ（add_audit_log）
+yuuka-todo.workspace = true         # 受信からの ToDo 自動登録（TodoRepo）
 axum.workspace = true
 rusqlite.workspace = true
 serde.workspace = true
@@ -20,6 +22,10 @@ async-trait.workspace = true
 getrandom.workspace = true
 base64.workspace = true
 tokio.workspace = true              # 受信処理の fire-and-forget spawn（即時 200 応答）
+tracing.workspace = true
+hmac.workspace = true               # 受信の HMAC-SHA256 署名検証
+sha2.workspace = true
+hex.workspace = true
 
 [dev-dependencies]
 tokio.workspace = true

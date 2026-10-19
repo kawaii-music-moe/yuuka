@@ -115,6 +115,7 @@ rmcp                     = { version = "2.0", features = ["client"] }
 extism                   = "1.30"
 redis                    = { version = "0.27", features = ["tokio-comp", "connection-manager"] }  # or fred（tokio-comp + 自動再接続）
 sha2                     = "0.10"                                               # セッション/デスクトップトークンの sha256hex
+hmac                     = "0.12"                                               # Webhook 受信の HMAC-SHA256 署名検証（Node webhookSignature.ts パリティ・既存の推移依存と同版）
 base64                   = "0.22"                                               # Discord 添付 → Gemini inlineData 用 base64
 # ── 保存時暗号化（yuuka-crypto・Node src/utils/crypto.ts パリティ・P1-5） ──
 aes-gcm                  = "0.10"                                               # AES-256-GCM（Node createCipheriv aes-256-gcm 相当・12B IV / 16B tag）

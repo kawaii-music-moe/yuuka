@@ -24,9 +24,9 @@ use yuuka_discord::{rate_limit_message, DiscordManager, ManagerPorts, Prepared, 
 use yuuka_orchestrator::{ChatEngine, DbBotDirectory, DbMembership, InMemoryRateLimiter};
 use yuuka_services::{MetricsRegistry, NotifierDeliveryRunner, ServiceContext};
 use yuuka_supervisor::{
-    build_app, build_supervised_services, build_tool_registry, ws_routes, RegistryBotRuntime,
-    RegistryBotViewRuntime, RegistryDiscordLive, RegistryLifecycle, ServiceError, ShutdownToken,
-    SupervisedService, Supervisor, TenantRegistry,
+    build_app, build_supervised_services, build_tool_registry, ws_routes, GeminiAuxText,
+    MessengerWebhookNotifier, RegistryBotRuntime, RegistryBotViewRuntime, RegistryDiscordLive,
+    RegistryLifecycle, ServiceError, ShutdownToken, SupervisedService, Supervisor, TenantRegistry,
 };
 use yuuka_web::{AppState, Db, WebConfig};
 
@@ -341,10 +341,15 @@ async fn run() -> Result<(), String> {
     // schedule ルータ: 管理画面からの登録・削除もエージェントと同じく Google カレンダーへ反映する（#127）。
     let schedule_routes = yuuka_schedule::routes_with_calendar(Some(google_events.clone()));
 
-    // Webhook ルータ（シークレット暗号化に crypto を注入・受信の実処理は未配線のため Null プロセッサへ縮退）。
+    // Webhook ルータ（署名検証・通知・ToDo/リマインド化・受信履歴を実処理へ配線）。
     let webhook_routes = yuuka_webhook::routes_with(
         crypto.clone(),
-        Arc::new(yuuka_webhook::NullWebhookProcessor),
+        Arc::new(yuuka_webhook::RealWebhookProcessor::new(
+            db.clone(),
+            crypto.clone(),
+            Arc::new(MessengerWebhookNotifier::new(messenger.clone())),
+            Arc::new(GeminiAuxText::new(db.clone(), crypto.clone())),
+        )),
     );
 
     // Discord ライブ照会（sync-discord の Bot ユーザー参照・guild-options のロール/メンバー候補）。
