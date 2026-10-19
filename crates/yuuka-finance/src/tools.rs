@@ -7,8 +7,8 @@
 //! （Node の Gemini 宣言と一致）。ツール名は Node system prompt が参照する **bare 名**を使う。
 //!
 //! 移植済み: addExpense（収支記録・`ExpenseRepo::add`）/ listRecentExpenses（直近一覧・`ExpenseRepo::list`）。
-//! これらは repo の add/list に素直に対応する。予算・支払い予定・月次集計・消込は対応 repo が
-//! 無いため未移植（deferred）。addExpense の予算消化率・消込候補（他 repo 依存）も同様に落とす。
+//! addExpense は支出のとき、Node と同じく予算消化率（`budget_usage`）と消込候補
+//! （`settlement_candidates`）も返す。
 //! 記録済みの収支の修正・削除は updateExpense / deleteExpense（Rust 版で追加・Node には無かった）。
 
 use std::sync::Arc;
@@ -20,7 +20,7 @@ use yuuka_core::tool::FunctionDeclaration;
 use yuuka_core::{DbError, Tool, ToolContext, ToolError, ToolName, ToolOutcome, UserScope};
 use yuuka_web::Db;
 
-use crate::dto::{ExpenseUpdate, NewExpense, NewPlannedPayment};
+use crate::dto::{ExpenseUpdate, NewExpense, NewPlannedPayment, PlannedPayment};
 use crate::repo::ExpenseRepo;
 
 /// このドメインが公開する Native ツール一式を作る。
@@ -169,6 +169,28 @@ fn ok_payload(message: impl Into<String>, extra: Value) -> Value {
     Value::Object(obj)
 }
 
+/// 支払い予定 1 件の案内行（Node `planLine`）。一覧と addExpense の消込候補で共用する。
+fn plan_line(p: &PlannedPayment) -> String {
+    let repeat = if p.repeat_rule.is_some() { " 🔁" } else { "" };
+    format!(
+        "{} #{} {} {}（{}・期日 {}）{repeat}",
+        plan_status_emoji(&p.status),
+        p.id,
+        p.title,
+        format_yen(p.amount),
+        p.category,
+        p.due_date,
+    )
+}
+
+/// `'YYYY-MM-DD'` から年・月を取り出す（予算消化率を集計する月の特定用）。
+fn year_month_of(date: &str) -> Option<(i64, i64)> {
+    let mut parts = date.split('-');
+    let year = parts.next()?.parse().ok()?;
+    let month = parts.next()?.parse().ok()?;
+    Some((year, month))
+}
+
 /// `{success:false, message}`（Node `fail(msg)`）。実行エラーではなく「妥当だが失敗」な結果。
 fn fail_payload(message: impl Into<String>) -> ToolOutcome {
     ToolOutcome::from_payload(json!({ "success": false, "message": message.into() }))
@@ -295,13 +317,12 @@ impl Tool for AddExpenseTool {
             .await
             .map_err(exec_err)?;
 
-        // NOTE: 予算消化率・消込候補（budget_limits / planned_payments）は対応 repo が無いため落とす。
         let memo_suffix = expense
             .memo
             .as_ref()
             .map(|m| format!(" — {m}"))
             .unwrap_or_default();
-        let message = format!(
+        let mut message = format!(
             "{} {}円 ({}) を記録しました{} (ID: #{})",
             type_label(&expense.r#type),
             expense.amount,
@@ -309,9 +330,81 @@ impl Tool for AddExpenseTool {
             memo_suffix,
             expense.id,
         );
+        let mut extra = serde_json::Map::new();
+        extra.insert("expense".to_owned(), json!(expense));
+        extra.insert("settlement_candidates".to_owned(), json!([]));
+
+        // 支出のときだけ予算消化率と消込候補を添え、ユーザーへの確認につなげる（Node addExpense）。
+        if expense.r#type == "expense" {
+            let scope = scope_of(ctx);
+            let repo = ExpenseRepo::new(&self.db);
+
+            let limit = repo
+                .list_budget_limits(&scope)
+                .await
+                .map_err(exec_err)?
+                .into_iter()
+                .find(|l| l.category == expense.category);
+            if let (Some(limit), Some((year, month))) = (limit, year_month_of(&expense.date)) {
+                let spent = repo
+                    .monthly_category_breakdown(&scope, year, month, "expense")
+                    .await
+                    .map_err(exec_err)?
+                    .into_iter()
+                    .find(|c| c.category == expense.category)
+                    .map_or(0, |c| c.total);
+                let ratio = if limit.limit_amount > 0 {
+                    ((spent as f64 / limit.limit_amount as f64) * 100.0).round() as i64
+                } else {
+                    0
+                };
+                message.push_str(&format!(
+                    "\n{}の{year}年{month}月の予算消化率: {ratio}% ({} / {})",
+                    expense.category,
+                    format_yen(spent),
+                    format_yen(limit.limit_amount),
+                ));
+                if ratio >= 100 {
+                    message.push_str(" ⚠️予算を超過しています！");
+                } else if ratio >= 80 {
+                    message.push_str(" ⚠️予算の8割を超えています。");
+                }
+                extra.insert(
+                    "budget_usage".to_owned(),
+                    json!({
+                        "limit_amount": limit.limit_amount,
+                        "spent": spent,
+                        "ratio_percent": ratio,
+                    }),
+                );
+            }
+
+            let candidates = repo
+                .find_settlement_candidates(
+                    &scope,
+                    expense.amount,
+                    expense.category.clone(),
+                    Some(expense.date.clone()),
+                )
+                .await
+                .map_err(exec_err)?;
+            if !candidates.is_empty() {
+                let lines: Vec<String> = candidates.iter().map(plan_line).collect();
+                message.push_str(&format!(
+                    "\n💡 この支出に対応しそうな支払い予定が{}件あります:\n{}\n\
+                     消込するかユーザーに確認し、承認されたら \
+                     settlePlannedPayment(plan_id, expense_id={}) を呼んでください。",
+                    candidates.len(),
+                    lines.join("\n"),
+                    expense.id,
+                ));
+                extra.insert("settlement_candidates".to_owned(), json!(candidates));
+            }
+        }
+
         Ok(ToolOutcome::from_payload(ok_payload(
             message,
-            json!({ "expense": expense }),
+            Value::Object(extra),
         )))
     }
 }
@@ -938,21 +1031,7 @@ impl Tool for ListPlannedPaymentsTool {
                 json!({ "plans": [] }),
             )));
         }
-        let lines: Vec<String> = plans
-            .iter()
-            .map(|p| {
-                let repeat = if p.repeat_rule.is_some() { " 🔁" } else { "" };
-                format!(
-                    "{} #{} {} {}（{}・期日 {}）{repeat}",
-                    plan_status_emoji(&p.status),
-                    p.id,
-                    p.title,
-                    format_yen(p.amount),
-                    p.category,
-                    p.due_date,
-                )
-            })
-            .collect();
+        let lines: Vec<String> = plans.iter().map(plan_line).collect();
         Ok(ToolOutcome::from_payload(ok_payload(
             format!("支払い予定 ({}件):\n{}", plans.len(), lines.join("\n")),
             json!({ "plans": plans }),
@@ -2143,6 +2222,128 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(out.payload["candidates"].as_array().unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn add_expense_reports_budget_usage_of_its_month() {
+        let db = seed_db();
+        let tools = tools(db).unwrap();
+        let add = find(&tools, "addExpense");
+        let set_budget = find(&tools, "setBudgetLimit");
+
+        // 予算未設定のカテゴリは budget_usage を返さない。
+        let out = add
+            .call(
+                &ctx(),
+                json!({"amount": 7000, "category": "食費", "date": "2026-08-10"}),
+            )
+            .await
+            .unwrap();
+        assert!(out.payload.get("budget_usage").is_none());
+
+        set_budget
+            .call(&ctx(), json!({"category": "食費", "limit_amount": 10000}))
+            .await
+            .unwrap();
+        // 別の月の支出は消化額に入らない。
+        add.call(
+            &ctx(),
+            json!({"amount": 5000, "category": "食費", "date": "2026-07-31"}),
+        )
+        .await
+        .unwrap();
+
+        // 8月: 7000 + 2000 = 9000 / 10000 → 90%（8割超えの注意）。
+        let out = add
+            .call(
+                &ctx(),
+                json!({"amount": 2000, "category": "食費", "date": "2026-08-12"}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(out.payload["budget_usage"]["spent"], 9000);
+        assert_eq!(out.payload["budget_usage"]["limit_amount"], 10000);
+        assert_eq!(out.payload["budget_usage"]["ratio_percent"], 90);
+        let message = out.payload["message"].as_str().unwrap();
+        assert!(message.contains("食費の2026年8月の予算消化率: 90% (¥9,000 / ¥10,000)"));
+        assert!(message.contains("予算の8割を超えています"));
+
+        // 9000 + 2000 = 11000 → 110%（超過の注意）。
+        let out = add
+            .call(
+                &ctx(),
+                json!({"amount": 2000, "category": "食費", "date": "2026-08-20"}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(out.payload["budget_usage"]["ratio_percent"], 110);
+        assert!(out.payload["message"]
+            .as_str()
+            .unwrap()
+            .contains("予算を超過しています"));
+
+        // 収入は予算の対象外。
+        let out = add
+            .call(
+                &ctx(),
+                json!({"amount": 2000, "category": "食費", "type": "income", "date": "2026-08-20"}),
+            )
+            .await
+            .unwrap();
+        assert!(out.payload.get("budget_usage").is_none());
+    }
+
+    #[tokio::test]
+    async fn add_expense_suggests_settlement_candidates() {
+        let db = seed_db();
+        let tools = tools(db).unwrap();
+        let add = find(&tools, "addExpense");
+        let add_plan = find(&tools, "addPlannedPayment");
+
+        add_plan
+            .call(&ctx(), json!({"title": "家賃", "amount": 80000, "category": "その他", "due_date": "2026-08-27"}))
+            .await
+            .unwrap();
+
+        // 一致する支出: 候補 1 件と、expense_id を添えた消込の案内を返す。
+        let out = add
+            .call(
+                &ctx(),
+                json!({"amount": 78000, "category": "その他", "date": "2026-08-25"}),
+            )
+            .await
+            .unwrap();
+        let expense_id = out.payload["expense"]["id"].as_i64().unwrap();
+        let candidates = out.payload["settlement_candidates"].as_array().unwrap();
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0]["title"], "家賃");
+        let message = out.payload["message"].as_str().unwrap();
+        assert!(message.contains("対応しそうな支払い予定が1件あります"));
+        assert!(message.contains("家賃 ¥80,000"));
+        assert!(message.contains(&format!(
+            "settlePlannedPayment(plan_id, expense_id={expense_id})"
+        )));
+
+        // 期日から離れた支出は候補なし（空配列で返す）。
+        let out = add
+            .call(
+                &ctx(),
+                json!({"amount": 80000, "category": "その他", "date": "2026-10-01"}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(out.payload["settlement_candidates"], json!([]));
+        assert!(!out.payload["message"].as_str().unwrap().contains("💡"));
+
+        // 収入は照合しない。
+        let out = add
+            .call(
+                &ctx(),
+                json!({"amount": 80000, "category": "その他", "type": "income", "date": "2026-08-25"}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(out.payload["settlement_candidates"], json!([]));
     }
 
     #[tokio::test]
