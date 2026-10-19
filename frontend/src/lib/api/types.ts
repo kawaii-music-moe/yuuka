@@ -3,7 +3,7 @@
 //
 // - サーバの大半のレスポンスは { success: boolean; message?: string } & payload
 //   の「トップレベル直置き」形状（`data` ラッパは無い）。→ ApiResponse<T> で表現。
-// - 機密列（*_encrypted / *_iv / *_tag・password_hash・salt 等）は zod ビュー
+// - 機密列（*_encrypted / *_iv / *_tag・salt 等）は zod ビュー
 //   スキーマ（src/types/apiViews.ts）で strip 済みのため、ここでも露出フィールド
 //   のみを型化する。全網羅ではなく、フロントが参照する主要フィールドを厚めに定義。
 // - 参照元: src/server/routes/*.ts, src/db/*Repo.ts, src/types/apiViews.ts
@@ -30,23 +30,6 @@ export type MeResponse = ApiResponse<{
 	privacyUrl?: string;
 	usageUrl?: string;
 }>;
-
-/** GET /api/setup/status（共通エンベロープの例外: success を持たない） */
-export interface SetupStatusResponse {
-	needSetup: boolean;
-	termsUrl?: string;
-	privacyUrl?: string;
-	usageUrl?: string;
-}
-
-/** POST /api/login */
-export type LoginResponse = ApiResponse<{ user?: SessionUser }>;
-
-/**
- * POST /api/register（DM チャレンジ発行 → /api/register/verify で確定）。
- * サーバは本人確認のため常に pending:true を返す（authRoutes.ts:282）。
- */
-export type RegisterResponse = ApiResponse<{ pending?: boolean }>;
 
 // ─── bots ────────────────────────────────────────────────────────────────────
 
@@ -510,11 +493,10 @@ export type GoogleOAuthUrlResponse = ApiResponse<{ url: string }>;
 
 // ─── integrated（integratedRoutes: /api/integrated/overview） ─────────────────
 
-/** 統合オーバービューの Bot 行（overview handler の bots[] を写す） */
+/** 統合オーバービューの Bot 行（overview handler の bots[] を写す・所有 Bot のみ。システム Bot は含まない） */
 export interface IntegratedBotView {
 	id: string;
 	name: string;
-	is_system_default: boolean;
 	preset: string;
 	suspended: boolean;
 	stopped: boolean;
@@ -584,9 +566,6 @@ export interface AdminStats {
 	totalUsers: number;
 	totalBots: number;
 	suspendedBots: number;
-	totalInviteCodes: number;
-	usedInviteCodes: number;
-	availableInviteCodes: number;
 }
 /** GET /api/admin/bots が返す Bot 行（BotView とは別形状） */
 export interface AdminBotView {
@@ -601,13 +580,6 @@ export interface AdminBotView {
 	isRunning: boolean;
 	created_at: string;
 	updated_at: string;
-}
-export interface InviteCode {
-	code: string;
-	created_at: string;
-	used_by?: string | null;
-	revoked_at?: string | null;
-	[k: string]: unknown;
 }
 export interface AuditLogEntry {
 	id: number;
@@ -639,7 +611,6 @@ export type AdminBotAttributeSettingsResponse = ApiResponse<{
 export type AdminStatsResponse = ApiResponse<{ stats: AdminStats }>;
 export type AdminUsersResponse = ApiResponse<{ users: AdminUserView[] }>;
 export type AdminBotsResponse = ApiResponse<{ bots: AdminBotView[] }>;
-export type AdminInviteCodesResponse = ApiResponse<{ codes: InviteCode[] }>;
 export type AdminAuditLogsResponse = ApiResponse<{
 	logs: AuditLogEntry[];
 	total: number;

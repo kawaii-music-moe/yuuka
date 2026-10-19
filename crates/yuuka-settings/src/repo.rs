@@ -1,8 +1,6 @@
 //! settings データアクセス（Node `userRepo` の設定系セッターのパリティ）。
 //!
-//! ユーザー本人の行のみを更新する（`WHERE discord_id = ?`）。bcrypt ハッシュ化は yuuka-auth の
-//! [`hash_password`](yuuka_auth::users::hash_password)（cost 12）を再利用し、パスワード変更でも
-//! `salt` 列は**絶対に変更しない**（ユーザー鍵導出＝保存済み資格情報の復号に使うため）。
+//! ユーザー本人の行のみを更新する（`WHERE discord_id = ?`）。`salt` 列は**絶対に変更しない**（ユーザー鍵導出＝保存済み資格情報の復号に使うため）。
 
 use rusqlite::types::Value;
 use rusqlite::{params, params_from_iter, ErrorCode, OptionalExtension};
@@ -368,33 +366,6 @@ pub async fn update_username(db: &Db, discord_id: &str, username: &str) -> Resul
         .await
 }
 
-/// パスワードを bcrypt で再ハッシュして更新する（Node `updatePassword`）。**`salt` は変更しない**。
-/// 全セッション/デスクトップトークンの失効は呼び出し側で行う。
-///
-/// # Errors
-/// bcrypt 失敗・書き込み失敗時 [`DbError`]。
-pub async fn update_password(
-    db: &Db,
-    discord_id: &str,
-    new_password: &str,
-) -> Result<bool, DbError> {
-    // async な bcrypt はクロージャ外で先に済ませる（yuuka-auth の cost 12 実装を再利用）。
-    let hash = yuuka_auth::users::hash_password(new_password.to_owned()).await?;
-    let discord_id = discord_id.to_owned();
-    db.writer
-        .transaction(move |tx| {
-            let n = tx
-                .execute(
-                    "UPDATE users SET password_hash = ?1, updated_at = datetime('now', 'localtime') \
-                     WHERE discord_id = ?2",
-                    params![hash, discord_id],
-                )
-                .map_err(map_sqlite)?;
-            Ok(n > 0)
-        })
-        .await
-}
-
 /// Admin ロールのユーザー数（Node `countAdmins`・唯一の管理者の自己削除ガード用）。
 ///
 /// # Errors
@@ -634,8 +605,8 @@ mod tests {
     fn seed_user(path: &PathBuf, discord_id: &str, role: &str) {
         raw(path)
             .execute(
-                "INSERT INTO users (discord_id, username, password_hash, salt, role) \
-                 VALUES (?1, ?1, 'orig-hash', 'deadbeef', ?2)",
+                "INSERT INTO users (discord_id, username, salt, role) \
+                 VALUES (?1, ?1, 'deadbeef', ?2)",
                 params![discord_id, role],
             )
             .expect("seed user");
@@ -666,20 +637,6 @@ mod tests {
         assert!(!update_username(&db, "alice", "bob").await.unwrap());
         // 不在ユーザーは false。
         assert!(!update_username(&db, "ghost", "x").await.unwrap());
-    }
-
-    #[tokio::test]
-    async fn password_rehash_keeps_salt() {
-        let (db, path) = fresh_db();
-        seed_user(&path, "alice", "user");
-        let salt_before = col(&path, "alice", "salt");
-        assert!(update_password(&db, "alice", "NewPassw0rd!").await.unwrap());
-        let hash_after = col(&path, "alice", "password_hash").unwrap();
-        // bcrypt ハッシュに置き換わる（$2b$ 始まり・元の 'orig-hash' でない）。
-        assert!(hash_after.starts_with("$2b$"), "bcrypt でリハッシュ");
-        assert_ne!(hash_after, "orig-hash");
-        // salt は絶対に変更しない（資格情報復号のため）。
-        assert_eq!(col(&path, "alice", "salt"), salt_before);
     }
 
     #[tokio::test]

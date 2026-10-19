@@ -15,20 +15,12 @@ mod device_auth;
 mod session;
 
 pub mod audit;
-pub mod invite;
-pub mod password_policy;
-pub mod pending;
-pub mod ratelimit;
 pub mod routes;
 pub mod token;
 pub mod users;
 
-pub use desktop::revoke_all_for_user as revoke_all_desktop_tokens;
 pub use device::routes as device_routes;
 pub use device_auth::{device_auth_routes, DeviceAuthStore};
-pub use pending::{
-    NullRegistrationDm, PendingRegistration, PendingStore, RegistrationDm, VerifyResult,
-};
 pub use routes::{build_session_cookie, routes, AuthRuntime, SessionCookieToken};
 pub use session::SessionStore;
 

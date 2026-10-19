@@ -14,9 +14,10 @@ pub mod dto;
 pub mod google_sync;
 pub mod repo;
 pub mod routes;
+pub mod service;
 pub mod tools;
 
-pub use routes::routes;
+pub use routes::{routes, routes_with_calendar};
 pub use tools::{tools, tools_with_calendar};
 
 use std::path::Path;
@@ -48,6 +49,7 @@ mod tests {
     use yuuka_core::{AuthError, BotId, UserId, UserScope};
     use yuuka_db::map_sqlite;
     use yuuka_types::{Role, SessionUser};
+    use yuuka_web::test_support::{with_bot_query, TEST_BOT_ID};
     use yuuka_web::{AppState, AuthBackend, Db, WebConfig};
 
     use crate::dto::NewSchedule;
@@ -276,7 +278,7 @@ mod tests {
         }
     }
 
-    fn app() -> axum::Router {
+    async fn app() -> axum::Router {
         let auth = Arc::new(FakeAuth {
             user: SessionUser {
                 discord_id: "u".to_owned(),
@@ -284,13 +286,15 @@ mod tests {
                 role: Role::User,
             },
         });
-        let state = AppState::new(auth, WebConfig::default(), seed_db());
-        super::routes().with_state(state)
+        let db = seed_db();
+        yuuka_web::test_support::seed_bot(&db, TEST_BOT_ID, "u").await;
+        let state = AppState::new(auth, WebConfig::default(), db);
+        with_bot_query(super::routes().with_state(state), TEST_BOT_ID)
     }
 
     #[tokio::test]
     async fn route_add_then_list() {
-        let app = app();
+        let app = app().await;
         // now 基準の相対式で確実に窓に載る開始時刻を実値化する。
         let start = {
             let conn = rusqlite::Connection::open_in_memory().expect("mem conn");
@@ -343,6 +347,7 @@ mod tests {
     #[tokio::test]
     async fn route_requires_auth() {
         let resp = app()
+            .await
             .oneshot(
                 Request::builder()
                     .uri("/api/schedules")
@@ -358,7 +363,7 @@ mod tests {
     /// 実在削除は `success:true`、該当無（二重削除）は **404 ではなく** `200 {success:false}`。
     #[tokio::test]
     async fn route_delete_returns_bare_success_without_deleted_id() {
-        let app = app();
+        let app = app().await;
         let add = app
             .clone()
             .oneshot(
@@ -422,5 +427,136 @@ mod tests {
             .unwrap();
         let j: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(j["success"], serde_json::json!(false));
+    }
+
+    // ─── 管理画面からの登録・削除も Google に反映する（issue #127 / D03） ──────────
+
+    /// 連携済みの Google カレンダー（登録・削除の呼び出しだけ記録する）。
+    #[derive(Default)]
+    struct RecordingGoogle {
+        inserted: std::sync::Mutex<Vec<String>>,
+        deleted: std::sync::Mutex<Vec<(String, String)>>,
+    }
+
+    #[async_trait]
+    impl yuuka_google::CalendarEventsPort for RecordingGoogle {
+        async fn account_for(
+            &self,
+            _user_id: &str,
+            _bot_id: &str,
+        ) -> Option<yuuka_google::LinkedGoogleAccount> {
+            Some(yuuka_google::LinkedGoogleAccount {
+                account_id: 1,
+                default_calendar_id: "main@g".to_owned(),
+            })
+        }
+        async fn import_account_for(&self, _user_id: &str, _bot_id: &str) -> Option<i64> {
+            None
+        }
+        async fn calendars(
+            &self,
+            _account_id: i64,
+        ) -> Result<Vec<yuuka_google::CalendarSummary>, yuuka_google::GoogleError> {
+            Ok(Vec::new())
+        }
+        async fn insert_event(
+            &self,
+            _account_id: i64,
+            _calendar_id: &str,
+            event: &yuuka_google::GoogleEventInput,
+        ) -> Result<String, yuuka_google::GoogleError> {
+            self.inserted.lock().unwrap().push(event.title.clone());
+            Ok("ev1".to_owned())
+        }
+        async fn delete_event(
+            &self,
+            _account_id: i64,
+            calendar_id: &str,
+            event_id: &str,
+        ) -> Result<(), yuuka_google::GoogleError> {
+            self.deleted
+                .lock()
+                .unwrap()
+                .push((calendar_id.to_owned(), event_id.to_owned()));
+            Ok(())
+        }
+        async fn list_events(
+            &self,
+            _account_id: i64,
+            _calendar_id: &str,
+            _from_local: &str,
+            _to_local: &str,
+        ) -> Result<Vec<yuuka_google::GoogleEvent>, yuuka_google::GoogleError> {
+            Ok(Vec::new())
+        }
+    }
+
+    #[tokio::test]
+    async fn route_add_and_delete_sync_with_google_like_the_tools() {
+        let auth = Arc::new(FakeAuth {
+            user: SessionUser {
+                discord_id: "u".to_owned(),
+                username: "u".to_owned(),
+                role: Role::User,
+            },
+        });
+        let db = seed_db();
+        yuuka_web::test_support::seed_bot(&db, TEST_BOT_ID, "u").await;
+        let google = Arc::new(RecordingGoogle::default());
+        let app = with_bot_query(
+            super::routes_with_calendar(Some(google.clone())).with_state(AppState::new(
+                auth,
+                WebConfig::default(),
+                db.clone(),
+            )),
+            TEST_BOT_ID,
+        );
+        let post = |uri: &'static str, body: String| {
+            Request::builder()
+                .method("POST")
+                .uri(uri)
+                .header("cookie", "__Host-yuuka-session=good")
+                .header("content-type", "application/json")
+                .body(Body::from(body))
+                .unwrap()
+        };
+
+        let add = app
+            .clone()
+            .oneshot(post(
+                "/api/schedules/add",
+                r#"{"title":"歯医者","startAt":"2999-01-01 09:00:00"}"#.to_owned(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(add.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(add.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let j: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let id = j["schedule"]["id"].as_i64().expect("id");
+        // 応答の形は変えない（Google 同期列は露出しない）。
+        assert!(j["schedule"]["google_event_id"].is_null());
+        assert_eq!(*google.inserted.lock().unwrap(), vec!["歯医者".to_owned()]);
+        assert_eq!(
+            ScheduleRepo::new(&db)
+                .google_link(
+                    &UserScope::new(UserId::new("u"), BotId::new(TEST_BOT_ID)),
+                    id
+                )
+                .await
+                .unwrap(),
+            Some(("ev1".to_owned(), Some("main@g".to_owned())))
+        );
+
+        let del = app
+            .oneshot(post("/api/schedules/delete", format!(r#"{{"id":{id}}}"#)))
+            .await
+            .unwrap();
+        assert_eq!(del.status(), StatusCode::OK);
+        assert_eq!(
+            *google.deleted.lock().unwrap(),
+            vec![("main@g".to_owned(), "ev1".to_owned())]
+        );
     }
 }

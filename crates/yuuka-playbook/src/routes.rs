@@ -2,7 +2,7 @@
 //!
 //! 認可は [`AuthenticatedUser`] extractor で型強制、DB は `State<Db>` サブステートで取得、
 //! スコープは **共通の [`resolve_scope`]**（`?botId=` を bot アクセス認可つきで解決・
-//! 未アクセスは system_default にフォールバック）で束ねて repo に渡す。
+//! 未指定・system_default は 403、未アクセスは 404）で束ねて repo に渡す。
 //! 本ルータは supervisor 側で共通レイヤ（CSRF/body 上限）配下にマージされる。
 //!
 //! スコープ = コア CRUD（list/save/delete）＋定期実行スケジュール（schedules の
@@ -19,7 +19,7 @@ use axum::extract::{Query, State};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Deserialize;
-use yuuka_core::WebError;
+use yuuka_core::{BotId, UserId, UserScope, WebError};
 use yuuka_types::{EmptyData, Envelope};
 use yuuka_web::{resolve_scope, ApiError, AppState, AuthenticatedUser, Db, ScopedJson};
 
@@ -118,12 +118,16 @@ async fn delete(
 
 /// `GET /api/playbooks/schedules` — Node `listSchedules(userId)`（bot 横断・`user_id` スコープ）。
 ///
-/// Node は botId を読まない。scope の bot 部は使わないため `None` で解決する。
+/// Node は botId を読まない。repo は scope の `user_id` しか使わないため、bot を解決せず
+/// ユーザーだけのスコープで引く（`resolve_scope` は bot 未指定を 403 にする）。
 async fn list_schedules(
     user: AuthenticatedUser,
     State(db): State<Db>,
 ) -> Result<Json<Envelope<ScheduleListData>>, ApiError> {
-    let scope = resolve_scope(&user.0, &db, None).await?;
+    let scope = UserScope::new(
+        UserId::new(user.0.discord_id.clone()),
+        BotId::system_default(),
+    );
     let schedules = PlaybookRepo::new(&db).list_schedules(&scope).await?;
     Ok(Json(Envelope::ok(ScheduleListData { schedules })))
 }

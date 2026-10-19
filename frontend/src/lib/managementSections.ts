@@ -47,9 +47,9 @@ export const ACCOUNT_SECTIONS: ManagementSection[] = [
 	{ key: "profile", label: "表示名（プロフィール）", desc: "ご自身の表示名" },
 	{ key: "theme", label: "テーマ設定", desc: "管理画面の外観テーマ" },
 	{
-		key: "password",
-		label: "パスワード変更",
-		desc: "管理画面ログイン用パスワードの変更",
+		key: "package",
+		label: "Bot移行パッケージ",
+		desc: "所有する全Botと関連データを暗号化して保存",
 	},
 	{
 		key: "delete",
@@ -86,11 +86,6 @@ export const ADMIN_SECTIONS: ManagementSection[] = [
 		desc: "公開ペルソナの非公開化・削除",
 	},
 	{ key: "audit", label: "監査ログ", desc: "セキュリティ関連の操作履歴" },
-	{
-		key: "invites",
-		label: "招待コード管理",
-		desc: "新規ユーザー登録用の招待コードの発行・管理",
-	},
 ];
 
 /**
