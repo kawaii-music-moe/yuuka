@@ -4,20 +4,21 @@
 //! DAG: `reminder → web, db, types, core`。ルータは supervisor が共通レイヤ配下にマージする。
 //!
 //! Phase 1 スコープ = コア CRUD（list/add/cancel/delete）。cron 用の全件走査
-//! （listDuePending / markSent / rescheduleRepeat）は Phase 4 で [`cron`] に追加済み。deferred（後回し）:
-//! - 既定送信先解決（users.notify_target_*）・source/source_id の各機能連携
-//!
+//! （listDuePending / markSent / rescheduleRepeat）は Phase 4 で [`cron`] に追加済み。
+//! source/source_id の各機能連携は deferred（後回し）。
 //! 過去日時の保護（単発は拒否・繰り返しは次回時刻へ補正）は addReminder ツール（[`tools`]）で行う。
 //! repeat_rule の cron 式は実行時と同じ parser（`yuuka_core::cron_util::is_valid`）で、ツールと
 //! `POST /api/reminders/add` の両方で検証する。
 //!
 //! trigger_at の DB 形式正規化（`T`/空白/日付のみ）は [`datetime::to_db_datetime`] で実装済み（B4 修正）。
+//! 送信先省略時の既定送信先解決（users.notify_target_*）は [`notify_target`] で実装済み（R17）。
 //!
 //! cancel 失敗の **404（不在）/ 409（実在するが pending でない）** 区別は M-12 で実装済み。
 
 pub mod cron;
 pub mod datetime;
 pub mod dto;
+pub mod notify_target;
 pub mod repo;
 pub mod routes;
 pub mod tools;
@@ -90,6 +91,24 @@ mod tests {
         Db::open(&path).expect("open db")
     }
 
+    /// ユーザーの既定送信先をチャンネルにする（users 表は `Db::open` のマイグレーションが作る）。
+    async fn set_channel_default(db: &Db, user: &str, channel_id: &str) {
+        let (user, channel_id) = (user.to_owned(), channel_id.to_owned());
+        db.writer
+            .execute(move |conn| {
+                conn.execute(
+                    "INSERT INTO users \
+                       (discord_id, username, salt, notify_target_type, notify_target_id) \
+                     VALUES (?1, ?1, '', 'channel', ?2)",
+                    rusqlite::params![user, channel_id],
+                )
+                .map_err(yuuka_db::map_sqlite)?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+    }
+
     fn scope(user: &str) -> UserScope {
         UserScope::new(UserId::new(user), BotId::system_default())
     }
@@ -123,6 +142,56 @@ mod tests {
 
         // 別ユーザーには見えない（分離キーを型で強制）。
         assert!(repo.list(&scope("userB"), false).await.unwrap().is_empty());
+    }
+
+    /// R17: 送信先を省略したらユーザー設定の既定送信先を保存し、明示指定はそのまま保存する。
+    #[tokio::test]
+    async fn add_without_target_uses_user_default() {
+        let db = seed_db();
+        set_channel_default(&db, "userA", "chan-1").await;
+        let repo = ReminderRepo::new(&db);
+
+        let defaulted = repo
+            .add(&scope("userA"), new_reminder("default"))
+            .await
+            .unwrap();
+        assert_eq!(defaulted.target_type, "channel");
+        assert_eq!(defaulted.target_id.as_deref(), Some("chan-1"));
+
+        let explicit_dm = repo
+            .add(
+                &scope("userA"),
+                NewReminder {
+                    target_type: Some("dm".to_owned()),
+                    ..new_reminder("dm")
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(explicit_dm.target_type, "dm");
+        assert_eq!(explicit_dm.target_id, None);
+
+        let explicit_channel = repo
+            .add(
+                &scope("userA"),
+                NewReminder {
+                    target_type: Some("channel".to_owned()),
+                    target_id: Some("chan-2".to_owned()),
+                    ..new_reminder("channel")
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(explicit_channel.target_type, "channel");
+        assert_eq!(explicit_channel.target_id.as_deref(), Some("chan-2"));
+
+        // 既定送信先が未設定（users 行なし）のユーザーは DM。
+        let other = repo
+            .add(&scope("userB"), new_reminder("other"))
+            .await
+            .unwrap();
+        assert_eq!(other.target_type, "dm");
+        assert_eq!(other.target_id, None);
     }
 
     #[tokio::test]

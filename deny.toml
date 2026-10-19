@@ -23,6 +23,9 @@ yanked = "deny"
 # ignore する（advisories クリーン必須方針の唯一の例外・ユーザー承認済み）。
 ignore = [
     "RUSTSEC-2026-0192", # ttf-parser unmaintained（ab_glyph 経由・sendChart のラベル描画）
+    # serde_yaml_ng 0.10 の低レベル YAML パーサ。設定ファイルは管理者が配置するローカル入力で、
+    # 現時点で互換性のある保守済みパーサへの移行先がないため、非メンテ勧告のみを限定除外する。
+    "RUSTSEC-2024-0449",
 ]
 
 [licenses]
