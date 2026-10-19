@@ -30,7 +30,8 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
-tokio = { workspace = true }
+# test-util: プロフィール定期同期タイマーの時間制御テスト（`start_paused`）。
+tokio = { workspace = true, features = ["test-util"] }
 
 [lints]
 workspace = true
