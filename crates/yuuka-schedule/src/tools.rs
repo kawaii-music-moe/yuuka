@@ -9,7 +9,8 @@
 //! snake_case**（`start_at`・Node の Gemini 宣言と一致）。ツール名は Node の system prompt が
 //! 参照する **bare 名**（`addSchedule` 等・namespace 無し）を使う。
 //!
-//! 移植済み: addSchedule / listSchedules / deleteSchedule（コア 3 経路）。
+//! 移植済み: addSchedule / listSchedules / deleteSchedule（コア 3 経路）。登録・削除の本体（Google 同期
+//! 込み）は管理画面・PWA と共通の [`crate::service::ScheduleService`] にある。
 //!
 //! ## Google カレンダー同期（[`tools_with_calendar`] で [`CalendarEventsPort`] を渡したとき）
 //! 予定は常に Yuuka に保存し、エージェントに Google アカウントが連携されているときだけ Google にも
@@ -28,12 +29,13 @@ use yuuka_core::tool::FunctionDeclaration;
 use yuuka_core::{DbError, Tool, ToolContext, ToolError, ToolName, ToolOutcome, UserScope};
 use yuuka_web::Db;
 
-use yuuka_google::{CalendarEventsPort, GoogleEventInput};
+use yuuka_google::CalendarEventsPort;
 
 use crate::datetime::normalize_local_datetime;
 use crate::dto::NewSchedule;
 use crate::google_sync::{pull_from_google, DEFAULT_SYNC_DAYS};
 use crate::repo::ScheduleRepo;
+use crate::service::{AddOptions, GoogleSync, ScheduleService};
 
 /// このドメインが公開する Native ツール一式を作る。
 ///
@@ -180,44 +182,14 @@ impl Tool for AddScheduleTool {
             description: arg_str(&args, "description"),
         };
 
-        let scope = scope_of(ctx);
-        let repo = ScheduleRepo::new(&self.db);
-        let schedule = repo.add(&scope, new).await.map_err(exec_err)?;
-
-        // Yuuka に保存してから、連携していれば Google にも登録する（失敗しても Yuuka の予定は残す）。
-        let local_only = args.get("local_only").and_then(Value::as_bool) == Some(true);
-        let sync = if local_only {
-            GoogleSync::LocalOnly
-        } else {
-            match self.linked_account(ctx).await {
-                None => GoogleSync::NotLinked,
-                Some((calendar, account)) => {
-                    let calendar_id = arg_str(&args, "calendar_id")
-                        .unwrap_or_else(|| account.default_calendar_id.clone());
-                    let input = GoogleEventInput {
-                        title: schedule.title.clone(),
-                        description: schedule.description.clone(),
-                        start_local: schedule.start_at.clone(),
-                        end_local: schedule.end_at.clone(),
-                    };
-                    match calendar
-                        .insert_event(account.account_id, &calendar_id, &input)
-                        .await
-                    {
-                        Ok(event_id) => {
-                            repo.set_google_link(&scope, schedule.id, &event_id, &calendar_id)
-                                .await
-                                .map_err(exec_err)?;
-                            GoogleSync::Synced
-                        }
-                        Err(e) => {
-                            tracing::warn!(schedule_id = schedule.id, error = ?e, "予定の Google カレンダー登録に失敗しました");
-                            GoogleSync::Failed
-                        }
-                    }
-                }
-            }
+        let opts = AddOptions {
+            calendar_id: arg_str(&args, "calendar_id"),
+            local_only: args.get("local_only").and_then(Value::as_bool) == Some(true),
         };
+        let (schedule, sync) = ScheduleService::new(self.db.clone(), self.calendar.clone())
+            .add(&scope_of(ctx), new, opts)
+            .await
+            .map_err(exec_err)?;
 
         let remind_label = if schedule.remind_before_minutes > 0 {
             format!("、{}分前にリマインド", schedule.remind_before_minutes)
@@ -240,47 +212,6 @@ impl Tool for AddScheduleTool {
             message,
             json!({ "schedule": schedule, "google_sync": sync.as_str() }),
         )))
-    }
-}
-
-impl AddScheduleTool {
-    /// 予定の書き込みに使う Google アカウント（同期が無効・未連携なら `None`）。
-    async fn linked_account(
-        &self,
-        ctx: &ToolContext,
-    ) -> Option<(
-        &Arc<dyn CalendarEventsPort>,
-        yuuka_google::LinkedGoogleAccount,
-    )> {
-        let calendar = self.calendar.as_ref()?;
-        let account = calendar
-            .account_for(ctx.user_id.as_str(), ctx.bot_id.as_str())
-            .await?;
-        Some((calendar, account))
-    }
-}
-
-/// Google カレンダー同期の結果（ツール結果の `google_sync`）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum GoogleSync {
-    /// Google にも反映した。
-    Synced,
-    /// 連携しているが反映に失敗した。
-    Failed,
-    /// Google と連携していない。
-    NotLinked,
-    /// `local_only` 指定で送らなかった。
-    LocalOnly,
-}
-
-impl GoogleSync {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Synced => "synced",
-            Self::Failed => "failed",
-            Self::NotLinked => "not_linked",
-            Self::LocalOnly => "local_only",
-        }
     }
 }
 
@@ -399,47 +330,14 @@ impl Tool for DeleteScheduleTool {
             return Ok(fail_payload("schedule_id が不正です。"));
         };
 
-        let scope = scope_of(ctx);
-        let repo = ScheduleRepo::new(&self.db);
-
-        // Node parity: 先に取得して所有（スコープ）を確認し、無ければ not-found。
-        if repo.get(&scope, id).await.map_err(exec_err)?.is_none() {
+        // Node parity: スコープ内に無ければ not-found（Google 側にも触れない）。
+        let Some(sync) = ScheduleService::new(self.db.clone(), self.calendar.clone())
+            .delete(&scope_of(ctx), id)
+            .await
+            .map_err(exec_err)?
+        else {
             return Ok(fail_payload(format!("予定 #{id} が見つかりません。")));
-        }
-
-        // Google と紐付いていれば先に向こうを消す（失敗しても Yuuka 側は消す）。
-        let link = repo.google_link(&scope, id).await.map_err(exec_err)?;
-        let sync = match (link, &self.calendar) {
-            (None, _) => GoogleSync::NotLinked,
-            (Some(_), None) => GoogleSync::Failed,
-            (Some((event_id, calendar_id)), Some(calendar)) => {
-                match calendar
-                    .account_for(ctx.user_id.as_str(), ctx.bot_id.as_str())
-                    .await
-                {
-                    None => GoogleSync::Failed,
-                    Some(account) => {
-                        let calendar_id =
-                            calendar_id.unwrap_or_else(|| account.default_calendar_id.clone());
-                        match calendar
-                            .delete_event(account.account_id, &calendar_id, &event_id)
-                            .await
-                        {
-                            Ok(()) => GoogleSync::Synced,
-                            Err(e) => {
-                                tracing::warn!(schedule_id = id, error = ?e, "予定の Google カレンダー削除に失敗しました");
-                                GoogleSync::Failed
-                            }
-                        }
-                    }
-                }
-            }
         };
-
-        let deleted = repo.delete(&scope, id).await.map_err(exec_err)?;
-        if !deleted {
-            return Ok(fail_payload(format!("予定 #{id} の削除に失敗しました。")));
-        }
         let sync_note = match sync {
             GoogleSync::Synced => "Googleカレンダーからも削除しました",
             GoogleSync::Failed => {
@@ -652,7 +550,9 @@ mod tests {
 
     use std::sync::Mutex;
 
-    use yuuka_google::{CalendarSummary, GoogleError, GoogleEvent, LinkedGoogleAccount};
+    use yuuka_google::{
+        CalendarSummary, GoogleError, GoogleEvent, GoogleEventInput, LinkedGoogleAccount,
+    };
 
     /// メモリ上の Google カレンダー（呼び出しを記録し、`events` を一覧として返す）。
     #[derive(Default)]
