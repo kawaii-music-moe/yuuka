@@ -87,10 +87,22 @@ async fn process_due_reports(ctx: &ServiceContext) -> Result<(), DbError> {
 ///
 /// 定時配信（[`process_due_reports`]）とテスト配信（[`crate::delivery::NotifierDeliveryRunner`]）の
 /// 共通経路。`config` の `user_id`/`bot_id` のデータだけを集約し、その本人へ送る。
+/// 送信先は配信設定（`target_type`/`target_id`）から解決する。
 pub(crate) async fn deliver(
     db: &Db,
     notifier: &dyn Notifier,
     config: &EnabledReport,
+) -> Result<bool, DbError> {
+    deliver_to(db, notifier, config, resolve_target(config)).await
+}
+
+/// [`deliver`] の送信先指定版。テスト配信で設定行が無いとき、[`NotifyTarget::Default`]
+/// （ユーザー既定送信先）で送るために使う（Node は `config ? {...} : undefined` で送信先を省略）。
+pub(crate) async fn deliver_to(
+    db: &Db,
+    notifier: &dyn Notifier,
+    config: &EnabledReport,
+    target: NotifyTarget,
 ) -> Result<bool, DbError> {
     let is_weekly = config.r#type == "weekly";
     let data = collect_report_data(db, &config.user_id, &config.bot_id, is_weekly).await?;
@@ -102,7 +114,7 @@ pub(crate) async fn deliver(
         BotId::new(config.bot_id.clone()),
         body,
     )
-    .with_target(resolve_target(config));
+    .with_target(target);
 
     // 配信不可（Discord 未配線 = NullNotifier / クライアント無し）は false。レポートは last_run を持たず
     // 「この分だけ配信」のため、失敗しても再スケジュールはしない（Node も送信結果を保存しない）。

@@ -13,7 +13,8 @@
 //! ## Node パリティ
 //! - 朝報: 設定が無ければ未配信（`false`）。`enabled` は見ない（テストは無効化中でも送れる）。
 //!   送信先は設定の `target_type`/`target_id`。
-//! - 日報/週報: 設定が無くても既定送信先（→DM）へ送る（Node は `config ? {...} : undefined`）。
+//! - 日報/週報: 設定が無くてもユーザー既定の通知先（`users.notify_target_*`）へ送る（Node は
+//!   `config ? {...} : undefined` で送信先を省略し、`sendToUser` が既定の通知先へ解決する）。
 //!   こちらも `enabled` は見ない。
 //! - 戻り値は送信結果そのもの（Node `sendToUser` の boolean）。DB 失敗も未配信（`false`）として返す。
 
@@ -23,7 +24,7 @@ use async_trait::async_trait;
 use yuuka_briefing::{find_briefing, find_report, DeliveryRunner, EnabledBriefing, EnabledReport};
 use yuuka_web::Db;
 
-use crate::notifier::Notifier;
+use crate::notifier::{DefaultTargetNotifier, Notifier, NotifyTarget};
 use crate::{briefing, report};
 
 /// 通知ポート（[`Notifier`]）経由でテスト配信する [`DeliveryRunner`] 実装。
@@ -34,8 +35,12 @@ pub struct NotifierDeliveryRunner {
 
 impl NotifierDeliveryRunner {
     /// DB と通知ポート（main では Discord Messenger）を束ねて作る。
+    ///
+    /// 定時配信（[`crate::context::ServiceContext::new`]）と同じく `DefaultTargetNotifier` で包み、
+    /// `NotifyTarget::Default` をユーザー既定の通知先へ解決してから送る。
     #[must_use]
     pub fn new(db: Db, notifier: Arc<dyn Notifier>) -> Self {
+        let notifier = Arc::new(DefaultTargetNotifier::new(db.clone(), notifier));
         Self { db, notifier }
     }
 }
@@ -75,10 +80,12 @@ impl DeliveryRunner for NotifierDeliveryRunner {
                 return false;
             }
         };
-        // 設定が無ければ既定送信先（→DM）。schedule_cron は配信では使わない（cron 判定は定時配信側のみ）。
+        // 設定が無ければ送信先を省略（Default）し、ユーザー既定の通知先へ解決させる。
+        // schedule_cron は配信では使わない（cron 判定は定時配信側のみ）。
+        let has_config = config.is_some();
         let (schedule_cron, target_type, target_id) = match config {
             Some(c) => (c.schedule_cron, c.target_type, c.target_id),
-            None => (String::new(), "dm".to_owned(), None),
+            None => (String::new(), String::new(), None),
         };
         let target = EnabledReport {
             user_id: user_id.to_owned(),
@@ -88,7 +95,18 @@ impl DeliveryRunner for NotifierDeliveryRunner {
             target_type,
             target_id,
         };
-        match report::deliver(&self.db, self.notifier.as_ref(), &target).await {
+        let result = if has_config {
+            report::deliver(&self.db, self.notifier.as_ref(), &target).await
+        } else {
+            report::deliver_to(
+                &self.db,
+                self.notifier.as_ref(),
+                &target,
+                NotifyTarget::Default,
+            )
+            .await
+        };
+        match result {
             Ok(sent) => sent,
             Err(e) => {
                 tracing::error!(user = %user_id, error = %e, "❌ レポートのテスト配信に失敗");
@@ -118,6 +136,7 @@ mod tests {
     /// - a/bot1: 朝報（無効・チャンネル chan-a1）・日報（無効・チャンネル chan-a1）
     /// - a/bot2: 設定なし
     /// - b/bot2: 朝報（有効・チャンネル chan-b2）・週報（有効・チャンネル chan-b2）
+    /// - ユーザー既定の通知先: a はチャンネル chan-a-default・b は DM・c は users 行なし
     ///
     /// 天気・RSS は未設定にして外部 HTTP を発生させない（朝報本文は空案内文になる）。
     fn seed() -> (Db, tempfile::TempDir) {
@@ -134,7 +153,10 @@ mod tests {
                       ('b', 'bot2', 1, 'channel', 'chan-b2');
              INSERT INTO report_configs (user_id, bot_id, type, enabled, target_type, target_id)
                VALUES ('a', 'bot1', 'daily', 0, 'channel', 'chan-a1'),
-                      ('b', 'bot2', 'weekly', 1, 'channel', 'chan-b2');",
+                      ('b', 'bot2', 'weekly', 1, 'channel', 'chan-b2');
+             INSERT INTO users (discord_id, username, salt, notify_target_type, notify_target_id)
+               VALUES ('a', 'a', '', 'channel', 'chan-a-default'),
+                      ('b', 'b', '', 'dm', NULL);",
         )
         .expect("seed configs");
         (db, dir)
@@ -200,7 +222,8 @@ mod tests {
         let (db, _dir) = seed();
         let notifier = Arc::new(RecordingNotifier::new(true));
 
-        // a/bot2 の週報は未設定（b/bot2 の週報はチャンネル指定だが使わない）→ 本人の既定送信先（→DM）。
+        // a/bot2 の週報は未設定（b/bot2 の週報はチャンネル指定だが使わない）→ a の既定の通知先
+        // （チャンネル chan-a-default）。明示 DM にはしない。
         assert!(
             runner(db, &notifier)
                 .run_report("a", "bot2", "weekly")
@@ -211,7 +234,28 @@ mod tests {
         assert_eq!(sent.len(), 1);
         assert_eq!(sent[0].user_id.as_str(), "a");
         assert_eq!(sent[0].bot_id.as_str(), "bot2");
-        assert_eq!(sent[0].target, NotifyTarget::Default);
+        assert_eq!(
+            sent[0].target,
+            NotifyTarget::Channel("chan-a-default".to_owned())
+        );
         assert!(sent[0].content.contains("📋 週報"));
+    }
+
+    #[tokio::test]
+    async fn report_test_without_config_falls_back_to_dm_by_user_setting() {
+        let (db, _dir) = seed();
+        let notifier = Arc::new(RecordingNotifier::new(true));
+        let runner = runner(db, &notifier);
+
+        // b は既定の通知先が DM・c は users 行が無い → どちらも DM。
+        assert!(runner.run_report("b", "bot1", "daily").await);
+        assert!(runner.run_report("c", "bot1", "daily").await);
+
+        let sent = notifier.sent.lock().unwrap();
+        assert_eq!(sent.len(), 2);
+        assert_eq!(sent[0].user_id.as_str(), "b");
+        assert_eq!(sent[0].target, NotifyTarget::Dm);
+        assert_eq!(sent[1].user_id.as_str(), "c");
+        assert_eq!(sent[1].target, NotifyTarget::Dm);
     }
 }
