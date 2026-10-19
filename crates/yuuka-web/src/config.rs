@@ -28,6 +28,9 @@ pub struct WebConfig {
     pub db_path: String,
     /// リマインダー cron 式（`config.reminder_cron`・`/api/status` の設定表示に返す・Node `config.reminderCron`）。
     pub reminder_cron: String,
+    /// index.html へ差し込む google-site-verification 値（`config.google_site_verification`・
+    /// [`crate::mount_pwa`]/[`crate::mount_static`] へ渡す・#124）。`None` は差し込まない。
+    pub google_site_verification: Option<String>,
 }
 
 impl WebConfig {
@@ -44,6 +47,7 @@ impl WebConfig {
             base_url: cfg.base_url.clone(),
             db_path: cfg.db_path.to_string_lossy().into_owned(),
             reminder_cron: cfg.reminder_cron.clone(),
+            google_site_verification: cfg.google_site_verification.clone(),
         }
     }
 }

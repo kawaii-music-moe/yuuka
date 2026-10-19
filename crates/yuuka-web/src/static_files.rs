@@ -22,15 +22,22 @@
 //!
 //! セキュリティヘッダ（CSP/Referrer/HSTS/nosniff/X-Frame）は `apply_common_layers` が
 //! 全応答へ付与する（本モジュールは `Cache-Control` のみ担当）。
-//! index.html への google-site-verification meta 注入は後続増分（deferred・機能非依存）。
+//!
+//! **google-site-verification（#124）**: 管理画面・PWA の `index.html` は毎回ファイルを読み、
+//! [`SITE_VERIFICATION_PLACEHOLDER`] を `GOOGLE_SITE_VERIFICATION` の
+//! `<meta name="google-site-verification" …>` に置換して返す（旧 `src/server.ts` の index.html 分岐）。
+//! Google はサイトのトップ `/`（＝PWA のシェル）を確認するため、PWA 側にも同じプレースホルダーを置く。
+//! 置換後の本文を返すため index.html は `ServeDir` を通さず（`.br`/`.gz` サイドカーの古い内容を
+//! 配信しない）、未設定時は本文を一切変えない。
 
 use std::convert::Infallible;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use axum::body::Body;
 use axum::extract::Request;
 use axum::http::header::{HeaderValue, CACHE_CONTROL, CONTENT_TYPE};
-use axum::http::{StatusCode, Uri};
+use axum::http::{Method, StatusCode, Uri};
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::get;
 use axum::Router;
@@ -41,6 +48,10 @@ use tower_http::services::ServeDir;
 const IMMUTABLE: &str = "public, max-age=31536000, immutable";
 /// 非ハッシュ資産・index.html・404・SPA フォールバックの Cache-Control（Node 一致）。
 const NO_CACHE: &str = "no-cache, no-store, must-revalidate";
+
+/// `index.html` 内の google-site-verification 差し込み位置（`frontend/index.html`・
+/// `client/pwa/index.html` の `<head>` 内）。Vite はこの HTML コメントをビルド後も残す。
+pub const SITE_VERIFICATION_PLACEHOLDER: &str = "<!-- GOOGLE_SITE_VERIFICATION -->";
 
 /// 管理画面 SPA の配信プレフィックス。`frontend/vite.config.ts` の `base` と一字一句一致させる
 /// こと（ズレると資産 404・deep link 崩壊に直結する）。OAuth コールバック等サーバ側リダイレクト
@@ -56,14 +67,23 @@ pub const ADMIN_PREFIX: &str = "/admin";
 ///
 /// 旧共有ログインのパス `GET /login`・`/login/` だけは例外的に `/admin/login` へ互換リダイレクトする
 /// （[`legacy_login_redirect`]）。
-pub fn mount_static<S>(router: Router<S>, dist_dir: &Path) -> Router<S>
+///
+/// `google_site_verification`（`Config::google_site_verification`）を渡すと、管理画面の
+/// `index.html`（直接アクセス・SPA フォールバックとも）へ meta を差し込む（[`index_response`]）。
+pub fn mount_static<S>(
+    router: Router<S>,
+    dist_dir: &Path,
+    google_site_verification: Option<&str>,
+) -> Router<S>
 where
     S: Clone + Send + Sync + 'static,
 {
     let dist = dist_dir.to_path_buf();
+    let meta = site_verification_meta(google_site_verification);
     let admin_service = service_fn(move |req: Request| {
         let dist = dist.clone();
-        async move { Ok::<Response, Infallible>(serve_static(&dist, req).await) }
+        let meta = meta.clone();
+        async move { Ok::<Response, Infallible>(serve_static(&dist, meta.as_deref(), req).await) }
     });
     let dist_for_fallback = dist_dir.to_path_buf();
     router
@@ -118,7 +138,10 @@ async fn top_level_fallback(dist: &Path, req: Request) -> Response {
 }
 
 /// Node `serveStaticFile` の写像: `ServeDir` で配信し、未存在は拡張子で分岐、最後に Cache-Control。
-async fn serve_static(dist: &Path, req: Request) -> Response {
+///
+/// `index.html`（`/admin`・`/admin/`・`/admin/index.html`）と SPA フォールバックは
+/// [`index_response`] で読み直して meta を差し込む（`ServeDir` の precompressed を使わない）。
+async fn serve_static(dist: &Path, meta: Option<&str>, req: Request) -> Response {
     let path = req.uri().path().to_owned();
 
     // **B6**: 未登録の `/api/*` は SPA フォールバック（index.html 200）に落とさず、明示 JSON 404 を返す
@@ -127,6 +150,16 @@ async fn serve_static(dist: &Path, req: Request) -> Response {
     // JSON パース失敗 → `res.ok=true` で「空の成功」に誤変換し、未実装機能が沈黙して壊れる。全メソッド対象。
     if path.starts_with("/api/") {
         return api_not_found();
+    }
+
+    // `nest_service` がプレフィックスを剥がすため `/admin`・`/admin/` はここでは `/` になる。
+    // GET/HEAD 以外は従来どおり ServeDir（405）に任せる。
+    let is_index = matches!(path.as_str(), "" | "/" | "/index.html");
+    if is_index && matches!(*req.method(), Method::GET | Method::HEAD) {
+        let mut resp = index_response(dist, meta).await;
+        resp.headers_mut()
+            .insert(CACHE_CONTROL, HeaderValue::from_static(NO_CACHE));
+        return resp;
     }
 
     // ServeDir が実ファイル配信（precompress/MIME/range/traversal 防御）。エラー型は Infallible。
@@ -146,7 +179,7 @@ async fn serve_static(dist: &Path, req: Request) -> Response {
             )
             .await
         } else {
-            file_response(&dist.join("index.html"), StatusCode::OK, "").await
+            index_response(dist, meta).await
         }
     } else {
         served
@@ -188,6 +221,66 @@ async fn file_response(path: &Path, status: StatusCode, fallback: &str) -> Respo
         HeaderValue::from_static("text/html; charset=utf-8"),
     );
     resp
+}
+
+/// `dist/index.html` を読み、google-site-verification meta を差し込んだ `text/html` 200 応答を作る
+/// （旧 `src/server.ts` の index.html 分岐）。読めなければ従来どおり空本文の 200。
+async fn index_response(dist: &Path, meta: Option<&str>) -> Response {
+    let body = match tokio::fs::read(dist.join("index.html")).await {
+        Ok(bytes) => Body::from(inject_site_verification(bytes, meta)),
+        Err(_) => Body::empty(),
+    };
+    let mut resp = Response::new(body);
+    resp.headers_mut().insert(
+        CONTENT_TYPE,
+        HeaderValue::from_static("text/html; charset=utf-8"),
+    );
+    resp
+}
+
+/// 設定値から差し込む meta タグを作る（未設定・空白のみは `None`）。値は HTML 属性として
+/// エスケープする（旧実装は無加工で連結していたが、`"` や `<` を含む値で HTML を壊さないため）。
+fn site_verification_meta(value: Option<&str>) -> Option<Arc<str>> {
+    let value = value.map(str::trim).filter(|v| !v.is_empty())?;
+    Some(
+        format!(
+            r#"<meta name="google-site-verification" content="{}" />"#,
+            escape_html_attr(value)
+        )
+        .into(),
+    )
+}
+
+/// HTML 属性値（`"` 囲み）向けのエスケープ。
+fn escape_html_attr(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for c in value.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#39;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// プレースホルダー（最初の 1 個・旧 `String.prototype.replace` と同じ）を meta に置換する。
+/// `meta` が `None`・プレースホルダーが無い・UTF-8 でない場合は元のバイト列をそのまま返す
+/// （未設定時に HTML を変えない）。
+fn inject_site_verification(bytes: Vec<u8>, meta: Option<&str>) -> Vec<u8> {
+    let Some(meta) = meta else {
+        return bytes;
+    };
+    match String::from_utf8(bytes) {
+        Ok(html) if html.contains(SITE_VERIFICATION_PLACEHOLDER) => html
+            .replacen(SITE_VERIFICATION_PLACEHOLDER, meta, 1)
+            .into_bytes(),
+        Ok(html) => html.into_bytes(),
+        Err(err) => err.into_bytes(),
+    }
 }
 
 /// Node `isHashedAsset`（`server.ts`）の写像: `/assets/` 配下 かつ ファイル名末尾が
@@ -251,16 +344,28 @@ const PWA_SHELL_ROUTES: [&str; 7] = [
 /// `fallback_service` ベース）とは独立に同一ルータへ組み合わせられる: axum は明示ルートを
 /// `fallback_service` より必ず優先するため、登録順に関わらず PWA が上記の固定パス群だけを
 /// 横取りし、`/admin` を含む残りは admin 側の fallback へ従来どおり落ちる。
-pub fn mount_pwa<S>(router: Router<S>, pwa_dist: &Path) -> Router<S>
+///
+/// `google_site_verification` を渡すとシェル（`/` を含む）の `index.html` へ meta を差し込む。
+/// Google のサイト所有権確認はトップ `/` を見に行くため、こちらが本命の差し込み先。
+pub fn mount_pwa<S>(
+    router: Router<S>,
+    pwa_dist: &Path,
+    google_site_verification: Option<&str>,
+) -> Router<S>
 where
     S: Clone + Send + Sync + 'static,
 {
     let dist = pwa_dist.to_path_buf();
+    let meta = site_verification_meta(google_site_verification);
 
     let mut router = router;
     for path in PWA_SHELL_ROUTES {
         let shell_dist = dist.clone();
-        router = router.route(path, get(move || pwa_index(shell_dist.clone())));
+        let shell_meta = meta.clone();
+        router = router.route(
+            path,
+            get(move || pwa_index(shell_dist.clone(), shell_meta.clone())),
+        );
     }
 
     let manifest_dist = dist.clone();
@@ -303,9 +408,10 @@ where
         )
 }
 
-/// PWA シェル（`index.html`）を返す。SPA シェルは常に最新を取得させるため `no-cache` 固定。
-async fn pwa_index(dist: PathBuf) -> Response {
-    let mut resp = file_response(&dist.join("index.html"), StatusCode::OK, "").await;
+/// PWA シェル（`index.html`・meta 差し込み済み）を返す。SPA シェルは常に最新を取得させるため
+/// `no-cache` 固定。
+async fn pwa_index(dist: PathBuf, meta: Option<Arc<str>>) -> Response {
+    let mut resp = index_response(&dist, meta.as_deref()).await;
     resp.headers_mut()
         .insert(CACHE_CONTROL, HeaderValue::from_static(NO_CACHE));
     resp
@@ -378,7 +484,11 @@ mod tests {
     }
 
     fn app(dir: &std::path::Path) -> Router {
-        mount_static(Router::new().route("/api/me", get(|| async { "me" })), dir)
+        mount_static(
+            Router::new().route("/api/me", get(|| async { "me" })),
+            dir,
+            None,
+        )
     }
 
     async fn get_resp(dir: &std::path::Path, uri: &str) -> axum::response::Response {
@@ -679,8 +789,8 @@ mod pwa_tests {
     /// PWA + admin fallback + 明示 API ルートを同一ルータへ組み合わせたアプリ（実運用の配線を模す）。
     fn app(pwa_dir: &std::path::Path, admin_dir: &std::path::Path) -> Router {
         let router = Router::new().route("/api/me", get(|| async { "me" }));
-        let router = mount_pwa(router, pwa_dir);
-        mount_static(router, admin_dir)
+        let router = mount_pwa(router, pwa_dir, None);
+        mount_static(router, admin_dir, None)
     }
 
     async fn get_resp(
@@ -782,5 +892,198 @@ mod pwa_tests {
         let admin = admin_dist();
         let resp = get_resp(pwa.path(), admin.path(), "/manifest.webmanifest").await;
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+}
+
+#[cfg(test)]
+mod site_verification_tests {
+    //! #124: google-site-verification meta の index.html 差し込み（旧 `src/server.ts` の index.html 分岐）。
+    use super::{mount_pwa, mount_static, site_verification_meta};
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use axum::Router;
+    use std::fs;
+    use tower::ServiceExt;
+
+    const ADMIN_INDEX: &str =
+        "<html><head>\n<!-- GOOGLE_SITE_VERIFICATION -->\n<title>admin</title></head>ADMIN-SHELL</html>";
+    const PWA_INDEX: &str =
+        "<html><head>\n<!-- GOOGLE_SITE_VERIFICATION -->\n<title>pwa</title></head>PWA-SHELL</html>";
+    const META: &str = r#"<meta name="google-site-verification" content="abc123-XYZ_" />"#;
+
+    fn admin_dist() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().expect("tmp");
+        fs::write(dir.path().join("index.html"), ADMIN_INDEX).expect("index");
+        fs::write(dir.path().join("404.html"), "<html>NOT-FOUND</html>").expect("404");
+        fs::write(dir.path().join("manifest.json"), "{}").expect("manifest");
+        dir
+    }
+
+    fn pwa_dist() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().expect("tmp");
+        fs::write(dir.path().join("index.html"), PWA_INDEX).expect("index");
+        dir
+    }
+
+    /// 実運用と同じ PWA → admin static の組み合わせ。
+    fn app(pwa: &std::path::Path, admin: &std::path::Path, value: Option<&str>) -> Router {
+        mount_static(mount_pwa(Router::new(), pwa, value), admin, value)
+    }
+
+    async fn get_with(
+        router: Router,
+        uri: &str,
+        accept_encoding: Option<&str>,
+    ) -> axum::response::Response {
+        let mut req = Request::builder().uri(uri);
+        if let Some(ae) = accept_encoding {
+            req = req.header("accept-encoding", ae);
+        }
+        router
+            .oneshot(req.body(Body::empty()).unwrap())
+            .await
+            .unwrap()
+    }
+
+    fn header(resp: &axum::response::Response, name: &str) -> Option<String> {
+        resp.headers()
+            .get(name)
+            .map(|v| String::from_utf8_lossy(v.as_bytes()).into_owned())
+    }
+
+    async fn body_text(resp: axum::response::Response) -> String {
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        String::from_utf8_lossy(&bytes).into_owned()
+    }
+
+    /// 管理画面の index.html（直接・`/admin`・SPA フォールバック）と PWA シェル（`/` 他）の全経路。
+    const INDEX_URIS: [&str; 6] = [
+        "/",
+        "/chat",
+        "/admin",
+        "/admin/",
+        "/admin/index.html",
+        "/admin/dashboard/tasks",
+    ];
+
+    #[tokio::test]
+    async fn configured_value_is_injected_into_every_index_html_with_no_cache() {
+        let (pwa, admin) = (pwa_dist(), admin_dist());
+        for uri in INDEX_URIS {
+            let resp = get_with(
+                app(pwa.path(), admin.path(), Some("abc123-XYZ_")),
+                uri,
+                None,
+            )
+            .await;
+            assert_eq!(resp.status(), StatusCode::OK, "uri={uri}");
+            assert_eq!(
+                header(&resp, "cache-control").as_deref(),
+                Some("no-cache, no-store, must-revalidate"),
+                "uri={uri}"
+            );
+            assert_eq!(
+                header(&resp, "content-type").as_deref(),
+                Some("text/html; charset=utf-8"),
+                "uri={uri}"
+            );
+            let text = body_text(resp).await;
+            assert!(text.contains(META), "uri={uri} body={text}");
+            assert!(
+                !text.contains("<!-- GOOGLE_SITE_VERIFICATION -->"),
+                "uri={uri} body={text}"
+            );
+            let shell = if uri.starts_with("/admin") {
+                "ADMIN-SHELL"
+            } else {
+                "PWA-SHELL"
+            };
+            assert!(text.contains(shell), "uri={uri} body={text}");
+        }
+    }
+
+    #[tokio::test]
+    async fn unset_value_leaves_index_html_byte_for_byte() {
+        let (pwa, admin) = (pwa_dist(), admin_dist());
+        for value in [None, Some(""), Some("   ")] {
+            for uri in INDEX_URIS {
+                let resp = get_with(app(pwa.path(), admin.path(), value), uri, None).await;
+                assert_eq!(resp.status(), StatusCode::OK, "uri={uri}");
+                let expected = if uri.starts_with("/admin") {
+                    ADMIN_INDEX
+                } else {
+                    PWA_INDEX
+                };
+                assert_eq!(body_text(resp).await, expected, "uri={uri} value={value:?}");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn value_is_escaped_as_html_attribute() {
+        let (pwa, admin) = (pwa_dist(), admin_dist());
+        let value = r#"x"><script>alert('1')</script>&"#;
+        for uri in ["/", "/admin/"] {
+            let resp = get_with(app(pwa.path(), admin.path(), Some(value)), uri, None).await;
+            let text = body_text(resp).await;
+            assert!(
+                text.contains(
+                    r#"<meta name="google-site-verification" content="x&quot;&gt;&lt;script&gt;alert(&#39;1&#39;)&lt;/script&gt;&amp;" />"#
+                ),
+                "uri={uri} body={text}"
+            );
+            assert!(!text.contains("<script>"), "uri={uri} body={text}");
+        }
+    }
+
+    #[tokio::test]
+    async fn stale_precompressed_index_html_is_not_served() {
+        // ServeDir の precompressed（`.br`/`.gz`）を index.html に使うと置換前の古い内容が返るため、
+        // index.html は常に素のファイルを読んで置換する（他の資産の配信経路は変えない）。
+        let (pwa, admin) = (pwa_dist(), admin_dist());
+        fs::write(admin.path().join("index.html.br"), "STALE-BR").expect("br");
+        fs::write(admin.path().join("index.html.gz"), "STALE-GZ").expect("gz");
+        for uri in [
+            "/admin",
+            "/admin/",
+            "/admin/index.html",
+            "/admin/dashboard/tasks",
+        ] {
+            let resp = get_with(
+                app(pwa.path(), admin.path(), Some("abc123-XYZ_")),
+                uri,
+                Some("br, gzip"),
+            )
+            .await;
+            assert_eq!(resp.status(), StatusCode::OK, "uri={uri}");
+            assert_eq!(header(&resp, "content-encoding"), None, "uri={uri}");
+            let text = body_text(resp).await;
+            assert!(text.contains(META), "uri={uri} body={text}");
+            assert!(!text.contains("STALE"), "uri={uri} body={text}");
+        }
+
+        // index.html 以外は従来どおり ServeDir（precompressed 含む）で配信される。
+        fs::write(admin.path().join("manifest.json.gz"), "GZ-MANIFEST").expect("gz");
+        let resp = get_with(
+            app(pwa.path(), admin.path(), Some("abc123-XYZ_")),
+            "/admin/manifest.json",
+            Some("gzip"),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(header(&resp, "content-encoding").as_deref(), Some("gzip"));
+        assert_eq!(body_text(resp).await, "GZ-MANIFEST");
+    }
+
+    #[test]
+    fn meta_tag_is_none_for_blank_and_trims_value() {
+        assert_eq!(site_verification_meta(None), None);
+        assert_eq!(site_verification_meta(Some("  ")), None);
+        assert_eq!(
+            site_verification_meta(Some(" abc123-XYZ_ ")).as_deref(),
+            Some(META)
+        );
     }
 }
