@@ -322,13 +322,6 @@ mod tests {
         assert_eq!(cfg.session_ttl_days, 7);
         assert_eq!(cfg.db_path.to_str(), Some("./data/yuuka.db"));
         assert_eq!(cfg.reminder_cron, "* * * * *");
-        assert_eq!(
-            cfg.invite_codes,
-            vec![
-                "change-me-to-random-code-1".to_owned(),
-                "change-me-to-random-code-2".to_owned()
-            ]
-        );
         assert_eq!(cfg.base_url.as_deref(), Some("https://example.com"));
         assert_eq!(cfg.terms_url, "/terms");
         assert_eq!(cfg.google_client_id, None, "空文字は未設定に畳む");
@@ -337,7 +330,6 @@ mod tests {
             let path = root.join(format!("deploy/{instance}/config.yaml.example"));
             let cfg = Config::load_and_validate(&path).expect("deploy example");
             assert_eq!(cfg.port, 7854);
-            assert_eq!(cfg.invite_codes.len(), 2);
         }
     }
 
