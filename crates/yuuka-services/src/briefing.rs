@@ -107,15 +107,16 @@ pub(crate) async fn deliver(
 }
 
 /// 配信先を解決する（Node `{ type: target_type, id: target_id }`）。
-/// `channel` かつ ID 有り → チャンネル指定・それ以外 → 既定送信先（→DM）。reminder と同規律。
+/// `channel` かつ ID 有り → チャンネル指定・それ以外 → DM。Node は配信設定の送信先を常に明示して
+/// 渡すため、ユーザー既定送信先は見ない（ID 無しのチャンネル指定も DM に落ちる）。
 fn resolve_target(config: &EnabledBriefing) -> NotifyTarget {
     if config.target_type == "channel" {
         match config.target_id.as_deref() {
             Some(id) if !id.is_empty() => NotifyTarget::Channel(id.to_owned()),
-            _ => NotifyTarget::Default,
+            _ => NotifyTarget::Dm,
         }
     } else {
-        NotifyTarget::Default
+        NotifyTarget::Dm
     }
 }
 
@@ -180,8 +181,8 @@ mod tests {
 
         let sent = notifier.sent.lock().unwrap();
         assert_eq!(sent.len(), 1);
-        // 既定送信先（→DM）で、本文に朝報タイトルが入る。
-        assert_eq!(sent[0].target, NotifyTarget::Default);
+        // 設定の dm は DM（ユーザー既定送信先は見ない）で、本文に朝報タイトルが入る。
+        assert_eq!(sent[0].target, NotifyTarget::Dm);
         assert!(sent[0].content.contains("今日の朝報です"));
     }
 

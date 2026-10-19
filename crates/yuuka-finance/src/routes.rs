@@ -2,7 +2,7 @@
 //!
 //! 認可は [`AuthenticatedUser`] extractor で型強制、DB は `State<Db>` サブステートで取得、
 //! スコープは **共通の [`resolve_scope`]**（`?botId=` を bot アクセス認可つきで解決・
-//! 未アクセスは system_default にフォールバック）で束ねて repo に渡す。
+//! 未指定・system_default は 403、未アクセスは 404）で束ねて repo に渡す。
 //! 本ルータは supervisor 側で共通レイヤ（CSRF/body 上限）配下にマージされる。
 //!
 //! 参照スコープ = コア CRUD の list/add に加え、予算上限（budget_limits）・支払い予定
@@ -21,9 +21,7 @@ use serde::Deserialize;
 use serde_json::json;
 use yuuka_core::WebError;
 use yuuka_types::{EmptyData, Envelope};
-use yuuka_web::{
-    has_bot_access, resolve_scope, ApiError, AppState, AuthenticatedUser, Db, ScopedJson,
-};
+use yuuka_web::{resolve_scope, ApiError, AppState, AuthenticatedUser, Db, ScopeError, ScopedJson};
 
 use crate::dto::{
     BudgetLimitListData, DeleteBudgetLimit, ExpenseData, ExpenseListData, NewExpense,
@@ -146,16 +144,19 @@ async fn upload_receipt(
         );
     }
 
-    // resolvedBotId = botId && hasBotAccess ? botId : system_default。
-    let bot_id = match body.bot_id.as_deref() {
-        Some(b) if !b.is_empty() => match has_bot_access(&db, &user.0.discord_id, b).await {
-            Ok(true) => b.to_owned(),
-            Ok(false) => "system_default".to_owned(),
-            Err(_) => {
-                return receipt_error(StatusCode::INTERNAL_SERVER_ERROR, "処理に失敗しました。")
-            }
-        },
-        _ => "system_default".to_owned(),
+    // 取引の下書きはユーザーの Bot にだけ置く。未指定・system_default は 403、アクセス不可は 404
+    // （システム Bot へは落とさない・issue #141）。
+    let bot_id = match resolve_scope(&user.0, &db, body.bot_id.as_deref()).await {
+        Ok(scope) => scope.bot_id().as_str().to_owned(),
+        Err(ScopeError::BotRequired) => {
+            return receipt_error(StatusCode::FORBIDDEN, "Bot を選択してください。")
+        }
+        Err(ScopeError::BotNotFound) => {
+            return receipt_error(StatusCode::NOT_FOUND, "Bot が見つかりません。")
+        }
+        Err(ScopeError::Db(_)) => {
+            return receipt_error(StatusCode::INTERNAL_SERVER_ERROR, "処理に失敗しました。")
+        }
     };
 
     // Node: additionalText || undefined（空文字は None）。
@@ -366,10 +367,12 @@ async fn pay_plan(
         )));
     }
 
-    // 実支払いを Expense として記録し消込・紐付き ToDo を自動完了（1 トランザクション）。
-    let (expense_id, completed_todos) = repo.settle_plan(&scope, &plan).await?;
+    // 実支払いを Expense として記録し消込・紐付き ToDo を自動完了・紐付きリマインドを停止
+    // （1 トランザクション）。
+    let settled = repo.settle_plan(&scope, &plan).await?;
+    let completed_todos = settled.completed_todos;
     let expense = repo
-        .get(&scope, expense_id)
+        .get(&scope, settled.expense_id)
         .await?
         .ok_or(ApiError(WebError::Internal))?;
 
@@ -400,11 +403,15 @@ async fn delete_plan(
     }: ScopedJson<PlannedPaymentId>,
 ) -> Result<Json<Envelope<EmptyData>>, ApiError> {
     // Node parity: `!id`（0 含む）は 400。成否は bare `{success: ok}` で返す。
+    // 紐付く期日前リマインドは repo が同じトランザクションで止める（R15）。
     if input.id == 0 {
         return Err(ApiError(WebError::Validation("id is required".to_owned())));
     }
     let scope = resolve_scope(&user.0, &db, bot_id.as_deref()).await?;
-    let ok = ExpenseRepo::new(&db).cancel_plan(&scope, input.id).await?;
+    let ok = ExpenseRepo::new(&db)
+        .cancel_plan(&scope, input.id)
+        .await?
+        .is_some();
     Ok(Json(Envelope::bare(ok)))
 }
 

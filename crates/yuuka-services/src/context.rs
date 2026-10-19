@@ -12,7 +12,7 @@ use yuuka_web::Db;
 use crate::backup::{BackupRunner, NullBackupRunner};
 use crate::calendar_sync::{CalendarSyncRunner, NullCalendarSyncRunner};
 use crate::metrics::MetricsRegistry;
-use crate::notifier::Notifier;
+use crate::notifier::{DefaultTargetNotifier, Notifier};
 use crate::turn::PlaybookRunner;
 
 /// サービス実行時の依存一式。
@@ -21,6 +21,7 @@ pub struct ServiceContext {
     /// 共有 DB ハンドル（read pool + 単一 writer actor）。
     pub db: Db,
     /// ユーザー通知配信（discord 未配線時は [`crate::notifier::NullNotifier`]）。
+    /// `DefaultTargetNotifier` で包み、送信先省略の通知をユーザー既定送信先へ解決してから配信する。
     pub notifier: Arc<dyn Notifier>,
     /// 軽量メトリクスレジストリ（定期ログサービスが snapshot を出す）。
     pub metrics: Arc<MetricsRegistry>,
@@ -45,8 +46,8 @@ impl ServiceContext {
         playbook_runner: Arc<dyn PlaybookRunner>,
     ) -> Self {
         Self {
+            notifier: Arc::new(DefaultTargetNotifier::new(db.clone(), notifier)),
             db,
-            notifier,
             metrics,
             playbook_runner,
             backup: Arc::new(NullBackupRunner),

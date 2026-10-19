@@ -75,7 +75,7 @@
 |---|---|---|---|
 | D01 | Svelte管理画面とVue PWAのタスク・予定・家計・ノート・設定 | 同じ業務データを別の画面で操作する。両方とも稼働する用途があり、PWAは機能を絞った個人画面。`frontend/src/routes/BotShell.svelte:36` と `client/pwa/src/router.ts`。 | UIを残すなら業務ルールを共有し、機能差を明示する。画面が2つあるだけで不要とはしない。 |
 | D02 | ドメインHTTP API、`/api/client/*`、LLMツール | 同じToDo・家計・ノートに3つの入口がある。repoは共有するものが多いが、入力検証・既定値・レスポンスが別実装。例：`yuuka-todo/src/routes.rs`、`yuuka-client-api/src/routes.rs` の `todos_add`、`yuuka-todo/src/tools.rs`。 | repoだけでなく、登録・更新・取消の業務処理を共通サービスに集約する。 |
-| D03 | 予定登録・削除の経路 | PWA登録は `addSchedule` ツールを呼ぶ一方、管理APIは `ScheduleRepo::add/delete` を直接呼ぶ。作業中のGoogle同期はツール側にあるため、管理画面経由では同じ外部反映を行わない。旧NodeでもHTTPとツールの経路差があったため、新たな移植欠落とは数えない。 | Google同期を含む予定サービスを全入口から呼ぶ。根拠：`yuuka-client-api/src/routes.rs` の `calendar_add`、`yuuka-schedule/src/routes.rs:76`、`yuuka-schedule/src/tools.rs`。 |
+| D03 | 予定登録・削除の経路 | PWA登録は `addSchedule` ツールを呼ぶ一方、管理APIは `ScheduleRepo::add/delete` を直接呼ぶ。作業中のGoogle同期はツール側にあるため、管理画面経由では同じ外部反映を行わない。旧NodeでもHTTPとツールの経路差があったため、新たな移植欠落とは数えない。**修正済み（#127）**：予定の登録・削除（Google同期込み）を `yuuka-schedule/src/service.rs` の `ScheduleService` にまとめ、ツール・管理API（`routes_with_calendar` で同期先を配線）・PWA の `calendar_add` をすべてそこへ通した。管理APIからの登録・削除が Google に反映される回帰テストを追加。 | Google同期を含む予定サービスを全入口から呼ぶ。根拠：`yuuka-client-api/src/routes.rs` の `calendar_add`、`yuuka-schedule/src/routes.rs:76`、`yuuka-schedule/src/tools.rs`。 |
 | D04 | cron式の検証 | `todo/finance/reminder/briefing` に簡易検証が重複し、実行時だけ `yuuka-services/src/cron_util.rs` が本物のパーサを使う。R19の原因。 | 循環依存を作らない共通層に検証・次回時刻計算を移し、登録時と実行時を揃える。 |
 | D05 | 日時の解釈・保存形式変換 | `yuuka-reminder/src/datetime.rs`、`yuuka-schedule/src/datetime.rs`、`yuuka-client-api` 内の日時変換、`yuuka-services/src/cron_util.rs` が並存。入力ISO、DBローカル時刻、PWA向けUTCという用途差もある。 | 用途差を保った名前付き関数として共通化し、受理形式・オフセットの差を管理する。 |
 | D06 | 外向きURL/IPのSSRF検査 | browser、MCP、briefingが個別実装。briefingの検査だけDNS確認がない（R25）。`yuuka-browser/src/ssrf.rs`、`yuuka-mcp/src/http_client.rs`、`yuuka-briefing/src/tools.rs`。 | 通信直前の検査を共有する。URL登録時の簡易検査と通信時検査を区別する。 |
@@ -95,7 +95,7 @@
 ## 失われた機能と誤判定しないもの
 
 - **会話ツールの入口は85件すべて存在**。現行で増えた `updateExpense` / `deleteExpense` を合わせ、検出した静的ツール名は87件。MCPの動的ツールはこの件数に含めない。
-- **Googleカレンダー同期**は作業ツリーに追加・削除・取り込み・定期取り込みの実装と起動時接続がある。`crates/yuuka-schedule/src/google_sync.rs`、`tools.rs`、`crates/yuuka-services/src/calendar_sync.rs`、`crates/yuuka-supervisor/src/main.rs`。未コミットなのでデプロイ済みとは扱わない。管理APIの経路差はD03。
+- **Googleカレンダー同期**は作業ツリーに追加・削除・取り込み・定期取り込みの実装と起動時接続がある。`crates/yuuka-schedule/src/google_sync.rs`、`tools.rs`、`crates/yuuka-services/src/calendar_sync.rs`、`crates/yuuka-supervisor/src/main.rs`。未コミットなのでデプロイ済みとは扱わない。管理APIの経路差はD03（#127 で解消）。
 - **コンテキストノートとカレンダー情報のプロンプト注入、シナプス想起・抽出**は接続済み。engine冒頭の古い「空移植」コメントは現状と一致しない。返信チェーンはR08として残る。
 - **MCP探索・動的ツール実行、Google OAuth・Driveバックアップ、レシート解析、Bot起動停止**には実クライアントの接続経路がある。資格情報なしでNullに落ちること自体を未実装とは判定しない。
 - **通常のDiscord会話、音声・画像入力、共有・申請ボタン処理、登録コードDM**は実装あり。Web招待・申請のDMはR03/R04、WSボタンはR09として区別する。

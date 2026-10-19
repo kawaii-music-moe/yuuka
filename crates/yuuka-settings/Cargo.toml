@@ -20,9 +20,11 @@ axum.workspace = true
 rusqlite.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+chrono.workspace = true
+zip.workspace = true
+tokio.workspace = true
 
 [dev-dependencies]
-tokio.workspace = true
 tower = { workspace = true, features = ["util"] }
 tempfile = "3"
 

@@ -3365,21 +3365,6 @@ details.admin-section[open] > summary > .admin-section-title::before {
 	border-color: rgba(234, 179, 8, 0.7);
 }
 
-/* Invite Code Status */
-.invite-status-available {
-	color: #22c55e;
-	font-weight: 700;
-}
-
-.invite-status-used {
-	color: var(--color-zinc-muted);
-}
-
-.invite-status-revoked {
-	color: #ef4444;
-	font-weight: 700;
-}
-
 /* Discord ID masking style */
 .admin-discord-id {
 	font-family: var(--font-family-mono);
