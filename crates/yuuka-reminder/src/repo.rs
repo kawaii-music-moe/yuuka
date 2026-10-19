@@ -106,7 +106,7 @@ impl<'a> ReminderRepo<'a> {
     /// `target_type` 未指定は `"dm"`、`source` は `"manual"` 固定（Web UI 由来）。
     /// trigger_at は [`crate::datetime::to_db_datetime`] で DB 形式へ正規化する（**B4**: Node
     /// `reminderRepo.add` と同位置。LLM/Web の `T` 区切り ISO を空白区切りへ揃え cron の字句比較を
-    /// 正す）。cron 検証・過去日時補正・既定送信先解決は deferred。
+    /// 正す）。cron 検証・既定送信先解決は deferred。過去日時の保護は addReminder ツール側で行う。
     ///
     /// # Errors
     /// 挿入失敗・作成後の取得失敗時 [`DbError`]。
