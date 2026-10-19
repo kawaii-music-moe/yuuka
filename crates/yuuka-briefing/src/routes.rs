@@ -21,11 +21,11 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::{json, Value};
-use yuuka_core::DbError;
+use yuuka_core::{cron_util, DbError};
 use yuuka_web::{resolve_scope, AppState, AuthenticatedUser, Db};
 
 use crate::repo;
-use crate::tools::{is_likely_public_http_url, is_valid_cron_basic};
+use crate::tools::is_likely_public_http_url;
 
 /// テスト配信の実行ポート（Node `runBriefingForUser` / `runReportForUser` のシーム）。
 #[async_trait]
@@ -116,7 +116,7 @@ async fn post_briefing_config(
 ) -> Response {
     // cron が文字列で与えられたら妥当性検証（Node `cron.validate`）。
     if let Some(cron) = body.get("schedule_cron").and_then(Value::as_str) {
-        if !is_valid_cron_basic(cron) {
+        if !cron_util::is_valid(cron) {
             return bad_request("cron式が不正です。");
         }
     }
@@ -262,7 +262,7 @@ async fn post_report_configs(
         return bad_request("type は 'daily' または 'weekly' を指定してください。");
     }
     if let Some(cron) = body.get("schedule_cron").and_then(Value::as_str) {
-        if !is_valid_cron_basic(cron) {
+        if !cron_util::is_valid(cron) {
             return bad_request("cron式が不正です。");
         }
     }
@@ -553,6 +553,17 @@ mod tests {
             "POST",
             "/api/briefing-config",
             r#"{"schedule_cron":"nope"}"#,
+        )
+        .await;
+        assert_eq!(st, StatusCode::BAD_REQUEST);
+        assert_eq!(j["message"], "cron式が不正です。");
+
+        // 5 フィールドでも実行時 parser が解釈できない式は弾く。
+        let (st, j) = send(
+            &app,
+            "POST",
+            "/api/briefing-config",
+            r#"{"schedule_cron":"0 8 32 * *"}"#,
         )
         .await;
         assert_eq!(st, StatusCode::BAD_REQUEST);

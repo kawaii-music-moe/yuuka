@@ -17,9 +17,9 @@ use yuuka_schedule::repo::ScheduleRepo;
 use yuuka_todo::repo::TodoRepo;
 
 use crate::context::ServiceContext;
-use crate::cron_util;
 use crate::notifier::{Notification, NotifyTarget};
 use crate::schedule::{CronService, Schedule};
+use yuuka_core::cron_util;
 
 /// リマインドエンジンサービス。
 pub struct ReminderService;

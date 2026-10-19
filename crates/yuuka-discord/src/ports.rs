@@ -426,9 +426,10 @@ pub trait MembershipService: Send + Sync {
     async fn get_public_persona(&self, persona_id: i64) -> Option<PersonaRecord>;
 }
 
-/// 利用申請ボタンフローの結果 DM 送信（Node `sendMemberRequestDM`/`sendMemberDecisionDM`）。
+/// 利用申請の受付/結果 DM 送信（Node `sendMemberRequestDM`/`sendMemberDecisionDM`）。
 ///
-/// interaction ハンドラが DB 確定後に呼ぶ。常に共有デフォルト Bot から送る（実装側で担保）。fire-and-forget
+/// interaction ハンドラ（Discord ボタン経路）と Web の利用申請ルート（`yuuka-orchestrator::member_routes`）
+/// が DB 確定後に呼ぶ。常に共有デフォルト Bot から送る（実装側で担保）。fire-and-forget
 /// （戻り値の false は握り潰す・DB 上の申請は Web 管理から拾えるため）。fake でユニットテスト可能にするため
 /// 注入ポートにする（[`DiscordMessenger`] が本実装）。
 #[async_trait]
@@ -446,6 +447,24 @@ pub trait MemberDmSender: Send + Sync {
 
     /// 承認/却下の結果を申請者へ通知（ボタンなし）。
     async fn send_decision_dm(&self, applicant_id: &str, bot_name: &str, approved: bool) -> bool;
+}
+
+/// Bot 共有招待 DM の送信ポート（Node `sendShareInviteDM`）。
+///
+/// Web の共有招待ルート（`yuuka-orchestrator::share_routes`）が招待行の作成後に呼ぶ。常に共有デフォルト
+/// Bot から `share_accept:{share_id}` / `share_decline:{share_id}` ボタン付きで送り、押下は
+/// [`crate::interaction::decide`] が処理する（[`crate::DiscordMessenger`] が本実装）。送信失敗でも招待行は残る。
+#[async_trait]
+pub trait ShareInviteDm: Send + Sync {
+    /// 招待先へ承認/辞退ボタン付き DM を送る（成功なら `true`）。
+    async fn send_invite(
+        &self,
+        share_id: i64,
+        target_user_id: &str,
+        bot_name: &str,
+        owner_name: &str,
+        persona_name: Option<&str>,
+    ) -> bool;
 }
 
 // ─── RateLimiter ─────────────────────────────────────────────────────────────

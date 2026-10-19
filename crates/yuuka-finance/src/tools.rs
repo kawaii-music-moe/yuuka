@@ -15,6 +15,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde_json::{json, Value};
+use yuuka_core::cron_util;
 use yuuka_core::tool::FunctionDeclaration;
 use yuuka_core::{DbError, Tool, ToolContext, ToolError, ToolName, ToolOutcome, UserScope};
 use yuuka_web::Db;
@@ -95,12 +96,6 @@ pub fn tools(db: Db) -> Result<Vec<Arc<dyn Tool>>, ToolError> {
             db,
         }),
     ])
-}
-
-/// 最小 cron 妥当性（5 フィールド・空でない）。厳密な croner 検証は簡約（todo tools と同方針）。
-fn is_valid_cron_basic(rule: &str) -> bool {
-    let fields: Vec<&str> = rule.split_whitespace().collect();
-    fields.len() == 5 && fields.iter().all(|f| !f.is_empty())
 }
 
 /// 支払い予定 1 件の状態絵文字。
@@ -1022,7 +1017,7 @@ impl Tool for AddPlannedPaymentTool {
         };
         let repeat_rule = arg_str(&args, "repeat_rule");
         if let Some(rule) = &repeat_rule {
-            if !is_valid_cron_basic(rule) {
+            if !cron_util::is_valid(rule) {
                 return Ok(fail_payload(format!(
                     "repeat_rule のcron式が不正です: {rule}（例: '0 0 27 * *' = 毎月27日）"
                 )));
@@ -1937,6 +1932,9 @@ mod tests {
             )
             .await
             .unwrap();
+        assert_eq!(out.payload["success"], false);
+        // 5 フィールドでも実行時 parser が解釈できない repeat_rule は登録しない。
+        let out = add.call(&ctx(), json!({"title": "家賃", "amount": 80000, "category": "その他", "due_date": "2026-08-27", "repeat_rule": "0 0 32 * *"})).await.unwrap();
         assert_eq!(out.payload["success"], false);
         // 正常追加 2 件。
         let out = add.call(&ctx(), json!({"title": "家賃", "amount": 80000, "category": "その他", "due_date": "2026-08-27"})).await.unwrap();

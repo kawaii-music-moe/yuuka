@@ -107,7 +107,7 @@ impl<'a> ReminderRepo<'a> {
     /// `target_type` が `"dm"`/`"channel"` でなければ（未指定含む）ユーザー設定の既定送信先
     /// （users.notify_target_*）を保存する。`target_id` は明示値を優先し、無ければ既定送信先の ID
     /// （現行 `reminderFunctions.ts` / `reminderRoutes.ts` の送信先解決）。`source` は `"manual"` 固定。
-    /// trigger_at は [`crate::datetime::to_db_datetime`] で DB 形式へ正規化する（**B4**: Node
+    /// trigger_at は [`yuuka_core::datetime::input_to_db_local`] で DB 形式へ正規化する（**B4**: Node
     /// `reminderRepo.add` と同位置。LLM/Web の `T` 区切り ISO を空白区切りへ揃え cron の字句比較を
     /// 正す）。
     /// cron 検証と過去日時の保護は addReminder ツール側で行う。
@@ -117,7 +117,8 @@ impl<'a> ReminderRepo<'a> {
     pub async fn add(&self, scope: &UserScope, input: NewReminder) -> Result<Reminder, DbError> {
         let (uid, bid) = scope_keys(scope);
         // trigger_at を DB 形式へ正規化（正規化不能な想定外入力は原文維持＝非破壊）。
-        let trigger_at = crate::datetime::normalize_or_keep(&input.trigger_at);
+        let trigger_at = yuuka_core::datetime::input_to_db_local(&input.trigger_at)
+            .unwrap_or_else(|| input.trigger_at.clone());
         let id = self
             .writer
             .transaction(move |tx| {

@@ -9,8 +9,8 @@ use chrono::Local;
 use yuuka_todo::repo::TodoRepo;
 
 use crate::context::ServiceContext;
-use crate::cron_util;
 use crate::schedule::{CronService, Schedule};
+use yuuka_core::cron_util;
 
 /// ルーチンタスク自動生成サービス。
 pub struct TodoRecurrenceService;
