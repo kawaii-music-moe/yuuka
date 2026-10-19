@@ -200,7 +200,11 @@ async fn run() -> Result<(), String> {
             mcp_client.clone(),
             Some(synapse_engine),
         )
-        .with_calendar(google_events.clone()),
+        .with_calendar(google_events.clone())
+        // ツール実行実績を tool_outcomes へ永続化する（Node `recordToolOutcome`・R22）。
+        .with_tool_outcomes(Arc::new(yuuka_orchestrator::DbToolOutcomeSink::new(
+            db.clone(),
+        ))),
     );
     let chat_ws_routes = ws_routes(chat_engine.clone(), cfg.desktop_max_upload_mb);
 
