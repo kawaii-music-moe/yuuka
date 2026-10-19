@@ -263,7 +263,11 @@ pub async fn get_bot_detail(db: &Db, bot_id: &str) -> Result<Option<BotDetail>, 
         .await
 }
 
-/// ユーザーがアクセス可能な Bot の詳細一覧（owner + system_default + 共有 active・Node `listBotsForUser`）。
+/// ユーザーがアクセス可能な Bot の詳細一覧（owner + 共有 active・Node `listBotsForUser`）。
+///
+/// システムデフォルト Bot（`system_default`）は案内役で個人データを持たないため、持ち主（管理者）でも
+/// 含めない（管理画面・デスクトップの Bot 選択に出さない・issue #140/#142）。並びは自分の Bot →
+/// 共有された Bot、それぞれ作成順。
 ///
 /// # Errors
 /// 読み取り失敗時 [`DbError`]。
@@ -280,8 +284,8 @@ pub async fn list_bots_for_user(db: &Db, user_id: &str) -> Result<Vec<BotDetail>
                  FROM bots b \
                  LEFT JOIN bot_shares s ON s.bot_id = b.id AND s.shared_user_id = ?1 \
                     AND s.status = 'active' \
-                 WHERE b.user_id = ?1 OR b.id = 'system_default' OR s.id IS NOT NULL \
-                 ORDER BY b.created_at ASC";
+                 WHERE (b.user_id = ?1 OR s.id IS NOT NULL) AND b.id != 'system_default' \
+                 ORDER BY (b.user_id = ?1) DESC, b.created_at ASC";
             let mut stmt = conn.prepare(sql).map_err(map_sqlite)?;
             let rows = stmt
                 .query_map(params![user_id], map_bot_detail)
@@ -2175,8 +2179,8 @@ mod crud_tests {
             let conn = rusqlite::Connection::open(&path).expect("seed conn");
             for uid in ["owner", "sharee", "stranger"] {
                 conn.execute(
-                    "INSERT OR IGNORE INTO users (discord_id, username, password_hash, salt) \
-                     VALUES (?1, ?1, 'x', 'x')",
+                    "INSERT OR IGNORE INTO users (discord_id, username, salt) \
+                     VALUES (?1, ?1, 'x')",
                     params![uid],
                 )
                 .expect("seed user");
@@ -2242,6 +2246,31 @@ mod crud_tests {
         let sharee_bots = list_bots_for_user(&db, "sharee").await.unwrap();
         assert!(sharee_bots.iter().any(|b| b.id == "b_other"));
         assert!(!sharee_bots.iter().any(|b| b.id == "b_owned"));
+    }
+
+    /// issue #140/#142: システム Bot は持ち主（管理者）の一覧にも出さず、自分の Bot を共有 Bot より先に並べる。
+    #[tokio::test]
+    async fn list_for_user_excludes_system_default_and_puts_owned_first() {
+        let db = seed_db();
+        create_bot(&db, "system_default", "owner", "System")
+            .await
+            .unwrap();
+        create_bot(&db, "b_other", "stranger", "Other")
+            .await
+            .unwrap();
+        create_bot(&db, "b_owned", "owner", "Owned").await.unwrap();
+        create_share_invite(&db, "b_other", "stranger", "owner")
+            .await
+            .unwrap();
+        accept_share(&db, "b_other", "owner").await.unwrap();
+
+        let ids: Vec<String> = list_bots_for_user(&db, "owner")
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|b| b.id)
+            .collect();
+        assert_eq!(ids, vec!["b_owned".to_owned(), "b_other".to_owned()]);
     }
 
     #[tokio::test]

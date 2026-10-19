@@ -166,8 +166,9 @@ const configSectionTitle = $derived(
 );
 
 // Bot ブランディング（旧 updateSidebarBotBranding）。
-const botName = $derived($activeBot?.name ?? "システムデフォルト");
-const botId = $derived($activeBot?.id ?? "system_default");
+// Bot 未選択時は App が Bot 一覧へ戻すので、ここは描画中の一瞬だけの既定値。
+const botName = $derived($activeBot?.name ?? "");
+const botId = $derived($activeBot?.id ?? "");
 const botIdLabel = $derived(botId.startsWith("bot_") ? botId.slice(4) : botId);
 const botAvatar = $derived($activeBot?.avatar ?? "");
 const DEFAULT_AVATAR =

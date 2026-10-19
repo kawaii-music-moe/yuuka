@@ -130,6 +130,17 @@ pub fn derive_user_key(secret: &str, salt_hex: &str) -> Result<[u8; KEY_LEN], Cr
 /// # Errors
 /// 乱数取得失敗で [`CryptoError::Random`]、暗号化失敗で [`CryptoError::Encrypt`]。
 pub fn encrypt_with_key(key: &[u8; KEY_LEN], plaintext: &str) -> Result<Encrypted, CryptoError> {
+    encrypt_bytes_with_key(key, plaintext.as_bytes())
+}
+
+/// 導出済み鍵で任意のバイト列を AES-256-GCM 暗号化する。
+///
+/// Bot パッケージの SQLite/ZIP のような非 UTF-8 ペイロード向け。返却形式は
+/// [`encrypt_with_key`] と同じ hex 3 要素で、認証タグにより改ざんも検出できる。
+pub fn encrypt_bytes_with_key(
+    key: &[u8; KEY_LEN],
+    plaintext: &[u8],
+) -> Result<Encrypted, CryptoError> {
     let mut iv = [0u8; IV_LEN];
     getrandom::getrandom(&mut iv).map_err(|e| CryptoError::Random(e.to_string()))?;
 
@@ -137,7 +148,7 @@ pub fn encrypt_with_key(key: &[u8; KEY_LEN], plaintext: &str) -> Result<Encrypte
     let nonce = Nonce::from_slice(&iv);
     // RustCrypto の encrypt は ciphertext||tag を返す。末尾 TAG_LEN を tag として分離。
     let ct_and_tag = cipher
-        .encrypt(nonce, plaintext.as_bytes())
+        .encrypt(nonce, plaintext)
         .map_err(|_| CryptoError::Encrypt)?;
     if ct_and_tag.len() < TAG_LEN {
         return Err(CryptoError::Encrypt);
@@ -160,6 +171,17 @@ pub fn decrypt_with_key(
     iv_hex: &str,
     auth_tag_hex: &str,
 ) -> Result<String, CryptoError> {
+    let plain = decrypt_bytes_with_key(key, encrypted_hex, iv_hex, auth_tag_hex)?;
+    String::from_utf8(plain).map_err(|_| CryptoError::NotUtf8)
+}
+
+/// 導出済み鍵で任意のバイト列を復号・認証する。
+pub fn decrypt_bytes_with_key(
+    key: &[u8; KEY_LEN],
+    encrypted_hex: &str,
+    iv_hex: &str,
+    auth_tag_hex: &str,
+) -> Result<Vec<u8>, CryptoError> {
     let iv = hex::decode(iv_hex).map_err(|_| CryptoError::BadIv)?;
     if iv.len() != IV_LEN {
         return Err(CryptoError::BadIv);
@@ -174,10 +196,9 @@ pub fn decrypt_with_key(
 
     let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
     let nonce = Nonce::from_slice(&iv);
-    let plain = cipher
+    cipher
         .decrypt(nonce, buf.as_ref())
-        .map_err(|_| CryptoError::Decrypt)?;
-    String::from_utf8(plain).map_err(|_| CryptoError::NotUtf8)
+        .map_err(|_| CryptoError::Decrypt)
 }
 
 /// ユーザー登録時のソルト生成（CSPRNG・16 バイト hex＝Node `generateUserSalt` と同一形式）。
@@ -330,6 +351,15 @@ mod tests {
         assert_eq!(enc.auth_tag.len(), 32);
         let back = decrypt_with_key(&key, &enc.encrypted, &enc.iv, &enc.auth_tag).unwrap();
         assert_eq!(back, "gemini-api-key-XYZ");
+    }
+
+    #[test]
+    fn binary_roundtrip() {
+        let key = derive_user_key("123456", "00112233445566778899aabbccddeeff").unwrap();
+        let input = [0_u8, 255, 83, 81, 76, 105, 116, 101, 0, 128];
+        let enc = encrypt_bytes_with_key(&key, &input).unwrap();
+        let back = decrypt_bytes_with_key(&key, &enc.encrypted, &enc.iv, &enc.auth_tag).unwrap();
+        assert_eq!(back, input);
     }
 
     #[test]

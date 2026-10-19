@@ -22,6 +22,7 @@ reqwest = { workspace = true }       # runBriefingNow の天気（Open-Meteo）/
 [dev-dependencies]
 tokio.workspace = true
 tower.workspace = true
+yuuka-web = { workspace = true, features = ["test-support"] }
 
 [lints]
 workspace = true

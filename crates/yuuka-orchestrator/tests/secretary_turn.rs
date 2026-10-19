@@ -86,9 +86,9 @@ fn seed_user_with_key(path: &std::path::Path, crypto: &SystemCrypto, discord_id:
     let enc = crypto.encrypt_text("fake-gemini-key").expect("encrypt");
     let conn = rusqlite::Connection::open(path).expect("open seed");
     conn.execute(
-        "INSERT INTO users (discord_id, username, password_hash, salt, role, \
+        "INSERT INTO users (discord_id, username, salt, role, \
          gemini_api_key_encrypted, gemini_api_key_iv, gemini_api_key_tag, gemini_model) \
-         VALUES (?1, 'yuu', 'x', '00', 'user', ?2, ?3, ?4, 'gemini-3.1-flash-lite')",
+         VALUES (?1, 'yuu', '00', 'user', ?2, ?3, ?4, 'gemini-3.1-flash-lite')",
         rusqlite::params![discord_id, enc.encrypted, enc.iv, enc.auth_tag],
     )
     .expect("seed user");
@@ -98,8 +98,8 @@ fn seed_user_with_key(path: &std::path::Path, crypto: &SystemCrypto, discord_id:
 fn seed_user_no_key(path: &std::path::Path, discord_id: &str) {
     let conn = rusqlite::Connection::open(path).expect("open seed");
     conn.execute(
-        "INSERT INTO users (discord_id, username, password_hash, salt, role) \
-         VALUES (?1, 'yuu', 'x', '00', 'user')",
+        "INSERT INTO users (discord_id, username, salt, role) \
+         VALUES (?1, 'yuu', '00', 'user')",
         rusqlite::params![discord_id],
     )
     .expect("seed user");

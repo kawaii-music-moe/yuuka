@@ -49,6 +49,7 @@ mod tests {
     use tower::ServiceExt;
     use yuuka_core::{AuthError, BotId, UserId, UserScope};
     use yuuka_types::{Role, SessionUser};
+    use yuuka_web::test_support::{with_bot_query, TEST_BOT_ID};
     use yuuka_web::{AppState, AuthBackend, Db, WebConfig};
 
     use crate::dto::{NewDayPlanBlock, NewTimelineRecord, UpdatePlanBlock};
@@ -79,8 +80,8 @@ mod tests {
             let conn = rusqlite::Connection::open(&path).expect("seed users conn");
             for uid in ["u", "userA", "userB", "other"] {
                 conn.execute(
-                    "INSERT OR IGNORE INTO users (discord_id, username, password_hash, salt) \
-                     VALUES (?1, ?1, 'x', 'x')",
+                    "INSERT OR IGNORE INTO users (discord_id, username, salt) \
+                     VALUES (?1, ?1, 'x')",
                     rusqlite::params![uid],
                 )
                 .expect("seed user");
@@ -351,7 +352,7 @@ mod tests {
         }
     }
 
-    fn app() -> axum::Router {
+    async fn app() -> axum::Router {
         let auth = Arc::new(FakeAuth {
             user: SessionUser {
                 discord_id: "u".to_owned(),
@@ -359,13 +360,15 @@ mod tests {
                 role: Role::User,
             },
         });
-        let state = AppState::new(auth, WebConfig::default(), seed_db());
-        super::routes().with_state(state)
+        let db = seed_db();
+        yuuka_web::test_support::seed_bot(&db, TEST_BOT_ID, "u").await;
+        let state = AppState::new(auth, WebConfig::default(), db);
+        with_bot_query(super::routes().with_state(state), TEST_BOT_ID)
     }
 
     #[tokio::test]
     async fn route_add_then_day() {
-        let app = app();
+        let app = app().await;
         let add = app
             .clone()
             .oneshot(
@@ -408,7 +411,7 @@ mod tests {
 
     #[tokio::test]
     async fn route_expense_record_double_registers_and_validates() {
-        let app = app();
+        let app = app().await;
         // type=expense: 200・record.expense_id 連結（家計簿へ二重登録された証跡）。
         let ok = app
             .clone()
@@ -468,7 +471,12 @@ mod tests {
             media_dir: media_dir.path().to_path_buf(),
             ..WebConfig::default()
         };
-        let app = super::routes().with_state(AppState::new(auth, config, seed_db()));
+        let db = seed_db();
+        yuuka_web::test_support::seed_bot(&db, TEST_BOT_ID, "u").await;
+        let app = with_bot_query(
+            super::routes().with_state(AppState::new(auth, config, db)),
+            TEST_BOT_ID,
+        );
 
         // base64 "hello" を image/png としてアップロード。
         let b64 = base64::engine::general_purpose::STANDARD.encode(b"hello");
@@ -552,6 +560,7 @@ mod tests {
     async fn day_without_date_falls_back_to_today() {
         // date 未指定は 400 ではなく本日にフォールバックして 200（Node parity）。
         let resp = app()
+            .await
             .oneshot(
                 Request::builder()
                     .uri("/api/timeline/day")
@@ -572,6 +581,7 @@ mod tests {
     #[tokio::test]
     async fn route_requires_auth() {
         let resp = app()
+            .await
             .oneshot(
                 Request::builder()
                     .uri("/api/timeline/day?date=2026-07-06")
@@ -619,7 +629,7 @@ mod tests {
     /// M-8 回帰: クライアントが内部列を送り込んでも INSERT されない（NULL のまま）。
     #[tokio::test]
     async fn route_record_ignores_internal_columns() {
-        let app = app();
+        let app = app().await;
         let add = app
             .oneshot(
                 Request::builder()
@@ -850,7 +860,7 @@ mod tests {
 
     #[tokio::test]
     async fn route_plan_add_update_delete_and_day() {
-        let app = app();
+        let app = app().await;
         // 作成。
         let add = app
             .clone()
@@ -945,6 +955,7 @@ mod tests {
     async fn route_plan_add_missing_fields_is_400() {
         // title 欠落 → 400（Node parity）。
         let resp = app()
+            .await
             .oneshot(
                 Request::builder()
                     .method("POST")
@@ -963,6 +974,7 @@ mod tests {
     async fn route_plan_update_not_found_is_404() {
         // 存在しない id → 404（Node parity・delete の 200 とは異なる）。
         let resp = app()
+            .await
             .oneshot(
                 Request::builder()
                     .method("POST")
@@ -981,6 +993,7 @@ mod tests {
     async fn route_plan_update_id_zero_is_400() {
         // id=0 は Node の `!id` で 400（0 は falsy）。
         let resp = app()
+            .await
             .oneshot(
                 Request::builder()
                     .method("POST")
@@ -998,6 +1011,7 @@ mod tests {
     #[tokio::test]
     async fn route_plan_requires_auth() {
         let resp = app()
+            .await
             .oneshot(
                 Request::builder()
                     .method("POST")
