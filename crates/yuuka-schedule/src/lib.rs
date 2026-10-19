@@ -501,12 +501,16 @@ mod tests {
             },
         });
         let db = seed_db();
+        yuuka_web::test_support::seed_bot(&db, TEST_BOT_ID, "u").await;
         let google = Arc::new(RecordingGoogle::default());
-        let app = super::routes_with_calendar(Some(google.clone())).with_state(AppState::new(
-            auth,
-            WebConfig::default(),
-            db.clone(),
-        ));
+        let app = with_bot_query(
+            super::routes_with_calendar(Some(google.clone())).with_state(AppState::new(
+                auth,
+                WebConfig::default(),
+                db.clone(),
+            )),
+            TEST_BOT_ID,
+        );
         let post = |uri: &'static str, body: String| {
             Request::builder()
                 .method("POST")
@@ -536,7 +540,10 @@ mod tests {
         assert_eq!(*google.inserted.lock().unwrap(), vec!["歯医者".to_owned()]);
         assert_eq!(
             ScheduleRepo::new(&db)
-                .google_link(&scope("u"), id)
+                .google_link(
+                    &UserScope::new(UserId::new("u"), BotId::new(TEST_BOT_ID)),
+                    id
+                )
                 .await
                 .unwrap(),
             Some(("ev1".to_owned(), Some("main@g".to_owned())))
