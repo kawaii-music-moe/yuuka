@@ -9,7 +9,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use yuuka_core::{BotId, UserId};
+use yuuka_core::{BotId, EmbedPart, UserId};
 use yuuka_reminder::notify_target::{user_notify_target, UserNotifyTarget};
 use yuuka_web::Db;
 
@@ -25,15 +25,17 @@ pub enum NotifyTarget {
     Channel(String),
 }
 
-/// 1 通の通知（現行 `NotifyPayload` の text 経路）。埋め込み/ファイルは report/briefing 実装時に拡張する。
+/// 1 通の通知（現行 `NotifyPayload` の text / embeds 経路）。
 #[derive(Debug, Clone)]
 pub struct Notification {
     /// 宛先ユーザー。
     pub user_id: UserId,
     /// 配信元 Bot（秘書業務データの Bot 別分離・本人クライアントで届ける）。
     pub bot_id: BotId,
-    /// 本文（空なら配信しない）。
+    /// 本文（Embed が無い場合、空なら配信しない）。
     pub content: String,
+    /// provider 中立な Discord Embed。本文が空でも Embed があれば配信する。
+    pub embeds: Vec<EmbedPart>,
     /// 送信先の解決方針。
     pub target: NotifyTarget,
 }
@@ -46,6 +48,19 @@ impl Notification {
             user_id,
             bot_id,
             content: content.into(),
+            embeds: Vec::new(),
+            target: NotifyTarget::Default,
+        }
+    }
+
+    /// DM/既定送信先への Embed 通知を作る。
+    #[must_use]
+    pub fn embed(user_id: UserId, bot_id: BotId, embed: EmbedPart) -> Self {
+        Self {
+            user_id,
+            bot_id,
+            content: String::new(),
+            embeds: vec![embed],
             target: NotifyTarget::Default,
         }
     }
@@ -61,7 +76,7 @@ impl Notification {
 /// ユーザー通知配信（現行 `sendToUser`）。送信成功なら `true`。
 #[async_trait]
 pub trait Notifier: Send + Sync {
-    /// 1 通配信する。空本文・利用可能クライアント無し・送信失敗は `false`（呼び出し側で再試行）。
+    /// 1 通配信する。空 payload・利用可能クライアント無し・送信失敗は `false`（呼び出し側で再試行）。
     async fn send(&self, notification: Notification) -> bool;
 }
 
@@ -224,6 +239,30 @@ mod tests {
         let sent = rec.sent.lock().expect("lock");
         assert_eq!(sent.len(), 1);
         assert_eq!(sent[0].content, "x");
+        assert!(sent[0].embeds.is_empty());
         assert_eq!(sent[0].target, NotifyTarget::Channel("c1".to_owned()));
+    }
+
+    #[tokio::test]
+    async fn recording_notifier_captures_embed_without_text() {
+        let rec = RecordingNotifier::new(true);
+        let ok = rec
+            .send(Notification::embed(
+                UserId::new("u"),
+                BotId::new("b"),
+                EmbedPart {
+                    title: Some("通知".to_owned()),
+                    description: None,
+                    color: 0x58_65_F2,
+                    fields: Vec::new(),
+                    footer: None,
+                },
+            ))
+            .await;
+        assert!(ok);
+        let sent = rec.sent.lock().expect("lock");
+        assert!(sent[0].content.is_empty());
+        assert_eq!(sent[0].embeds.len(), 1);
+        assert_eq!(sent[0].embeds[0].title.as_deref(), Some("通知"));
     }
 }
