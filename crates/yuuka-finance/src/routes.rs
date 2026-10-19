@@ -367,10 +367,12 @@ async fn pay_plan(
         )));
     }
 
-    // 実支払いを Expense として記録し消込・紐付き ToDo を自動完了（1 トランザクション）。
-    let (expense_id, completed_todos) = repo.settle_plan(&scope, &plan).await?;
+    // 実支払いを Expense として記録し消込・紐付き ToDo を自動完了・紐付きリマインドを停止
+    // （1 トランザクション）。
+    let settled = repo.settle_plan(&scope, &plan).await?;
+    let completed_todos = settled.completed_todos;
     let expense = repo
-        .get(&scope, expense_id)
+        .get(&scope, settled.expense_id)
         .await?
         .ok_or(ApiError(WebError::Internal))?;
 
@@ -401,11 +403,15 @@ async fn delete_plan(
     }: ScopedJson<PlannedPaymentId>,
 ) -> Result<Json<Envelope<EmptyData>>, ApiError> {
     // Node parity: `!id`（0 含む）は 400。成否は bare `{success: ok}` で返す。
+    // 紐付く期日前リマインドは repo が同じトランザクションで止める（R15）。
     if input.id == 0 {
         return Err(ApiError(WebError::Validation("id is required".to_owned())));
     }
     let scope = resolve_scope(&user.0, &db, bot_id.as_deref()).await?;
-    let ok = ExpenseRepo::new(&db).cancel_plan(&scope, input.id).await?;
+    let ok = ExpenseRepo::new(&db)
+        .cancel_plan(&scope, input.id)
+        .await?
+        .is_some();
     Ok(Json(Envelope::bare(ok)))
 }
 
