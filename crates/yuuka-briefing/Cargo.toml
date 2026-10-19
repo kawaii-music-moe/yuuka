@@ -19,6 +19,7 @@ serde.workspace = true
 serde_json.workspace = true
 async-trait.workspace = true
 reqwest = { workspace = true }       # runBriefingNow の天気（Open-Meteo）/ RSS 取得
+tracing.workspace = true             # RSS のリダイレクト拒否などを記録
 
 [dev-dependencies]
 tokio.workspace = true

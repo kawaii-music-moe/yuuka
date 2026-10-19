@@ -197,10 +197,27 @@ struct NewsItem {
 }
 
 async fn fetch_news(feeds: &[String], keywords: &[String]) -> Vec<NewsItem> {
+    fetch_news_with(feeds, keywords, |url| async move {
+        yuuka_browser::assert_safe_outbound_url(&url).await.is_ok()
+    })
+    .await
+}
+
+/// リダイレクトを追う上限（Node `rss-parser` の `maxRedirects` 既定値と同じ）。
+const MAX_FEED_REDIRECTS: usize = 5;
+
+/// [`fetch_news`] の本体。`is_safe` は取得する各 URL（リダイレクト先を含む）の SSRF 検査で、
+/// 本番は DNS 解決先まで見る `assert_safe_outbound_url`。テストはループバック上の擬似サーバーを
+/// 「公開先」と「内部先」に見立てるために差し替える。
+async fn fetch_news_with<F, Fut>(feeds: &[String], keywords: &[String], is_safe: F) -> Vec<NewsItem>
+where
+    F: Fn(String) -> Fut,
+    Fut: std::future::Future<Output = bool>,
+{
     let client = match reqwest::Client::builder()
         .timeout(Duration::from_secs(10))
-        // The destination check below only covers the original URL. Following redirects here
-        // would let an otherwise public feed redirect the request to a loopback/link-local host.
+        // reqwest に追わせると検査は最初の URL だけになり、公開フィードが内部アドレスへリダイレクト
+        // できてしまう。リダイレクトは `fetch_feed` で 1 回ずつ検査してから追う。
         .redirect(reqwest::redirect::Policy::none())
         .build()
     {
@@ -209,18 +226,10 @@ async fn fetch_news(feeds: &[String], keywords: &[String]) -> Vec<NewsItem> {
     };
 
     let mut items: Vec<NewsItem> = Vec::new();
-    for url in feeds.iter().take(10) {
-        // SSRF: 取得直前に DNS 解決先まで検査し、内部/予約レンジ・非 http(s) は取得しない
-        // （個別失敗は無視・Node パリティ）。登録時の簡易検査はドメインを公開扱いにするため、ここで再検査する。
-        if yuuka_browser::assert_safe_outbound_url(url).await.is_err() {
-            continue;
-        }
-        let Ok(resp) = client.get(url).send().await else {
+    for feed in feeds.iter().take(10) {
+        let Some(resp) = fetch_feed(&client, feed, &is_safe).await else {
             continue;
         };
-        if !resp.status().is_success() {
-            continue;
-        }
         let Ok(body) = resp.text().await else {
             continue;
         };
@@ -245,6 +254,42 @@ async fn fetch_news(feeds: &[String], keywords: &[String]) -> Vec<NewsItem> {
     } else {
         filtered
     }
+}
+
+/// 1 フィードを取得し、成功（2xx）レスポンスを返す。取れなければ `None`（個別失敗は無視・Node パリティ）。
+///
+/// SSRF: 取得直前に DNS 解決先まで検査し、内部/予約レンジ・非 http(s) は取得しない。登録時の簡易検査は
+/// ドメインを公開扱いにするため、ここで再検査する。リダイレクトは `Location` を解決して同じ検査に
+/// 通してから、最大 [`MAX_FEED_REDIRECTS`] 回まで追う。
+async fn fetch_feed<F, Fut>(
+    client: &reqwest::Client,
+    feed: &str,
+    is_safe: &F,
+) -> Option<reqwest::Response>
+where
+    F: Fn(String) -> Fut,
+    Fut: std::future::Future<Output = bool>,
+{
+    let mut url = feed.to_owned();
+    for hop in 0..=MAX_FEED_REDIRECTS {
+        if !is_safe(url.clone()).await {
+            if hop > 0 {
+                tracing::warn!(feed, redirect_to = %url, "RSS のリダイレクト先が内部アドレスのため取得しない");
+            }
+            return None;
+        }
+        let resp = client.get(&url).send().await.ok()?;
+        if !resp.status().is_redirection() {
+            return resp.status().is_success().then_some(resp);
+        }
+        let location = resp
+            .headers()
+            .get(reqwest::header::LOCATION)
+            .and_then(|v| v.to_str().ok())?;
+        url = resp.url().join(location).ok()?.into();
+    }
+    tracing::warn!(feed, "RSS のリダイレクトが多すぎるため取得しない");
+    None
 }
 
 /// RSS/Atom から記事タイトル群を最小抽出する（`<item>`/`<entry>` 内の最初の `<title>`）。
@@ -429,57 +474,114 @@ mod tests {
         assert_eq!(hits.load(Ordering::SeqCst), 0, "内部アドレスへ接続した");
     }
 
-    /// R25: a feed URL which passed the initial safety check must not be allowed to redirect the
-    /// HTTP client to an internal address. The production client intentionally returns the 302
-    /// response to `fetch_news`, which then ignores it as a non-success response.
-    #[tokio::test]
-    async fn news_client_does_not_follow_redirects_to_internal_address() {
+    /// テスト用の HTTP サーバー。リクエストのパスを `respond` に渡して応答を返し、接続回数を数える。
+    async fn spawn_feed_server(
+        respond: impl Fn(&str) -> String + Send + 'static,
+    ) -> (
+        std::net::SocketAddr,
+        std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        tokio::task::JoinHandle<()>,
+    ) {
         use std::sync::atomic::{AtomicUsize, Ordering};
         use std::sync::Arc;
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-        let internal = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let internal_addr = internal.local_addr().unwrap();
-        let internal_hits = Arc::new(AtomicUsize::new(0));
-        let server_hits = Arc::clone(&internal_hits);
-        let internal_server = tokio::spawn(async move {
-            if let Ok((mut sock, _)) = internal.accept().await {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let hits = Arc::new(AtomicUsize::new(0));
+        let server_hits = Arc::clone(&hits);
+        let server = tokio::spawn(async move {
+            while let Ok((mut sock, _)) = listener.accept().await {
                 server_hits.fetch_add(1, Ordering::SeqCst);
                 let mut buf = [0u8; 1024];
-                let _ = sock.read(&mut buf).await;
-                let _ = sock
-                    .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
-                    .await;
+                let n = sock.read(&mut buf).await.unwrap_or(0);
+                let req = String::from_utf8_lossy(&buf[..n]);
+                let path = req.split_whitespace().nth(1).unwrap_or("/").to_owned();
+                let _ = sock.write_all(respond(&path).as_bytes()).await;
             }
         });
+        (addr, hits, server)
+    }
 
-        let redirector = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let redirector_addr = redirector.local_addr().unwrap();
-        let redirect_server = tokio::spawn(async move {
-            let (mut sock, _) = redirector.accept().await.unwrap();
-            let mut buf = [0u8; 1024];
-            let _ = sock.read(&mut buf).await;
-            let response = format!(
-                "HTTP/1.1 302 Found\r\nLocation: http://{internal_addr}/feed.xml\r\nContent-Length: 0\r\n\r\n"
-            );
-            sock.write_all(response.as_bytes()).await.unwrap();
-        });
+    fn feed_response(title: &str) -> String {
+        let body = format!("<rss><channel><item><title>{title}</title></item></channel></rss>");
+        format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/rss+xml\r\n\
+             Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )
+    }
 
-        let client = reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .unwrap();
-        let response = client
-            .get(format!("http://{redirector_addr}/feed.xml"))
-            .send()
-            .await
-            .unwrap();
+    fn redirect_response(location: &str) -> String {
+        format!(
+            "HTTP/1.1 302 Found\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        )
+    }
 
-        redirect_server.await.unwrap();
-        tokio::task::yield_now().await;
+    /// 擬似サーバーのうち `public` のポートだけを公開先として通す検査（それ以外は内部扱い）。
+    fn only_public(public: std::net::SocketAddr) -> impl Fn(String) -> std::future::Ready<bool> {
+        move |url| {
+            let port = reqwest::Url::parse(&url).ok().and_then(|u| u.port());
+            std::future::ready(port == Some(public.port()))
+        }
+    }
+
+    /// R25: 検査を通った公開フィードが内部アドレスへリダイレクトしても追わない（内部への接続 0 回）。
+    #[tokio::test]
+    async fn fetch_news_does_not_follow_redirect_to_internal_address() {
+        use std::sync::atomic::Ordering;
+
+        let (internal, internal_hits, internal_server) =
+            spawn_feed_server(|_| feed_response("内部の記事")).await;
+        let (public, public_hits, public_server) =
+            spawn_feed_server(move |_| redirect_response(&format!("http://{internal}/feed.xml")))
+                .await;
+
+        let feeds = vec![format!("http://{public}/feed.xml")];
+        let items = fetch_news_with(&feeds, &[], only_public(public)).await;
+        public_server.abort();
         internal_server.abort();
-        assert_eq!(response.status(), reqwest::StatusCode::FOUND);
-        assert_eq!(internal_hits.load(Ordering::SeqCst), 0);
+
+        assert!(items.is_empty());
+        assert_eq!(public_hits.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            internal_hits.load(Ordering::SeqCst),
+            0,
+            "内部アドレスへ接続した"
+        );
+    }
+
+    /// 公開先へのリダイレクト（http→https・移転など）は追って記事を取る（相対 `Location` も解決する）。
+    #[tokio::test]
+    async fn fetch_news_follows_redirect_to_public_address() {
+        let (public, _hits, server) = spawn_feed_server(|path| match path {
+            "/old.xml" => redirect_response("/moved.xml"),
+            "/moved.xml" => redirect_response("/feed.xml"),
+            _ => feed_response("移転先の記事"),
+        })
+        .await;
+
+        let feeds = vec![format!("http://{public}/old.xml")];
+        let items = fetch_news_with(&feeds, &[], only_public(public)).await;
+        server.abort();
+
+        let titles: Vec<String> = items.into_iter().map(|it| it.title).collect();
+        assert_eq!(titles, vec!["移転先の記事".to_owned()]);
+    }
+
+    /// リダイレクトは最大 5 回まで（Node `rss-parser` と同じ）。それを超えるループは取得しない。
+    #[tokio::test]
+    async fn fetch_news_gives_up_after_too_many_redirects() {
+        use std::sync::atomic::Ordering;
+
+        let (public, hits, server) = spawn_feed_server(|_| redirect_response("/loop.xml")).await;
+
+        let feeds = vec![format!("http://{public}/feed.xml")];
+        let items = fetch_news_with(&feeds, &[], only_public(public)).await;
+        server.abort();
+
+        assert!(items.is_empty());
+        assert_eq!(hits.load(Ordering::SeqCst), MAX_FEED_REDIRECTS + 1);
     }
 
     #[test]
