@@ -14,7 +14,7 @@ use async_trait::async_trait;
 use chrono::Local;
 
 use crate::context::ServiceContext;
-use crate::cron_util;
+use yuuka_core::cron_util;
 
 /// cron スケジュール。cron 整列（分境界で発火）と固定間隔（metrics の setInterval）を区別する。
 #[derive(Debug, Clone)]

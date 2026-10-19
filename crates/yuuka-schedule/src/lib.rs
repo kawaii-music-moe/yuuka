@@ -9,7 +9,6 @@
 //! [`cron`] に追加済み。DAG: `schedule → web, db, types, core`。
 
 pub mod cron;
-pub mod datetime;
 pub mod dto;
 pub mod google_sync;
 pub mod repo;

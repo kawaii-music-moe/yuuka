@@ -4,12 +4,17 @@
 //! 往復・並行呼び出し（`id` 相関）・`maxIterations`・完了ハルシネーション是正（mode=ANY）を保持。
 //! バックエンドは [`GenerateBackend`] trait 越しなのでテストは canned レスポンスで駆動できる。
 //! provider は `yuuka-core` の凍結 [`ToolProvider`] トレイト（Native/MCP/WASM 透過）。
+//! ツール実行実績（`tool_outcomes`）は [`ToolOutcomeSink`] ポート越しに上位層が永続化する。
 
 use std::sync::Arc;
+use std::time::Instant;
 
+use async_trait::async_trait;
 use serde_json::json;
 use yuuka_core::tool::FunctionDeclaration as CoreFnDecl;
-use yuuka_core::{ActionRecorder, GeminiError, ResponsePart, ToolContext, ToolName, ToolProvider};
+use yuuka_core::{
+    ActionRecorder, DbError, GeminiError, ResponsePart, ToolContext, ToolName, ToolProvider,
+};
 
 use crate::client::GenerateBackend;
 use crate::wire::{Content, FunctionDeclaration, FunctionResponse, Part, Role, ToolConfig};
@@ -30,6 +35,65 @@ pub enum Status {
 /// ステータス通知コールバック（省略可）。
 pub type StatusCb = Arc<dyn Fn(Status) + Send + Sync>;
 
+/// ツール実行の成否（`tool_outcomes.status`・Node `"success" | "error"`）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolOutcomeStatus {
+    Success,
+    Error,
+}
+
+impl ToolOutcomeStatus {
+    /// `functionResponse.response` から成否を判定する（Node `reportedFailure`: JSON の
+    /// `success === false` のときだけ失敗。`success` を持たない結果は成功扱い）。
+    #[must_use]
+    pub fn from_response(response: &serde_json::Value) -> Self {
+        if response.get("success") == Some(&serde_json::Value::Bool(false)) {
+            Self::Error
+        } else {
+            Self::Success
+        }
+    }
+
+    /// DB に保存する文字列表現（`"success"` / `"error"`）。
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Success => "success",
+            Self::Error => "error",
+        }
+    }
+}
+
+/// ツール 1 回分の実行実績（Node `recordToolOutcome` の入力のうち FC ループが知る部分）。
+///
+/// `args` は**生の引数**。永続化する側は必ずダイジェスト化（秘匿マスク）してから保存し、
+/// 引数そのものを残さないこと。user/bot/guild は同時に渡す [`ToolContext`] から取る。
+#[derive(Debug, Clone, Copy)]
+pub struct ToolOutcomeRecord<'a> {
+    /// ツール名（Gemini の functionCall 名）。
+    pub tool_name: &'a str,
+    /// 生の引数（ダイジェスト化前）。
+    pub args: &'a serde_json::Value,
+    /// 成否。
+    pub status: ToolOutcomeStatus,
+    /// dispatch に要した時間（ミリ秒）。
+    pub latency_ms: u64,
+}
+
+/// ツール実行実績の記録先ポート（Node `recordToolOutcome` → `tool_outcomes`）。
+///
+/// FC ループは dispatch 毎に 1 回呼ぶ。失敗はループ側で `warn` ログに落とし、ターンは続行する
+/// （記録の失敗で応答を妨げない）。本番実装は orchestrator の `DbToolOutcomeSink`。
+#[async_trait]
+pub trait ToolOutcomeSink: Send + Sync {
+    /// 実行実績を 1 件記録する。
+    ///
+    /// # Errors
+    /// 永続化に失敗したとき [`DbError`]。
+    async fn record(&self, ctx: &ToolContext, record: ToolOutcomeRecord<'_>)
+        -> Result<(), DbError>;
+}
+
 /// ループ実行オプション。
 pub struct LoopOptions {
     /// 最大反復回数（現行 `maxIterations=10`）。
@@ -43,6 +107,9 @@ pub struct LoopOptions {
     /// 操作履歴レコーダー（Node `recordFunctionCall`）。dispatch 毎に記録し
     /// `getRecentActionHistory` へ供給する。None なら記録しない。
     pub action_recorder: Option<Arc<ActionRecorder>>,
+    /// ツール実行実績の記録先（Node `recordToolOutcome`）。dispatch 毎に 1 件記録する。
+    /// None なら記録しない。
+    pub outcome_sink: Option<Arc<dyn ToolOutcomeSink>>,
 }
 
 impl Default for LoopOptions {
@@ -53,6 +120,7 @@ impl Default for LoopOptions {
             allowed_tool_names: None,
             on_status: None,
             action_recorder: None,
+            outcome_sink: None,
         }
     }
 }
@@ -238,8 +306,22 @@ pub async fn run_function_calling_loop(
             if let Some(recorder) = &opts.action_recorder {
                 recorder.record(ctx.user_id.as_str(), &fc.name, &fc.args);
             }
+            let started = Instant::now();
             let response =
                 dispatch_one(provider, ctx, &fc.name, fc.args.clone(), &mut result).await;
+            let latency_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+            // 実行実績を永続化（Node `recordToolOutcome`・失敗は warn のみで応答を妨げない）。
+            if let Some(sink) = &opts.outcome_sink {
+                let record = ToolOutcomeRecord {
+                    tool_name: &fc.name,
+                    args: &fc.args,
+                    status: ToolOutcomeStatus::from_response(&response),
+                    latency_ms,
+                };
+                if let Err(e) = sink.record(ctx, record).await {
+                    tracing::warn!(error = %e, tool = %fc.name, "[ToolOutcome] 記録に失敗しました（無視）");
+                }
+            }
             response_parts.push(Part::function_response(FunctionResponse {
                 name: fc.name.clone(),
                 response,

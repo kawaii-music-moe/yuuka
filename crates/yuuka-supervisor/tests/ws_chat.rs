@@ -160,7 +160,8 @@ async fn ws_chat_ready_then_msg_returns_done() {
         // デバイスフロー ルータ（本テストでは不要・空ルータ）。
         axum::Router::new(),
         ws_routes(engine, 20),
-        // MCP / 統合設定 / finance / schedule / Bot 管理 / client-api ルータ（本テストでは不要・空ルータ）。
+        // MCP / 統合設定 / finance / schedule / Bot 管理 / 利用申請・共有招待 / client-api ルータ（本テストでは不要・空ルータ）。
+        axum::Router::new(),
         axum::Router::new(),
         axum::Router::new(),
         axum::Router::new(),
@@ -260,7 +261,8 @@ async fn ws_chat_rejects_cookie_only_auth() {
         // デバイスフロー ルータ（本テストでは不要・空ルータ）。
         axum::Router::new(),
         ws_routes(engine, 20),
-        // MCP / 統合設定 / finance / schedule / Bot 管理 / client-api ルータ（本テストでは不要・空ルータ）。
+        // MCP / 統合設定 / finance / schedule / Bot 管理 / 利用申請・共有招待 / client-api ルータ（本テストでは不要・空ルータ）。
+        axum::Router::new(),
         axum::Router::new(),
         axum::Router::new(),
         axum::Router::new(),

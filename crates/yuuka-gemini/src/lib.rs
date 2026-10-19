@@ -16,7 +16,7 @@ pub use breaker::CircuitBreaker;
 pub use client::{ClientOptions, GeminiClient, GenerateBackend, ALLOWED_MODELS, DEFAULT_MODEL};
 pub use fc_loop::{
     claims_action_completed, run_function_calling_loop, LoopOptions, LoopResult, Status, StatusCb,
-    COMPLETION_CORRECTION_PROMPT,
+    ToolOutcomeRecord, ToolOutcomeSink, ToolOutcomeStatus, COMPLETION_CORRECTION_PROMPT,
 };
 pub use wire::{
     Candidate, Content, FunctionCall, FunctionCallingMode, FunctionDeclaration, FunctionResponse,
@@ -27,7 +27,7 @@ pub use wire::{
 #[cfg(test)]
 mod loop_tests {
     use std::collections::VecDeque;
-    use std::sync::Mutex;
+    use std::sync::{Arc, Mutex};
 
     use async_trait::async_trait;
     use serde_json::json;
@@ -106,10 +106,17 @@ mod loop_tests {
             args: serde_json::Value,
             _ctx: &ToolContext,
         ) -> Result<ToolOutcome, ToolError> {
+            let fail = args.get("title") == Some(&json!("fail"));
             self.invoked
                 .lock()
                 .unwrap()
                 .push((name.as_str().to_owned(), args));
+            // title="fail" はツール側の失敗（Node の `{success:false}` 応答）を返す。
+            if fail {
+                return Ok(ToolOutcome::from_payload(
+                    json!({ "success": false, "message": "失敗" }),
+                ));
+            }
             Ok(ToolOutcome::from_payload(
                 json!({ "success": true, "id": 1 }),
             ))
@@ -244,5 +251,143 @@ mod loop_tests {
 
         assert!(result.hit_max_iterations);
         assert_eq!(provider.invoked.lock().unwrap().len(), 2);
+    }
+
+    /// 記録内容（ツール名・引数・成否・user/bot/guild）を溜める fake 記録器。`fail=true` なら常に失敗する。
+    #[derive(Default)]
+    struct FakeOutcomeSink {
+        fail: bool,
+        #[allow(clippy::type_complexity)]
+        records: Mutex<
+            Vec<(
+                String,
+                serde_json::Value,
+                ToolOutcomeStatus,
+                String,
+                String,
+                Option<String>,
+            )>,
+        >,
+    }
+
+    #[async_trait]
+    impl ToolOutcomeSink for FakeOutcomeSink {
+        async fn record(
+            &self,
+            ctx: &ToolContext,
+            record: ToolOutcomeRecord<'_>,
+        ) -> Result<(), yuuka_core::DbError> {
+            self.records.lock().unwrap().push((
+                record.tool_name.to_owned(),
+                record.args.clone(),
+                record.status,
+                ctx.user_id.as_str().to_owned(),
+                ctx.bot_id.as_str().to_owned(),
+                ctx.guild_id.as_ref().map(|g| g.as_str().to_owned()),
+            ));
+            if self.fail {
+                return Err(yuuka_core::DbError::Operation("disk full".to_owned()));
+            }
+            Ok(())
+        }
+    }
+
+    /// 1 ターンで成功・失敗のツールを 1 回ずつ呼ぶ応答列（並行呼び出し 2 件 → 最終テキスト）。
+    fn success_and_failure_script() -> Vec<GenerateContentResponse> {
+        vec![
+            resp(json!({"candidates":[{"content":{"role":"model","parts":[
+                {"functionCall":{"name":"native:add_todo","args":{"title":"牛乳"},"id":"c1"}},
+                {"functionCall":{"name":"native:add_todo","args":{"title":"fail"},"id":"c2"}}
+            ]}}]})),
+            resp(json!({"candidates":[{"content":{"role":"model","parts":[
+                {"text":"1 件は追加できませんでした。"}
+            ]}}]})),
+        ]
+    }
+
+    /// dispatch 毎に実行実績を 1 件ずつ記録し、`{success:false}` 応答は error として残す（R22）。
+    #[tokio::test]
+    async fn records_tool_outcome_per_dispatch_with_status() {
+        let backend = FakeBackend::new(success_and_failure_script());
+        let provider = FakeProvider::new();
+        let sink = Arc::new(FakeOutcomeSink::default());
+        let mut contents = vec![Content::user_text("牛乳と fail を追加して")];
+        let opts = LoopOptions {
+            outcome_sink: Some(sink.clone()),
+            ..LoopOptions::default()
+        };
+        let mut ctx = ctx();
+        ctx.guild_id = Some(yuuka_core::GuildId::new("g1"));
+
+        let result =
+            run_function_calling_loop(&backend, &provider, "sys", &mut contents, &ctx, &opts)
+                .await
+                .unwrap();
+        assert_eq!(result.tool_calls.len(), 2);
+
+        let records = sink.records.lock().unwrap();
+        assert_eq!(records.len(), 2, "成功・失敗それぞれ 1 件ずつ記録される");
+        let bot = BotId::system_default().as_str().to_owned();
+        assert_eq!(
+            records[0],
+            (
+                "native:add_todo".to_owned(),
+                json!({"title":"牛乳"}),
+                ToolOutcomeStatus::Success,
+                "u1".to_owned(),
+                bot.clone(),
+                Some("g1".to_owned()),
+            )
+        );
+        assert_eq!(records[1].0, "native:add_todo");
+        assert_eq!(records[1].1, json!({"title":"fail"}));
+        assert_eq!(records[1].2, ToolOutcomeStatus::Error);
+    }
+
+    /// 記録に失敗してもターンは失敗せず、ツール結果の返送と最終応答はそのまま続く。
+    #[tokio::test]
+    async fn outcome_sink_failure_does_not_fail_turn() {
+        let backend = FakeBackend::new(success_and_failure_script());
+        let provider = FakeProvider::new();
+        let sink = Arc::new(FakeOutcomeSink {
+            fail: true,
+            ..FakeOutcomeSink::default()
+        });
+        let mut contents = vec![Content::user_text("牛乳と fail を追加して")];
+        let opts = LoopOptions {
+            outcome_sink: Some(sink.clone()),
+            ..LoopOptions::default()
+        };
+
+        let result =
+            run_function_calling_loop(&backend, &provider, "sys", &mut contents, &ctx(), &opts)
+                .await
+                .unwrap();
+        assert_eq!(result.text, "1 件は追加できませんでした。");
+        assert_eq!(provider.invoked.lock().unwrap().len(), 2);
+        assert_eq!(
+            sink.records.lock().unwrap().len(),
+            2,
+            "失敗しても毎回試みる"
+        );
+    }
+
+    #[test]
+    fn outcome_status_follows_success_false_only() {
+        assert_eq!(
+            ToolOutcomeStatus::from_response(&json!({"success": false, "message": "x"})),
+            ToolOutcomeStatus::Error
+        );
+        assert_eq!(
+            ToolOutcomeStatus::from_response(&json!({"success": true})),
+            ToolOutcomeStatus::Success
+        );
+        // success を持たない結果（説明文の包み等）は成功扱い（Node `reportedFailure` と同じ）。
+        assert_eq!(
+            ToolOutcomeStatus::from_response(&json!({"result": "text"})),
+            ToolOutcomeStatus::Success
+        );
+        assert_eq!(ToolOutcomeStatus::Error.as_str(), "error");
+        assert_eq!(ToolOutcomeStatus::Success.as_str(), "success");
     }
 }

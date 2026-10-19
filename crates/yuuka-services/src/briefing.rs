@@ -27,9 +27,9 @@ use yuuka_briefing::{
 use yuuka_core::{BotId, DbError, UserId};
 
 use crate::context::ServiceContext;
-use crate::cron_util;
 use crate::notifier::{Notification, NotifyTarget};
 use crate::schedule::{CronService, Schedule};
+use yuuka_core::cron_util;
 
 /// 朝報定時配信サービス。
 pub struct BriefingService;

@@ -136,3 +136,10 @@
 5. 残る生成補助・運用設定・計測を戻し、D02/D03/D04/D06/D07の共通化で経路間の再発を抑える。
 
 本調査では機能修正・削除・デプロイは行っていない。対応表とこの報告書を追加した。
+
+## 対応状況
+
+| ID | 状態 | 内容 |
+|---|---|---|
+| R19 / D04 | 対応済み（#116 / #128） | cron 式ユーティリティを `yuuka-services` から循環依存のない `crates/yuuka-core/src/cron_util.rs` へ移し、登録時検証 `cron_util::is_valid` を追加した。ToDo・支払い予定・リマインド・朝報/日報週報設定のツールと HTTP（`POST /api/tasks/add`・`POST /api/expenses/plans/add`・`POST /api/reminders/add` を含む）、Playbook スケジュールのWeb登録は、実行側と同じ croner parser で検証する（HTTP の不正式は 400、空の repeat_rule は単発扱い）。範囲外の値・発火日が実在しない式（例：`0 0 30 2 *`）は保存しない。Playbook は Node と同じく 400「無効なcron式です。」を返す。各ドメインに 5 フィールドだが不正な式の回帰テストを追加した。 |
+| D05 | 対応済み（#129） | 日時の解釈・保存形式変換を `crates/yuuka-core/src/datetime.rs` に集め、`yuuka-reminder/src/datetime.rs`・`yuuka-schedule/src/datetime.rs`・`yuuka-client-api` の日時変換・`cron_util::to_db_datetime` を置き換えた。用途差は関数名で残した：リマインド入力 `input_to_db_local`（オフセット付きはサーバーのローカル TZ へ換算・Node `toDbDateTime` パリティ）、予定入力 `input_to_db_jst`（JST 固定へ換算）、PWA の `datetime-local` 入力 `browser_local_to_db`（`T` 区切りのみ受理）、PWA 向け出力 `db_to_utc_iso`、実行時の時刻 `local_to_db`。前 2 つの受理形式（日付のみ／`T`・空白区切り／秒・小数秒は任意／RFC 3339）は同じ parser に揃えた。挙動は変えていない（本番は `TZ=Asia/Tokyo` なので Local と JST 固定は同じ結果になる）。対象外として残る個別変換：`yuuka-google/src/http.rs` の Google API ⇔ ローカル暦変換、`yuuka-services` の `playbook_schedule.rs` / `backup.rs` の DB 文字列パース。 |
