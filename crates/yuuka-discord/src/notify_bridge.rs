@@ -16,12 +16,13 @@ use crate::ports::{DeliverTarget, Notifier as DiscordNotifierPort, TurnReply};
 
 /// services の [`NotifyTarget`] を discord の [`DeliverTarget`] へ写す。
 ///
-/// `Default`（ユーザー既定送信先）は DM 配信に落とす。チャンネル ID 指定は透過。
-/// 注: ユーザーの `notify_target_type`/`notify_target_id`（DB）に基づく既定の解決は services 側の
-/// 責務（`Notification` 生成時に `Channel(..)` を積む）。本ブリッジは Target の型写像のみを担う。
+/// `Dm` は DM、チャンネル ID 指定は透過。
+/// 注: ユーザーの `notify_target_type`/`notify_target_id`（DB）に基づく `Default` の解決は services 側の
+/// 責務（`ServiceContext` の notifier が `Dm` / `Channel(..)` へ解決してから渡す）。本ブリッジは Target の
+/// 型写像のみを担い、未解決の `Default` が届いた場合は DM に落とす。
 fn to_deliver_target(target: NotifyTarget) -> DeliverTarget {
     match target {
-        NotifyTarget::Default => DeliverTarget::Dm,
+        NotifyTarget::Default | NotifyTarget::Dm => DeliverTarget::Dm,
         NotifyTarget::Channel(id) => DeliverTarget::Channel(id),
     }
 }
@@ -56,6 +57,14 @@ mod tests {
     fn default_maps_to_dm() {
         assert!(matches!(
             to_deliver_target(NotifyTarget::Default),
+            DeliverTarget::Dm
+        ));
+    }
+
+    #[test]
+    fn dm_maps_to_dm() {
+        assert!(matches!(
+            to_deliver_target(NotifyTarget::Dm),
             DeliverTarget::Dm
         ));
     }

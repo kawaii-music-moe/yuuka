@@ -13,7 +13,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Deserialize;
-use yuuka_core::WebError;
+use yuuka_core::{cron_util, WebError};
 use yuuka_types::{EmptyData, Envelope};
 use yuuka_web::{resolve_scope, ApiError, AppState, AuthenticatedUser, Db, ScopedJson};
 
@@ -161,13 +161,25 @@ async fn add(
     State(db): State<Db>,
     ScopedJson {
         bot_id,
-        value: input,
+        value: mut input,
     }: ScopedJson<NewTodo>,
 ) -> Result<Json<Envelope<TaskData>>, ApiError> {
     if input.title.trim().is_empty() {
         return Err(ApiError(WebError::Validation(
             "title is required".to_owned(),
         )));
+    }
+    // R19: ルーチンの cron 式はツールと同じく実行時の parser で検証する（空は単発扱い）。
+    input.repeat_rule = input
+        .repeat_rule
+        .map(|rule| rule.trim().to_owned())
+        .filter(|rule| !rule.is_empty());
+    if let Some(rule) = &input.repeat_rule {
+        if !cron_util::is_valid(rule) {
+            return Err(ApiError(WebError::Validation(
+                "repeatRule must be a valid cron expression".to_owned(),
+            )));
+        }
     }
     let scope = resolve_scope(&user.0, &db, bot_id.as_deref()).await?;
     let task = TodoRepo::new(&db).add(&scope, input).await?;

@@ -8,18 +8,16 @@
 //! スコープ = コア CRUD（list/save/delete）＋定期実行スケジュール（schedules の
 //! list/save/toggle/delete）と実行履歴（runs）。
 //!
-//! **cron 妥当性検証は deferred（既知の縮退シーム）**: Node `upsertSchedule` は
-//! `node-cron` の `cron.validate(cronExpression)` で不正式を 400（「無効なcron式です。」）
-//! で弾く。Rust では croner ベースの検証器が `yuuka-services::cron_util` にあるが、本クレートの
-//! 依存グラフ（core/web/types/db）から到達不能で、依存追加は本タスクの制約で禁止。よって
-//! reminder ドメイン（cron 検証 deferred と明記）と同じ扱いで、cron 検証のみ移植を見送る。
+//! **cron 妥当性検証**: Node `upsertSchedule` と同じく、不正式は 400（「無効なcron式です。」）で
+//! 弾く。検証器は実行側（`yuuka-services` の `PlaybookScheduleService`）と同じ
+//! [`yuuka_core::cron_util::is_valid`]（登録時と実行時で解釈がずれない）。
 //! それ以外（必須検証・playbook 存在検証・所有者検証・レスポンス形状・status）は Node と一致。
 
 use axum::extract::{Query, State};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Deserialize;
-use yuuka_core::{BotId, UserId, UserScope, WebError};
+use yuuka_core::{cron_util, BotId, UserId, UserScope, WebError};
 use yuuka_types::{EmptyData, Envelope};
 use yuuka_web::{resolve_scope, ApiError, AppState, AuthenticatedUser, Db, ScopedJson};
 
@@ -136,7 +134,7 @@ async fn list_schedules(
 ///
 /// 必須検証（`playbookName`/`cronExpression`）と playbook 存在検証に失敗した場合は Node と同じ
 /// 日本語メッセージで 400 を返す（`WebError::Validation` は `{success:false, message}` に写像）。
-/// 成功時は `{success:true, message, schedule}`（Node と同形）。cron 妥当性検証は deferred。
+/// 成功時は `{success:true, message, schedule}`（Node と同形）。不正な cron 式は 400（「無効なcron式です。」）。
 async fn save_schedule(
     user: AuthenticatedUser,
     State(db): State<Db>,
@@ -153,6 +151,12 @@ async fn save_schedule(
     // Node は raw の playbookName をメッセージに埋め込む（正規化前）。
     let playbook_name = input.playbook_name.clone();
     let scope = resolve_scope(&user.0, &db, bot_id.as_deref()).await?;
+    // Node parity: cron 式の検証は playbook 存在検証より先。
+    if !cron_util::is_valid(&input.cron_expression) {
+        return Err(ApiError(WebError::Validation(
+            "無効なcron式です。".to_owned(),
+        )));
+    }
     match PlaybookRepo::new(&db)
         .upsert_schedule(&scope, input)
         .await?

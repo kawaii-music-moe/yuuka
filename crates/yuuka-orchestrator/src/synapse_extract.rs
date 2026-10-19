@@ -249,7 +249,7 @@ fn contains_jwt(t: &str) -> bool {
 }
 
 /// 1 トークンが秘匿値らしい形状か（Node `looksLikeSecretValue`）。接頭辞 / JWT / 高エントロピー長塊。
-fn looks_like_secret_value(token: &str) -> bool {
+pub(crate) fn looks_like_secret_value(token: &str) -> bool {
     let t = token.trim();
     if t.chars().count() < 8 {
         return false;

@@ -35,9 +35,9 @@ use yuuka_db::map_sqlite;
 use yuuka_web::Db;
 
 use crate::context::ServiceContext;
-use crate::cron_util;
 use crate::notifier::{Notification, NotifyTarget};
 use crate::schedule::{CronService, Schedule};
+use yuuka_core::{cron_util, datetime};
 
 /// 日報・週報定時配信サービス。
 pub struct ReportService;
@@ -105,15 +105,16 @@ async fn deliver(ctx: &ServiceContext, config: &EnabledReport) -> Result<(), DbE
 }
 
 /// 配信先を解決する（Node `{ type: target_type, id: target_id }`）。
-/// `channel` かつ ID 有り → チャンネル指定・それ以外 → 既定送信先（→DM）。briefing / reminder と同規律。
+/// `channel` かつ ID 有り → チャンネル指定・それ以外 → DM。briefing と同規律（配信設定の送信先を
+/// 明示して渡すため、ユーザー既定送信先は見ない）。
 fn resolve_target(config: &EnabledReport) -> NotifyTarget {
     if config.target_type == "channel" {
         match config.target_id.as_deref() {
             Some(id) if !id.is_empty() => NotifyTarget::Channel(id.to_owned()),
-            _ => NotifyTarget::Default,
+            _ => NotifyTarget::Dm,
         }
     } else {
-        NotifyTarget::Default
+        NotifyTarget::Dm
     }
 }
 
@@ -160,8 +161,8 @@ async fn collect_report_data(
         24 * 60 * 60
     };
     let from_dt = now - chrono::Duration::seconds(period_ms);
-    let from = cron_util::to_db_datetime(from_dt);
-    let to = cron_util::to_db_datetime(now);
+    let from = datetime::local_to_db(from_dt);
+    let to = datetime::local_to_db(now);
     let from_day = from[..10].to_owned();
     let to_day = to[..10].to_owned();
 
@@ -239,20 +240,18 @@ async fn collect_report_data(
                 .map_err(map_sqlite)?;
 
             // 支払い予定: 当該期間に期日を迎えるもの（Node `payments`・date(due_date) 範囲・上限20）。
-            // planned_payments は user_id のみで bot_id 列を持たない（Node の SQL は bot_id を
-            // 条件に含めるが、テーブルに列が無いため Node 側でも該当行は 0 件になる方が実態に近い）。
-            // ここは Node の SQL 条件（bot_id = ?）を落とし、実テーブルのスキーマ（user_id スコープ）に
-            // 合わせる＝Node パリティ上の必然的差分（planned_payments に bot_id が無い）。
+            // planned_payments は V17 で bot_id 列を持つ（finance の登録も bot_id 付き）ため、Node と
+            // 同じく user_id + bot_id で絞り、同じユーザーの別 Bot の支払い予定を混ぜない（R24）。
             let mut stmt = conn
                 .prepare(
                     "SELECT title, amount, status FROM planned_payments \
-                     WHERE user_id = ?1 \
-                       AND date(due_date) >= date(?2) AND date(due_date) <= date(?3) \
+                     WHERE user_id = ?1 AND bot_id = ?2 \
+                       AND date(due_date) >= date(?3) AND date(due_date) <= date(?4) \
                      ORDER BY due_date ASC LIMIT 20",
                 )
                 .map_err(map_sqlite)?;
             let payments = stmt
-                .query_map(params![u, from_day_c, to_day_c], |r| {
+                .query_map(params![u, b, from_day_c, to_day_c], |r| {
                     Ok(PaymentRow {
                         title: r.get::<_, String>(0)?,
                         amount: r.get::<_, i64>(1)?,
@@ -432,7 +431,8 @@ mod tests {
             amount INTEGER NOT NULL, category TEXT, memo TEXT, due_date TEXT NOT NULL, repeat_rule TEXT, \
             status TEXT NOT NULL DEFAULT 'pending', \
             created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')), \
-            updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime')));\
+            updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime')), \
+            bot_id TEXT NOT NULL DEFAULT 'system_default');\
         CREATE TABLE expenses (\
             id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, \
             bot_id TEXT NOT NULL DEFAULT 'system_default', type TEXT NOT NULL DEFAULT 'expense', \
@@ -476,8 +476,8 @@ mod tests {
 
         let sent = notifier.sent.lock().unwrap();
         assert_eq!(sent.len(), 1);
-        // 既定送信先（→DM）で、本文に日報タイトルと生データフッタが入る。
-        assert_eq!(sent[0].target, NotifyTarget::Default);
+        // 設定の dm は DM（ユーザー既定送信先は見ない）で、本文に日報タイトルと生データフッタが入る。
+        assert_eq!(sent[0].target, NotifyTarget::Dm);
         assert!(sent[0].content.contains("📋 日報"));
         assert!(sent[0].content.contains("Yuuka レポート（生データ）"));
         // 集約元が空でも fallback 本体（完了/持ち越し/収支）は出る。
@@ -542,8 +542,8 @@ mod tests {
                        VALUES ('u','system_default','レポート提出','open', date('now','localtime'));\
                      INSERT INTO schedules (user_id, bot_id, title, start_at) \
                        VALUES ('u','system_default','会議', datetime('now','localtime'));\
-                     INSERT INTO planned_payments (user_id, title, amount, due_date, status) \
-                       VALUES ('u','家賃',80000, date('now','localtime'),'pending');\
+                     INSERT INTO planned_payments (user_id, bot_id, title, amount, due_date, status) \
+                       VALUES ('u','system_default','家賃',80000, date('now','localtime'),'pending');\
                      INSERT INTO expenses (user_id, bot_id, type, amount, category, date) \
                        VALUES ('u','system_default','income',300000,'salary', date('now','localtime'));\
                      INSERT INTO expenses (user_id, bot_id, type, amount, category, date) \
@@ -574,6 +574,35 @@ mod tests {
             body.contains("💰 収支: 収入 ¥300,000 / 支出 ¥1,500"),
             "body: {body}"
         );
+    }
+
+    #[tokio::test]
+    async fn payments_are_scoped_to_report_bot() {
+        // 同じユーザーの別 Bot の支払い予定はレポートに混ぜない（R24・Node の user_id + bot_id 条件）。
+        let (db, _dir) = seed(true, "* * * * *", "daily", "dm", None);
+        db.writer
+            .execute(|conn| {
+                conn.execute_batch(
+                    "INSERT INTO planned_payments (user_id, bot_id, title, amount, due_date, status) \
+                       VALUES ('u','system_default','家賃',80000, date('now','localtime'),'pending');\
+                     INSERT INTO planned_payments (user_id, bot_id, title, amount, due_date, status) \
+                       VALUES ('u','other_bot','別Botのサブスク',980, date('now','localtime'),'pending');",
+                )
+                .map_err(yuuka_db::map_sqlite)?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+
+        let notifier = Arc::new(RecordingNotifier::new(true));
+        let ctx = ctx_with(db, notifier.clone());
+        ReportService.tick(&ctx).await;
+
+        let sent = notifier.sent.lock().unwrap();
+        assert_eq!(sent.len(), 1);
+        let body = &sent[0].content;
+        assert!(body.contains("  ・家賃 ¥80,000 [未払い]"), "body: {body}");
+        assert!(!body.contains("別Botのサブスク"), "body: {body}");
     }
 
     #[test]

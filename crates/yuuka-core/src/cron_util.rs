@@ -5,13 +5,28 @@
 //! `find_next_occurrence(_, inclusive=false)`（= 厳密に後）を使い、`cron-parser` の `.next()`
 //! （currentDate を含まない次回）と意味を合わせる。日時は他モジュールと同じ DB 文字列
 //! `'YYYY-MM-DD HH:MM:SS'`（ローカル）／`'YYYY-MM-DD'` で入出力する。
+//!
+//! 登録時検証（各ドメインの tools / routes）と実行時判定（`yuuka-services` の定期処理）が
+//! **同じ parser** を使うよう core に置く（以前は登録時だけ「空白区切り 5 個」の簡易検証で、
+//! 保存できた式が実行時に壊れた式としてスキップされ得た）。
 
 use chrono::{DateTime, Datelike, Duration, Local, NaiveDate, TimeZone, Timelike};
 use croner::Cron;
 
+use crate::datetime::local_to_db;
+
 /// 5-field cron 式を parse する（失敗は `None`＝壊れた式は呼び出し側でスキップ）。
 fn parse(expr: &str) -> Option<Cron> {
     Cron::new(expr).parse().ok()
+}
+
+/// 登録時の cron 式妥当性検証（Node `cron-parser` / `node-cron` `cron.validate` パリティ）。
+///
+/// 実行時と同じ parser で解釈でき、かつ発火日が実在する（`2月30日` のように永久に来ない式でない）
+/// ときだけ true。登録経路はこれを通すことで「保存成功 → 実行時に不正式で停止」を防ぐ。
+#[must_use]
+pub fn is_valid(expr: &str) -> bool {
+    next_after(expr, Local::now()).is_some()
 }
 
 /// `after` より **厳密に後**の次回発火ローカル時刻（`cron-parser` `.next()` パリティ）。
@@ -42,19 +57,13 @@ pub fn cron_matches_now(expr: &str, now: DateTime<Local>) -> bool {
         && next.minute() == now.minute()
 }
 
-/// DB 保存形式 `'YYYY-MM-DD HH:MM:SS'`（ローカル）へ整形する（Node `toDbDateTime` と同形）。
-#[must_use]
-pub fn to_db_datetime(dt: DateTime<Local>) -> String {
-    dt.format("%Y-%m-%d %H:%M:%S").to_string()
-}
-
 /// リマインド `repeat_rule` の次回 `trigger_at`（`now` 起点・DB 文字列）。
 ///
 /// 現行 reminderEngine: `CronExpressionParser.parse(rule, {currentDate: now}).next()` → `toDbDateTime`。
 /// 壊れた式は `None`（呼び出し側は単発扱い＝ `markSent` で打ち切る）。
 #[must_use]
 pub fn next_reminder_trigger(expr: &str, now: DateTime<Local>) -> Option<String> {
-    Some(to_db_datetime(next_after(expr, now)?))
+    Some(local_to_db(next_after(expr, now)?))
 }
 
 /// ローカル 0 時へ丸める。
@@ -110,18 +119,56 @@ mod tests {
     }
 
     #[test]
+    fn is_valid_accepts_runtime_parsable_exprs() {
+        for expr in [
+            "0 9 * * 1",
+            "* * * * *",
+            "0,30 9-17 * * *",
+            "*/15 * * * *",
+            "0 0 27 * *",
+            "0 9 * * MON-FRI",
+        ] {
+            assert!(is_valid(expr), "{expr} should be valid");
+        }
+    }
+
+    #[test]
+    fn is_valid_rejects_what_field_count_check_let_through() {
+        // 旧簡易検証（空白区切り 5 個）は全て通していたが、実行時 parser は解釈できない／発火しない。
+        for expr in [
+            "99 99 * * *",
+            "60 * * * *",
+            "0 24 * * *",
+            "0 0 32 * *",
+            "0 0 * 13 *",
+            "0 0 * * 8",
+            "a b c d e",
+            "0 0 30 2 *",
+        ] {
+            assert!(!is_valid(expr), "{expr} should be invalid");
+        }
+    }
+
+    #[test]
+    fn is_valid_rejects_wrong_field_count() {
+        assert!(!is_valid(""));
+        assert!(!is_valid("* * * *"));
+        assert!(!is_valid("not a cron"));
+    }
+
+    #[test]
     fn daily_next_is_strictly_after() {
         // "0 8 * * *"（毎朝8時）。8:00 ちょうどからの次回は翌日 8:00（inclusive=false）。
         let base = at(2026, 7, 8, 8, 0);
         let next = next_after("0 8 * * *", base).expect("has next");
-        assert_eq!(to_db_datetime(next), "2026-07-09 08:00:00");
+        assert_eq!(local_to_db(next), "2026-07-09 08:00:00");
     }
 
     #[test]
     fn every_minute_advances_one_minute() {
         let base = at(2026, 7, 8, 8, 30);
         let next = next_after("* * * * *", base).expect("has next");
-        assert_eq!(to_db_datetime(next), "2026-07-08 08:31:00");
+        assert_eq!(local_to_db(next), "2026-07-08 08:31:00");
     }
 
     #[test]

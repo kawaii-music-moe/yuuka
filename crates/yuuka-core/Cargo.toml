@@ -11,12 +11,14 @@ description = "yuuka foundation: 層別エラー・config・secrets・telemetry�
 thiserror.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-serde_yaml.workspace = true
+granit-parser.workspace = true
+ryu.workspace = true
 secrecy.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 async-trait.workspace = true
 chrono.workspace = true              # 操作履歴レコーダーの記録時刻（Node `new Date().toISOString()`）
+croner.workspace = true              # cron 式の parse・次回発火（登録時検証と実行時判定を同じ実装に揃える）
 
 [dev-dependencies]
 tempfile = "3"

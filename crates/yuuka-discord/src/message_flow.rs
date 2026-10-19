@@ -17,7 +17,7 @@ use base64::Engine as _;
 use twilight_gateway::MessageSender;
 use twilight_http::Client;
 use twilight_model::channel::{Attachment, Message};
-use twilight_model::id::marker::{ChannelMarker, MessageMarker, UserMarker};
+use twilight_model::id::marker::{ChannelMarker, MessageMarker, RoleMarker, UserMarker};
 use twilight_model::id::Id;
 use yuuka_core::{BotId, DiscordError, GuildId, UserId};
 
@@ -73,27 +73,77 @@ pub struct RuntimeBot {
     pub bot_user_id: Id<UserMarker>,
     /// プレゼンス（`setBotStatus`）を spawn 先タスクから送るための cloneable sender。
     pub sender: MessageSender,
-    /// ギルド別の Bot 統合ロール ID（`@Bot名` 補完がロールメンションになるケースの判定用。
-    /// GUILD_CREATE の `role.tags.bot_id == 自 Bot` で控える）。
-    pub integration_roles: Arc<std::sync::Mutex<std::collections::HashMap<u64, u64>>>,
+    /// ギルド別の Bot 自身のロール（統合ロール＋保持ロール）。ロールメンション判定と
+    /// `<@&統合ロール>` の除去に使う。gateway イベントで更新する（[`OwnGuildRoles`]）。
+    pub own_roles: Arc<std::sync::Mutex<OwnGuildRoles>>,
 }
 
 impl RuntimeBot {
-    /// GUILD_CREATE で確認した Bot 統合ロールを控える。
-    pub fn note_integration_role(&self, guild_id: u64, role_id: u64) {
-        self.integration_roles
+    /// 自ロール表を参照・更新する（GUILD_CREATE / GUILD_MEMBER_UPDATE / GUILD_DELETE から呼ぶ）。
+    pub fn with_own_roles<R>(&self, f: impl FnOnce(&mut OwnGuildRoles) -> R) -> R {
+        let mut roles = self
+            .own_roles
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(guild_id, role_id);
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        f(&mut roles)
     }
 
     /// ギルドの Bot 統合ロール ID（未知なら `None`）。
     fn integration_role(&self, guild_id: u64) -> Option<u64> {
-        self.integration_roles
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .get(&guild_id)
-            .copied()
+        self.with_own_roles(|r| r.integration_role(guild_id))
+    }
+}
+
+/// ギルドごとの Bot 自身のロール控え（現行 discord.js の `guild.members.me.roles` 相当）。
+///
+/// - 統合ロール: GUILD_CREATE の `role.tags.bot_id == 自 Bot` で控える（`@Bot名` 補完のロールメンション）。
+/// - 保持ロール: GUILD_CREATE の自メンバー（Discord は intent に関わらず自 Bot を `members` に含める）
+///   と、自分宛の GUILD_MEMBER_UPDATE で丸ごと置き換える（手動付与の共用ロール等）。
+///
+/// メッセージごとの member fetch はしない。@everyone ロール（ID = guild_id）は `mention_everyone`
+/// 側で扱うので保持ロールから除く。
+#[derive(Debug, Default)]
+pub struct OwnGuildRoles {
+    integration: std::collections::HashMap<u64, u64>,
+    held: std::collections::HashMap<u64, std::collections::HashSet<u64>>,
+}
+
+impl OwnGuildRoles {
+    /// 統合ロールを控える。
+    pub fn note_integration_role(&mut self, guild_id: u64, role_id: u64) {
+        self.integration.insert(guild_id, role_id);
+    }
+
+    /// 自メンバーの保持ロールを丸ごと置き換える（@everyone ロールは除く）。
+    pub fn set_held_roles(&mut self, guild_id: u64, roles: impl IntoIterator<Item = u64>) {
+        let held = roles.into_iter().filter(|&r| r != guild_id).collect();
+        self.held.insert(guild_id, held);
+    }
+
+    /// ギルドから離脱した際に控えを捨てる。
+    pub fn forget_guild(&mut self, guild_id: u64) {
+        self.integration.remove(&guild_id);
+        self.held.remove(&guild_id);
+    }
+
+    /// ギルドの統合ロール ID（未知なら `None`）。
+    #[must_use]
+    pub fn integration_role(&self, guild_id: u64) -> Option<u64> {
+        self.integration.get(&guild_id).copied()
+    }
+
+    /// `mention_roles` のいずれかが自 Bot のロール（統合ロール＋保持ロール）か。DM（guild なし）は偽。
+    #[must_use]
+    pub fn is_mentioned(&self, guild_id: Option<u64>, mention_roles: &[Id<RoleMarker>]) -> bool {
+        let Some(gid) = guild_id else {
+            return false;
+        };
+        let integration = self.integration_role(gid);
+        let held = self.held.get(&gid);
+        mention_roles
+            .iter()
+            .map(|r| r.get())
+            .any(|r| r != gid && (integration == Some(r) || held.is_some_and(|h| h.contains(&r))))
     }
 }
 
@@ -778,23 +828,19 @@ fn bot_uid_str(rt: &RuntimeBot) -> String {
 ///
 /// discord.js の `has()` は直接メンションに加え **@everyone/@here**（`mention_everyone`）と
 /// **Bot 自身が保持するロールへのロールメンション**も真とする。前者は本関数、後者は
-/// [`is_bot_role_mentioned`]（統合ロール＝`@Bot名` 補完で付くロール）で移植する。統合ロール以外の
-/// 保持ロール（例: 手動付与の共用ロール）へのメンションは未対応（既知の狭め・member fetch が必要）。
+/// [`is_bot_role_mentioned`]（統合ロール＋手動付与の共用ロール等の保持ロール）で移植する。
 fn is_user_mentioned(message: &Message, user_id: Id<UserMarker>) -> bool {
     message.mention_everyone || message.mentions.iter().any(|m| m.id == user_id)
 }
 
-/// Bot の統合ロールへのロールメンションか。Discord の `@Bot名` 補完はユーザーメンションではなく
+/// Bot 自身のロールへのロールメンションか。Discord の `@Bot名` 補完はユーザーメンションではなく
 /// **統合ロールのロールメンション**になることがあり（`message.mentions` は空・`mention_roles` に
-/// ロール ID）、discord.js の `mentions.has()` はこれを真とするため移植する。
+/// ロール ID）、Bot が保持する一般ロール（共用ロール等）へのメンションも含めて discord.js の
+/// `mentions.has()` は真とするため移植する。保持ロールは gateway イベントで控えた値で判定する
+/// （[`OwnGuildRoles`]・メッセージごとの member fetch はしない）。
 fn is_bot_role_mentioned(rt: &RuntimeBot, message: &Message) -> bool {
-    let Some(gid) = message.guild_id else {
-        return false;
-    };
-    let Some(role_id) = rt.integration_role(gid.get()) else {
-        return false;
-    };
-    message.mention_roles.iter().any(|r| r.get() == role_id)
+    let guild_id = message.guild_id.map(Id::get);
+    rt.with_own_roles(|r| r.is_mentioned(guild_id, &message.mention_roles))
 }
 
 /// ギルド表示名を解決する（nick → global_name → username・現行 `resolveDisplayName`）。
@@ -880,6 +926,73 @@ mod tests {
         let atts = vec![mk("image/png"), mk("audio/ogg; codecs=opus")];
         assert!(select_audio(&atts).is_some());
         assert!(select_image(&atts).is_some());
+    }
+
+    fn roles(ids: &[u64]) -> Vec<Id<RoleMarker>> {
+        ids.iter().map(|&i| Id::new(i)).collect()
+    }
+
+    const GUILD: u64 = 100;
+    const INTEGRATION: u64 = 200;
+    const SHARED: u64 = 300;
+    const UNRELATED: u64 = 400;
+
+    fn own_roles() -> OwnGuildRoles {
+        let mut r = OwnGuildRoles::default();
+        r.note_integration_role(GUILD, INTEGRATION);
+        // 実際の自メンバーは統合ロールも保持するが、統合ロール単独でも判定できることを見るため外す。
+        r.set_held_roles(GUILD, [SHARED]);
+        r
+    }
+
+    #[test]
+    fn role_mention_hits_integration_role() {
+        assert!(own_roles().is_mentioned(Some(GUILD), &roles(&[INTEGRATION])));
+    }
+
+    #[test]
+    fn role_mention_hits_manually_assigned_held_role() {
+        let r = own_roles();
+        assert!(r.is_mentioned(Some(GUILD), &roles(&[SHARED])));
+        assert!(r.is_mentioned(Some(GUILD), &roles(&[UNRELATED, SHARED])));
+    }
+
+    #[test]
+    fn role_mention_ignores_unrelated_role_and_other_guild() {
+        let r = own_roles();
+        assert!(!r.is_mentioned(Some(GUILD), &roles(&[UNRELATED])));
+        assert!(!r.is_mentioned(Some(GUILD), &[]));
+        // 別ギルドでは同じ ID でも控えが無いので偽。
+        assert!(!r.is_mentioned(Some(999), &roles(&[SHARED, INTEGRATION])));
+    }
+
+    #[test]
+    fn role_mention_is_false_in_dm() {
+        assert!(!own_roles().is_mentioned(None, &roles(&[SHARED, INTEGRATION])));
+    }
+
+    #[test]
+    fn everyone_role_is_not_counted_as_held_role() {
+        // @everyone ロール（ID = guild_id）は mention_everyone 側で扱うため二重に数えない。
+        let mut r = OwnGuildRoles::default();
+        r.set_held_roles(GUILD, [GUILD, SHARED]);
+        assert!(!r.is_mentioned(Some(GUILD), &roles(&[GUILD])));
+        assert!(r.is_mentioned(Some(GUILD), &roles(&[SHARED])));
+    }
+
+    #[test]
+    fn held_roles_are_replaced_on_update_and_forgotten_on_leave() {
+        let mut r = own_roles();
+        // GUILD_MEMBER_UPDATE で共用ロールが外れ、別ロールが付いた。
+        r.set_held_roles(GUILD, [UNRELATED]);
+        assert!(!r.is_mentioned(Some(GUILD), &roles(&[SHARED])));
+        assert!(r.is_mentioned(Some(GUILD), &roles(&[UNRELATED])));
+        // 統合ロールは保持ロール更新の影響を受けない。
+        assert_eq!(r.integration_role(GUILD), Some(INTEGRATION));
+
+        r.forget_guild(GUILD);
+        assert!(!r.is_mentioned(Some(GUILD), &roles(&[UNRELATED, INTEGRATION])));
+        assert_eq!(r.integration_role(GUILD), None);
     }
 
     fn dummy_attachment() -> Attachment {

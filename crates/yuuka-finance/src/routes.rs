@@ -19,7 +19,7 @@ use axum::routing::{get, post};
 use axum::{Extension, Json, Router};
 use serde::Deserialize;
 use serde_json::json;
-use yuuka_core::WebError;
+use yuuka_core::{cron_util, WebError};
 use yuuka_types::{EmptyData, Envelope};
 use yuuka_web::{resolve_scope, ApiError, AppState, AuthenticatedUser, Db, ScopeError, ScopedJson};
 
@@ -315,7 +315,7 @@ async fn add_plan(
     State(db): State<Db>,
     ScopedJson {
         bot_id,
-        value: input,
+        value: mut input,
     }: ScopedJson<NewPlannedPayment>,
 ) -> Result<Json<Envelope<PlannedPaymentData>>, ApiError> {
     // Node parity: 期日は dueDate ?? plannedDate（旧 UI 互換）。空文字は falsy 扱い。
@@ -336,6 +336,18 @@ async fn add_plan(
             )));
         }
     };
+    // R19: 繰り返しの cron 式はツールと同じく実行時の parser で検証する（空は単発扱い）。
+    input.repeat_rule = input
+        .repeat_rule
+        .map(|rule| rule.trim().to_owned())
+        .filter(|rule| !rule.is_empty());
+    if let Some(rule) = &input.repeat_rule {
+        if !cron_util::is_valid(rule) {
+            return Err(ApiError(WebError::Validation(
+                "repeatRule must be a valid cron expression".to_owned(),
+            )));
+        }
+    }
     let scope = resolve_scope(&user.0, &db, bot_id.as_deref()).await?;
     let plan = ExpenseRepo::new(&db).add_plan(&scope, input, due).await?;
     Ok(Json(Envelope::ok(PlannedPaymentData { plan })))
@@ -367,10 +379,12 @@ async fn pay_plan(
         )));
     }
 
-    // 実支払いを Expense として記録し消込・紐付き ToDo を自動完了（1 トランザクション）。
-    let (expense_id, completed_todos) = repo.settle_plan(&scope, &plan).await?;
+    // 実支払いを Expense として記録し消込・紐付き ToDo を自動完了・紐付きリマインドを停止
+    // （1 トランザクション）。
+    let settled = repo.settle_plan(&scope, &plan).await?;
+    let completed_todos = settled.completed_todos;
     let expense = repo
-        .get(&scope, expense_id)
+        .get(&scope, settled.expense_id)
         .await?
         .ok_or(ApiError(WebError::Internal))?;
 
@@ -401,11 +415,15 @@ async fn delete_plan(
     }: ScopedJson<PlannedPaymentId>,
 ) -> Result<Json<Envelope<EmptyData>>, ApiError> {
     // Node parity: `!id`（0 含む）は 400。成否は bare `{success: ok}` で返す。
+    // 紐付く期日前リマインドは repo が同じトランザクションで止める（R15）。
     if input.id == 0 {
         return Err(ApiError(WebError::Validation("id is required".to_owned())));
     }
     let scope = resolve_scope(&user.0, &db, bot_id.as_deref()).await?;
-    let ok = ExpenseRepo::new(&db).cancel_plan(&scope, input.id).await?;
+    let ok = ExpenseRepo::new(&db)
+        .cancel_plan(&scope, input.id)
+        .await?
+        .is_some();
     Ok(Json(Envelope::bare(ok)))
 }
 
