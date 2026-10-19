@@ -426,8 +426,8 @@ mod tests {
                 ("other", "user"),
             ] {
                 conn.execute(
-                    "INSERT OR IGNORE INTO users (discord_id, username, password_hash, salt, role) \
-                     VALUES (?1, ?1, 'x', 'x', ?2)",
+                    "INSERT OR IGNORE INTO users (discord_id, username, salt, role) \
+                     VALUES (?1, ?1, 'x', ?2)",
                     rusqlite::params![uid, role],
                 )
                 .expect("seed user");

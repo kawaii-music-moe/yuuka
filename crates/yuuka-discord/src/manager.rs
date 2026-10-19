@@ -425,17 +425,6 @@ impl DiscordMessenger {
         };
         self.send_owner_dm(applicant_id, &content, &[]).await
     }
-
-    /// 登録確認コード DM（現行 `sendRegistrationCodeDM`。コードはログに出さない）。
-    pub async fn send_registration_code_dm(&self, discord_id: &str, code: &str) -> bool {
-        let content = format!(
-            "🔐 **Yuuka アカウント登録の確認コード**\n\n\
-             確認コード: **{code}**\n\n\
-             Web登録画面にこのコードを入力すると登録が完了します（10分間有効）。\n\
-             ※ このDMに心当たりがない場合は、誰かがあなたのDiscord IDで登録を試みています。コードは入力しないでください。"
-        );
-        self.send_owner_dm(discord_id, &content, &[]).await
-    }
 }
 
 #[async_trait]

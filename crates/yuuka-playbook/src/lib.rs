@@ -55,6 +55,7 @@ mod tests {
     use tower::ServiceExt;
     use yuuka_core::{AuthError, BotId, UserId, UserScope};
     use yuuka_types::{Role, SessionUser};
+    use yuuka_web::test_support::{with_bot_query, TEST_BOT_ID};
     use yuuka_web::{AppState, AuthBackend, Db, WebConfig};
 
     use crate::dto::{NewPlaybook, NewSchedule};
@@ -409,7 +410,7 @@ mod tests {
         }
     }
 
-    fn app() -> axum::Router {
+    async fn app() -> axum::Router {
         let auth = Arc::new(FakeAuth {
             user: SessionUser {
                 discord_id: "u".to_owned(),
@@ -417,13 +418,15 @@ mod tests {
                 role: Role::User,
             },
         });
-        let state = AppState::new(auth, WebConfig::default(), seed_db());
-        super::routes().with_state(state)
+        let db = seed_db();
+        yuuka_web::test_support::seed_bot(&db, TEST_BOT_ID, "u").await;
+        let state = AppState::new(auth, WebConfig::default(), db);
+        with_bot_query(super::routes().with_state(state), TEST_BOT_ID)
     }
 
     #[tokio::test]
     async fn route_save_then_list() {
-        let app = app();
+        let app = app().await;
         let save = app
             .clone()
             .oneshot(
@@ -469,6 +472,7 @@ mod tests {
     #[tokio::test]
     async fn route_requires_auth() {
         let resp = app()
+            .await
             .oneshot(
                 Request::builder()
                     .uri("/api/playbooks")
@@ -510,7 +514,7 @@ mod tests {
 
     #[tokio::test]
     async fn route_schedule_save_list_toggle_delete() {
-        let app = app();
+        let app = app().await;
         // playbook を先に作らないと schedule save は 400（マクロが見つかりません）。
         let pb = post_json(
             &app,
@@ -584,7 +588,7 @@ mod tests {
 
     #[tokio::test]
     async fn route_schedule_save_missing_fields_400() {
-        let app = app();
+        let app = app().await;
         let resp = post_json(
             &app,
             "/api/playbooks/schedules/save",
@@ -602,7 +606,7 @@ mod tests {
 
     #[tokio::test]
     async fn route_schedule_save_unknown_playbook_400() {
-        let app = app();
+        let app = app().await;
         let resp = post_json(
             &app,
             "/api/playbooks/schedules/save",
@@ -619,7 +623,7 @@ mod tests {
 
     #[tokio::test]
     async fn route_toggle_missing_id_400() {
-        let app = app();
+        let app = app().await;
         let resp = post_json(
             &app,
             "/api/playbooks/schedules/toggle",
@@ -633,7 +637,7 @@ mod tests {
 
     #[tokio::test]
     async fn route_delete_missing_id_400() {
-        let app = app();
+        let app = app().await;
         let resp = post_json(&app, "/api/playbooks/schedules/delete", r#"{}"#).await;
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
         let j = body_json(resp).await;
@@ -642,7 +646,7 @@ mod tests {
 
     #[tokio::test]
     async fn route_toggle_unknown_id_400() {
-        let app = app();
+        let app = app().await;
         let resp = post_json(
             &app,
             "/api/playbooks/schedules/toggle",
@@ -659,7 +663,7 @@ mod tests {
 
     #[tokio::test]
     async fn route_runs_empty_ok() {
-        let app = app();
+        let app = app().await;
         let resp = app
             .oneshot(
                 Request::builder()

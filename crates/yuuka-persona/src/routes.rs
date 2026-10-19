@@ -190,7 +190,7 @@ async fn import_persona(
     // 名前空間を左右する（共有 bot ではオーナー集合へ追加＝共同編集）。
     let scope = match resolve_scope(&user.0, &db, bot_id.as_deref()).await {
         Ok(s) => s,
-        Err(_) => return internal_error(),
+        Err(e) => return e.into_response(),
     };
     match PersonaRepo::new(&db).import_public(&scope, id).await {
         Ok(Some(persona)) => {
@@ -252,7 +252,7 @@ async fn activate_persona(
 ) -> Response {
     let scope = match resolve_scope(&user.0, &db, bot_id.as_deref()).await {
         Ok(s) => s,
-        Err(_) => return internal_error(),
+        Err(e) => return e.into_response(),
     };
     let repo = PersonaRepo::new(&db);
     // null/欠落/空文字は「適用解除（既定へ）」（Node `id != null && id !== "" ? Number(id) : null`）。
@@ -330,7 +330,7 @@ async fn publish_persona(
     let is_public = input.is_public == Some(Value::Bool(true));
     let scope = match resolve_scope(&user.0, &db, bot_id.as_deref()).await {
         Ok(s) => s,
-        Err(_) => return internal_error(),
+        Err(e) => return e.into_response(),
     };
     match PersonaRepo::new(&db)
         .set_public(&scope, id, is_public)

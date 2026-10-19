@@ -53,6 +53,7 @@ mod tests {
     use tower::ServiceExt;
     use yuuka_core::{AuthError, BotId, UserId, UserScope};
     use yuuka_types::{Role, SessionUser};
+    use yuuka_web::test_support::{with_bot_query, TEST_BOT_ID};
     use yuuka_web::{AppState, AuthBackend, Db, WebConfig};
 
     use crate::dto::NewContact;
@@ -223,7 +224,7 @@ mod tests {
         }
     }
 
-    fn app() -> axum::Router {
+    async fn app() -> axum::Router {
         let auth = Arc::new(FakeAuth {
             user: SessionUser {
                 discord_id: "u".to_owned(),
@@ -231,13 +232,15 @@ mod tests {
                 role: Role::User,
             },
         });
-        let state = AppState::new(auth, WebConfig::default(), seed_db());
-        super::routes().with_state(state)
+        let db = seed_db();
+        yuuka_web::test_support::seed_bot(&db, TEST_BOT_ID, "u").await;
+        let state = AppState::new(auth, WebConfig::default(), db);
+        with_bot_query(super::routes().with_state(state), TEST_BOT_ID)
     }
 
     #[tokio::test]
     async fn route_save_then_list() {
-        let app = app();
+        let app = app().await;
         let save = app
             .clone()
             .oneshot(
@@ -286,6 +289,7 @@ mod tests {
     #[tokio::test]
     async fn route_save_rejects_bad_birthday() {
         let resp = app()
+            .await
             .oneshot(
                 Request::builder()
                     .method("POST")
@@ -303,6 +307,7 @@ mod tests {
     #[tokio::test]
     async fn route_requires_auth() {
         let resp = app()
+            .await
             .oneshot(
                 Request::builder()
                     .uri("/api/contacts")
@@ -331,7 +336,7 @@ mod tests {
     /// camelCase 受理により、同値を送る update で連絡先情報が保持されることを凍結する。
     #[tokio::test]
     async fn route_save_update_preserves_contact_info() {
-        let app = app();
+        let app = app().await;
         // 新規作成（contactInfo つき）。
         let create = app
             .clone()
@@ -480,7 +485,7 @@ mod tests {
 
     #[tokio::test]
     async fn route_context_note_roundtrip() {
-        let app = app();
+        let app = app().await;
         // 初期は空・max_length 同梱。
         let get0 = app
             .clone()
@@ -544,6 +549,7 @@ mod tests {
         let over = "あ".repeat(10_001);
         let body = serde_json::json!({ "content": over }).to_string();
         let resp = app()
+            .await
             .oneshot(
                 Request::builder()
                     .method("POST")
@@ -571,6 +577,7 @@ mod tests {
     async fn route_clipboard_delete_missing_is_200_false() {
         // Node parity: 該当無でも 200 + {success:false, message}。
         let resp = app()
+            .await
             .oneshot(
                 Request::builder()
                     .method("POST")
@@ -594,6 +601,7 @@ mod tests {
     #[tokio::test]
     async fn route_clipboard_requires_auth() {
         let resp = app()
+            .await
             .oneshot(
                 Request::builder()
                     .uri("/api/clipboard")

@@ -1076,7 +1076,7 @@ impl Tool for SettlePlannedPaymentTool {
                 expense_id を渡すと、その記帳済みの支出記録と紐付けて消込する（新しい支出は記録しない）。\
                 省くと予定の金額・カテゴリで新しい支出を家計簿に記帳して消込する。\
                 レシート等で先に記帳した支払いを消込む時は、二重計上を避けるため expense_id を渡す。\
-                紐付く未完了 ToDo があれば自動で完了になる。\
+                紐付く未完了 ToDo があれば自動で完了になり、紐付く期日前リマインドは止まる。\
                 まだ払っていない予定を取り消すだけなら cancelPlannedPayment を使う。"
                 .to_owned(),
             parameters_json_schema: json!({
@@ -1126,7 +1126,8 @@ impl Tool for SettlePlannedPaymentTool {
             )));
         }
 
-        // expense_id 指定: 記帳済みの支出と紐付けて消込 + 紐付き ToDo 自動完了（新規記帳しない・R14）。
+        // expense_id 指定: 記帳済みの支出と紐付けて消込 + 紐付き ToDo 自動完了 + 紐付きリマインド停止
+        // （新規記帳しない・R14）。
         if let Some(expense_id) = existing_expense_id {
             let Some(expense) = repo.get(&scope, expense_id).await.map_err(exec_err)? else {
                 return Ok(fail_payload(format!(
@@ -1138,7 +1139,7 @@ impl Tool for SettlePlannedPaymentTool {
                     "記録 #{expense_id} は収入のため消込に使えません。"
                 )));
             }
-            let Some(completed) = repo
+            let Some(settled) = repo
                 .settle_plan_with_expense(&scope, plan_id, expense_id)
                 .await
                 .map_err(exec_err)?
@@ -1149,27 +1150,38 @@ impl Tool for SettlePlannedPaymentTool {
             };
             return Ok(ToolOutcome::from_payload(ok_payload(
                 format!(
-                    "支払い予定「{}」({}) を消込しました✅ 支出記録 #{expense_id} と紐付けました。{}",
+                    "支払い予定「{}」({}) を消込しました✅ 支出記録 #{expense_id} と紐付けました。{}{}",
                     plan.title,
                     format_yen(plan.amount),
-                    completed_todo_note(completed),
+                    completed_todo_note(settled.completed_todos),
+                    cancelled_reminder_note(settled.cancelled_reminder_id),
                 ),
-                json!({ "expense": expense, "completed_todos": completed }),
+                json!({
+                    "expense": expense,
+                    "completed_todos": settled.completed_todos,
+                    "cancelled_reminder_id": settled.cancelled_reminder_id,
+                }),
             )));
         }
 
-        // expense_id 省略: 予定内容で新規記帳 + 消込 + 紐付き ToDo 自動完了。
-        let (expense_id, completed) = repo.settle_plan(&scope, &plan).await.map_err(exec_err)?;
+        // expense_id 省略: 予定内容で新規記帳 + 消込 + 紐付き ToDo 自動完了 + 紐付きリマインド停止。
+        let settled = repo.settle_plan(&scope, &plan).await.map_err(exec_err)?;
+        let expense_id = settled.expense_id;
         let expense = repo.get(&scope, expense_id).await.map_err(exec_err)?;
         Ok(ToolOutcome::from_payload(ok_payload(
             format!(
-                "支払い予定「{}」({}) を消込しました✅ 支出 {} を新規記帳しました (ID: #{expense_id})。{}",
+                "支払い予定「{}」({}) を消込しました✅ 支出 {} を新規記帳しました (ID: #{expense_id})。{}{}",
                 plan.title,
                 format_yen(plan.amount),
                 format_yen(plan.amount),
-                completed_todo_note(completed),
+                completed_todo_note(settled.completed_todos),
+                cancelled_reminder_note(settled.cancelled_reminder_id),
             ),
-            json!({ "expense": expense, "completed_todos": completed }),
+            json!({
+                "expense": expense,
+                "completed_todos": settled.completed_todos,
+                "cancelled_reminder_id": settled.cancelled_reminder_id,
+            }),
         )))
     }
 }
@@ -1180,6 +1192,14 @@ fn completed_todo_note(completed: i64) -> String {
         format!(" 紐付きToDo {completed} 件を自動的に完了にしました✅")
     } else {
         String::new()
+    }
+}
+
+/// 消込で止めた期日前リマインドの補足文（止めていなければ空・Node `settlePlannedPayment`）。
+fn cancelled_reminder_note(reminder_id: Option<i64>) -> String {
+    match reminder_id {
+        Some(rid) => format!(" 期日前リマインド (#{rid}) をキャンセルしました。"),
+        None => String::new(),
     }
 }
 
@@ -1196,7 +1216,8 @@ impl Tool for CancelPlannedPaymentTool {
         FunctionDeclaration {
             name: self.name.clone(),
             description: "まだ支払っていない支払い予定を取り消す（キャンセル）。\
-                「来月の予定はもういらない」等で呼ぶ。実際に支払った時は settlePlannedPayment を使う。"
+                「来月の予定はもういらない」等で呼ぶ。実際に支払った時は settlePlannedPayment を使う。\
+                紐付く期日前リマインドも自動で取り消される。"
                 .to_owned(),
             parameters_json_schema: json!({
                 "type": "object",
@@ -1230,15 +1251,22 @@ impl Tool for CancelPlannedPaymentTool {
                 "支払い予定 #{plan_id} は既に{state}です。"
             )));
         }
-        // NOTE: 紐付きリマインドの期日前キャンセル（linked_reminder_id）は cross-domain のため deferred。
-        if !repo.cancel_plan(&scope, plan_id).await.map_err(exec_err)? {
+        // 紐付く期日前リマインドは repo が同じトランザクションで止める（R15）。
+        let Some(cancelled) = repo.cancel_plan(&scope, plan_id).await.map_err(exec_err)? else {
             return Ok(fail_payload(format!(
                 "支払い予定 #{plan_id} のキャンセルに失敗しました。"
             )));
-        }
+        };
+        let reminder_note = match cancelled.cancelled_reminder_id {
+            Some(rid) => format!(" 期日前リマインド (#{rid}) もキャンセルしました。"),
+            None => String::new(),
+        };
         Ok(ToolOutcome::from_payload(ok_payload(
-            format!("支払い予定「{}」をキャンセルしました。", plan.title),
-            json!({}),
+            format!(
+                "支払い予定「{}」をキャンセルしました。{reminder_note}",
+                plan.title
+            ),
+            json!({ "cancelled_reminder_id": cancelled.cancelled_reminder_id }),
         )))
     }
 }
@@ -2218,5 +2246,122 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(out.payload["success"], false);
+    }
+
+    /// R15: 消込（新規記帳・記帳済みの支出）とキャンセルで紐付きの期日前リマインドを止め、
+    /// そのことを返答に含める。
+    #[tokio::test]
+    async fn settle_and_cancel_stop_linked_reminder() {
+        let db = seed_db();
+        let tools = tools(db.clone()).unwrap();
+        let add_expense = find(&tools, "addExpense");
+        let add = find(&tools, "addPlannedPayment");
+        let link = find(&tools, "linkPlannedPaymentReminder");
+        let settle = find(&tools, "settlePlannedPayment");
+        let cancel = find(&tools, "cancelPlannedPayment");
+
+        // 期日が遠い予定を作り、期日前リマインドを紐付けて (plan_id, reminder_id) を返す。
+        let plan_with_reminder = |title: &'static str| {
+            let (add, link) = (add.clone(), link.clone());
+            async move {
+                let out = add
+                    .call(
+                        &ctx(),
+                        json!({"title": title, "amount": 12000, "category": "その他", "due_date": "2099-01-10"}),
+                    )
+                    .await
+                    .unwrap();
+                let plan_id = out.payload["plan"]["id"].as_i64().unwrap();
+                let out = link
+                    .call(&ctx(), json!({"plan_id": plan_id}))
+                    .await
+                    .unwrap();
+                (plan_id, out.payload["reminder_id"].as_i64().unwrap())
+            }
+        };
+        let reminder_status = |id: i64| {
+            let db = db.clone();
+            async move {
+                db.read
+                    .read(move |conn| {
+                        conn.query_row("SELECT status FROM reminders WHERE id = ?1", [id], |r| {
+                            r.get::<_, String>(0)
+                        })
+                        .map_err(yuuka_db::map_sqlite)
+                    })
+                    .await
+                    .unwrap()
+            }
+        };
+
+        // 新規記帳で消込。
+        let (plan_id, reminder_id) = plan_with_reminder("年会費").await;
+        let out = settle
+            .call(&ctx(), json!({"plan_id": plan_id}))
+            .await
+            .unwrap();
+        assert_eq!(out.payload["success"], true);
+        assert_eq!(
+            out.payload["cancelled_reminder_id"].as_i64(),
+            Some(reminder_id)
+        );
+        assert!(out.payload["message"].as_str().unwrap().contains(&format!(
+            "期日前リマインド (#{reminder_id}) をキャンセルしました"
+        )));
+        assert_eq!(reminder_status(reminder_id).await, "cancelled");
+
+        // 記帳済みの支出で消込。
+        let (plan_id, reminder_id) = plan_with_reminder("保険料").await;
+        let out = add_expense
+            .call(&ctx(), json!({"amount": 12000, "category": "その他"}))
+            .await
+            .unwrap();
+        let paid = out.payload["expense"]["id"].as_i64().unwrap();
+        let out = settle
+            .call(&ctx(), json!({"plan_id": plan_id, "expense_id": paid}))
+            .await
+            .unwrap();
+        assert_eq!(out.payload["success"], true);
+        assert_eq!(
+            out.payload["cancelled_reminder_id"].as_i64(),
+            Some(reminder_id)
+        );
+        assert_eq!(reminder_status(reminder_id).await, "cancelled");
+
+        // キャンセル。
+        let (plan_id, reminder_id) = plan_with_reminder("会費").await;
+        let out = cancel
+            .call(&ctx(), json!({"plan_id": plan_id}))
+            .await
+            .unwrap();
+        assert_eq!(out.payload["success"], true);
+        assert_eq!(
+            out.payload["cancelled_reminder_id"].as_i64(),
+            Some(reminder_id)
+        );
+        assert!(out.payload["message"].as_str().unwrap().contains(&format!(
+            "期日前リマインド (#{reminder_id}) もキャンセルしました"
+        )));
+        assert_eq!(reminder_status(reminder_id).await, "cancelled");
+
+        // 紐付きリマインドが無ければ何も言わない。
+        let out = add
+            .call(
+                &ctx(),
+                json!({"title": "雑費", "amount": 500, "category": "その他", "due_date": "2099-01-10"}),
+            )
+            .await
+            .unwrap();
+        let plan_id = out.payload["plan"]["id"].as_i64().unwrap();
+        let out = cancel
+            .call(&ctx(), json!({"plan_id": plan_id}))
+            .await
+            .unwrap();
+        assert_eq!(out.payload["success"], true);
+        assert!(out.payload["cancelled_reminder_id"].is_null());
+        assert!(!out.payload["message"]
+            .as_str()
+            .unwrap()
+            .contains("リマインド"));
     }
 }

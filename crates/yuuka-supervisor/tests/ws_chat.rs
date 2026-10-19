@@ -111,10 +111,22 @@ fn seeded_db() -> (Db, Arc<SystemCrypto>) {
     let enc = crypto.encrypt_text("fake-key").unwrap();
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute(
-        "INSERT INTO users (discord_id, username, password_hash, salt, role, \
+        "INSERT INTO users (discord_id, username, salt, role, \
          gemini_api_key_encrypted, gemini_api_key_iv, gemini_api_key_tag) \
-         VALUES ('u1', 'yuu', 'x', '00', 'user', ?1, ?2, ?3)",
+         VALUES ('u1', 'yuu', '00', 'user', ?1, ?2, ?3)",
         rusqlite::params![enc.encrypted, enc.iv, enc.auth_tag],
+    )
+    .unwrap();
+    // u1 はシステム Bot の持ち主（管理者）でもある。共有された Bot（u2 持ち）を自分の Bot より先に作り、
+    // primary が「作成順の先頭」ではなく「自分の最初の Bot」になることを確かめる。
+    conn.execute_batch(
+        "INSERT INTO users (discord_id, username, salt) VALUES ('u2', 'u2', '00');
+         INSERT INTO bots (id, user_id, name, created_at) VALUES
+           ('system_default', 'u1', 'システムデフォルト', '2026-01-01 00:00:00'),
+           ('b_shared', 'u2', 'シェア', '2026-01-02 00:00:00'),
+           ('b_own', 'u1', 'ユウカ', '2026-01-03 00:00:00');
+         INSERT INTO bot_shares (bot_id, owner_id, shared_user_id, status)
+           VALUES ('b_shared', 'u2', 'u1', 'active');",
     )
     .unwrap();
     (db, crypto)
@@ -148,7 +160,8 @@ async fn ws_chat_ready_then_msg_returns_done() {
         // デバイスフロー ルータ（本テストでは不要・空ルータ）。
         axum::Router::new(),
         ws_routes(engine, 20),
-        // MCP / 統合設定 / finance / Bot 管理 / 利用申請・共有招待 / client-api ルータ（本テストでは不要・空ルータ）。
+        // MCP / 統合設定 / finance / schedule / Bot 管理 / 利用申請・共有招待 / client-api ルータ（本テストでは不要・空ルータ）。
+        axum::Router::new(),
         axum::Router::new(),
         axum::Router::new(),
         axum::Router::new(),
@@ -165,8 +178,20 @@ async fn ws_chat_ready_then_msg_returns_done() {
         let _ = axum::serve(listener, app).await;
     });
 
-    // Bearer 認証つきで /ws/chat?botId=system_default へ接続。
-    let mut req = format!("ws://{addr}/ws/chat?botId=system_default")
+    // システム Bot（案内役）へは、持ち主であっても繋がない（issue #142）。
+    let mut sd_req = format!("ws://{addr}/ws/chat?botId=system_default")
+        .into_client_request()
+        .unwrap();
+    sd_req
+        .headers_mut()
+        .insert("authorization", "Bearer good".parse().unwrap());
+    assert!(
+        tokio_tungstenite::connect_async(sd_req).await.is_err(),
+        "system_default への WS upgrade は 403 で拒否される"
+    );
+
+    // Bearer 認証つきで botId 未指定のまま /ws/chat へ接続 → primary（自分の最初の Bot）へ束縛される。
+    let mut req = format!("ws://{addr}/ws/chat")
         .into_client_request()
         .unwrap();
     req.headers_mut()
@@ -179,7 +204,17 @@ async fn ws_chat_ready_then_msg_returns_done() {
     let ready = next_json(&mut ws).await;
     assert_eq!(ready["type"], "ready", "ready: {ready}");
     assert_eq!(ready["user"]["discordId"], "u1");
-    assert_eq!(ready["bot"]["id"], "system_default");
+    assert_eq!(ready["bot"]["id"], "b_own");
+    assert_eq!(ready["bot"]["primary"], true);
+    // Bot 一覧は自分の Bot → 共有された Bot の順。システム Bot は含まない。
+    let ids: Vec<&str> = ready["bots"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|b| b["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, vec!["b_own", "b_shared"]);
+    assert_eq!(ready["bots"][1]["primary"], false);
     assert_eq!(ready["maxUploadMb"], 20);
 
     // 2) msg 送信 → status/done を受け取る（done まで読む）。
@@ -226,7 +261,8 @@ async fn ws_chat_rejects_cookie_only_auth() {
         // デバイスフロー ルータ（本テストでは不要・空ルータ）。
         axum::Router::new(),
         ws_routes(engine, 20),
-        // MCP / 統合設定 / finance / Bot 管理 / 利用申請・共有招待 / client-api ルータ（本テストでは不要・空ルータ）。
+        // MCP / 統合設定 / finance / schedule / Bot 管理 / 利用申請・共有招待 / client-api ルータ（本テストでは不要・空ルータ）。
+        axum::Router::new(),
         axum::Router::new(),
         axum::Router::new(),
         axum::Router::new(),
@@ -244,7 +280,7 @@ async fn ws_chat_rejects_cookie_only_auth() {
     });
 
     // 正当な Cookie セッションのみ（Authorization ヘッダ無し）で接続を試みる。
-    let mut req = format!("ws://{addr}/ws/chat?botId=system_default")
+    let mut req = format!("ws://{addr}/ws/chat?botId=b_own")
         .into_client_request()
         .unwrap();
     req.headers_mut()
@@ -256,7 +292,7 @@ async fn ws_chat_rejects_cookie_only_auth() {
     );
 
     // 対照: 同一サーバに Bearer で接続すると 101 で通る（Bearer 専用が機能している証左）。
-    let mut ok_req = format!("ws://{addr}/ws/chat?botId=system_default")
+    let mut ok_req = format!("ws://{addr}/ws/chat?botId=b_own")
         .into_client_request()
         .unwrap();
     ok_req

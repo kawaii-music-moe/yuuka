@@ -54,7 +54,7 @@ pub async fn get_agent_settings(
 ///
 /// `users` 行が存在せず何も更新されなかった場合は `false` を返す（呼び出し側は保存されていない値を
 /// 成功として報告しないこと）。行はここでは作らない: `users` は認証（`yuuka-auth`）が
-/// `password_hash`/`salt` 付きで作る唯一の正で、PWA 設定の書き込みが仮の認証情報で行を作ると
+/// `salt`・sk-account ID 付きで作る唯一の正で、PWA 設定の書き込みが仮の認証情報で行を作ると
 /// 未登録ユーザーを生み得るため。
 ///
 /// # Errors
@@ -98,9 +98,9 @@ mod tests {
             .transaction(move |tx| {
                 tx.execute(
                     "INSERT INTO users \
-                       (discord_id, username, password_hash, salt, gemini_model, \
+                       (discord_id, username, salt, gemini_model, \
                         google_refresh_token_encrypted) \
-                     VALUES (?1, ?1, 'x', 'x', ?2, ?3)",
+                     VALUES (?1, ?1, 'x', ?2, ?3)",
                     params![id, model, google_refresh],
                 )
                 .map_err(map_sqlite)?;

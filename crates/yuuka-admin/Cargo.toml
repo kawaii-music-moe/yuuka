@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
-description = "yuuka admin ドメイン（管理 API: users/bots/invite-codes/stats/audit-logs/system-settings）— Node adminRoutes.ts パリティ"
+description = "yuuka admin ドメイン（管理 API: users/bots/stats/audit-logs/system-settings）— Node adminRoutes.ts パリティ"
 
 [dependencies]
 yuuka-core.workspace = true
