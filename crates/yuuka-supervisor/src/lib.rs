@@ -45,6 +45,9 @@ pub use ws::ws_routes;
 /// `client_api_routes` は [`yuuka_client_api::routes_with`] が返す `/api/client/*` ルータ（`ChatEngine`/
 /// `RateLimiter` を `Extension` で内包済み・チャット送信 issue #41）。
 ///
+/// `member_share_routes` は利用申請 + Bot 共有招待ルータ（[`yuuka_orchestrator::member_request_routes_with`]
+/// と [`yuuka_orchestrator::bot_share_routes_with`] を merge したもの・DM sender を `Extension` で内包済み）。
+///
 /// `pwa_dist_dir` を渡すと PWA（issue #33・`client/pwa`）を [`mount_pwa`] で明示ルート群として
 /// 載せる。`dist_dir`（admin SPA・`fallback_service`）とは独立に効くため、両方 `Some` でも
 /// 互いを横取りしない（[`yuuka_web::mount_pwa`] のドキュメント参照）。
@@ -64,6 +67,7 @@ pub fn build_app(
     finance_routes: Router<AppState>,
     schedule_routes: Router<AppState>,
     bot_management_routes: Router<AppState>,
+    member_share_routes: Router<AppState>,
     client_api_routes: Router<AppState>,
     dist_dir: Option<&Path>,
     pwa_dist_dir: Option<&Path>,
@@ -89,8 +93,7 @@ pub fn build_app(
         .merge(yuuka_persona::routes())
         .merge(yuuka_briefing::routes())
         .merge(yuuka_auth::device_routes())
-        .merge(yuuka_orchestrator::member_request_routes())
-        .merge(yuuka_orchestrator::bot_share_routes())
+        .merge(member_share_routes)
         .merge(client_api_routes)
         .merge(bot_management_routes)
         .merge(desktop_dist::routes());
@@ -264,6 +267,9 @@ mod tests {
             yuuka_schedule::routes(),
             // Bot 管理ルータ（既定 NullBotViewRuntime・crypto なし）を merge して検証する。
             yuuka_orchestrator::bot_management_routes(),
+            // 利用申請 + 共有招待ルータ（Null DM sender）を merge して検証する。
+            yuuka_orchestrator::member_request_routes()
+                .merge(yuuka_orchestrator::bot_share_routes()),
             // client-api ルータ（fake ChatEngine・InMemoryRateLimiter）。上のコメント参照。
             yuuka_client_api::routes_with(client_api_engine, client_api_rate_limiter),
             dist_dir,
