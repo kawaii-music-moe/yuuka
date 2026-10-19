@@ -467,6 +467,47 @@ mod tests {
             .expect("todo status")
     }
 
+    /// 予定に期日前リマインドを紐付ける（`link_reminder` 相当の行を直接作る・テスト用）。
+    /// `status` で送信済み等の状態も作れる。`bot_id` は別 Bot の行を作るときに変える。
+    async fn insert_linked_reminder(db: &Db, plan_id: i64, bot_id: &str, status: &str) -> i64 {
+        let bot_id = bot_id.to_owned();
+        let status = status.to_owned();
+        db.writer
+            .transaction(move |tx| {
+                tx.execute(
+                    "INSERT INTO reminders \
+                       (user_id, bot_id, message, trigger_at, status, source, source_id) \
+                     VALUES ('u', ?1, '電気代の期日です', '2099-06-30 09:00:00', ?2, 'payment', ?3)",
+                    rusqlite::params![bot_id, status, plan_id.to_string()],
+                )
+                .map_err(yuuka_db::map_sqlite)?;
+                let reminder_id = tx.last_insert_rowid();
+                tx.execute(
+                    "UPDATE planned_payments SET linked_reminder_id = ?1 WHERE id = ?2",
+                    rusqlite::params![reminder_id, plan_id],
+                )
+                .map_err(yuuka_db::map_sqlite)?;
+                Ok(reminder_id)
+            })
+            .await
+            .expect("seed reminder")
+    }
+
+    /// リマインドの status を読む（テスト検査用）。
+    async fn reminder_status(db: &Db, reminder_id: i64) -> String {
+        db.read
+            .read(move |conn| {
+                conn.query_row(
+                    "SELECT status FROM reminders WHERE id = ?1",
+                    rusqlite::params![reminder_id],
+                    |r| r.get::<_, String>(0),
+                )
+                .map_err(yuuka_db::map_sqlite)
+            })
+            .await
+            .expect("reminder status")
+    }
+
     // ── 予算上限（budget_limits） ────────────────────────────────────────────
 
     #[tokio::test]
@@ -619,13 +660,13 @@ mod tests {
         assert_eq!(repo.list_plans(&s, false).await.unwrap().len(), 1);
 
         // cancel → pending から消え、include_paid で cancelled として見える。
-        assert!(repo.cancel_plan(&s, created.id).await.unwrap());
+        assert!(repo.cancel_plan(&s, created.id).await.unwrap().is_some());
         assert!(repo.list_plans(&s, false).await.unwrap().is_empty());
         let all = repo.list_plans(&s, true).await.unwrap();
         assert_eq!(all.len(), 1);
         assert_eq!(all[0].status, "cancelled");
-        // 二重キャンセル（pending でない）は false。
-        assert!(!repo.cancel_plan(&s, created.id).await.unwrap());
+        // 二重キャンセル（pending でない）は None。
+        assert!(repo.cancel_plan(&s, created.id).await.unwrap().is_none());
     }
 
     #[tokio::test]
@@ -657,6 +698,42 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn route_plan_add_validates_repeat_rule_with_runtime_parser() {
+        // R19: 5 フィールドでも実行時 parser が解釈できない式は保存しない（ツールと同じ判定）。
+        let app = app().await;
+        let post = |body: &'static str| {
+            Request::builder()
+                .method("POST")
+                .uri("/api/expenses/plans/add")
+                .header("cookie", "__Host-yuuka-session=good")
+                .header("content-type", "application/json")
+                .body(Body::from(body))
+                .unwrap()
+        };
+        let bad = app
+            .clone()
+            .oneshot(post(
+                r#"{"title":"家賃","amount":80000,"category":"その他","dueDate":"2026-08-27","repeatRule":"0 0 32 * *"}"#,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(bad.status(), StatusCode::BAD_REQUEST);
+
+        let ok = app
+            .oneshot(post(
+                r#"{"title":"家賃","amount":80000,"category":"その他","dueDate":"2026-08-27","repeatRule":"0 0 27 * *"}"#,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(ok.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(ok.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let j: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(j["plan"]["repeat_rule"], serde_json::json!("0 0 27 * *"));
+    }
+
+    #[tokio::test]
     async fn route_plan_add_rejects_missing_due() {
         let resp = app()
             .await
@@ -684,8 +761,10 @@ mod tests {
         let s = scope("u");
 
         let plan = repo.get_plan(&s, plan_id).await.unwrap().expect("plan");
-        let (expense_id, completed) = repo.settle_plan(&s, &plan).await.unwrap();
-        assert_eq!(completed, 1);
+        let settled = repo.settle_plan(&s, &plan).await.unwrap();
+        let expense_id = settled.expense_id;
+        assert_eq!(settled.completed_todos, 1);
+        assert_eq!(settled.cancelled_reminder_id, None); // 紐付きリマインド無し
 
         // (1) Expense（amount/category=予定・memo=title・expense/manual）。
         let expense = repo.get(&s, expense_id).await.unwrap().expect("expense");
@@ -703,6 +782,178 @@ mod tests {
 
         // (3) 紐付き ToDo は done。
         assert_eq!(todo_status(&db, plan_id).await, "done");
+    }
+
+    /// R14: 記帳済みの支出で消込すると新しい支出を作らず、その支出を settled_expense_id に記録する。
+    /// 他ユーザーの支出・収入・存在しない ID では何も変更しない。
+    #[tokio::test]
+    async fn settle_with_existing_expense_links_without_new_record() {
+        let db = seed_db();
+        let plan_id = insert_plan_with_todo(&db, true).await;
+        let repo = ExpenseRepo::new(&db);
+        let s = scope("u");
+
+        let existing = repo.add(&s, new_expense(5000, "光熱費")).await.unwrap();
+        let income = repo
+            .add(
+                &s,
+                NewExpense {
+                    r#type: Some("income".to_owned()),
+                    ..new_expense(5000, "その他")
+                },
+            )
+            .await
+            .unwrap();
+        let others = repo
+            .add(&scope("other"), new_expense(5000, "光熱費"))
+            .await
+            .unwrap();
+
+        // 条件を満たさない支出では None・予定は pending のまま・ToDo も未完了。
+        for bad in [others.id, income.id, 99_999] {
+            assert_eq!(
+                repo.settle_plan_with_expense(&s, plan_id, bad)
+                    .await
+                    .unwrap(),
+                None
+            );
+        }
+        let plan = repo.get_plan(&s, plan_id).await.unwrap().expect("plan");
+        assert_eq!(plan.status, "pending");
+        assert_eq!(plan.settled_expense_id, None);
+        assert_eq!(todo_status(&db, plan_id).await, "open");
+
+        // 記帳済みの支出で消込: 紐付き ToDo を完了し、支出は増えない。
+        let settled = repo
+            .settle_plan_with_expense(&s, plan_id, existing.id)
+            .await
+            .unwrap()
+            .expect("settled");
+        assert_eq!(settled.expense_id, existing.id);
+        assert_eq!(settled.completed_todos, 1);
+        let settled = repo.get_plan(&s, plan_id).await.unwrap().expect("plan");
+        assert_eq!(settled.status, "settled");
+        assert_eq!(settled.settled_expense_id, Some(existing.id));
+        assert_eq!(todo_status(&db, plan_id).await, "done");
+        assert_eq!(repo.list(&s).await.unwrap().len(), 2); // existing + income のみ
+
+        // 消込済みの予定はもう一度消込できない。
+        assert_eq!(
+            repo.settle_plan_with_expense(&s, plan_id, existing.id)
+                .await
+                .unwrap(),
+            None
+        );
+    }
+
+    /// R15: 消込（新規記帳・記帳済みの支出）とキャンセルで、紐付く pending の期日前リマインドを
+    /// 止める。送信済みのリマインドと、紐付きの無いリマインドは変えない。
+    #[tokio::test]
+    async fn settle_and_cancel_stop_linked_reminder() {
+        let db = seed_db();
+        let repo = ExpenseRepo::new(&db);
+        let s = scope("u");
+        // 別の予定に紐付く pending のリマインド（巻き込まれないことの確認用）。
+        let unrelated_plan = insert_plan_with_todo(&db, false).await;
+        let unrelated = insert_linked_reminder(&db, unrelated_plan, TEST_BOT_ID, "pending").await;
+
+        // 新規記帳で消込。
+        let plan_id = insert_plan_with_todo(&db, false).await;
+        let reminder = insert_linked_reminder(&db, plan_id, TEST_BOT_ID, "pending").await;
+        let plan = repo.get_plan(&s, plan_id).await.unwrap().expect("plan");
+        let settled = repo.settle_plan(&s, &plan).await.unwrap();
+        assert_eq!(settled.cancelled_reminder_id, Some(reminder));
+        assert_eq!(reminder_status(&db, reminder).await, "cancelled");
+
+        // 記帳済みの支出で消込。
+        let plan_id = insert_plan_with_todo(&db, false).await;
+        let reminder = insert_linked_reminder(&db, plan_id, TEST_BOT_ID, "pending").await;
+        let existing = repo.add(&s, new_expense(5000, "光熱費")).await.unwrap();
+        let settled = repo
+            .settle_plan_with_expense(&s, plan_id, existing.id)
+            .await
+            .unwrap()
+            .expect("settled");
+        assert_eq!(settled.cancelled_reminder_id, Some(reminder));
+        assert_eq!(reminder_status(&db, reminder).await, "cancelled");
+
+        // キャンセル。
+        let plan_id = insert_plan_with_todo(&db, false).await;
+        let reminder = insert_linked_reminder(&db, plan_id, TEST_BOT_ID, "pending").await;
+        let cancelled = repo
+            .cancel_plan(&s, plan_id)
+            .await
+            .unwrap()
+            .expect("cancelled");
+        assert_eq!(cancelled.cancelled_reminder_id, Some(reminder));
+        assert_eq!(reminder_status(&db, reminder).await, "cancelled");
+
+        // 送信済みのリマインドは sent のまま（止めたことにしない）。
+        let plan_id = insert_plan_with_todo(&db, false).await;
+        let reminder = insert_linked_reminder(&db, plan_id, TEST_BOT_ID, "sent").await;
+        let cancelled = repo
+            .cancel_plan(&s, plan_id)
+            .await
+            .unwrap()
+            .expect("cancelled");
+        assert_eq!(cancelled.cancelled_reminder_id, None);
+        assert_eq!(reminder_status(&db, reminder).await, "sent");
+
+        // 別 Bot のリマインド id が紐付いていても、スコープ外なので変えない。
+        let plan_id = insert_plan_with_todo(&db, false).await;
+        let reminder = insert_linked_reminder(&db, plan_id, "other_bot", "pending").await;
+        let cancelled = repo
+            .cancel_plan(&s, plan_id)
+            .await
+            .unwrap()
+            .expect("cancelled");
+        assert_eq!(cancelled.cancelled_reminder_id, None);
+        assert_eq!(reminder_status(&db, reminder).await, "pending");
+
+        assert_eq!(reminder_status(&db, unrelated).await, "pending");
+    }
+
+    /// R15: HTTP の消込（plans/pay）・キャンセル（plans/delete）でも紐付きリマインドを止める。
+    #[tokio::test]
+    async fn route_pay_and_delete_stop_linked_reminder() {
+        let db = seed_db();
+        let paid_plan = insert_plan_with_todo(&db, false).await;
+        let paid_reminder = insert_linked_reminder(&db, paid_plan, TEST_BOT_ID, "pending").await;
+        let cancelled_plan = insert_plan_with_todo(&db, false).await;
+        let cancelled_reminder =
+            insert_linked_reminder(&db, cancelled_plan, TEST_BOT_ID, "pending").await;
+        let auth = Arc::new(FakeAuth {
+            user: SessionUser {
+                discord_id: "u".to_owned(),
+                username: "u".to_owned(),
+                role: Role::User,
+            },
+        });
+        let state = AppState::new(auth, WebConfig::default(), db.clone());
+        yuuka_web::test_support::seed_bot(&db, TEST_BOT_ID, "u").await;
+        let app = with_bot_query(super::routes().with_state(state), TEST_BOT_ID);
+
+        for (uri, plan_id) in [
+            ("/api/expenses/plans/pay", paid_plan),
+            ("/api/expenses/plans/delete", cancelled_plan),
+        ] {
+            let resp = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(uri)
+                        .header("cookie", "__Host-yuuka-session=good")
+                        .header("content-type", "application/json")
+                        .body(Body::from(format!(r#"{{"id":{plan_id}}}"#)))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), StatusCode::OK, "{uri}");
+        }
+        assert_eq!(reminder_status(&db, paid_reminder).await, "cancelled");
+        assert_eq!(reminder_status(&db, cancelled_reminder).await, "cancelled");
     }
 
     #[tokio::test]

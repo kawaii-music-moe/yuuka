@@ -8,9 +8,9 @@ use async_trait::async_trait;
 use chrono::Local;
 
 use crate::context::ServiceContext;
-use crate::cron_util;
 use crate::planned_payment;
 use crate::schedule::{CronService, Schedule};
+use yuuka_core::cron_util;
 
 /// 支払い予定 繰り返し自動生成サービス。
 pub struct PaymentRecurrenceService;
@@ -70,7 +70,8 @@ mod tests {
         amount INTEGER NOT NULL, category TEXT, memo TEXT, due_date TEXT NOT NULL, repeat_rule TEXT,
         status TEXT NOT NULL DEFAULT 'pending',
         created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
-        updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+        updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+        bot_id TEXT NOT NULL DEFAULT 'system_default'
     );";
 
     #[tokio::test]
@@ -131,5 +132,42 @@ mod tests {
             next_due.ends_with("-01"),
             "next_due should be a month start: {next_due}"
         );
+    }
+
+    #[tokio::test]
+    async fn next_plan_keeps_bot_id() {
+        // 次回分は元の行の bot_id を引き継ぐ（省くと既定値 system_default が入り、元の Bot から見えなくなる）。
+        let (db, _dir) = seeded_db(PLANNED_DDL);
+        let ctx = ctx_null(db);
+        ctx.db
+            .writer
+            .execute(|conn| {
+                conn.execute(
+                    "INSERT INTO planned_payments (user_id,bot_id,title,amount,category,due_date,repeat_rule,status) \
+                     VALUES ('u','bot_a','家賃',80000,'housing','2000-01-01','0 0 1 * *','pending')",
+                    [],
+                )
+                .map_err(map_sqlite)?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+
+        run(&ctx).await.unwrap();
+
+        let bot_id: String = ctx
+            .db
+            .read
+            .read(|conn| {
+                conn.query_row(
+                    "SELECT bot_id FROM planned_payments WHERE status='pending'",
+                    [],
+                    |r| r.get(0),
+                )
+                .map_err(map_sqlite)
+            })
+            .await
+            .unwrap();
+        assert_eq!(bot_id, "bot_a");
     }
 }

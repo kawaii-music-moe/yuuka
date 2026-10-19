@@ -200,7 +200,11 @@ async fn run() -> Result<(), String> {
             mcp_client.clone(),
             Some(synapse_engine),
         )
-        .with_calendar(google_events.clone()),
+        .with_calendar(google_events.clone())
+        // ツール実行実績を tool_outcomes へ永続化する（Node `recordToolOutcome`・R22）。
+        .with_tool_outcomes(Arc::new(yuuka_orchestrator::DbToolOutcomeSink::new(
+            db.clone(),
+        ))),
     );
     let chat_ws_routes = ws_routes(chat_engine.clone(), cfg.desktop_max_upload_mb);
 
@@ -334,6 +338,9 @@ async fn run() -> Result<(), String> {
         rate_limiter: Arc::new(InMemoryRateLimiter::new(db.clone())),
     }));
 
+    // schedule ルータ: 管理画面からの登録・削除もエージェントと同じく Google カレンダーへ反映する（#127）。
+    let schedule_routes = yuuka_schedule::routes_with_calendar(Some(google_events.clone()));
+
     // Webhook ルータ（署名検証・通知・ToDo/リマインド化・受信履歴を実処理へ配線）。
     let webhook_routes = yuuka_webhook::routes_with(
         crypto.clone(),
@@ -372,6 +379,12 @@ async fn run() -> Result<(), String> {
         crypto.clone(),
         discord_live,
     );
+
+    // 利用申請 + Bot 共有招待ルータ（issue #100/#101）。DM は Discord ボタン経路（interaction）と同じ
+    // messenger（共有デフォルト Bot）から送り、入口（Web / Discord）によらず同じ通知が届くようにする。
+    // gateway ゲート非依存（REST 送信のみ）。デフォルト Bot 未起動なら送信 false → warn のみで応答は成功。
+    let member_share_routes = yuuka_orchestrator::member_request_routes_with(messenger.clone())
+        .merge(yuuka_orchestrator::bot_share_routes_with(messenger.clone()));
 
     // デバイスフロー（RFC 8628）ルータ。device_code の一時状態はインメモリ store（web 再起動を跨ぐよう
     // main で 1 度だけ生成し注入）。承認 URL ベースは base_url（末尾スラッシュ除去）or http://host:port。
@@ -430,7 +443,9 @@ async fn run() -> Result<(), String> {
         mcp_routes,
         integrated_routes,
         finance_routes,
+        schedule_routes,
         bot_management_routes,
+        member_share_routes,
         client_api_routes,
         addr,
         dist_dir,
@@ -810,8 +825,13 @@ struct WebService {
     integrated_routes: Router<AppState>,
     /// finance ルータ（`ReceiptParser` を `Extension` で内包済み・`/api/expenses/*`・upload-receipt live）。
     finance_routes: Router<AppState>,
+    /// schedule ルータ（予定の Google 同期先を `Extension` で内包済み・`/api/schedules*`）。
+    schedule_routes: Router<AppState>,
     /// Bot 管理ルータ（`BotViewRuntime`/crypto を `Extension` で内包済み・`/api/bots*`）。
     bot_management_routes: Router<AppState>,
+    /// 利用申請 + Bot 共有招待ルータ（`DiscordMessenger` の DM sender を `Extension` で内包済み・
+    /// `/api/bots/member-requests*` + `/api/bots/shares*`）。
+    member_share_routes: Router<AppState>,
     /// PWA クライアント API ルータ（`ChatEngine`/`RateLimiter` を `Extension` で内包済み・
     /// `/api/client/*`・チャット送信は issue #41）。
     client_api_routes: Router<AppState>,
@@ -841,7 +861,9 @@ impl SupervisedService for WebService {
             self.mcp_routes.clone(),
             self.integrated_routes.clone(),
             self.finance_routes.clone(),
+            self.schedule_routes.clone(),
             self.bot_management_routes.clone(),
+            self.member_share_routes.clone(),
             self.client_api_routes.clone(),
             self.dist_dir.as_deref(),
             self.pwa_dist_dir.as_deref(),

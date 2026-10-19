@@ -1,8 +1,8 @@
 //! 支払い予定（`planned_payments`）の cron 専用アクセス（現行 `plannedPaymentRepo` の
 //! `listOverdueRecurringAcrossUsers` / `advanceRecurring`）。
 //!
-//! 支払い予定はユーザー向け CRUD ドメイン crate が未整備（`planned_payments` は `user_id` のみで
-//! `bot_id` を持たない）。cron 専用 SQL を本 crate が直接持つ（ドメイン整備時に repo へ移す）。
+//! cron 専用 SQL を本 crate が直接持つ。次回分の行は元の行の `user_id` / `bot_id` を引き継ぐ
+//! （`bot_id` を省くと列の既定値 `system_default` が入り、元の Bot から見えなくなる）。
 //! 横断アクセスは [`CrossUserAccess`] 証憑を要求する。
 
 use rusqlite::types::Value;
@@ -16,6 +16,7 @@ use yuuka_web::Db;
 pub struct OverduePlan {
     pub id: i64,
     pub user_id: String,
+    pub bot_id: String,
     pub title: String,
     pub amount: Value,
     pub category: Option<String>,
@@ -35,7 +36,8 @@ pub async fn list_overdue_recurring(
 ) -> Result<Vec<OverduePlan>, DbError> {
     db.read
         .read(move |conn| {
-            let sql = "SELECT id, user_id, title, amount, category, memo, due_date, repeat_rule \
+            let sql = "SELECT id, user_id, bot_id, title, amount, category, memo, due_date, \
+                 repeat_rule \
                  FROM planned_payments \
                  WHERE status = 'pending' AND repeat_rule IS NOT NULL \
                  AND date(due_date) < date('now', 'localtime') \
@@ -64,6 +66,7 @@ pub async fn advance_recurring(
 ) -> Result<bool, DbError> {
     let id = plan.id;
     let user_id = plan.user_id.clone();
+    let bot_id = plan.bot_id.clone();
     let title = plan.title.clone();
     let amount = plan.amount.clone();
     let category = plan.category.clone();
@@ -85,10 +88,11 @@ pub async fn advance_recurring(
             let n = tx
                 .execute(
                     "INSERT INTO planned_payments \
-                     (user_id, title, amount, category, memo, due_date, repeat_rule) \
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                     (user_id, bot_id, title, amount, category, memo, due_date, repeat_rule) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
                     params![
                         user_id,
+                        bot_id,
                         title,
                         amount,
                         category,
@@ -107,6 +111,7 @@ fn row_to_plan(row: &Row) -> rusqlite::Result<OverduePlan> {
     Ok(OverduePlan {
         id: row.get("id")?,
         user_id: row.get("user_id")?,
+        bot_id: row.get("bot_id")?,
         title: row.get("title")?,
         amount: row.get("amount")?,
         category: row.get("category")?,

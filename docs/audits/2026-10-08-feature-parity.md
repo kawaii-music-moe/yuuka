@@ -62,7 +62,7 @@
 |---|---|---|---|---|
 | R22 | 中 | ツール実行実績の永続保存 | ツール名・引数ダイジェスト・成否・所要時間を `tool_outcomes` へ保存していた。現在はテーブルはあるがRustの実行処理に書き込みがない。操作履歴 `ActionRecorder` は別物で、成否・所要時間の永続記録を代替しない。 | 旧 `src/gemini.ts:724`、`src/db/toolOutcomeRepo.ts`。現行 `crates/yuuka-gemini/src/fc_loop.rs:237`、`crates/yuuka-db/migrations/V17__baseline.sql`。 |
 | R23 | 中 | 実利用メトリクスの計測 | 会話数、ツール数、想起ヒット、応答時間などを更新していた。現在はレジストリと定期ログはあるが、実処理から増加・記録しない。更新呼び出しはレジストリのテスト内にしか見つからない。 | 旧 `src/gemini.ts:342,724,879,929`、`src/services/metrics.ts`。現行 `crates/yuuka-services/src/metrics.rs:6,35,42`。 |
-| R24 | 高 | 日報・週報の支払い予定のBot別分離 | 旧SQLは `user_id AND bot_id`。Rustの日報集計は `user_id` だけで、別Botの支払い予定が混ざる。同じユーザー内のBot分離の後退であり、別ユーザーへの漏洩を確認したわけではない。「bot_id列がない」という現行コメントは、V17の実スキーマと矛盾する。 | 旧 `src/services/reportService.ts:110`。現行 `crates/yuuka-services/src/report.rs:240`付近、`crates/yuuka-db/migrations/V17__baseline.sql:169`。 |
+| R24 | 高 | 日報・週報の支払い予定のBot別分離 | 旧SQLは `user_id AND bot_id`。Rustの日報集計は `user_id` だけで、別Botの支払い予定が混ざる。同じユーザー内のBot分離の後退であり、別ユーザーへの漏洩を確認したわけではない。「bot_id列がない」という現行コメントは、V17の実スキーマと矛盾する。**修正済み（#121）**：支払い予定の集計を `user_id AND bot_id` に戻し、誤ったコメントを直した。別Botの支払い予定が混ざらない回帰テストを追加。 | 旧 `src/services/reportService.ts:110`。現行 `crates/yuuka-services/src/report.rs:240`付近、`crates/yuuka-db/migrations/V17__baseline.sql:169`。 |
 | R25 | 高 | RSS取得直前のDNS解決を含むSSRF検査 | Nodeは取得直前に `assertSafeOutboundUrl` でDNS解決先を確認していた。RustはURL文字列・IPリテラルの簡易検査だけで、ドメインを公開扱いにして通常のHTTPクライアントで取得する。内部IPへ解決されるホストの拒否機能が失われている。 | 旧 `src/services/briefingService.ts:132`、`src/utils/ssrfGuard.ts:167`。現行 `crates/yuuka-briefing/src/service.rs:200`、`crates/yuuka-briefing/src/tools.rs:46`。 |
 | R26 | 中 | 運用設定の反映 | `REMINDER_CRON` は読まれて画面表示に使われるが実行周期は毎分固定。`SYNAPSE_RECALL_K`・`SYNAPSE_RECENCY_WEIGHT`・`SYNAPSE_RECENCY_HALFLIFE_HOURS` は定数化。`DESKTOP_TOKEN_TTL_DAYS` は90日、`DESKTOP_DEVICE_CODE_TTL_SEC` は600秒固定。旧設定を渡しても調整できない。計画・返信関連の設定消失はR06～R08に含む。 | 旧 `src/config.ts:83,95,138,144,147,168,174`、`src/services/reminderEngine.ts:221`。現行 `crates/yuuka-services/src/reminder.rs:34`、`crates/yuuka-orchestrator/src/synapse_recall.rs:19`、`crates/yuuka-auth/src/lib.rs:42`、`crates/yuuka-auth/src/device_auth.rs:37`。 |
 | R27 | 低 | Googleサイト所有権確認metaの注入 | Nodeは設定値をHTMLのプレースホルダーへ差し込んでいた。Rustでは設定とプレースホルダーは残るが配信時に置換しない。 | 旧 `src/server.ts:230`。現行 `crates/yuuka-core/src/config.rs:37`、`crates/yuuka-web/src/static_files.rs:25`、`frontend/index.html:7`。 |
@@ -75,7 +75,7 @@
 |---|---|---|---|
 | D01 | Svelte管理画面とVue PWAのタスク・予定・家計・ノート・設定 | 同じ業務データを別の画面で操作する。両方とも稼働する用途があり、PWAは機能を絞った個人画面。`frontend/src/routes/BotShell.svelte:36` と `client/pwa/src/router.ts`。 | UIを残すなら業務ルールを共有し、機能差を明示する。画面が2つあるだけで不要とはしない。 |
 | D02 | ドメインHTTP API、`/api/client/*`、LLMツール | 同じToDo・家計・ノートに3つの入口がある。repoは共有するものが多いが、入力検証・既定値・レスポンスが別実装。例：`yuuka-todo/src/routes.rs`、`yuuka-client-api/src/routes.rs` の `todos_add`、`yuuka-todo/src/tools.rs`。 | repoだけでなく、登録・更新・取消の業務処理を共通サービスに集約する。 |
-| D03 | 予定登録・削除の経路 | PWA登録は `addSchedule` ツールを呼ぶ一方、管理APIは `ScheduleRepo::add/delete` を直接呼ぶ。作業中のGoogle同期はツール側にあるため、管理画面経由では同じ外部反映を行わない。旧NodeでもHTTPとツールの経路差があったため、新たな移植欠落とは数えない。 | Google同期を含む予定サービスを全入口から呼ぶ。根拠：`yuuka-client-api/src/routes.rs` の `calendar_add`、`yuuka-schedule/src/routes.rs:76`、`yuuka-schedule/src/tools.rs`。 |
+| D03 | 予定登録・削除の経路 | PWA登録は `addSchedule` ツールを呼ぶ一方、管理APIは `ScheduleRepo::add/delete` を直接呼ぶ。作業中のGoogle同期はツール側にあるため、管理画面経由では同じ外部反映を行わない。旧NodeでもHTTPとツールの経路差があったため、新たな移植欠落とは数えない。**修正済み（#127）**：予定の登録・削除（Google同期込み）を `yuuka-schedule/src/service.rs` の `ScheduleService` にまとめ、ツール・管理API（`routes_with_calendar` で同期先を配線）・PWA の `calendar_add` をすべてそこへ通した。管理APIからの登録・削除が Google に反映される回帰テストを追加。 | Google同期を含む予定サービスを全入口から呼ぶ。根拠：`yuuka-client-api/src/routes.rs` の `calendar_add`、`yuuka-schedule/src/routes.rs:76`、`yuuka-schedule/src/tools.rs`。 |
 | D04 | cron式の検証 | `todo/finance/reminder/briefing` に簡易検証が重複し、実行時だけ `yuuka-services/src/cron_util.rs` が本物のパーサを使う。R19の原因。 | 循環依存を作らない共通層に検証・次回時刻計算を移し、登録時と実行時を揃える。 |
 | D05 | 日時の解釈・保存形式変換 | `yuuka-reminder/src/datetime.rs`、`yuuka-schedule/src/datetime.rs`、`yuuka-client-api` 内の日時変換、`yuuka-services/src/cron_util.rs` が並存。入力ISO、DBローカル時刻、PWA向けUTCという用途差もある。 | 用途差を保った名前付き関数として共通化し、受理形式・オフセットの差を管理する。 |
 | D06 | 外向きURL/IPのSSRF検査 | browser、MCP、briefingが個別実装。briefingの検査だけDNS確認がない（R25）。`yuuka-browser/src/ssrf.rs`、`yuuka-mcp/src/http_client.rs`、`yuuka-briefing/src/tools.rs`。 | 通信直前の検査を共有する。URL登録時の簡易検査と通信時検査を区別する。 |
@@ -95,7 +95,7 @@
 ## 失われた機能と誤判定しないもの
 
 - **会話ツールの入口は85件すべて存在**。現行で増えた `updateExpense` / `deleteExpense` を合わせ、検出した静的ツール名は87件。MCPの動的ツールはこの件数に含めない。
-- **Googleカレンダー同期**は作業ツリーに追加・削除・取り込み・定期取り込みの実装と起動時接続がある。`crates/yuuka-schedule/src/google_sync.rs`、`tools.rs`、`crates/yuuka-services/src/calendar_sync.rs`、`crates/yuuka-supervisor/src/main.rs`。未コミットなのでデプロイ済みとは扱わない。管理APIの経路差はD03。
+- **Googleカレンダー同期**は作業ツリーに追加・削除・取り込み・定期取り込みの実装と起動時接続がある。`crates/yuuka-schedule/src/google_sync.rs`、`tools.rs`、`crates/yuuka-services/src/calendar_sync.rs`、`crates/yuuka-supervisor/src/main.rs`。未コミットなのでデプロイ済みとは扱わない。管理APIの経路差はD03（#127 で解消）。
 - **コンテキストノートとカレンダー情報のプロンプト注入、シナプス想起・抽出**は接続済み。engine冒頭の古い「空移植」コメントは現状と一致しない。返信チェーンはR08として残る。
 - **MCP探索・動的ツール実行、Google OAuth・Driveバックアップ、レシート解析、Bot起動停止**には実クライアントの接続経路がある。資格情報なしでNullに落ちること自体を未実装とは判定しない。
 - **通常のDiscord会話、音声・画像入力、共有・申請ボタン処理、登録コードDM**は実装あり。Web招待・申請のDMはR03/R04、WSボタンはR09として区別する。
@@ -136,3 +136,10 @@
 5. 残る生成補助・運用設定・計測を戻し、D02/D03/D04/D06/D07の共通化で経路間の再発を抑える。
 
 本調査では機能修正・削除・デプロイは行っていない。対応表とこの報告書を追加した。
+
+## 対応状況
+
+| ID | 状態 | 内容 |
+|---|---|---|
+| R19 / D04 | 対応済み（#116 / #128） | cron 式ユーティリティを `yuuka-services` から循環依存のない `crates/yuuka-core/src/cron_util.rs` へ移し、登録時検証 `cron_util::is_valid` を追加した。ToDo・支払い予定・リマインド・朝報/日報週報設定のツールと HTTP（`POST /api/tasks/add`・`POST /api/expenses/plans/add`・`POST /api/reminders/add` を含む）、Playbook スケジュールのWeb登録は、実行側と同じ croner parser で検証する（HTTP の不正式は 400、空の repeat_rule は単発扱い）。範囲外の値・発火日が実在しない式（例：`0 0 30 2 *`）は保存しない。Playbook は Node と同じく 400「無効なcron式です。」を返す。各ドメインに 5 フィールドだが不正な式の回帰テストを追加した。 |
+| D05 | 対応済み（#129） | 日時の解釈・保存形式変換を `crates/yuuka-core/src/datetime.rs` に集め、`yuuka-reminder/src/datetime.rs`・`yuuka-schedule/src/datetime.rs`・`yuuka-client-api` の日時変換・`cron_util::to_db_datetime` を置き換えた。用途差は関数名で残した：リマインド入力 `input_to_db_local`（オフセット付きはサーバーのローカル TZ へ換算・Node `toDbDateTime` パリティ）、予定入力 `input_to_db_jst`（JST 固定へ換算）、PWA の `datetime-local` 入力 `browser_local_to_db`（`T` 区切りのみ受理）、PWA 向け出力 `db_to_utc_iso`、実行時の時刻 `local_to_db`。前 2 つの受理形式（日付のみ／`T`・空白区切り／秒・小数秒は任意／RFC 3339）は同じ parser に揃えた。挙動は変えていない（本番は `TZ=Asia/Tokyo` なので Local と JST 固定は同じ結果になる）。対象外として残る個別変換：`yuuka-google/src/http.rs` の Google API ⇔ ローカル暦変換、`yuuka-services` の `playbook_schedule.rs` / `backup.rs` の DB 文字列パース。 |

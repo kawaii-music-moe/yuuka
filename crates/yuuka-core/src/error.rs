@@ -27,7 +27,7 @@ pub enum ConfigError {
     #[error("config parse failed")]
     Parse {
         #[source]
-        source: serde_yaml::Error,
+        source: crate::config::YamlError,
     },
 
     #[error("required config field missing: {field}")]

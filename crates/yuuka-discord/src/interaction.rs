@@ -595,6 +595,48 @@ mod tests {
         );
     }
 
+    /// 共有招待 DM（`DiscordMessenger::send_share_invite_dm`）のボタンが、本ハンドラで処理される
+    /// custom_id になっていること（押して動くこと）を往復で確認する。
+    #[tokio::test]
+    async fn share_invite_dm_buttons_round_trip_to_decide() {
+        let components = crate::manager::share_invite_components(42);
+        let ids: Vec<&str> = components[0]
+            .buttons
+            .iter()
+            .map(|b| b.custom_id.as_str())
+            .collect();
+        assert_eq!(ids, ["share_accept:42", "share_decline:42"]);
+        for (custom_id, expected) in [
+            (
+                "share_accept:42",
+                "✅ Bot「**bot1**」へのアクセスが有効になりました！",
+            ),
+            ("share_decline:42", "招待を辞退しました。"),
+        ] {
+            let d = deps(
+                FakeMembership {
+                    share: Some(ShareRecord {
+                        bot_id: BotId::new("bot1"),
+                        shared_user_id: UserId::new("me"),
+                        status: "pending".to_owned(),
+                    }),
+                    ..Default::default()
+                },
+                FakeDirectory::default(),
+            );
+            let (action, id, extra) = parse_custom_id(custom_id);
+            let plan = decide(&d, action, id, extra, &UserId::new("me"), None, None).await;
+            assert_eq!(
+                plan,
+                InteractionPlan::Update {
+                    content: expected.to_owned(),
+                    followup: None,
+                },
+                "{custom_id}"
+            );
+        }
+    }
+
     #[tokio::test]
     async fn share_accept_offers_persona_followup() {
         let d = deps(

@@ -26,7 +26,6 @@ tracing.workspace = true
 thiserror.workspace = true
 rusqlite.workspace = true                 # services 固有 cron SQL（clipboard_entries / planned_payments・専用ドメイン crate 未整備）
 chrono.workspace = true
-croner.workspace = true
 
 [dev-dependencies]
 tempfile = "3"

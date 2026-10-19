@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde_json::{json, Value};
+use yuuka_core::cron_util;
 use yuuka_core::tool::FunctionDeclaration;
 use yuuka_core::{
     EmbedFieldPart, EmbedPart, ResponsePart, Tool, ToolContext, ToolError, ToolName, ToolOutcome,
@@ -101,12 +102,6 @@ fn exec_err(e: yuuka_core::DbError) -> ToolError {
     ToolError::Execution(e.to_string())
 }
 
-/// 最小 cron 妥当性（5 フィールド・空でない・Node `cron.validate` の簡約）。
-pub(crate) fn is_valid_cron_basic(rule: &str) -> bool {
-    let fields: Vec<&str> = rule.split_whitespace().collect();
-    fields.len() == 5 && fields.iter().all(|f| !f.is_empty())
-}
-
 /// trim 後空なら `None`。
 fn arg_str(args: &Value, key: &str) -> Option<String> {
     args.get(key)
@@ -153,7 +148,7 @@ impl Tool for ConfigureReportTool {
         }
         let schedule_cron = arg_str(&args, "schedule_cron");
         if let Some(cron) = &schedule_cron {
-            if !is_valid_cron_basic(cron) {
+            if !cron_util::is_valid(cron) {
                 return Ok(fail("schedule_cron のcron式が不正です。"));
             }
         }
@@ -272,7 +267,7 @@ impl Tool for ConfigureBriefingTool {
 
     async fn call(&self, ctx: &ToolContext, args: Value) -> Result<ToolOutcome, ToolError> {
         if let Some(cron) = arg_str(&args, "schedule_cron") {
-            if !is_valid_cron_basic(&cron) {
+            if !cron_util::is_valid(&cron) {
                 return Ok(fail("schedule_cron のcron式が不正です。"));
             }
         }
@@ -494,14 +489,17 @@ mod tests {
                 .payload["success"],
             false
         );
-        assert_eq!(
-            configure
-                .call(&ctx(), json!({"type": "daily", "schedule_cron": "bad"}))
-                .await
-                .unwrap()
-                .payload["success"],
-            false
-        );
+        for cron in ["bad", "0 24 * * *"] {
+            assert_eq!(
+                configure
+                    .call(&ctx(), json!({"type": "daily", "schedule_cron": cron}))
+                    .await
+                    .unwrap()
+                    .payload["success"],
+                false,
+                "{cron}"
+            );
+        }
 
         // 日報を有効化。
         let out = configure
