@@ -451,14 +451,13 @@ impl ChatEngine {
         ctx.rich_reply_enabled = rich;
         ctx.capabilities = caps;
         ctx.mode = TurnMode::Secretary;
-        // MCP 動的ツール: `mcp` 能力があるときだけ発話者スコープで探索し、そのターン限りの provider として
+        // MCP 動的ツール: `mcp` 能力があるときだけ Bot の許可スコープで探索し、そのターン限りの provider として
         // snapshot へ層状に足す（Node `resolveMcpModule`: `caps.has("mcp")` ガード → getMcpFunctionModuleForBot）。
         // 探索は DB + tools/list（ネットワーク）を伴うため FC ループ直前に一度だけ行う。取得失敗でも空 provider。
         let mcp_provider: Option<Arc<dyn yuuka_core::ToolProvider>> = if ctx.capabilities.has("mcp")
         {
             Some(Arc::new(
-                McpProvider::discover(self.db.clone(), Arc::clone(&self.mcp_client), bid, uid)
-                    .await,
+                McpProvider::discover(self.db.clone(), Arc::clone(&self.mcp_client), bid).await,
             ))
         } else {
             None

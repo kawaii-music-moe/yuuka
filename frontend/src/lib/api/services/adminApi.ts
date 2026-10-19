@@ -6,7 +6,6 @@ import type {
 	AdminAuditLogsResponse,
 	AdminBotAttributeSettingsResponse,
 	AdminBotsResponse,
-	AdminInviteCodesResponse,
 	AdminStatsResponse,
 	AdminSystemSettingsResponse,
 	AdminUsersResponse,
@@ -61,27 +60,6 @@ export const adminApi = {
 	/** POST /api/admin/bots/unsuspend */
 	unsuspendBot: (botId: string) =>
 		api.post<ApiResponse>("/api/admin/bots/unsuspend", { botId }, USER),
-
-	// ── 招待コード ──
-	/** GET /api/admin/invite-codes */
-	inviteCodes: () =>
-		api.get<AdminInviteCodesResponse>("/api/admin/invite-codes", USER),
-	/** POST /api/admin/invite-codes — 発行（ハンドラは ctx.body.code を読む） */
-	createInviteCode: (code: string) =>
-		api.post<ApiResponse>("/api/admin/invite-codes", { code }, USER),
-	/** POST /api/admin/invite-codes/:code/revoke */
-	revokeInviteCode: (code: string) =>
-		api.post<ApiResponse>(
-			`/api/admin/invite-codes/${encodeURIComponent(code)}/revoke`,
-			{},
-			USER,
-		),
-	/** DELETE /api/admin/invite-codes/:code */
-	deleteInviteCode: (code: string) =>
-		api.del<ApiResponse>(
-			`/api/admin/invite-codes/${encodeURIComponent(code)}`,
-			USER,
-		),
 
 	// ── Bot 属性のグローバル既定（botAttributeRoutes: admin） ──
 	/** GET /api/admin/bot-attribute-settings */

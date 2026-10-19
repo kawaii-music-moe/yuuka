@@ -20,12 +20,9 @@ export const settingsApi = {
 	/** POST /api/settings/profile */
 	updateProfile: (body: Record<string, unknown>) =>
 		api.post<ApiResponse>("/api/settings/profile", body, USER),
-	/** POST /api/settings/password */
-	changePassword: (body: { currentPassword: string; newPassword: string }) =>
-		api.post<ApiResponse>("/api/settings/password", body, USER),
 	/** POST /api/settings/delete-account */
-	deleteAccount: (body: { password: string }) =>
-		api.post<ApiResponse>("/api/settings/delete-account", body, USER),
+	deleteAccount: () =>
+		api.post<ApiResponse>("/api/settings/delete-account", {}, USER),
 
 	/** POST /api/settings/user — ユーザー設定（リマインド既定・通知先等） */
 	updateUserSettings: (body: Record<string, unknown>) =>
@@ -64,4 +61,7 @@ export const settingsApi = {
 	/** POST /api/settings/backup/trigger — 手動バックアップ実行 */
 	triggerBackup: () =>
 		api.post<ApiResponse>("/api/settings/backup/trigger", {}, USER),
+	/** 所有する全Botと関連データをPIN暗号化した移行パッケージとして取得 */
+	downloadPackage: (pin: string) =>
+		api.downloadPost("/api/settings/package/download", { pin }),
 };

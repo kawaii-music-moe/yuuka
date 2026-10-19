@@ -596,8 +596,8 @@ mod tests {
         db.writer
             .transaction(|tx| {
                 tx.execute_batch(
-                    "INSERT INTO users (discord_id, username, password_hash, salt) VALUES \
-                       ('u1', 'u1', 'x', 'x'), ('u2', 'u2', 'x', 'x');
+                    "INSERT INTO users (discord_id, username, salt) VALUES \
+                       ('u1', 'u1', 'x'), ('u2', 'u2', 'x');
                      INSERT INTO bots (id, user_id, name) VALUES \
                        ('plain', 'u1', 'P'), ('none', 'u1', 'N'), ('mine', 'u1', 'M'), ('others', 'u2', 'O');
                      INSERT INTO user_google_accounts \

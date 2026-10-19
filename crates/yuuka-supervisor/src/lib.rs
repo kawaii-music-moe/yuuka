@@ -19,7 +19,7 @@ pub mod tenants;
 pub mod tool_registry;
 pub mod ws;
 
-pub use discord::{DiscordTenantService, MessengerRegistrationDm};
+pub use discord::DiscordTenantService;
 pub use services::{build_supervised_services, CronSupervised};
 pub use supervisor::{RestartPolicy, ServiceError, ShutdownToken, SupervisedService, Supervisor};
 pub use tenants::{
@@ -62,6 +62,7 @@ pub fn build_app(
     mcp_routes: Router<AppState>,
     integrated_routes: Router<AppState>,
     finance_routes: Router<AppState>,
+    schedule_routes: Router<AppState>,
     bot_management_routes: Router<AppState>,
     client_api_routes: Router<AppState>,
     dist_dir: Option<&Path>,
@@ -80,7 +81,7 @@ pub fn build_app(
         .merge(integrated_routes)
         .merge(finance_routes)
         .merge(yuuka_todo::routes())
-        .merge(yuuka_schedule::routes())
+        .merge(schedule_routes)
         .merge(yuuka_timeline::routes())
         .merge(yuuka_reminder::routes())
         .merge(yuuka_personal::routes())
@@ -158,12 +159,12 @@ mod tests {
         }
         let db = Db::open(&path).expect("open"); // migrations で users 表を作成。
                                                  // /api/me は DB からユーザーを再取得する（P3-5）。FakeAuth のユーザー "u" を seed する
-                                                 // （V17 実スキーマの NOT NULL: username/password_hash/salt を充足）。
+                                                 // （V17 実スキーマの NOT NULL: username/salt を充足）。
         {
             let conn = rusqlite::Connection::open(&path).expect("open users");
             conn.execute(
-                "INSERT OR REPLACE INTO users (discord_id, username, password_hash, salt, role) \
-                 VALUES ('u', 'u', 'x', '00', 'user')",
+                "INSERT OR REPLACE INTO users (discord_id, username, salt, role) \
+                 VALUES ('u', 'u', '00', 'user')",
                 [],
             )
             .expect("seed user");
@@ -186,8 +187,8 @@ mod tests {
         let runtime = std::sync::Arc::new(yuuka_auth::AuthRuntime::new(
             yuuka_auth::SessionStore::in_memory(),
             7,
-            None,
-            std::sync::Arc::new(yuuka_auth::NullRegistrationDm),
+            "https://account.sk-9.net".to_owned(),
+            "http://127.0.0.1:3100".to_owned(),
             Vec::new(),
         ));
         // 管理ルータ（in-memory セッション・NullBotRuntime・暗号なし）を組んで merge を検証する。
@@ -258,6 +259,8 @@ mod tests {
             )),
             // finance ルータ（既定 NullReceiptParser）を merge して検証する。
             yuuka_finance::routes(),
+            // schedule ルータ（Google 同期なし）を merge して検証する。
+            yuuka_schedule::routes(),
             // Bot 管理ルータ（既定 NullBotViewRuntime・crypto なし）を merge して検証する。
             yuuka_orchestrator::bot_management_routes(),
             // client-api ルータ（fake ChatEngine・InMemoryRateLimiter）。上のコメント参照。
@@ -304,7 +307,8 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(tasks.status(), StatusCode::OK);
+        // 認証は通り、ドメインのハンドラまで届く（botId 未指定はシステム Bot へ落とさず 403・issue #139）。
+        assert_eq!(tasks.status(), StatusCode::FORBIDDEN);
     }
 
     #[tokio::test]

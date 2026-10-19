@@ -51,6 +51,7 @@ mod tests {
     use tower::ServiceExt;
     use yuuka_core::{AuthError, BotId, UserId, UserScope};
     use yuuka_types::{Role, SessionUser};
+    use yuuka_web::test_support::{with_bot_query, TEST_BOT_ID};
     use yuuka_web::{AppState, AuthBackend, Db, WebConfig};
 
     use crate::dto::{NewTodo, PriorityUpdate, TodoUpdate};
@@ -350,7 +351,7 @@ mod tests {
         }
     }
 
-    fn app() -> axum::Router {
+    async fn app() -> axum::Router {
         let auth = Arc::new(FakeAuth {
             user: SessionUser {
                 discord_id: "u".to_owned(),
@@ -358,13 +359,15 @@ mod tests {
                 role: Role::User,
             },
         });
-        let state = AppState::new(auth, WebConfig::default(), seed_db());
-        super::routes().with_state(state)
+        let db = seed_db();
+        yuuka_web::test_support::seed_bot(&db, TEST_BOT_ID, "u").await;
+        let state = AppState::new(auth, WebConfig::default(), db);
+        with_bot_query(super::routes().with_state(state), TEST_BOT_ID)
     }
 
     #[tokio::test]
     async fn route_add_then_list() {
-        let app = app();
+        let app = app().await;
         let add = app
             .clone()
             .oneshot(
@@ -406,6 +409,7 @@ mod tests {
     #[tokio::test]
     async fn route_requires_auth() {
         let resp = app()
+            .await
             .oneshot(
                 Request::builder()
                     .uri("/api/tasks")
@@ -417,11 +421,62 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
 
+    /// issue #139: Bot 未指定・システム Bot は 403、アクセスできない Bot は 404。
+    /// どれもシステム Bot へ黙って落とさない。
+    #[tokio::test]
+    async fn route_rejects_missing_system_and_foreign_bot() {
+        let auth = Arc::new(FakeAuth {
+            user: SessionUser {
+                discord_id: "u".to_owned(),
+                username: "u".to_owned(),
+                role: Role::User,
+            },
+        });
+        let db = seed_db();
+        yuuka_web::test_support::seed_bot(&db, "foreign", "someone").await;
+        // botId を補うレイヤを掛けない素のルータ。
+        let app = super::routes().with_state(AppState::new(auth, WebConfig::default(), db));
+        for (uri, want) in [
+            ("/api/tasks", StatusCode::FORBIDDEN),
+            ("/api/tasks?botId=", StatusCode::FORBIDDEN),
+            ("/api/tasks?botId=system_default", StatusCode::FORBIDDEN),
+            ("/api/tasks?botId=foreign", StatusCode::NOT_FOUND),
+            ("/api/tasks?botId=ghost", StatusCode::NOT_FOUND),
+        ] {
+            let resp = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(uri)
+                        .header("cookie", "__Host-yuuka-session=good")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), want, "{uri}");
+        }
+        // 書き込みも同じ（body に botId が無ければ 403）。
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/tasks/add")
+                    .header("cookie", "__Host-yuuka-session=good")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"title":"x"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
     /// H-1 回帰: フロント／Node は **camelCase**（`dueDate`/`startDate`）を送り、旧 UI は
     /// **数値優先度**（`2`）を送る。どちらも無音で落とさず永続化することを凍結する。
     #[tokio::test]
     async fn route_add_accepts_camelcase_and_numeric_priority() {
-        let app = app();
+        let app = app().await;
         let add = app
             .oneshot(
                 Request::builder()
@@ -611,7 +666,7 @@ mod tests {
     /// H-3 E2E: `GET /api/tasks` がネストしたツリーを返し、内部列を露出しない。
     #[tokio::test]
     async fn route_tasks_returns_nested_tree_without_internal_columns() {
-        let app = app();
+        let app = app().await;
         // 親を追加し id を取得。
         let add_parent = app
             .clone()
@@ -682,7 +737,7 @@ mod tests {
     /// いずれも `deletedId`/`deleted_id` を返さない（`*DeletedData` 幽霊型の除去）。
     #[tokio::test]
     async fn route_delete_returns_bare_success_without_deleted_id() {
-        let app = app();
+        let app = app().await;
         let add = app
             .clone()
             .oneshot(
@@ -751,6 +806,7 @@ mod tests {
     #[tokio::test]
     async fn route_complete_missing_returns_success_false() {
         let resp = app()
+            .await
             .oneshot(
                 Request::builder()
                     .method("POST")
@@ -1158,7 +1214,7 @@ mod tests {
     /// `GET /api/tasks/detail`: id 未指定/非数値/0 は 400、不在は 404、成功は camelCase 兄弟キー付き。
     #[tokio::test]
     async fn route_detail_validates_and_returns_siblings() {
-        let app = app();
+        let app = app().await;
         // id 未指定 → 400。
         assert_eq!(
             get_json(&app, "/api/tasks/detail").await.0,
@@ -1227,7 +1283,7 @@ mod tests {
     /// `GET /api/tasks/gantt` / `someday`: 日付有無で振り分け、{success, tasks} を返す。
     #[tokio::test]
     async fn route_gantt_and_someday_partition_by_date() {
-        let app = app();
+        let app = app().await;
         add_parent(&app, r#"{"title":"dated","dueDate":"2026-07-10"}"#).await;
         add_parent(&app, r#"{"title":"undated"}"#).await;
 
@@ -1247,7 +1303,7 @@ mod tests {
     /// `POST /api/tasks/update`: id 未指定/0 は 400、不在は 404、成功は {success, task}。
     #[tokio::test]
     async fn route_update_validates_and_updates() {
-        let app = app();
+        let app = app().await;
         // id なし → 400（missing field id で DTO パース失敗）。
         assert_eq!(
             post_json(&app, "/api/tasks/update", r#"{"title":"x"}"#.to_owned())
@@ -1294,7 +1350,7 @@ mod tests {
     /// `POST /api/tasks/progress`: 葉タスクは 200、サブタスクを持つ親は 409、不在は 404、id なしは 400。
     #[tokio::test]
     async fn route_progress_leaf_ok_parent_conflict() {
-        let app = app();
+        let app = app().await;
         // id なし → 400。
         assert_eq!(
             post_json(&app, "/api/tasks/progress", r#"{"progress":50}"#.to_owned())
