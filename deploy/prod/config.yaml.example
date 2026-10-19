@@ -10,7 +10,13 @@ DB_PATH: "./data/yuuka.db"
 # Redis はインスタンス専用コンテナ（compose の service 名 "redis"）へ接続
 REDIS_URL: "redis://redis:6379"
 
+# 運用チューニング（未設定なら既定値。不正値は起動時に警告して既定値を使う。詳細は example.yaml）
 REMINDER_CRON: "* * * * *"
+# SYNAPSE_RECALL_K: 5
+# SYNAPSE_RECENCY_WEIGHT: 0.15
+# SYNAPSE_RECENCY_HALFLIFE_HOURS: 18
+# DESKTOP_TOKEN_TTL_DAYS: 90
+# DESKTOP_DEVICE_CODE_TTL_SEC: 600
 
 # 管理画面（コンテナ内待受。ホスト公開ポートは instance.env の HOST_PORT）
 PORT: 7854

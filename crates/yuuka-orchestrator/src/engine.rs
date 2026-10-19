@@ -39,7 +39,7 @@ use crate::guild_prompt::{self, GuildScope};
 use crate::message_log::{self, ContextEntry};
 use crate::receipt_extract::{ReceiptDraft, ReceiptExtractError};
 use crate::synapse_extract::{self, ExtractScope};
-use crate::synapse_recall;
+use crate::synapse_recall::{self, RecallSettings};
 use crate::{bot_repo, persona, system_prompt, user};
 
 /// 空応答時の既定文（Node `runPlannedTurn` の `fallbackText` 既定）。
@@ -156,6 +156,9 @@ pub struct ChatEngine {
     /// `None` なら現行挙動（直近履歴のみ）へデグレード（想起は `""`・抽出は no-op）。main.rs で
     /// [`SynapseEngine::boot`] して 1 つだけ注入する。`Mutex` は唯一の可変索引を直列化する。
     synapse: Option<Arc<tokio::sync::Mutex<SynapseEngine>>>,
+    /// L2 想起のチューニング（config `SYNAPSE_RECALL_K`・`SYNAPSE_RECENCY_*`）。既定は Node 既定値。
+    /// main.rs で [`ChatEngine::with_recall_settings`] 注入。
+    recall: RecallSettings,
     /// Google カレンダー（予定の同期先）。連携中のカレンダー一覧を systemInstruction へ注入するのと、
     /// PWA の予定追加が Discord と同じ同期付きの `addSchedule` を使うのに使う。`None` なら非注入・同期なし。
     /// main.rs で [`ChatEngine::with_calendar`] 注入。
@@ -186,9 +189,17 @@ impl ChatEngine {
             recorder,
             mcp_client,
             synapse,
+            recall: RecallSettings::default(),
             calendar: None,
             tool_outcomes: None,
         }
+    }
+
+    /// L2 想起のチューニング（取得件数・recency ブースト）を差し替える。未注入なら Node 既定値。
+    #[must_use]
+    pub fn with_recall_settings(mut self, recall: RecallSettings) -> Self {
+        self.recall = recall;
+        self
     }
 
     /// ツール実行実績の記録先を後付けする。未注入なら FC ループは実績を保存しない。
@@ -754,8 +765,14 @@ impl ChatEngine {
                 guild_id: gid.map(str::to_owned),
             };
             let query = synapse_recall::build_recall_query(&msg.text, &[]);
-            let section =
-                synapse_recall::build_recall_section(&self.db, engine, &sscope, &query).await;
+            let section = synapse_recall::build_recall_section(
+                &self.db,
+                engine,
+                &self.recall,
+                &sscope,
+                &query,
+            )
+            .await;
             sys.push_str(&section);
         }
 
@@ -925,7 +942,14 @@ impl ChatEngine {
             };
             let query = synapse_recall::build_recall_query(&msg.text, &[]);
             sys.push_str(
-                &synapse_recall::build_recall_section(&self.db, engine, &scope, &query).await,
+                &synapse_recall::build_recall_section(
+                    &self.db,
+                    engine,
+                    &self.recall,
+                    &scope,
+                    &query,
+                )
+                .await,
             );
         }
         Ok(sys)

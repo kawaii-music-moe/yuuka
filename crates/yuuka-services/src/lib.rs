@@ -57,10 +57,12 @@ pub use turn::{NullPlaybookRunner, PlaybookRunner};
 ///
 /// backup は実行ポート（[`backup::BackupRunner`]）を [`ServiceContext`] から得る。未配線時は
 /// [`backup::NullBackupRunner`] へ縮退し、走査はするが実行は失敗（Node の Google 未連携と同じ非致命）。
+///
+/// `reminder_cron` はリマインドエンジンの実行周期（config `REMINDER_CRON`・起動時に検証済みの値）。
 #[must_use]
-pub fn build_services() -> Vec<Arc<dyn CronService>> {
+pub fn build_services(reminder_cron: &str) -> Vec<Arc<dyn CronService>> {
     vec![
-        Arc::new(reminder::ReminderService),
+        Arc::new(reminder::ReminderService::new(reminder_cron)),
         Arc::new(todo_recurrence::TodoRecurrenceService),
         Arc::new(payment_recurrence::PaymentRecurrenceService),
         Arc::new(birthday::BirthdayReminderService),

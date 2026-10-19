@@ -3,10 +3,14 @@
 //! `config.yaml`（存在すれば）＋環境変数を **既存 Node `getSetting` と同一の優先順**
 //! （`yaml[KEY] ?? env[KEY] ?? default`・キーは **UPPERCASE**）で読み、型付き構造体へ
 //! 落とす。認証発行（P1-1）に必要な `ADMIN_DISCORD_IDS` は取り込む（初期 admin 昇格に使う）。
-//! それ以外の未知キー（`GOOGLE_*`/
-//! `REMINDER_CRON` 等・bot/他系用）は **無視**する（web 起動に不要なため）。型不一致・不正値は起動時に fail-fast
+//! それ以外の未知キー（`INVITE_CODES` 等・廃止/他系用）は **無視**する。型不一致・不正値は起動時に fail-fast
 //! （`ConfigError`。§5.6 の唯一の致命ポイント）。機密は本 struct に平文で持たず
 //! [`crate::secrets`] の `SecretString` で扱う。
+//!
+//! 例外として運用チューニング設定（`REMINDER_CRON`・`SYNAPSE_RECALL_K`・`SYNAPSE_RECENCY_*`・
+//! `DESKTOP_TOKEN_TTL_DAYS`・`DESKTOP_DEVICE_CODE_TTL_SEC`）は、不正値でも起動を止めず
+//! **警告ログを出して既定値へ戻す**（[`tuning_or_default`]。Node は `parseInt` 失敗で NaN になり
+//! 挙動が壊れていたため、既定へ倒す）。
 
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
@@ -60,8 +64,22 @@ pub struct Config {
     /// Node `config.desktopMaxUploadMb`）。
     pub desktop_max_upload_mb: u32,
     /// リマインダーのポーリング cron 式（`REMINDER_CRON`・既定 `* * * * *`・Node `config.reminderCron`）。
-    /// `/api/status` の設定表示に返す。
+    /// リマインドエンジンの実行周期に使い、`/api/status` の設定表示にも返す。不正な式は既定へ戻す。
     pub reminder_cron: String,
+    /// L2 想起（1st Hop KNN）の取得件数（`SYNAPSE_RECALL_K`・既定 5・1 以上・Node `config.synapseRecallK`）。
+    pub synapse_recall_k: usize,
+    /// L2 想起の recency 加算ブースト重み（`SYNAPSE_RECENCY_WEIGHT`・既定 0.15・0 で無効・
+    /// Node `config.synapseRecencyWeight`）。
+    pub synapse_recency_weight: f32,
+    /// recency ブーストの半減期（時間・`SYNAPSE_RECENCY_HALFLIFE_HOURS`・既定 18・0 で無効・
+    /// Node `config.synapseRecencyHalflifeHours`）。
+    pub synapse_recency_halflife_hours: f32,
+    /// デスクトップトークンの TTL（日・`DESKTOP_TOKEN_TTL_DAYS`・既定 90・1〜36500・
+    /// Node `config.desktopTokenTtlDays`）。最終利用からのスライディング期限。
+    pub desktop_token_ttl_days: u32,
+    /// デバイスフローの device_code 有効期限（秒・`DESKTOP_DEVICE_CODE_TTL_SEC`・既定 600・1〜86400・
+    /// Node `config.desktopDeviceCodeTtlSec`）。
+    pub desktop_device_code_ttl_secs: u64,
     /// Google OAuth2 クライアント ID（`GOOGLE_CLIENT_ID`・未設定は Google 連携無効・Node `config.googleClientId`）。
     pub google_client_id: Option<String>,
     /// Google OAuth2 クライアントシークレット（`GOOGLE_CLIENT_SECRET`・同上・Node `config.googleClientSecret`）。
@@ -123,7 +141,50 @@ impl Config {
                 "DESKTOP_MAX_UPLOAD_MB",
                 &get("DESKTOP_MAX_UPLOAD_MB").unwrap_or_else(|| "20".to_owned()),
             )?,
-            reminder_cron: get("REMINDER_CRON").unwrap_or_else(|| "* * * * *".to_owned()),
+            reminder_cron: tuning_or_default(
+                "REMINDER_CRON",
+                get("REMINDER_CRON"),
+                DEFAULT_REMINDER_CRON.to_owned(),
+                |raw| Some(raw.to_owned()).filter(|c| crate::cron_util::is_valid(c)),
+            ),
+            synapse_recall_k: tuning_or_default(
+                "SYNAPSE_RECALL_K",
+                get("SYNAPSE_RECALL_K"),
+                DEFAULT_SYNAPSE_RECALL_K,
+                |raw| raw.parse::<usize>().ok().filter(|k| *k >= 1),
+            ),
+            synapse_recency_weight: tuning_or_default(
+                "SYNAPSE_RECENCY_WEIGHT",
+                get("SYNAPSE_RECENCY_WEIGHT"),
+                DEFAULT_SYNAPSE_RECENCY_WEIGHT,
+                parse_non_negative_f32,
+            ),
+            synapse_recency_halflife_hours: tuning_or_default(
+                "SYNAPSE_RECENCY_HALFLIFE_HOURS",
+                get("SYNAPSE_RECENCY_HALFLIFE_HOURS"),
+                DEFAULT_SYNAPSE_RECENCY_HALFLIFE_HOURS,
+                parse_non_negative_f32,
+            ),
+            desktop_token_ttl_days: tuning_or_default(
+                "DESKTOP_TOKEN_TTL_DAYS",
+                get("DESKTOP_TOKEN_TTL_DAYS"),
+                DEFAULT_DESKTOP_TOKEN_TTL_DAYS,
+                |raw| {
+                    raw.parse::<u32>()
+                        .ok()
+                        .filter(|d| (1..=MAX_DESKTOP_TOKEN_TTL_DAYS).contains(d))
+                },
+            ),
+            desktop_device_code_ttl_secs: tuning_or_default(
+                "DESKTOP_DEVICE_CODE_TTL_SEC",
+                get("DESKTOP_DEVICE_CODE_TTL_SEC"),
+                DEFAULT_DESKTOP_DEVICE_CODE_TTL_SECS,
+                |raw| {
+                    raw.parse::<u64>()
+                        .ok()
+                        .filter(|s| (1..=MAX_DESKTOP_DEVICE_CODE_TTL_SECS).contains(s))
+                },
+            ),
             google_client_id: non_empty(get("GOOGLE_CLIENT_ID")),
             google_client_secret: non_empty(get("GOOGLE_CLIENT_SECRET")),
         };
@@ -158,6 +219,52 @@ impl Config {
             .as_deref()
             .is_some_and(|u| u.to_ascii_lowercase().starts_with("https://"))
     }
+}
+
+/// `REMINDER_CRON` の既定（毎分・Node `config.reminderCron` 既定）。
+pub const DEFAULT_REMINDER_CRON: &str = "* * * * *";
+/// `SYNAPSE_RECALL_K` の既定（Node 既定 5）。
+pub const DEFAULT_SYNAPSE_RECALL_K: usize = 5;
+/// `SYNAPSE_RECENCY_WEIGHT` の既定（Node 既定 0.15）。
+pub const DEFAULT_SYNAPSE_RECENCY_WEIGHT: f32 = 0.15;
+/// `SYNAPSE_RECENCY_HALFLIFE_HOURS` の既定（Node 既定 18）。
+pub const DEFAULT_SYNAPSE_RECENCY_HALFLIFE_HOURS: f32 = 18.0;
+/// `DESKTOP_TOKEN_TTL_DAYS` の既定（Node 既定 90）。
+pub const DEFAULT_DESKTOP_TOKEN_TTL_DAYS: u32 = 90;
+/// `DESKTOP_DEVICE_CODE_TTL_SEC` の既定（Node 既定 600）。
+pub const DEFAULT_DESKTOP_DEVICE_CODE_TTL_SECS: u64 = 600;
+/// `DESKTOP_TOKEN_TTL_DAYS` の上限（100 年）。SQLite の日付加算が溢れて全トークンが無効になるのを防ぐ。
+const MAX_DESKTOP_TOKEN_TTL_DAYS: u32 = 36_500;
+/// `DESKTOP_DEVICE_CODE_TTL_SEC` の上限（1 日）。device_code は短命が前提（RFC 8628）で、期限計算の溢れも防ぐ。
+const MAX_DESKTOP_DEVICE_CODE_TTL_SECS: u64 = 86_400;
+
+/// 運用チューニング設定を読む。未設定・空文字は黙って既定、`parse` が `None` を返す不正値は
+/// 警告ログを出して既定へ戻す（起動は止めない）。
+fn tuning_or_default<T: std::fmt::Debug>(
+    key: &'static str,
+    raw: Option<String>,
+    default: T,
+    parse: impl FnOnce(&str) -> Option<T>,
+) -> T {
+    let Some(raw) = raw.filter(|r| !r.trim().is_empty()) else {
+        return default;
+    };
+    parse(raw.trim()).unwrap_or_else(|| {
+        tracing::warn!(
+            key,
+            value = %raw,
+            default = ?default,
+            "⚠️ 設定値が不正なため既定値を使います"
+        );
+        default
+    })
+}
+
+/// 0 以上の有限な小数（`SYNAPSE_RECENCY_*`。0 は recency ブースト無効）。
+fn parse_non_negative_f32(raw: &str) -> Option<f32> {
+    raw.parse::<f32>()
+        .ok()
+        .filter(|v| v.is_finite() && *v >= 0.0)
 }
 
 /// `yaml[key] ?? env[key]`（Node `getSetting` と同一・yaml 優先）。空文字も値として扱う。
@@ -285,6 +392,80 @@ mod tests {
         assert_eq!(cfg.redis_url, "redis://127.0.0.1:6379");
     }
 
+    // ---- 運用チューニング設定（R26・Node と同じキー名と既定値） ----
+
+    /// 既定値（Node `config.ts` の既定と同じ・旧 Rust 定数と同じ）を検証する。
+    fn assert_tuning_defaults(cfg: &Config) {
+        assert_eq!(cfg.reminder_cron, "* * * * *");
+        assert_eq!(cfg.synapse_recall_k, 5);
+        assert!((cfg.synapse_recency_weight - 0.15).abs() < f32::EPSILON);
+        assert!((cfg.synapse_recency_halflife_hours - 18.0).abs() < f32::EPSILON);
+        assert_eq!(cfg.desktop_token_ttl_days, 90);
+        assert_eq!(cfg.desktop_device_code_ttl_secs, 600);
+    }
+
+    #[test]
+    fn tuning_settings_default_when_unset() {
+        let f = write_yaml("PORT: 7854\n");
+        let cfg = Config::load_and_validate(f.path()).expect("load");
+        assert_tuning_defaults(&cfg);
+    }
+
+    #[test]
+    fn tuning_settings_are_read_from_yaml() {
+        let f = write_yaml(
+            "REMINDER_CRON: \"*/5 * * * *\"\n\
+             SYNAPSE_RECALL_K: 8\n\
+             SYNAPSE_RECENCY_WEIGHT: 0.3\n\
+             SYNAPSE_RECENCY_HALFLIFE_HOURS: 6\n\
+             DESKTOP_TOKEN_TTL_DAYS: 30\n\
+             DESKTOP_DEVICE_CODE_TTL_SEC: 900\n",
+        );
+        let cfg = Config::load_and_validate(f.path()).expect("load");
+        assert_eq!(cfg.reminder_cron, "*/5 * * * *");
+        assert_eq!(cfg.synapse_recall_k, 8);
+        assert!((cfg.synapse_recency_weight - 0.3).abs() < f32::EPSILON);
+        assert!((cfg.synapse_recency_halflife_hours - 6.0).abs() < f32::EPSILON);
+        assert_eq!(cfg.desktop_token_ttl_days, 30);
+        assert_eq!(cfg.desktop_device_code_ttl_secs, 900);
+    }
+
+    #[test]
+    fn tuning_settings_zero_recency_disables_boost() {
+        // recency の重み・半減期は 0 を「無効」として受け付ける（Node と同じ）。
+        let f = write_yaml("SYNAPSE_RECENCY_WEIGHT: 0\nSYNAPSE_RECENCY_HALFLIFE_HOURS: 0\n");
+        let cfg = Config::load_and_validate(f.path()).expect("load");
+        assert!(cfg.synapse_recency_weight.abs() < f32::EPSILON);
+        assert!(cfg.synapse_recency_halflife_hours.abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn invalid_tuning_settings_fall_back_to_defaults_without_failing() {
+        // 不正値は起動を止めず、警告を出して既定値へ戻す。
+        let f = write_yaml(
+            "REMINDER_CRON: \"not a cron\"\n\
+             SYNAPSE_RECALL_K: 0\n\
+             SYNAPSE_RECENCY_WEIGHT: -1\n\
+             SYNAPSE_RECENCY_HALFLIFE_HOURS: .nan\n\
+             DESKTOP_TOKEN_TTL_DAYS: \"90d\"\n\
+             DESKTOP_DEVICE_CODE_TTL_SEC: 0\n",
+        );
+        let cfg = Config::load_and_validate(f.path()).expect("invalid tuning is not fatal");
+        assert_tuning_defaults(&cfg);
+
+        // 範囲外（上限超え・負数）と空文字も既定へ戻す。
+        let f = write_yaml(
+            "REMINDER_CRON: \"\"\n\
+             SYNAPSE_RECALL_K: -3\n\
+             SYNAPSE_RECENCY_WEIGHT: .inf\n\
+             SYNAPSE_RECENCY_HALFLIFE_HOURS: abc\n\
+             DESKTOP_TOKEN_TTL_DAYS: 36501\n\
+             DESKTOP_DEVICE_CODE_TTL_SEC: 86401\n",
+        );
+        let cfg = Config::load_and_validate(f.path()).expect("invalid tuning is not fatal");
+        assert_tuning_defaults(&cfg);
+    }
+
     #[test]
     fn invalid_port_is_rejected() {
         let f = write_yaml("PORT: \"not-a-number\"\n");
@@ -325,11 +506,13 @@ mod tests {
         assert_eq!(cfg.base_url.as_deref(), Some("https://example.com"));
         assert_eq!(cfg.terms_url, "/terms");
         assert_eq!(cfg.google_client_id, None, "空文字は未設定に畳む");
+        assert_tuning_defaults(&cfg);
 
         for instance in ["dev", "prod"] {
             let path = root.join(format!("deploy/{instance}/config.yaml.example"));
             let cfg = Config::load_and_validate(&path).expect("deploy example");
             assert_eq!(cfg.port, 7854);
+            assert_tuning_defaults(&cfg);
         }
     }
 

@@ -21,7 +21,9 @@ use yuuka_core::telemetry::init_telemetry;
 use yuuka_core::{Config, DbError};
 use yuuka_crypto::{rotate_secret_key, SystemCrypto, LEGACY_FALLBACK_SECRET};
 use yuuka_discord::{rate_limit_message, DiscordManager, ManagerPorts, Prepared, RateLimiter};
-use yuuka_orchestrator::{ChatEngine, DbBotDirectory, DbMembership, InMemoryRateLimiter};
+use yuuka_orchestrator::{
+    ChatEngine, DbBotDirectory, DbMembership, InMemoryRateLimiter, RecallSettings,
+};
 use yuuka_services::{MetricsRegistry, NotifierDeliveryRunner, ServiceContext};
 use yuuka_supervisor::{
     build_app, build_supervised_services, build_tool_registry, ws_routes, GeminiAuxText,
@@ -110,11 +112,10 @@ async fn run() -> Result<(), String> {
     let sessions = SessionStore::connect(&cfg.redis_url).await;
 
     // 4) 実 AuthBackend（Cookie=Redis / Bearer=SQLite）。
-    let auth = Arc::new(CompositeAuth::new(
-        db.clone(),
-        sessions.clone(),
-        cfg.session_ttl_days,
-    ));
+    let auth = Arc::new(
+        CompositeAuth::new(db.clone(), sessions.clone(), cfg.session_ttl_days)
+            .with_desktop_token_ttl_days(cfg.desktop_token_ttl_days),
+    );
     let web_config = WebConfig::from_core(&cfg);
     let state = AppState::new(auth, web_config, db.clone());
 
@@ -200,6 +201,8 @@ async fn run() -> Result<(), String> {
             mcp_client.clone(),
             Some(synapse_engine),
         )
+        // L2 想起の取得件数・recency ブースト（config `SYNAPSE_*`・R26）。
+        .with_recall_settings(RecallSettings::from_config(&cfg))
         .with_calendar(google_events.clone())
         // ツール実行実績を tool_outcomes へ永続化する（Node `recordToolOutcome`・R22）。
         .with_tool_outcomes(Arc::new(yuuka_orchestrator::DbToolOutcomeSink::new(
@@ -403,7 +406,11 @@ async fn run() -> Result<(), String> {
         .map(|b| b.trim_end_matches('/').to_owned())
         .unwrap_or_else(|| format!("http://{}:{}", cfg.host, cfg.port));
     let device_auth_routes =
-        yuuka_auth::device_auth_routes(yuuka_auth::DeviceAuthStore::new(verification_base));
+        yuuka_auth::device_auth_routes(yuuka_auth::DeviceAuthStore::with_ttls(
+            verification_base,
+            cfg.desktop_device_code_ttl_secs,
+            cfg.desktop_token_ttl_days,
+        ));
 
     let auth_runtime = Arc::new(AuthRuntime::new(
         sessions,
@@ -515,7 +522,7 @@ async fn run() -> Result<(), String> {
             calendar: google_events.clone(),
         });
         service_ctx = service_ctx.with_calendar_sync(calendar_sync);
-        let cron = build_supervised_services(&service_ctx);
+        let cron = build_supervised_services(&service_ctx, &cfg.reminder_cron);
         tracing::warn!(
             count = cron.len(),
             "YUUKA_RUST_CRON 有効: Rust cron 常駐サービスを監督下に配置（Node cron が停止済みであること）"

@@ -1,6 +1,6 @@
 //! リマインドエンジン（§3.3.2・現行 `reminderEngine.ts`）。
 //!
-//! 毎分＋起動直後（取りこぼし復帰・§10）に 3 種を処理する:
+//! `REMINDER_CRON`（既定毎分）＋起動直後（取りこぼし復帰・§10）に 3 種を処理する:
 //!   1. 時刻指定リマインド（`reminders` の期限到来 pending・繰り返しは cron 式で再スケジュール）
 //!   2. ToDo 期限リマインド（24 時間以内に迫った未通知 ToDo）
 //!   3. 予定リマインド（Google カレンダー同期予定のイベント前通知）
@@ -22,7 +22,18 @@ use crate::schedule::{CronService, Schedule};
 use yuuka_core::cron_util;
 
 /// リマインドエンジンサービス。
-pub struct ReminderService;
+pub struct ReminderService {
+    /// 実行周期の cron 式（config `REMINDER_CRON`・起動時に検証済み・Node `config.reminderCron`）。
+    cron: String,
+}
+
+impl ReminderService {
+    /// 実行周期（`REMINDER_CRON`）を指定して作る。
+    #[must_use]
+    pub fn new(cron: impl Into<String>) -> Self {
+        Self { cron: cron.into() }
+    }
+}
 
 #[async_trait]
 impl CronService for ReminderService {
@@ -31,7 +42,7 @@ impl CronService for ReminderService {
     }
 
     fn schedule(&self) -> Schedule {
-        Schedule::EveryMinute // config.reminderCron 既定 "* * * * *"
+        Schedule::Cron(self.cron.clone())
     }
 
     async fn tick(&self, ctx: &ServiceContext) {
@@ -420,5 +431,28 @@ mod tests {
             .unwrap();
         assert_eq!(status, "pending");
         assert_ne!(trigger, "2000-01-01 00:00:00");
+    }
+
+    /// 実行周期は config `REMINDER_CRON` に従う（R26。以前は毎分固定）。
+    #[test]
+    fn schedule_follows_configured_cron() {
+        assert!(matches!(
+            ReminderService::new("*/5 * * * *").schedule(),
+            Schedule::Cron(expr) if expr == "*/5 * * * *"
+        ));
+    }
+
+    /// 既定（`build_services` に既定値を渡した場合）は毎分。
+    #[test]
+    fn default_schedule_is_every_minute() {
+        let svcs = crate::build_services(yuuka_core::config::DEFAULT_REMINDER_CRON);
+        let reminder = svcs
+            .iter()
+            .find(|s| s.name() == "reminder")
+            .expect("reminder service");
+        assert!(matches!(
+            reminder.schedule(),
+            Schedule::Cron(expr) if expr == "* * * * *"
+        ));
     }
 }

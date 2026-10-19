@@ -292,4 +292,35 @@ mod tests {
             .unwrap()
             .is_none());
     }
+
+    /// `CompositeAuth` は既定 90 日、`with_desktop_token_ttl_days` で config の TTL に従う（R26）。
+    #[tokio::test]
+    async fn composite_auth_uses_configured_ttl() {
+        use crate::{CompositeAuth, SessionStore};
+        use yuuka_web::AuthBackend;
+
+        let db = seed_db();
+        // 最終利用 30 日前のトークン（既定 90 日なら有効・7 日なら失効）。
+        let hash = sha256_hex("tok-30d");
+        db.writer
+            .transaction(move |tx| {
+                tx.execute(
+                    "INSERT INTO desktop_tokens(user_id, token_hash, created_at) \
+                     VALUES('123', ?1, datetime('now','localtime','-30 days'))",
+                    rusqlite::params![hash],
+                )
+                .map_err(yuuka_db::map_sqlite)?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+
+        let short = CompositeAuth::new(db.clone(), SessionStore::in_memory(), 7)
+            .with_desktop_token_ttl_days(7);
+        assert!(short.desktop_user("tok-30d").await.unwrap().is_none());
+
+        // 既定（90 日）では有効（検証で last_used_at が now へ touch される）。
+        let default = CompositeAuth::new(db, SessionStore::in_memory(), 7);
+        assert!(default.desktop_user("tok-30d").await.unwrap().is_some());
+    }
 }
