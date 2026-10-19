@@ -29,9 +29,22 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # ── build / clippy / test / fmt（rust-toolchain.toml の 1.96.1 + clippy/rustfmt を採用） ──
+  # ── 軽量な format 検査は通常の PR / push でも実行 ──
+  fmt:
+    name: fmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # rust-toolchain.toml（channel=1.96.1・components=clippy,rustfmt）を rustup が尊重する。
+      - name: Show toolchain
+        run: rustc --version && cargo --version && cargo fmt --version
+      - name: Format check (P3-2)
+        run: cargo fmt --all -- --check
+
+  # ── 重い clippy / build / test は develop -> main の PR でのみ実行 ──
   check:
-    name: fmt / clippy / build / test
+    name: clippy / build / test (develop -> main)
+    if: github.event_name == 'pull_request' && github.base_ref == 'main' && github.head_ref == 'develop'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -39,8 +52,6 @@ jobs:
       - name: Show toolchain
         run: rustc --version && cargo --version && cargo clippy --version
       - uses: Swatinem/rust-cache@v2
-      - name: Format check (P3-2)
-        run: cargo fmt --all -- --check
       - name: Clippy (絶対制約 1・-D warnings)
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       - name: Build (release)
