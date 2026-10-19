@@ -332,10 +332,12 @@ async fn run() -> Result<(), String> {
     ));
 
     // finance ルータ（A1 配線）: upload-receipt を実 ChatEngine の秘書ターン（画像 OCR）へ橋渡す。
-    // レート制限は web 受付専用の in-memory カウンタ（guildId スロット="web"）。
+    // レート制限は Discord/PWA と同じ共有 `rate_limiter` を消費する（guildId スロット="web"）。Node の
+    // `consumeRateLimit` も窓は全経路で共通なので、別インスタンスにするとレシート読み取りで
+    // ユーザー単位の上限を迂回できてしまう（X02 #134）。
     let finance_routes = yuuka_finance::routes_with(Arc::new(ReceiptParserAdapter {
         engine: chat_engine.clone(),
-        rate_limiter: Arc::new(InMemoryRateLimiter::new(db.clone())),
+        rate_limiter: rate_limiter.clone(),
     }));
 
     // schedule ルータ: 管理画面からの登録・削除もエージェントと同じく Google カレンダーへ反映する（#127）。
@@ -646,7 +648,7 @@ impl yuuka_services::BackupRunner for BackupRunnerAdapter {
 /// のテキストを返す（記帳自体は system prompt の OCR ルール + ツール呼び出しでサーバ側実行）。
 struct ReceiptParserAdapter {
     engine: Arc<ChatEngine>,
-    rate_limiter: Arc<InMemoryRateLimiter>,
+    rate_limiter: Arc<dyn RateLimiter>,
 }
 
 #[async_trait]

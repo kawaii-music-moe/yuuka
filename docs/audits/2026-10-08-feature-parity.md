@@ -86,9 +86,9 @@
 
 | 項目 | 差分と影響 | 根拠 |
 |---|---|---|
-| 操作履歴のRedis保存 | NodeはRedisを通常経路、メモリをフォールバックにしていた。Rustの `ActionRecorder` はメモリのみ。取得・マクロ化機能はあるが、アプリ再起動を跨ぐ短期履歴の保持を失う。 | 旧 `src/services/actionRecorder.ts:85,122`、現行 `crates/yuuka-core/src/action_history.rs:121`。 |
-| レート制限カウンタのRedis共有 | NodeのTTL付きRedisカウンタがRustでは `InMemoryRateLimiter`。単一プロセス内の制限はあるが、再起動・複数プロセスでのカウンタ共有はない。 | 旧 `src/services/botRateLimit.ts:63`、現行 `crates/yuuka-orchestrator/src/discord_ports.rs:319`。 |
-| 会話履歴のRedisキャッシュ | RustはSQLiteを直接読む。履歴が失われたわけではないので機能欠落には数えない。性能上の違い。 | 旧 `src/db/messageLogRepo.ts`、現行 `crates/yuuka-orchestrator/src/message_log.rs:3`。 |
+| 操作履歴のRedis保存 | NodeはRedisを通常経路、メモリをフォールバックにしていた。Rustの `ActionRecorder` はメモリのみ。取得・マクロ化機能はあるが、アプリ再起動を跨ぐ短期履歴の保持を失う。**仕様として受容（#133）**：TTL 2時間の揮発データで、本番 Redis も永続化なし（`deploy/prod/redis.conf` の `save ""`・`appendonly no`）のため、Node でも Redis 再起動で消えていた。差はアプリ再起動を跨ぐ直近2時間ぶんだけ。用途は「今の操作を覚えておいて」直後のマクロ化で、再起動を跨いで残す必要は低い。 | 旧 `src/services/actionRecorder.ts:85,122`、現行 `crates/yuuka-core/src/action_history.rs:121`。 |
+| レート制限カウンタのRedis共有 | NodeのTTL付きRedisカウンタがRustでは `InMemoryRateLimiter`。単一プロセス内の制限はあるが、再起動・複数プロセスでのカウンタ共有はない。**仕様として受容（#134）**：Discord ゲートウェイは `YUUKA_RUST_DISCORD` で単一プロセスに限られ、本番も1コンテナなので複数プロセス共有は不要。再起動で窓がリセットされるが、ユーザーが再起動を起こす手段はなく迂回経路にならない。再確認で、管理画面のレシート読み取りだけが別の `InMemoryRateLimiter` を作っており、Discord/PWA とユーザー単位の窓を共有していなかった（Node は全経路で共通の窓）。`crates/yuuka-supervisor/src/main.rs` で共有インスタンスを渡すよう修正した。 | 旧 `src/services/botRateLimit.ts:63`、現行 `crates/yuuka-orchestrator/src/discord_ports.rs:319`。 |
+| 会話履歴のRedisキャッシュ | RustはSQLiteを直接読む。履歴が失われたわけではないので機能欠落には数えない。性能上の違い。**仕様として受容（#135）**：Node も Redis ミス時は SQLite から再構築しており、Rust は「常にキャッシュミス」と同じ結果になる。読み出しは `(user_id, bot_id, source)` 等の索引に乗る `ORDER BY id DESC LIMIT 15/30` で、1ターンあたりの負荷は小さい。 | 旧 `src/db/messageLogRepo.ts`、現行 `crates/yuuka-orchestrator/src/message_log.rs:3`。 |
 | `runBriefingNow` の配信先 | Nodeは設定された通知先へ送る。Rustは呼び出した会話へのインラインEmbedとして返す。定期朝報とは独立した挙動変更で、設定先への手動配信は代替できない。 | 旧 `src/functions/briefingFunctions.ts`、現行 `crates/yuuka-briefing/src/tools.rs:365`。 |
 | 定期配信の見た目 | NodeのEmbed通知に対し、Rustのservices通知ポートはtext中心。朝報・日報の装飾や構造が簡略化されている。 | 旧 `src/services/reportService.ts` / `briefingService.ts`、現行 `crates/yuuka-services/src/notifier.rs:25`。 |
 
@@ -143,3 +143,6 @@
 |---|---|---|
 | R19 / D04 | 対応済み（#116 / #128） | cron 式ユーティリティを `yuuka-services` から循環依存のない `crates/yuuka-core/src/cron_util.rs` へ移し、登録時検証 `cron_util::is_valid` を追加した。ToDo・支払い予定・リマインド・朝報/日報週報設定のツールと HTTP（`POST /api/tasks/add`・`POST /api/expenses/plans/add`・`POST /api/reminders/add` を含む）、Playbook スケジュールのWeb登録は、実行側と同じ croner parser で検証する（HTTP の不正式は 400、空の repeat_rule は単発扱い）。範囲外の値・発火日が実在しない式（例：`0 0 30 2 *`）は保存しない。Playbook は Node と同じく 400「無効なcron式です。」を返す。各ドメインに 5 フィールドだが不正な式の回帰テストを追加した。 |
 | D05 | 対応済み（#129） | 日時の解釈・保存形式変換を `crates/yuuka-core/src/datetime.rs` に集め、`yuuka-reminder/src/datetime.rs`・`yuuka-schedule/src/datetime.rs`・`yuuka-client-api` の日時変換・`cron_util::to_db_datetime` を置き換えた。用途差は関数名で残した：リマインド入力 `input_to_db_local`（オフセット付きはサーバーのローカル TZ へ換算・Node `toDbDateTime` パリティ）、予定入力 `input_to_db_jst`（JST 固定へ換算）、PWA の `datetime-local` 入力 `browser_local_to_db`（`T` 区切りのみ受理）、PWA 向け出力 `db_to_utc_iso`、実行時の時刻 `local_to_db`。前 2 つの受理形式（日付のみ／`T`・空白区切り／秒・小数秒は任意／RFC 3339）は同じ parser に揃えた。挙動は変えていない（本番は `TZ=Asia/Tokyo` なので Local と JST 固定は同じ結果になる）。対象外として残る個別変換：`yuuka-google/src/http.rs` の Google API ⇔ ローカル暦変換、`yuuka-services` の `playbook_schedule.rs` / `backup.rs` の DB 文字列パース。 |
+| X01 | 仕様として受容（#133） | 操作履歴はメモリ保持のまま。理由は「設計上の変更・縮小」表を参照。 |
+| X02 | 仕様として受容（#134）＋一部修正 | 複数プロセス・再起動を跨ぐカウンタ共有は持たない。レシート読み取り（`/api/expenses/upload-receipt`）が別インスタンスのレート制限を使っていたため、Discord/PWA と同じ共有インスタンスへ揃えた。 |
+| X03 | 仕様として受容（#135） | 会話履歴は SQLite 直読みのまま。理由は「設計上の変更・縮小」表を参照。 |

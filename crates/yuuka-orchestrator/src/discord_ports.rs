@@ -314,8 +314,9 @@ const COUNTER_SOFT_CAP: usize = 10_000;
 /// 汎用モードのレート制限（Node `consumeRateLimit` の in-memory フォールバックと同一意味論）。
 ///
 /// Discord ゲートウェイ所有は単一プロセス（`YUUKA_RUST_DISCORD` ゲートで排他）なので、プロセス内
-/// 固定窓カウンタで正確。Redis 共有カウンタ（マルチプロセス整合）は後続（Node も in-memory を
-/// 「防衛線として十分」と明記）。上限は毎回 `system_settings` から読む（Node `getRateLimitSettings`）。
+/// 固定窓カウンタで正確。Redis 共有カウンタ（マルチプロセス整合）は仕様として持たない（X02 #134・
+/// Node も in-memory を「防衛線として十分」と明記）。全経路で 1 インスタンスを共有すること。上限は
+/// 毎回 `system_settings` から読む（Node `getRateLimitSettings`）。
 pub struct InMemoryRateLimiter {
     db: Db,
     counters: Mutex<HashMap<String, Window>>,
