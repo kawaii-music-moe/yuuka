@@ -37,7 +37,7 @@ use yuuka_web::Db;
 use crate::context::ServiceContext;
 use crate::notifier::{Notification, NotifyTarget};
 use crate::schedule::{CronService, Schedule};
-use yuuka_core::cron_util;
+use yuuka_core::{cron_util, datetime};
 
 /// 日報・週報定時配信サービス。
 pub struct ReportService;
@@ -161,8 +161,8 @@ async fn collect_report_data(
         24 * 60 * 60
     };
     let from_dt = now - chrono::Duration::seconds(period_ms);
-    let from = cron_util::to_db_datetime(from_dt);
-    let to = cron_util::to_db_datetime(now);
+    let from = datetime::local_to_db(from_dt);
+    let to = datetime::local_to_db(now);
     let from_day = from[..10].to_owned();
     let to_day = to[..10].to_owned();
 

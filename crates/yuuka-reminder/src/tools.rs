@@ -267,7 +267,7 @@ impl Tool for AddReminderTool {
         };
         // B4: DB 形式へ正規化できない日時は Node 同様に弾いて理由を返す（repo でも正規化されるが、
         // ここで検証してユーザーに再入力を促す。空白/T 区切り・日付のみ・実在日付を受理）。
-        let Some(trigger_db) = crate::datetime::to_db_datetime(&trigger_at) else {
+        let Some(trigger_db) = yuuka_core::datetime::input_to_db_local(&trigger_at) else {
             return Ok(fail_payload(format!(
                 "送信日時を解釈できません: {trigger_at}（ISO 8601形式 YYYY-MM-DDTHH:MM:SS で指定してください）"
             )));

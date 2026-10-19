@@ -13,6 +13,8 @@
 use chrono::{DateTime, Datelike, Duration, Local, NaiveDate, TimeZone, Timelike};
 use croner::Cron;
 
+use crate::datetime::local_to_db;
+
 /// 5-field cron 式を parse する（失敗は `None`＝壊れた式は呼び出し側でスキップ）。
 fn parse(expr: &str) -> Option<Cron> {
     Cron::new(expr).parse().ok()
@@ -55,19 +57,13 @@ pub fn cron_matches_now(expr: &str, now: DateTime<Local>) -> bool {
         && next.minute() == now.minute()
 }
 
-/// DB 保存形式 `'YYYY-MM-DD HH:MM:SS'`（ローカル）へ整形する（Node `toDbDateTime` と同形）。
-#[must_use]
-pub fn to_db_datetime(dt: DateTime<Local>) -> String {
-    dt.format("%Y-%m-%d %H:%M:%S").to_string()
-}
-
 /// リマインド `repeat_rule` の次回 `trigger_at`（`now` 起点・DB 文字列）。
 ///
 /// 現行 reminderEngine: `CronExpressionParser.parse(rule, {currentDate: now}).next()` → `toDbDateTime`。
 /// 壊れた式は `None`（呼び出し側は単発扱い＝ `markSent` で打ち切る）。
 #[must_use]
 pub fn next_reminder_trigger(expr: &str, now: DateTime<Local>) -> Option<String> {
-    Some(to_db_datetime(next_after(expr, now)?))
+    Some(local_to_db(next_after(expr, now)?))
 }
 
 /// ローカル 0 時へ丸める。
@@ -165,14 +161,14 @@ mod tests {
         // "0 8 * * *"（毎朝8時）。8:00 ちょうどからの次回は翌日 8:00（inclusive=false）。
         let base = at(2026, 7, 8, 8, 0);
         let next = next_after("0 8 * * *", base).expect("has next");
-        assert_eq!(to_db_datetime(next), "2026-07-09 08:00:00");
+        assert_eq!(local_to_db(next), "2026-07-09 08:00:00");
     }
 
     #[test]
     fn every_minute_advances_one_minute() {
         let base = at(2026, 7, 8, 8, 30);
         let next = next_after("* * * * *", base).expect("has next");
-        assert_eq!(to_db_datetime(next), "2026-07-08 08:31:00");
+        assert_eq!(local_to_db(next), "2026-07-08 08:31:00");
     }
 
     #[test]
