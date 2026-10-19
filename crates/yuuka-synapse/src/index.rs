@@ -261,17 +261,8 @@ pub fn le_bytes_to_vector(bytes: &[u8]) -> Option<Vec<f32>> {
     if !bytes.len().is_multiple_of(4) {
         return None;
     }
-    let mut out = Vec::with_capacity(bytes.len() / 4);
-    for chunk in bytes.chunks_exact(4) {
-        let arr = [
-            *chunk.first()?,
-            *chunk.get(1)?,
-            *chunk.get(2)?,
-            *chunk.get(3)?,
-        ];
-        out.push(f32::from_le_bytes(arr));
-    }
-    Some(out)
+    let (chunks, _) = bytes.as_chunks::<4>();
+    Some(chunks.iter().map(|c| f32::from_le_bytes(*c)).collect())
 }
 
 #[cfg(test)]

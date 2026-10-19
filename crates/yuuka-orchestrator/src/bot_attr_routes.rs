@@ -338,7 +338,7 @@ async fn set_gemini_key(
     let uid = user.0.discord_id;
     let bot = match owned_bot_from_body(&db, &uid, &body).await {
         Ok(b) => b,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     let api_key = body.get("apiKey").and_then(Value::as_str).unwrap_or("");
 
@@ -426,7 +426,7 @@ async fn owned_bot_from_body(
     db: &Db,
     uid: &str,
     body: &Value,
-) -> Result<bot_repo::BotRow, Response> {
+) -> Result<bot_repo::BotRow, Box<Response>> {
     let bot_id = body.get("botId").and_then(Value::as_str).unwrap_or("");
     require_owned_bot(db, uid, bot_id).await
 }
@@ -441,7 +441,7 @@ async fn set_guild(
     let uid = user.0.discord_id;
     let bot = match owned_bot_from_body(&db, &uid, &body).await {
         Ok(b) => b,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     let guild_id = trimmed(&body, "guildId");
     let remove = is_remove(&body);
@@ -493,7 +493,7 @@ async fn set_channel(
     let uid = user.0.discord_id;
     let bot = match owned_bot_from_body(&db, &uid, &body).await {
         Ok(b) => b,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     let guild_id = trimmed(&body, "guildId");
     let channel_id = trimmed(&body, "channelId");
@@ -554,7 +554,7 @@ async fn set_muted_channel(
     let uid = user.0.discord_id;
     let bot = match owned_bot_from_body(&db, &uid, &body).await {
         Ok(b) => b,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     let guild_id = trimmed(&body, "guildId");
     let channel_id = trimmed(&body, "channelId");
@@ -614,7 +614,7 @@ async fn set_member(
     let uid = user.0.discord_id;
     let bot = match owned_bot_from_body(&db, &uid, &body).await {
         Ok(b) => b,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     let guild_id = trimmed(&body, "guildId");
     let member_id = trimmed(&body, "userId");
@@ -676,7 +676,7 @@ async fn set_role(
     let uid = user.0.discord_id;
     let bot = match owned_bot_from_body(&db, &uid, &body).await {
         Ok(b) => b,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     let guild_id = trimmed(&body, "guildId");
     let role_id = trimmed(&body, "roleId");
@@ -781,7 +781,7 @@ async fn set_persona(
         .to_owned();
     let bot = match require_owned_bot(&db, &uid, &bot_id).await {
         Ok(b) => b,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
 
     // personaId: null/未指定/空文字は解除・それ以外は整数必須。
@@ -1025,7 +1025,7 @@ async fn guild_note_get(
     let bot =
         match require_owned_bot(&db, &user.0.discord_id, q.bot_id.as_deref().unwrap_or("")).await {
             Ok(b) => b,
-            Err(resp) => return resp,
+            Err(resp) => return *resp,
         };
     let guild_id = q.guild_id.unwrap_or_default();
     if !is_snowflake(&guild_id) {
@@ -1060,7 +1060,7 @@ async fn guild_note_set(
         .to_owned();
     let bot = match require_owned_bot(&db, &user.0.discord_id, &bot_id).await {
         Ok(b) => b,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     let guild_id = body
         .get("guildId")
@@ -1113,7 +1113,7 @@ async fn assistant_config_get(
     .await
     {
         Ok(b) => b,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     let caps = bot.capability_set();
     let preset = preset::preset_id_for_capabilities(&caps).as_str();
@@ -1282,7 +1282,7 @@ async fn guild_options_get(
     .await
     {
         Ok(b) => b,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     let guild_id = q.guild_id.unwrap_or_default();
     if !is_snowflake(&guild_id) {
@@ -1309,25 +1309,34 @@ async fn guild_options_get(
     .into_response()
 }
 
-/// requireOwnedBot（botId 必須→404→owner/Admin 403・Node）。エラー時は応答を `Err` で返す。
-async fn require_owned_bot(db: &Db, uid: &str, bot_id: &str) -> Result<bot_repo::BotRow, Response> {
+/// requireOwnedBot（botId 必須→404→owner/Admin 403・Node）。エラー時は応答を `Err`（Box 化）で返す。
+async fn require_owned_bot(
+    db: &Db,
+    uid: &str,
+    bot_id: &str,
+) -> Result<bot_repo::BotRow, Box<Response>> {
     if bot_id.is_empty() {
-        return Err(bad_request("botId が必要です。"));
+        return Err(Box::new(bad_request("botId が必要です。")));
     }
     let bot = match bot_repo::get_bot(db, bot_id).await {
         Ok(Some(b)) => b,
-        Ok(None) => return Err(status_json(StatusCode::NOT_FOUND, "Botが見つかりません。")),
-        Err(_) => return Err(server_error()),
+        Ok(None) => {
+            return Err(Box::new(status_json(
+                StatusCode::NOT_FOUND,
+                "Botが見つかりません。",
+            )))
+        }
+        Err(_) => return Err(Box::new(server_error())),
     };
     let is_admin = match bot_repo::is_admin(db, uid).await {
         Ok(v) => v,
-        Err(_) => return Err(server_error()),
+        Err(_) => return Err(Box::new(server_error())),
     };
     if bot.owner_id != uid && !is_admin {
-        return Err(status_json(
+        return Err(Box::new(status_json(
             StatusCode::FORBIDDEN,
             "Botの作成者のみが設定を変更できます。",
-        ));
+        )));
     }
     Ok(bot)
 }

@@ -242,10 +242,7 @@ impl SessionStore {
         let now = Instant::now();
         let mut mem = self.memory();
         // 期限切れ判定（不変借用）→ 削除、を分けて借用衝突を避ける。
-        let expired = match mem.sessions.get(token_hash) {
-            None => return None,
-            Some(e) => e.expires_at <= now,
-        };
+        let expired = mem.sessions.get(token_hash)?.expires_at <= now;
         if expired {
             self.remove_locked(&mut mem, token_hash);
             return None;
