@@ -14,8 +14,8 @@ use async_trait::async_trait;
 use base64::Engine as _;
 use secrecy::SecretString;
 use yuuka_core::{
-    ActionRecorder, BotId, CapabilitySet, DbError, GeminiError, GuildId, ResponsePart, ToolContext,
-    TurnMode, UserId,
+    ActionRecorder, BotId, CapabilitySet, DbError, GeminiError, GuildId, MetricsSink, ResponsePart,
+    ToolContext, TurnMode, UserId,
 };
 use yuuka_crypto::SystemCrypto;
 use yuuka_discord::{
@@ -23,8 +23,8 @@ use yuuka_discord::{
     StatusSink, TurnDelivery, TurnError, TurnProcessor, TurnReply,
 };
 use yuuka_gemini::{
-    run_function_calling_loop, Content, GeminiClient, GenerateBackend, LoopOptions, Part, Role,
-    Status, StatusCb, ToolOutcomeSink,
+    run_function_calling_loop, Content, GeminiClient, GenerateBackend, LoopOptions, LoopResult,
+    Part, Role, Status, StatusCb, ToolOutcomeSink,
 };
 use yuuka_google::CalendarEventsPort;
 use yuuka_mcp::{McpClient, McpProvider};
@@ -166,6 +166,10 @@ pub struct ChatEngine {
     /// ツール実行実績（`tool_outcomes`）の記録先。秘書・汎用モード双方の FC ループへ渡す（Node は共通
     /// dispatch で両モードを記録）。`None` なら記録しない。main.rs で [`ChatEngine::with_tool_outcomes`] 注入。
     tool_outcomes: Option<Arc<dyn ToolOutcomeSink>>,
+    /// 実利用メトリクスの記録先（Node `incrMetric`/`recordLatency`）。実体は services の
+    /// `MetricsRegistry`（定期ログが snapshot を出す）。`None` なら記録しない。main.rs で
+    /// [`ChatEngine::with_metrics`] 注入（cron の定期ログと同一インスタンスを共有）。
+    metrics: Option<Arc<dyn MetricsSink>>,
 }
 
 impl ChatEngine {
@@ -192,6 +196,7 @@ impl ChatEngine {
             recall: RecallSettings::default(),
             calendar: None,
             tool_outcomes: None,
+            metrics: None,
         }
     }
 
@@ -200,6 +205,39 @@ impl ChatEngine {
     pub fn with_recall_settings(mut self, recall: RecallSettings) -> Self {
         self.recall = recall;
         self
+    }
+
+    /// 実利用メトリクスの記録先を後付けする。未注入なら会話数・ツール数・想起・応答時間を記録しない。
+    #[must_use]
+    pub fn with_metrics(mut self, metrics: Arc<dyn MetricsSink>) -> Self {
+        self.metrics = Some(metrics);
+        self
+    }
+
+    /// 本編ターン（秘書・汎用モード）の FC ループを実行し、Node `runPlannedTurn` と同じく
+    /// `messages` を数えて成功時の `response` レイテンシを記録する。ペルソナ入りエラー応答の
+    /// 生成は本編ターンではないため、これを通さない（Node も `runPlannedTurn` を経由しない）。
+    async fn run_turn_loop(
+        &self,
+        backend: &dyn GenerateBackend,
+        provider: &dyn yuuka_core::ToolProvider,
+        sys: &str,
+        contents: &mut Vec<Content>,
+        ctx: &ToolContext,
+        opts: &LoopOptions,
+    ) -> Result<LoopResult, GeminiError> {
+        if let Some(m) = &self.metrics {
+            m.incr("messages", 1);
+        }
+        let started = std::time::Instant::now();
+        let result = run_function_calling_loop(backend, provider, sys, contents, ctx, opts).await?;
+        if let Some(m) = &self.metrics {
+            m.record_latency(
+                "response",
+                u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+            );
+        }
+        Ok(result)
     }
 
     /// ツール実行実績の記録先を後付けする。未注入なら FC ループは実績を保存しない。
@@ -480,17 +518,19 @@ impl ChatEngine {
             on_status: Some(status_bridge(status)),
             action_recorder: self.recorder.clone(),
             outcome_sink: self.tool_outcomes.clone(),
+            metrics: self.metrics.clone(),
             ..LoopOptions::default()
         };
-        let result = match run_function_calling_loop(
-            backend.as_ref(),
-            &snapshot,
-            &sys,
-            &mut contents,
-            &ctx,
-            &opts,
-        )
-        .await
+        let result = match self
+            .run_turn_loop(
+                backend.as_ref(),
+                &snapshot,
+                &sys,
+                &mut contents,
+                &ctx,
+                &opts,
+            )
+            .await
         {
             Ok(r) => r,
             Err(e) => {
@@ -771,6 +811,7 @@ impl ChatEngine {
                 &self.recall,
                 &sscope,
                 &query,
+                self.metrics.as_deref(),
             )
             .await;
             sys.push_str(&section);
@@ -807,17 +848,19 @@ impl ChatEngine {
         let opts = LoopOptions {
             on_status: Some(status_bridge(status)),
             outcome_sink: self.tool_outcomes.clone(),
+            metrics: self.metrics.clone(),
             ..LoopOptions::default()
         };
-        let result = match run_function_calling_loop(
-            backend.as_ref(),
-            &snapshot,
-            &sys,
-            &mut contents,
-            &ctx,
-            &opts,
-        )
-        .await
+        let result = match self
+            .run_turn_loop(
+                backend.as_ref(),
+                &snapshot,
+                &sys,
+                &mut contents,
+                &ctx,
+                &opts,
+            )
+            .await
         {
             Ok(r) => r,
             Err(e) => {
@@ -948,6 +991,7 @@ impl ChatEngine {
                     &self.recall,
                     &scope,
                     &query,
+                    self.metrics.as_deref(),
                 )
                 .await,
             );

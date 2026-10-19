@@ -6,9 +6,11 @@
 //! 想起したシナプスは鮮度（`use_count`/`last_used_at`/`decay_score`）を更新する（失敗は無視）。
 
 use std::sync::Arc;
+use std::time::Instant;
 
 use tokio::sync::Mutex;
 use yuuka_core::config;
+use yuuka_core::MetricsSink;
 use yuuka_synapse::{RecencyContext, Scope, SynapseEngine, TimeContext};
 
 use crate::synapse_repo;
@@ -103,17 +105,22 @@ pub fn build_recall_query(message_text: &str, reply_chain: &[String]) -> String 
 /// エンジン想起が空・クエリが空・失敗のときは `""`（呼び出し側は systemInstruction をそのまま使う）。
 /// 想起できた場合は鮮度更新（`touch_synapses`）を best-effort で行う（失敗は無視）。
 /// 取得件数・recency ブーストは `settings`（config `SYNAPSE_*`）に従う。
+///
+/// `metrics` があれば Node と同じく `assemble` レイテンシと `recall_hit`/`recall_empty` を記録する
+/// （空クエリは想起を試みないため記録しない）。
 pub async fn build_recall_section(
     db: &Db,
     engine: &Arc<Mutex<SynapseEngine>>,
     settings: &RecallSettings,
     scope: &Scope,
     query: &str,
+    metrics: Option<&dyn MetricsSink>,
 ) -> String {
     let q = query.trim();
     if q.is_empty() {
         return String::new();
     }
+    let started = Instant::now();
 
     // 現在の時間帯・曜日・エポックで時刻補正 + recency 加算ブーストをかける。
     let (now_tod, now_dow, now_epoch) = local_now();
@@ -128,6 +135,20 @@ pub async fn build_recall_section(
         let eng = engine.lock().await;
         eng.assemble(scope, q, time_ctx, recency_ctx, settings.k)
     };
+    if let Some(m) = metrics {
+        m.record_latency(
+            "assemble",
+            u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+        );
+        m.incr(
+            if neighbors.is_empty() {
+                "recall_empty"
+            } else {
+                "recall_hit"
+            },
+            1,
+        );
+    }
     if neighbors.is_empty() {
         return String::new();
     }
@@ -163,7 +184,56 @@ fn local_now() -> (i64, i64, i64) {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::*;
+
+    /// カウンタとレイテンシ標本数を溜める fake（実体の `MetricsRegistry` は services 側）。
+    #[derive(Default)]
+    struct FakeMetrics {
+        counters: std::sync::Mutex<HashMap<String, u64>>,
+        latencies: std::sync::Mutex<HashMap<String, usize>>,
+    }
+
+    impl FakeMetrics {
+        fn counter(&self, name: &str) -> u64 {
+            self.counters
+                .lock()
+                .expect("lock")
+                .get(name)
+                .copied()
+                .unwrap_or(0)
+        }
+
+        fn latency_count(&self, kind: &str) -> usize {
+            self.latencies
+                .lock()
+                .expect("lock")
+                .get(kind)
+                .copied()
+                .unwrap_or(0)
+        }
+    }
+
+    impl MetricsSink for FakeMetrics {
+        fn incr(&self, name: &str, by: u64) {
+            *self
+                .counters
+                .lock()
+                .expect("lock")
+                .entry(name.to_owned())
+                .or_insert(0) += by;
+        }
+
+        fn record_latency(&self, kind: &str, _ms: u64) {
+            *self
+                .latencies
+                .lock()
+                .expect("lock")
+                .entry(kind.to_owned())
+                .or_insert(0) += 1;
+        }
+    }
 
     #[test]
     fn recall_query_without_reply_chain_is_message_text() {
@@ -209,15 +279,32 @@ mod tests {
             bot_id: "b1".into(),
             guild_id: None,
         };
-        let section =
-            build_recall_section(&db, &engine, &RecallSettings::default(), &scope, "何か").await;
+        let metrics = FakeMetrics::default();
+        let section = build_recall_section(
+            &db,
+            &engine,
+            &RecallSettings::default(),
+            &scope,
+            "何か",
+            Some(&metrics),
+        )
+        .await;
         assert!(section.is_empty(), "索引が空なら想起セクションは空");
         // 空クエリも空。
-        assert!(
-            build_recall_section(&db, &engine, &RecallSettings::default(), &scope, "   ")
-                .await
-                .is_empty()
-        );
+        assert!(build_recall_section(
+            &db,
+            &engine,
+            &RecallSettings::default(),
+            &scope,
+            "   ",
+            Some(&metrics)
+        )
+        .await
+        .is_empty());
+        // 想起を試みた 1 回だけが空振りとして数えられる（空クエリは想起しないので数えない・Node 同様）。
+        assert_eq!(metrics.counter("recall_empty"), 1);
+        assert_eq!(metrics.counter("recall_hit"), 0);
+        assert_eq!(metrics.latency_count("assemble"), 1);
     }
 
     /// 索引に記憶を入れると想起され、フォーマット済みセクションが返り鮮度も更新される。
@@ -259,6 +346,7 @@ mod tests {
             yuuka_synapse::FormationContext::default(),
         );
         let engine = Arc::new(Mutex::new(engine));
+        let metrics = FakeMetrics::default();
 
         let section = build_recall_section(
             &db,
@@ -266,6 +354,7 @@ mod tests {
             &RecallSettings::default(),
             &scope,
             "好きな食べ物はカレーです",
+            Some(&metrics),
         )
         .await;
         assert!(
@@ -289,6 +378,11 @@ mod tests {
             .await
             .expect("read");
         assert_eq!(use_count, 1, "recall で touch されている");
+
+        // 想起ヒットと assemble レイテンシが記録されている（空振りは数えない）。
+        assert_eq!(metrics.counter("recall_hit"), 1);
+        assert_eq!(metrics.counter("recall_empty"), 0);
+        assert_eq!(metrics.latency_count("assemble"), 1);
     }
 
     /// 既定値は Node の既定（旧 Rust 定数）と同じ。
@@ -354,6 +448,7 @@ mod tests {
             &RecallSettings::default(),
             &scope,
             "好きなカレー",
+            None,
         )
         .await;
         assert_eq!(count_items(&all), 3, "既定 k=5 なら 3 件すべて");
@@ -362,7 +457,12 @@ mod tests {
             k: 1,
             ..RecallSettings::default()
         };
-        let limited = build_recall_section(&db, &engine, &one, &scope, "好きなカレー").await;
+        let metrics = FakeMetrics::default();
+        let limited =
+            build_recall_section(&db, &engine, &one, &scope, "好きなカレー", Some(&metrics)).await;
         assert_eq!(count_items(&limited), 1, "k=1 なら 1 件だけ");
+        assert_eq!(metrics.counter("recall_hit"), 1);
+        assert_eq!(metrics.counter("recall_empty"), 0);
+        assert_eq!(metrics.latency_count("assemble"), 1);
     }
 }

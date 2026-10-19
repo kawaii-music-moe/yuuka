@@ -2,13 +2,14 @@
 //!
 //! 依存ゼロ・インメモリのみ（プロセス再起動でリセット＝恒久ストアは目的外）。カウンタと
 //! レイテンシ標本（kind ごと最大 1000・古いものから捨てる）を保持し、[`MetricsLogService`] が
-//! 5 分ごとに snapshot をログに出す。カウンタ更新は将来 gemini/tools 層が [`ServiceContext`]
-//! 経由でこのレジストリへ書き込む（現状は配線待ちのため 0 が出る）。
+//! 5 分ごとに snapshot をログに出す。実処理（orchestrator の engine・gemini の FC ループ・シナプス
+//! 想起）は [`MetricsSink`] 越しに同じレジストリへ書き込む（supervisor が 1 つを共有注入する）。
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Mutex, PoisonError};
 
 use async_trait::async_trait;
+use yuuka_core::MetricsSink;
 
 use crate::context::ServiceContext;
 use crate::schedule::{CronService, Schedule};
@@ -90,6 +91,17 @@ impl MetricsRegistry {
             counter_parts.join(","),
             latency_parts.join(",")
         )
+    }
+}
+
+/// 実処理（engine/FC ループ/想起）からの書き込み口。inherent メソッドへ委譲する。
+impl MetricsSink for MetricsRegistry {
+    fn incr(&self, name: &str, by: u64) {
+        Self::incr(self, name, by);
+    }
+
+    fn record_latency(&self, kind: &str, ms: u64) {
+        Self::record_latency(self, kind, ms);
     }
 }
 

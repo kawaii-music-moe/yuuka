@@ -13,7 +13,8 @@ use async_trait::async_trait;
 use serde_json::json;
 use yuuka_core::tool::FunctionDeclaration as CoreFnDecl;
 use yuuka_core::{
-    ActionRecorder, DbError, GeminiError, ResponsePart, ToolContext, ToolName, ToolProvider,
+    ActionRecorder, DbError, GeminiError, MetricsSink, ResponsePart, ToolContext, ToolName,
+    ToolProvider,
 };
 
 use crate::client::GenerateBackend;
@@ -110,6 +111,9 @@ pub struct LoopOptions {
     /// ツール実行実績の記録先（Node `recordToolOutcome`）。dispatch 毎に 1 件記録する。
     /// None なら記録しない。
     pub outcome_sink: Option<Arc<dyn ToolOutcomeSink>>,
+    /// 実利用メトリクスの記録先（Node `incrMetric("tool_calls")`）。dispatch 毎に `tool_calls` を 1 増やす。
+    /// None なら記録しない。
+    pub metrics: Option<Arc<dyn MetricsSink>>,
 }
 
 impl Default for LoopOptions {
@@ -121,6 +125,7 @@ impl Default for LoopOptions {
             on_status: None,
             action_recorder: None,
             outcome_sink: None,
+            metrics: None,
         }
     }
 }
@@ -310,6 +315,10 @@ pub async fn run_function_calling_loop(
             let response =
                 dispatch_one(provider, ctx, &fc.name, fc.args.clone(), &mut result).await;
             let latency_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+            // 実利用メトリクス（Node は recordToolOutcome の直前で `incrMetric("tool_calls")`）。
+            if let Some(metrics) = &opts.metrics {
+                metrics.incr("tool_calls", 1);
+            }
             // 実行実績を永続化（Node `recordToolOutcome`・失敗は warn のみで応答を妨げない）。
             if let Some(sink) = &opts.outcome_sink {
                 let record = ToolOutcomeRecord {

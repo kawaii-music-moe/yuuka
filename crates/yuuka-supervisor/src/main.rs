@@ -197,6 +197,9 @@ async fn run() -> Result<(), String> {
         }
         Arc::new(tokio::sync::Mutex::new(engine))
     };
+    // 実利用メトリクス（Node `services/metrics.ts`）。会話エンジンが書き込み、cron の定期ログ
+    // （`MetricsLogService`）が同じインスタンスの snapshot を 5 分毎に出す（R23・#120）。
+    let metrics = Arc::new(MetricsRegistry::new());
     let chat_engine = Arc::new(
         ChatEngine::with_real_gemini(
             db.clone(),
@@ -212,7 +215,8 @@ async fn run() -> Result<(), String> {
         // ツール実行実績を tool_outcomes へ永続化する（Node `recordToolOutcome`・R22）。
         .with_tool_outcomes(Arc::new(yuuka_orchestrator::DbToolOutcomeSink::new(
             db.clone(),
-        ))),
+        )))
+        .with_metrics(metrics.clone()),
     );
     let chat_ws_routes = ws_routes(chat_engine.clone(), cfg.desktop_max_upload_mb);
 
@@ -512,7 +516,7 @@ async fn run() -> Result<(), String> {
         let mut service_ctx = ServiceContext::new(
             db,
             messenger,
-            Arc::new(MetricsRegistry::new()),
+            metrics,
             Arc::new(PlaybookRunnerAdapter {
                 engine: chat_engine.clone(),
             }),
