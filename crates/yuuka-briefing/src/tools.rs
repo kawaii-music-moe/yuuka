@@ -16,13 +16,26 @@ use yuuka_core::{
 use yuuka_web::Db;
 
 use crate::repo::{self, BriefingConfig, ReportConfig};
+use crate::routes::{DeliveryRunner, NullDeliveryRunner};
 use crate::service;
 
-/// このクレートが公開するツール（configureReport / getBriefingConfig）。
+/// このクレートが公開するツール（配信 runner 未注入＝`runBriefingNow` の `deliver: true` は常に未配信）。
 ///
 /// # Errors
 /// ツール名が Gemini 制約に反する場合 [`ToolError`]。
 pub fn tools(db: Db) -> Result<Vec<Arc<dyn Tool>>, ToolError> {
+    tools_with(db, Arc::new(NullDeliveryRunner))
+}
+
+/// 配信 runner を注入してツールを組む。`runBriefingNow` の `deliver: true` は `runner` で
+/// 設定した配信先へテスト配信する（`/api/briefing/test` と同じ経路・issue #136）。
+///
+/// # Errors
+/// ツール名が Gemini 制約に反する場合 [`ToolError`]。
+pub fn tools_with(
+    db: Db,
+    runner: Arc<dyn DeliveryRunner>,
+) -> Result<Vec<Arc<dyn Tool>>, ToolError> {
     Ok(vec![
         Arc::new(ConfigureReportTool {
             name: ToolName::checked("configureReport".to_owned())?,
@@ -39,6 +52,7 @@ pub fn tools(db: Db) -> Result<Vec<Arc<dyn Tool>>, ToolError> {
         Arc::new(RunBriefingNowTool {
             name: ToolName::checked("runBriefingNow".to_owned())?,
             db,
+            runner,
         }),
     ])
 }
@@ -357,15 +371,45 @@ fn report_view(c: &ReportConfig) -> Value {
 
 // ─── runBriefingNow ──────────────────────────────────────────────────────────
 
-/// 朝報を今すぐ生成して**この返信にインライン表示**する（Node `runBriefingNow`）。
+/// 朝報を今すぐ生成する（Node `runBriefingNow`）。配信先は `deliver` 引数で選ぶ（issue #136）。
 ///
-/// **意図的 divergence**: Node は設定した配信先（DM/channel）へ Discord 送信し「テスト配信しました」
-/// と返す。Rust は Discord 配信（Messenger）が Discord live 配線時のシームのため、手動 runBriefingNow
-/// は**生成した朝報をインライン Embed で返す**（今すぐ確認できて有用）。定時配信（cron→配信先）は
-/// DeliveryRunner シームが担い、同じ [`service::build_briefing`] 生成ロジックを再利用する。
+/// - 既定（`deliver` 省略/false）: 生成した朝報を**この返信にインライン Embed で返す**（Rust で足した
+///   使い方・今すぐ内容を確認できる）。
+/// - `deliver: true`: Node と同じく**設定した配信先（DM/channel）へテスト配信**し、送信結果を返す。
+///   送信は [`DeliveryRunner`]（`/api/briefing/test` と同じ・定時配信と同じ生成・送信経路）へ委譲する。
 struct RunBriefingNowTool {
     name: ToolName,
     db: Db,
+    runner: Arc<dyn DeliveryRunner>,
+}
+
+impl RunBriefingNowTool {
+    /// 設定した配信先へテスト配信する（Node `runBriefingNow` → `runBriefingForUser`）。
+    async fn deliver(&self, ctx: &ToolContext) -> Result<ToolOutcome, ToolError> {
+        let config = repo::find_briefing(&self.db, ctx.user_id.as_str(), ctx.bot_id.as_str())
+            .await
+            .map_err(exec_err)?;
+        let Some(config) = config else {
+            return Ok(fail(
+                "朝報がまだ設定されていません。先に configureBriefing で天気の地点やニュースフィードを設定してください。",
+            ));
+        };
+        let sent = self
+            .runner
+            .run_briefing(ctx.user_id.as_str(), ctx.bot_id.as_str())
+            .await;
+        let message = if sent {
+            "朝報を設定した配信先へテスト配信しました🌅"
+        } else {
+            "朝報の配信に失敗しました。配信先（DM/チャンネル）の設定と Bot の送信権限を確認してください。"
+        };
+        Ok(ToolOutcome::from_payload(json!({
+            "success": sent,
+            "message": message,
+            "target_type": config.target_type,
+            "target_id": config.target_id,
+        })))
+    }
 }
 
 #[async_trait]
@@ -373,16 +417,30 @@ impl Tool for RunBriefingNowTool {
     fn declaration(&self) -> FunctionDeclaration {
         FunctionDeclaration {
             name: self.name.clone(),
-            description: "設定済みの朝報（天気・ニュース）を今すぐ生成して見せる。\n\
-                ・「朝報を出して」「今日の天気とニュースまとめて」等で呼ぶ。\n\
+            description: "設定済みの朝報（天気・ニュース）を今すぐ生成する。\n\
+                ・「朝報を出して」「今日の天気とニュースまとめて」等は deliver を省略し、この会話に表示する。\n\
+                ・「テスト配信して」「設定した送り先にちゃんと届くか確かめたい」等は deliver=true にし、\
+                設定した配信先（DM/チャンネル）へ送る。\n\
                 ・先に configureBriefing で天気の地点やニュースのRSSフィードを設定しておく必要がある。"
                 .to_owned(),
-            parameters_json_schema: json!({ "type": "object", "properties": {} }),
+            parameters_json_schema: json!({
+                "type": "object",
+                "properties": {
+                    "deliver": {
+                        "type": "boolean",
+                        "description": "true なら設定した配信先へテスト配信する。省略/false ならこの会話に表示する。"
+                    }
+                }
+            }),
             requires_confirmation: false,
         }
     }
 
-    async fn call(&self, ctx: &ToolContext, _args: Value) -> Result<ToolOutcome, ToolError> {
+    async fn call(&self, ctx: &ToolContext, args: Value) -> Result<ToolOutcome, ToolError> {
+        if args.get("deliver").and_then(Value::as_bool) == Some(true) {
+            return self.deliver(ctx).await;
+        }
+
         let content = service::build_briefing(&self.db, ctx.user_id.as_str(), ctx.bot_id.as_str())
             .await
             .map_err(exec_err)?;
@@ -651,5 +709,135 @@ mod tests {
             .unwrap()
             .contains("朝報がまだ設定されていません"));
         assert!(out.parts.is_empty());
+    }
+
+    /// 呼ばれた (user, bot) を記録し、指定の送信結果を返す runner。
+    struct RecordingRunner {
+        result: bool,
+        calls: std::sync::Mutex<Vec<(String, String)>>,
+    }
+
+    impl RecordingRunner {
+        fn new(result: bool) -> Arc<Self> {
+            Arc::new(Self {
+                result,
+                calls: std::sync::Mutex::new(Vec::new()),
+            })
+        }
+
+        fn calls(&self) -> Vec<(String, String)> {
+            self.calls.lock().unwrap().clone()
+        }
+    }
+
+    #[async_trait]
+    impl DeliveryRunner for RecordingRunner {
+        async fn run_briefing(&self, user_id: &str, bot_id: &str) -> bool {
+            self.calls
+                .lock()
+                .unwrap()
+                .push((user_id.to_owned(), bot_id.to_owned()));
+            self.result
+        }
+        // runBriefingNow はレポートを配信しない（呼ばれても未配信）。
+        async fn run_report(&self, _user_id: &str, _bot_id: &str, _report_type: &str) -> bool {
+            false
+        }
+    }
+
+    /// 天気・フィード無しの朝報設定（外部 HTTP を発生させない）を入れる。
+    async fn configure_channel_target(db: &Db) {
+        let patch = repo::BriefingPatch {
+            enabled: None,
+            schedule_cron: None,
+            target_type: Some("channel".to_owned()),
+            target_id: Some(Some("chan-1".to_owned())),
+            weather_lat: None,
+            weather_lng: None,
+            location_name: None,
+            news_feeds: None,
+            news_keywords: None,
+        };
+        repo::upsert_briefing(db, "userA", BotId::system_default().as_str(), patch)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn run_briefing_now_deliver_sends_to_configured_target() {
+        let db = seed_db();
+        configure_channel_target(&db).await;
+        let runner = RecordingRunner::new(true);
+        let tools = tools_with(db, runner.clone()).unwrap();
+        let run = find(&tools, "runBriefingNow");
+
+        let out = run.call(&ctx(), json!({"deliver": true})).await.unwrap();
+
+        // 本人・呼び出し中の Bot として runner（/test と同じ配信経路）へ委譲する。
+        assert_eq!(
+            runner.calls(),
+            vec![("userA".to_owned(), "system_default".to_owned())]
+        );
+        assert_eq!(out.payload["success"], true);
+        assert_eq!(out.payload["target_type"], "channel");
+        assert_eq!(out.payload["target_id"], "chan-1");
+        assert!(out.payload["message"]
+            .as_str()
+            .unwrap()
+            .contains("テスト配信しました"));
+        // 配信先へ送るので、会話にはインライン Embed を出さない。
+        assert!(out.parts.is_empty());
+    }
+
+    #[tokio::test]
+    async fn run_briefing_now_deliver_reports_send_failure() {
+        let db = seed_db();
+        configure_channel_target(&db).await;
+        let runner = RecordingRunner::new(false);
+        let tools = tools_with(db, runner.clone()).unwrap();
+        let run = find(&tools, "runBriefingNow");
+
+        let out = run.call(&ctx(), json!({"deliver": true})).await.unwrap();
+
+        assert_eq!(runner.calls().len(), 1);
+        assert_eq!(out.payload["success"], false);
+        assert!(out.payload["message"]
+            .as_str()
+            .unwrap()
+            .contains("配信に失敗しました"));
+    }
+
+    #[tokio::test]
+    async fn run_briefing_now_deliver_without_config_does_not_send() {
+        let db = seed_db();
+        let runner = RecordingRunner::new(true);
+        let tools = tools_with(db, runner.clone()).unwrap();
+        let run = find(&tools, "runBriefingNow");
+
+        let out = run.call(&ctx(), json!({"deliver": true})).await.unwrap();
+
+        assert!(runner.calls().is_empty());
+        assert_eq!(out.payload["success"], false);
+        assert!(out.payload["message"]
+            .as_str()
+            .unwrap()
+            .contains("朝報がまだ設定されていません"));
+    }
+
+    #[tokio::test]
+    async fn run_briefing_now_default_stays_inline() {
+        let db = seed_db();
+        configure_channel_target(&db).await;
+        let runner = RecordingRunner::new(true);
+        let tools = tools_with(db, runner.clone()).unwrap();
+        let run = find(&tools, "runBriefingNow");
+
+        // deliver 省略 / false → 配信せず、この会話にインライン Embed で返す。
+        for args in [json!({}), json!({"deliver": false})] {
+            let out = run.call(&ctx(), args).await.unwrap();
+            assert_eq!(out.payload["success"], true);
+            assert!(matches!(out.parts.as_slice(), [ResponsePart::Embed(_)]));
+        }
+        assert!(runner.calls().is_empty());
     }
 }
