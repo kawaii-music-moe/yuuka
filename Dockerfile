@@ -28,6 +28,8 @@ WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 COPY xtask ./xtask
+# 検索スキル資料（R12・#109）。yuuka-orchestrator が `include_str!` でシステムプロンプトへ埋め込む。
+COPY docs/skills ./docs/skills
 # registry と target をキャッシュマウントに載せて再ビルドを高速化する。target はレイヤに残らない
 # ため、同一 RUN 内で成果物を実パス /yuuka へ取り出す（strip 済み・thin-LTO 済み）。
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
