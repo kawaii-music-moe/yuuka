@@ -12,7 +12,9 @@ use async_trait::async_trait;
 use yuuka_services::{Notification, Notifier as ServicesNotifier, NotifyTarget};
 
 use crate::manager::DiscordMessenger;
-use crate::ports::{DeliverTarget, Notifier as DiscordNotifierPort, TurnReply};
+use crate::ports::{
+    DeliverTarget, EmbedField, Notifier as DiscordNotifierPort, RichEmbed, TurnReply,
+};
 
 /// services の [`NotifyTarget`] を discord の [`DeliverTarget`] へ写す。
 ///
@@ -27,15 +29,37 @@ fn to_deliver_target(target: NotifyTarget) -> DeliverTarget {
     }
 }
 
+fn to_rich_embed(embed: yuuka_core::EmbedPart) -> RichEmbed {
+    RichEmbed {
+        title: embed.title,
+        description: embed.description,
+        color: Some(embed.color),
+        fields: embed
+            .fields
+            .into_iter()
+            .map(|field| EmbedField {
+                name: field.name,
+                value: field.value,
+                inline: field.inline,
+            })
+            .collect(),
+        footer: embed.footer,
+    }
+}
+
 #[async_trait]
 impl ServicesNotifier for DiscordMessenger {
     async fn send(&self, notification: Notification) -> bool {
-        // 空本文は配信しない（Node `sendToUser` / `Notifier` 契約・呼び出し側は false で次 tick 再試行）。
-        if notification.content.trim().is_empty() {
+        // 本文も Embed も無い通知は配信しない（Node `sendToUser` / `Notifier` 契約）。
+        if notification.content.trim().is_empty() && notification.embeds.is_empty() {
             return false;
         }
         let target = to_deliver_target(notification.target);
-        let reply = TurnReply::text(notification.content);
+        let reply = TurnReply {
+            text: notification.content,
+            embeds: notification.embeds.into_iter().map(to_rich_embed).collect(),
+            ..TurnReply::default()
+        };
         // discord ポートへ委譲: クライアント解決（bot_id 本人→default フォールバック）・
         // チャンネル露出ガード（第三者チャンネルへの流入防止）・分割送信は委譲先が担う。
         DiscordNotifierPort::send_to_user(
@@ -75,5 +99,28 @@ mod tests {
             to_deliver_target(NotifyTarget::Channel("123456".to_owned())),
             DeliverTarget::Channel(id) if id == "123456"
         ));
+    }
+
+    #[test]
+    fn service_embed_maps_to_discord_embed() {
+        let embed = to_rich_embed(yuuka_core::EmbedPart {
+            title: Some("朝報".to_owned()),
+            description: Some("本文".to_owned()),
+            color: 0x00_B0_F4,
+            fields: vec![yuuka_core::EmbedFieldPart {
+                name: "天気".to_owned(),
+                value: "晴れ".to_owned(),
+                inline: false,
+            }],
+            footer: Some("提供元".to_owned()),
+        });
+
+        assert_eq!(embed.title.as_deref(), Some("朝報"));
+        assert_eq!(embed.description.as_deref(), Some("本文"));
+        assert_eq!(embed.color, Some(0x00_B0_F4));
+        assert_eq!(embed.fields.len(), 1);
+        assert_eq!(embed.fields[0].name, "天気");
+        assert!(!embed.fields[0].inline);
+        assert_eq!(embed.footer.as_deref(), Some("提供元"));
     }
 }

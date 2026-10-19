@@ -16,15 +16,13 @@
 //! ## Node パリティの意図的 divergence
 //! - **LLM 要約（generateAuxText）は未配線**。Node はニュースを Gemini で 3〜5 件に要約するが、Rust は
 //!   `build_briefing` のヘッドライン列挙で代替する（手動 `runBriefingNow` と同じ意図的 divergence）。
-//! - **配信は Embed でなく text**。通知ポート（[`crate::notifier::Notifier`]）は現状 text 経路のみのため、
-//!   [`yuuka_briefing::render_briefing_text`] で Embed 相当の本文を text 化して配信する。
+//! - 定期配信の表示は Node と同じく、タイトル・天気/ニュースフィールド・フッタを持つスカイブルーの
+//!   Embed とする。LLM 要約の差分はこの表示パリティとは分離して扱う。
 
 use async_trait::async_trait;
 use chrono::Local;
-use yuuka_briefing::{
-    build_briefing, list_enabled_briefings, render_briefing_text, EnabledBriefing,
-};
-use yuuka_core::{BotId, DbError, UserId};
+use yuuka_briefing::{build_briefing, list_enabled_briefings, BriefingContent, EnabledBriefing};
+use yuuka_core::{BotId, DbError, EmbedFieldPart, EmbedPart, UserId};
 use yuuka_web::Db;
 
 use crate::context::ServiceContext;
@@ -89,11 +87,10 @@ pub(crate) async fn deliver(
         return Ok(false);
     };
 
-    let body = render_briefing_text(&content);
-    let notification = Notification::text(
+    let notification = Notification::embed(
         UserId::new(config.user_id.clone()),
         BotId::new(config.bot_id.clone()),
-        body,
+        briefing_embed(content),
     )
     .with_target(resolve_target(config));
 
@@ -104,6 +101,28 @@ pub(crate) async fn deliver(
         tracing::warn!(user = %config.user_id, "⚠️ 朝報の通知に失敗（配信先未配線などで未送信）");
     }
     Ok(sent)
+}
+
+/// 生成済み朝報を旧 Node と同じ構造の Embed にする。
+fn briefing_embed(content: BriefingContent) -> EmbedPart {
+    EmbedPart {
+        title: Some("🌅 おはようございます！今日の朝報です".to_owned()),
+        description: (!content.has_content).then(|| {
+            "朝報に表示する内容がまだ設定されていません。天気の地点（緯度経度）やニュースのRSSフィードを設定してください。"
+                .to_owned()
+        }),
+        color: 0x00_B0_F4,
+        fields: content
+            .fields
+            .into_iter()
+            .map(|(name, value)| EmbedFieldPart {
+                name,
+                value,
+                inline: false,
+            })
+            .collect(),
+        footer: Some("データ提供: Open-Meteo / 登録RSSフィード".to_owned()),
+    }
 }
 
 /// 配信先を解決する（Node `{ type: target_type, id: target_id }`）。
@@ -181,9 +200,23 @@ mod tests {
 
         let sent = notifier.sent.lock().unwrap();
         assert_eq!(sent.len(), 1);
-        // 設定の dm は DM（ユーザー既定送信先は見ない）で、本文に朝報タイトルが入る。
+        // 設定の dm は DM（ユーザー既定送信先は見ない）で、朝報は Embed として届く。
         assert_eq!(sent[0].target, NotifyTarget::Dm);
-        assert!(sent[0].content.contains("今日の朝報です"));
+        assert!(sent[0].content.is_empty());
+        assert_eq!(sent[0].embeds.len(), 1);
+        let embed = &sent[0].embeds[0];
+        assert_eq!(
+            embed.title.as_deref(),
+            Some("🌅 おはようございます！今日の朝報です")
+        );
+        assert_eq!(embed.color, 0x00_B0_F4);
+        assert!(embed.description.as_deref().is_some_and(
+            |description| description.contains("朝報に表示する内容がまだ設定されていません")
+        ));
+        assert_eq!(
+            embed.footer.as_deref(),
+            Some("データ提供: Open-Meteo / 登録RSSフィード")
+        );
     }
 
     #[tokio::test]
@@ -197,6 +230,24 @@ mod tests {
         let sent = notifier.sent.lock().unwrap();
         assert_eq!(sent.len(), 1);
         assert_eq!(sent[0].target, NotifyTarget::Channel("chan-1".to_owned()));
+    }
+
+    #[test]
+    fn generated_content_keeps_weather_and_news_as_embed_fields() {
+        let embed = briefing_embed(BriefingContent {
+            fields: vec![
+                ("🌤️ 東京 の天気".to_owned(), "**今日**: 晴れ".to_owned()),
+                ("📰 今朝のニュース".to_owned(), "・見出し".to_owned()),
+            ],
+            has_content: true,
+        });
+
+        assert!(embed.description.is_none());
+        assert_eq!(embed.fields.len(), 2);
+        assert_eq!(embed.fields[0].name, "🌤️ 東京 の天気");
+        assert_eq!(embed.fields[0].value, "**今日**: 晴れ");
+        assert_eq!(embed.fields[1].name, "📰 今朝のニュース");
+        assert!(embed.fields.iter().all(|field| !field.inline));
     }
 
     #[tokio::test]

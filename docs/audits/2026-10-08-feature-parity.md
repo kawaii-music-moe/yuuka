@@ -90,7 +90,7 @@
 | レート制限カウンタのRedis共有 | NodeのTTL付きRedisカウンタがRustでは `InMemoryRateLimiter`。単一プロセス内の制限はあるが、再起動・複数プロセスでのカウンタ共有はない。**仕様として受容（#134）**：Discord ゲートウェイは `YUUKA_RUST_DISCORD` で単一プロセスに限られ、本番も1コンテナなので複数プロセス共有は不要。再起動で窓がリセットされるが、ユーザーが再起動を起こす手段はなく迂回経路にならない。再確認で、管理画面のレシート読み取りだけが別の `InMemoryRateLimiter` を作っており、Discord/PWA とユーザー単位の窓を共有していなかった（Node は全経路で共通の窓）。`crates/yuuka-supervisor/src/main.rs` で共有インスタンスを渡すよう修正した。 | 旧 `src/services/botRateLimit.ts:63`、現行 `crates/yuuka-orchestrator/src/discord_ports.rs:319`。 |
 | 会話履歴のRedisキャッシュ | RustはSQLiteを直接読む。履歴が失われたわけではないので機能欠落には数えない。性能上の違い。**仕様として受容（#135）**：Node も Redis ミス時は SQLite から再構築しており、Rust は「常にキャッシュミス」と同じ結果になる。読み出しは `(user_id, bot_id, source)` 等の索引に乗る `ORDER BY id DESC LIMIT 15/30` で、1ターンあたりの負荷は小さい。 | 旧 `src/db/messageLogRepo.ts`、現行 `crates/yuuka-orchestrator/src/message_log.rs:3`。 |
 | `runBriefingNow` の配信先 | Nodeは設定された通知先へ送る。Rustは呼び出した会話へのインラインEmbedとして返す。定期朝報とは独立した挙動変更で、設定先への手動配信は代替できない。 | 旧 `src/functions/briefingFunctions.ts`、現行 `crates/yuuka-briefing/src/tools.rs:365`。 |
-| 定期配信の見た目 | NodeのEmbed通知に対し、Rustのservices通知ポートはtext中心。朝報・日報の装飾や構造が簡略化されている。 | 旧 `src/services/reportService.ts` / `briefingService.ts`、現行 `crates/yuuka-services/src/notifier.rs:25`。 |
+| 定期配信の見た目 | NodeのEmbed通知に対し、Rustのservices通知ポートはtext中心。朝報・日報の装飾や構造が簡略化されていた。**修正済み（#137）**：通知ポートへ provider 中立な Embed を追加し、朝報はタイトル・天気/ニュースフィールド・スカイブルー色・案内文・提供元フッタ、日報/週報はタイトル・生データ本文・完了/持ち越し/収支のインラインフィールド・ブルー色・フッタを復旧した。定期配信とWebのテスト配信は同じ生成経路を使う。 | 旧 `src/services/reportService.ts` / `briefingService.ts`、現行 `crates/yuuka-services/src/notifier.rs`・`briefing.rs`・`report.rs`、`crates/yuuka-discord/src/notify_bridge.rs`。 |
 
 ## 失われた機能と誤判定しないもの
 
@@ -146,3 +146,4 @@
 | X01 | 仕様として受容（#133） | 操作履歴はメモリ保持のまま。理由は「設計上の変更・縮小」表を参照。 |
 | X02 | 仕様として受容（#134）＋一部修正 | 複数プロセス・再起動を跨ぐカウンタ共有は持たない。レシート読み取り（`/api/expenses/upload-receipt`）が別インスタンスのレート制限を使っていたため、Discord/PWA と同じ共有インスタンスへ揃えた。 |
 | X03 | 仕様として受容（#135） | 会話履歴は SQLite 直読みのまま。理由は「設計上の変更・縮小」表を参照。 |
+| X05 | 対応済み（#137） | services の通知 payload に Embed を通し、朝報・日報・週報と同じ経路を使うテスト配信を旧 Node 相当のカード表示へ戻した。LLM 要約など別の監査差分には変更を加えていない。 |

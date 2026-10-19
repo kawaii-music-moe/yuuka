@@ -179,7 +179,10 @@ mod tests {
         assert_eq!(sent[0].user_id.as_str(), "a");
         assert_eq!(sent[0].bot_id.as_str(), "bot1");
         assert_eq!(sent[0].target, NotifyTarget::Channel("chan-a1".to_owned()));
-        assert!(sent[0].content.contains("今日の朝報です"));
+        assert!(sent[0].embeds[0]
+            .title
+            .as_deref()
+            .is_some_and(|title| title.contains("今日の朝報です")));
     }
 
     #[tokio::test]
@@ -214,7 +217,10 @@ mod tests {
         assert_eq!(sent[0].user_id.as_str(), "a");
         assert_eq!(sent[0].bot_id.as_str(), "bot1");
         assert_eq!(sent[0].target, NotifyTarget::Channel("chan-a1".to_owned()));
-        assert!(sent[0].content.contains("📋 日報"));
+        assert!(sent[0].embeds[0]
+            .title
+            .as_deref()
+            .is_some_and(|title| title.contains("📋 日報")));
     }
 
     #[tokio::test]
@@ -238,7 +244,10 @@ mod tests {
             sent[0].target,
             NotifyTarget::Channel("chan-a-default".to_owned())
         );
-        assert!(sent[0].content.contains("📋 週報"));
+        assert!(sent[0].embeds[0]
+            .title
+            .as_deref()
+            .is_some_and(|title| title.contains("📋 週報")));
     }
 
     #[tokio::test]

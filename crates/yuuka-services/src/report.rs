@@ -17,9 +17,8 @@
 //!   要約失敗時は `buildFallbackText(data)`（生データ）へフォールバックし本文を
 //!   「Yuuka レポート（生データ）」と表示する。Rust は**この Node 自前のフォールバック経路だけを実装**
 //!   する（briefing/runBriefingNow と同系統の意図的 divergence・生データ集約は Node と完全に等価）。
-//! - **配信は Embed でなく text**。通知ポート（[`crate::notifier::Notifier`]）は現状 text 経路のみのため、
-//!   Node の Embed（タイトル + 本文 + 集計フィールド + フッタ）を Discord マークダウンの text 本文へ
-//!   整形して配信する（briefing の `render_briefing_text` と同系統・情報は等価）。
+//! - 定期配信の表示は Node と同じく、タイトル・本文・集計フィールド・フッタを持つブルーの Embed
+//!   とする。LLM 要約の差分はこの表示パリティとは分離して扱う。
 //!
 //! ## 集約フィールド（Node `collectReportData` → `buildFallbackText` が使う範囲のみ）
 //! `buildFallbackText` が参照するのは completedTodos / carryOverTodos / schedules / payments /
@@ -30,7 +29,7 @@ use async_trait::async_trait;
 use chrono::Local;
 use rusqlite::params;
 use yuuka_briefing::{list_enabled_reports, EnabledReport};
-use yuuka_core::{BotId, DbError, UserId};
+use yuuka_core::{BotId, DbError, EmbedFieldPart, EmbedPart, UserId};
 use yuuka_db::map_sqlite;
 use yuuka_web::Db;
 
@@ -108,11 +107,10 @@ pub(crate) async fn deliver_to(
     let data = collect_report_data(db, &config.user_id, &config.bot_id, is_weekly).await?;
 
     // LLM 要約は未配線＝Node の `buildFallbackText(data)` 経路（フッタ「Yuuka レポート（生データ）」）。
-    let body = render_report_text(&data);
-    let notification = Notification::text(
+    let notification = Notification::embed(
         UserId::new(config.user_id.clone()),
         BotId::new(config.bot_id.clone()),
-        body,
+        report_embed(&data),
     )
     .with_target(target);
 
@@ -316,7 +314,7 @@ async fn collect_report_data(
         .await
 }
 
-// ─── テキスト整形（Node `buildFallbackText` + Embed 相当の text 化） ─────────────────────────
+// ─── Embed 整形（Node `buildFallbackText` + `EmbedBuilder`） ────────────────────────────────
 
 /// レポートのタイトルを作る（Node `📋 ${typeLabel} ${periodLabel}`）。
 fn title_line(is_weekly: bool, period_label: &str) -> String {
@@ -324,18 +322,9 @@ fn title_line(is_weekly: bool, period_label: &str) -> String {
     format!("📋 {type_label} {period_label}")
 }
 
-/// 生データレポートを **text** へ整形する（Node `buildFallbackText` + Embed タイトル/集計/フッタ相当）。
-///
-/// Node は Embed（タイトル + description=`buildFallbackText(data)` + 集計フィールド + フッタ
-/// 「Yuuka レポート（生データ）」）で配信する。通知ポートは text 経路のみのため、それらを Discord
-/// マークダウンで縦に積んだ text 本文にする（briefing の `render_briefing_text` と同系統・情報は等価）。
-fn render_report_text(data: &ReportData) -> String {
-    let is_weekly = data.period_label.contains('〜');
+/// Node `buildFallbackText` と同じ生データ本文を作る。
+fn render_report_body(data: &ReportData) -> String {
     let mut lines: Vec<String> = Vec::new();
-    lines.push(format!("**{}**", title_line(is_weekly, &data.period_label)));
-    lines.push(String::new());
-
-    // ── buildFallbackText 本体（Node と同一の行構成） ──
     lines.push(format!("✅ 完了タスク: {}件", data.completed_todos.len()));
     for t in data.completed_todos.iter().take(8) {
         lines.push(format!("  ・{t}"));
@@ -374,19 +363,39 @@ fn render_report_text(data: &ReportData) -> String {
         format_currency(data.income_total),
         format_currency(data.expense_total)
     ));
-
-    // ── Embed の集計フィールド相当（Node `.addFields(...)`）＋フッタ ──
-    lines.push(String::new());
-    lines.push(format!(
-        "✅ 完了 {}件 / 📌 持ち越し {}件 / 💰 収支 +{} / -{}",
-        data.completed_todos.len(),
-        data.carry_over_todos.len(),
-        format_currency(data.income_total),
-        format_currency(data.expense_total),
-    ));
-    lines.push("Yuuka レポート（生データ）".to_owned());
-
     lines.join("\n")
+}
+
+/// 生データレポートを旧 Node と同じ構造の Embed にする。
+fn report_embed(data: &ReportData) -> EmbedPart {
+    let is_weekly = data.period_label.contains('〜');
+    EmbedPart {
+        title: Some(title_line(is_weekly, &data.period_label)),
+        description: Some(render_report_body(data).chars().take(4000).collect()),
+        color: 0x58_65_F2,
+        fields: vec![
+            EmbedFieldPart {
+                name: "✅ 完了".to_owned(),
+                value: format!("{}件", data.completed_todos.len()),
+                inline: true,
+            },
+            EmbedFieldPart {
+                name: "📌 持ち越し".to_owned(),
+                value: format!("{}件", data.carry_over_todos.len()),
+                inline: true,
+            },
+            EmbedFieldPart {
+                name: "💰 収支".to_owned(),
+                value: format!(
+                    "+{} / -{}",
+                    format_currency(data.income_total),
+                    format_currency(data.expense_total)
+                ),
+                inline: true,
+            },
+        ],
+        footer: Some("Yuuka レポート（生データ）".to_owned()),
+    }
 }
 
 /// 金額を `¥1,234` 形式へ整形する（Node `formatCurrency` = `¥{amount.toLocaleString("ja-JP")}`）。
@@ -497,13 +506,29 @@ mod tests {
 
         let sent = notifier.sent.lock().unwrap();
         assert_eq!(sent.len(), 1);
-        // 設定の dm は DM（ユーザー既定送信先は見ない）で、本文に日報タイトルと生データフッタが入る。
+        // 設定の dm は DM（ユーザー既定送信先は見ない）で、日報は Embed として届く。
         assert_eq!(sent[0].target, NotifyTarget::Dm);
-        assert!(sent[0].content.contains("📋 日報"));
-        assert!(sent[0].content.contains("Yuuka レポート（生データ）"));
+        assert!(sent[0].content.is_empty());
+        assert_eq!(sent[0].embeds.len(), 1);
+        let embed = &sent[0].embeds[0];
+        assert!(embed
+            .title
+            .as_deref()
+            .is_some_and(|title| title.contains("📋 日報")));
+        assert_eq!(embed.color, 0x58_65_F2);
+        assert_eq!(embed.footer.as_deref(), Some("Yuuka レポート（生データ）"));
         // 集約元が空でも fallback 本体（完了/持ち越し/収支）は出る。
-        assert!(sent[0].content.contains("✅ 完了タスク: 0件"));
-        assert!(sent[0].content.contains("💰 収支: 収入 ¥0 / 支出 ¥0"));
+        let body = embed.description.as_deref().unwrap_or_default();
+        assert!(body.contains("✅ 完了タスク: 0件"));
+        assert!(body.contains("💰 収支: 収入 ¥0 / 支出 ¥0"));
+        assert_eq!(embed.fields.len(), 3);
+        assert!(embed.fields.iter().all(|field| field.inline));
+        assert_eq!(embed.fields[0].name, "✅ 完了");
+        assert_eq!(embed.fields[0].value, "0件");
+        assert_eq!(embed.fields[1].name, "📌 持ち越し");
+        assert_eq!(embed.fields[1].value, "0件");
+        assert_eq!(embed.fields[2].name, "💰 収支");
+        assert_eq!(embed.fields[2].value, "+¥0 / -¥0");
     }
 
     #[tokio::test]
@@ -518,7 +543,10 @@ mod tests {
         assert_eq!(sent.len(), 1);
         assert_eq!(sent[0].target, NotifyTarget::Channel("chan-1".to_owned()));
         // 週報タイトルは type ラベルが「週報」。
-        assert!(sent[0].content.contains("📋 週報"));
+        assert!(sent[0].embeds[0]
+            .title
+            .as_deref()
+            .is_some_and(|title| title.contains("📋 週報")));
     }
 
     #[tokio::test]
@@ -582,7 +610,7 @@ mod tests {
 
         let sent = notifier.sent.lock().unwrap();
         assert_eq!(sent.len(), 1);
-        let body = &sent[0].content;
+        let body = sent[0].embeds[0].description.as_deref().unwrap_or_default();
         assert!(body.contains("✅ 完了タスク: 1件"), "body: {body}");
         assert!(body.contains("  ・買い物"), "body: {body}");
         assert!(body.contains("📌 持ち越しタスク: 1件"), "body: {body}");
@@ -621,7 +649,7 @@ mod tests {
 
         let sent = notifier.sent.lock().unwrap();
         assert_eq!(sent.len(), 1);
-        let body = &sent[0].content;
+        let body = sent[0].embeds[0].description.as_deref().unwrap_or_default();
         assert!(body.contains("  ・家賃 ¥80,000 [未払い]"), "body: {body}");
         assert!(!body.contains("別Botのサブスク"), "body: {body}");
     }
