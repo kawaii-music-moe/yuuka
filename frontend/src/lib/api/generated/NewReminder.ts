@@ -11,7 +11,7 @@ export type NewReminder = {
 	trigger_at: string;
 	repeat_rule: string | null;
 	/**
-	 * `"dm" | "channel"`。未指定は `"dm"`。
+	 * `"dm" | "channel"`。未指定はユーザー設定の既定送信先。
 	 */
 	target_type: string | null;
 	target_id: string | null;

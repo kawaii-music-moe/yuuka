@@ -37,7 +37,7 @@ pub struct NewReminder {
     pub trigger_at: String,
     #[serde(default)]
     pub repeat_rule: Option<String>,
-    /// `"dm" | "channel"`。未指定は `"dm"`。
+    /// `"dm" | "channel"`。未指定はユーザー設定の既定送信先。
     #[serde(default)]
     pub target_type: Option<String>,
     #[serde(default)]
