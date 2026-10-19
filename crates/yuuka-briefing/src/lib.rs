@@ -8,7 +8,8 @@
 //! [`DeliveryRunner`] シーム越しに委譲する（実装は `yuuka-services` の `NotifierDeliveryRunner`＝
 //! 定時配信と同じ生成・送信経路。supervisor が [`routes_with`] で注入し、未注入時は
 //! [`NullDeliveryRunner`]（常に未配信）へ縮退する）。
-//! **残（後続）**: runBriefingNow の配信先（issue #136）。
+//! 移植済み（tool）: runBriefingNow（既定は会話へインライン Embed・`deliver: true` で設定した配信先へ
+//! テスト配信＝`/test` と同じ [`DeliveryRunner`] 経由・issue #136。supervisor が [`tools_with`] で注入）。
 //!
 //! 定時配信（cron→DM/channel）は `yuuka-services` の `BriefingService` が担う。本 crate は横断走査
 //! （[`list_enabled_briefings`]）・生成（[`build_briefing`]）・テキスト整形（[`render_briefing_text`]）
@@ -24,6 +25,6 @@ pub use repo::{
     find_briefing, find_report, list_enabled_briefings, list_enabled_reports, BriefingConfig,
     EnabledBriefing, EnabledReport, ReportConfig,
 };
-pub use routes::{routes, routes_with, DeliveryRunner, NullDeliveryRunner};
+pub use routes::{routes, routes_with, DeliveryRunner, LateDeliveryRunner, NullDeliveryRunner};
 pub use service::{build_briefing, render_briefing_text, BriefingContent};
-pub use tools::tools;
+pub use tools::{tools, tools_with};

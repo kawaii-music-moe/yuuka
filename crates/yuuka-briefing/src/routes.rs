@@ -49,6 +49,46 @@ impl DeliveryRunner for NullDeliveryRunner {
     }
 }
 
+/// 後から実 runner を差し込める runner（issue #136）。
+///
+/// ツールレジストリ（`runBriefingNow`）は会話エンジンより先に組まれ、実 runner が使う Messenger は
+/// 会話エンジンを受け取る Discord マネージャから作られる（循環）。そのためレジストリにはこれを渡し、
+/// Messenger ができた時点で [`LateDeliveryRunner::set`] する。未設定の間は [`NullDeliveryRunner`]
+/// と同じく常に未配信（`false`）。
+#[derive(Default)]
+pub struct LateDeliveryRunner {
+    inner: std::sync::OnceLock<Arc<dyn DeliveryRunner>>,
+}
+
+impl LateDeliveryRunner {
+    /// 未設定（常に未配信）の runner を作る。
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// 実 runner を設定する。設定は 1 度だけで、2 度目以降は無視して `false` を返す。
+    pub fn set(&self, runner: Arc<dyn DeliveryRunner>) -> bool {
+        self.inner.set(runner).is_ok()
+    }
+}
+
+#[async_trait]
+impl DeliveryRunner for LateDeliveryRunner {
+    async fn run_briefing(&self, user_id: &str, bot_id: &str) -> bool {
+        match self.inner.get() {
+            Some(runner) => runner.run_briefing(user_id, bot_id).await,
+            None => false,
+        }
+    }
+    async fn run_report(&self, user_id: &str, bot_id: &str, report_type: &str) -> bool {
+        match self.inner.get() {
+            Some(runner) => runner.run_report(user_id, bot_id, report_type).await,
+            None => false,
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct BotQuery {
     #[serde(default, rename = "botId")]
@@ -646,5 +686,37 @@ mod tests {
         .await;
         assert_eq!(st, StatusCode::OK);
         assert_eq!(j["success"], false);
+    }
+
+    /// 常に指定の結果を返す runner（[`super::LateDeliveryRunner`] の委譲確認用）。
+    struct FixedRunner(bool);
+
+    #[async_trait]
+    impl super::DeliveryRunner for FixedRunner {
+        async fn run_briefing(&self, _user_id: &str, _bot_id: &str) -> bool {
+            self.0
+        }
+        async fn run_report(&self, _user_id: &str, _bot_id: &str, _report_type: &str) -> bool {
+            self.0
+        }
+    }
+
+    #[tokio::test]
+    async fn late_runner_is_null_until_set_then_delegates() {
+        use super::{DeliveryRunner, LateDeliveryRunner};
+
+        let late = LateDeliveryRunner::new();
+        // 未設定の間は未配信。
+        assert!(!late.run_briefing("u", "b").await);
+        assert!(!late.run_report("u", "b", "daily").await);
+
+        // 設定後は実 runner へ委譲する。
+        assert!(late.set(Arc::new(FixedRunner(true))));
+        assert!(late.run_briefing("u", "b").await);
+        assert!(late.run_report("u", "b", "weekly").await);
+
+        // 2 度目の設定は無視（最初の runner のまま）。
+        assert!(!late.set(Arc::new(FixedRunner(false))));
+        assert!(late.run_briefing("u", "b").await);
     }
 }

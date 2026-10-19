@@ -164,11 +164,16 @@ async fn run() -> Result<(), String> {
             Arc::new(yuuka_google::NullCalendarEvents),
         )
     };
+    // runBriefingNow（`deliver: true`）のテスト配信 runner（issue #136）。実 runner が使う Messenger は
+    // 会話エンジン（＝このレジストリ）を受け取る Discord マネージャから作られるため、ここでは空の
+    // LateDeliveryRunner を渡し、Messenger 生成後（配信設定ルータの配線時）に同じ runner を設定する。
+    let briefing_delivery = Arc::new(yuuka_briefing::LateDeliveryRunner::new());
     let tool_registry = build_tool_registry(
         &db,
         crypto.clone(),
         Some(action_recorder.clone()),
         Some(google_events.clone()),
+        Some(briefing_delivery.clone()),
     )
     .map_err(|e| format!("build tool registry: {e}"))?;
     let mcp_client = Arc::new(yuuka_mcp::HttpMcpClient::new(
@@ -387,10 +392,11 @@ async fn run() -> Result<(), String> {
 
     // 配信設定ルータ（issue #99）: 朝報・日報/週報のテスト配信を、定時配信と同じ生成・送信経路で
     // Discord Messenger へ送る。REST 送信は gateway 非依存のため YUUKA_RUST_CRON/DISCORD に関わらず live。
-    let briefing_routes = yuuka_briefing::routes_with(Arc::new(NotifierDeliveryRunner::new(
-        db.clone(),
-        messenger.clone(),
-    )));
+    // 同じ runner を runBriefingNow（`deliver: true`）にも設定する（issue #136）。
+    let delivery_runner: Arc<dyn yuuka_briefing::DeliveryRunner> =
+        Arc::new(NotifierDeliveryRunner::new(db.clone(), messenger.clone()));
+    briefing_delivery.set(delivery_runner.clone());
+    let briefing_routes = yuuka_briefing::routes_with(delivery_runner);
 
     // 利用申請 + Bot 共有招待ルータ（issue #100/#101）。DM は Discord ボタン経路（interaction）と同じ
     // messenger（共有デフォルト Bot）から送り、入口（Web / Discord）によらず同じ通知が届くようにする。

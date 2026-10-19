@@ -267,4 +267,38 @@ mod tests {
         assert_eq!(sent[1].user_id.as_str(), "c");
         assert_eq!(sent[1].target, NotifyTarget::Dm);
     }
+
+    #[tokio::test]
+    async fn run_briefing_now_deliver_uses_same_route_as_test_delivery() {
+        use yuuka_core::{BotId, ToolContext, UserId};
+
+        // issue #136: runBriefingNow（deliver: true）は /api/briefing/test と同じ runner で、
+        // 呼び出した本人・Bot の設定した配信先へ送る（会話へのインライン表示ではない）。
+        let (db, _dir) = seed();
+        let notifier = Arc::new(RecordingNotifier::new(true));
+        let tools =
+            yuuka_briefing::tools_with(db.clone(), Arc::new(runner(db, &notifier))).expect("tools");
+        let run = tools
+            .iter()
+            .find(|t| t.declaration().name.as_str() == "runBriefingNow")
+            .expect("runBriefingNow");
+        let ctx = ToolContext::new(BotId::new("bot1"), UserId::new("a"));
+
+        let out = run
+            .call(&ctx, serde_json::json!({"deliver": true}))
+            .await
+            .expect("call");
+
+        assert_eq!(out.payload["success"], true);
+        assert!(out.parts.is_empty());
+        let sent = notifier.sent.lock().unwrap();
+        assert_eq!(sent.len(), 1);
+        assert_eq!(sent[0].user_id.as_str(), "a");
+        assert_eq!(sent[0].bot_id.as_str(), "bot1");
+        assert_eq!(sent[0].target, NotifyTarget::Channel("chan-a1".to_owned()));
+        assert!(sent[0].embeds[0]
+            .title
+            .as_deref()
+            .is_some_and(|title| title.contains("今日の朝報です")));
+    }
 }
