@@ -3738,6 +3738,8 @@ dependencies = [
  "serde_json",
  "tokio",
  "tower",
+ "tracing",
+ "yuuka-browser",
  "yuuka-core",
  "yuuka-db",
  "yuuka-types",

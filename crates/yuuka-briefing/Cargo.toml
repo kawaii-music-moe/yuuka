@@ -12,12 +12,14 @@ yuuka-core.workspace = true
 yuuka-db.workspace = true
 yuuka-types.workspace = true
 yuuka-web.workspace = true
+yuuka-browser.workspace = true       # RSS 取得直前の SSRF 検査（assert_safe_outbound_url・DNS 解決先を含む）
 axum.workspace = true
 rusqlite.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 async-trait.workspace = true
 reqwest = { workspace = true }       # runBriefingNow の天気（Open-Meteo）/ RSS 取得
+tracing.workspace = true             # RSS のリダイレクト拒否などを記録
 
 [dev-dependencies]
 tokio.workspace = true
