@@ -334,6 +334,9 @@ async fn run() -> Result<(), String> {
         rate_limiter: Arc::new(InMemoryRateLimiter::new(db.clone())),
     }));
 
+    // schedule ルータ: 管理画面からの登録・削除もエージェントと同じく Google カレンダーへ反映する（#127）。
+    let schedule_routes = yuuka_schedule::routes_with_calendar(Some(google_events.clone()));
+
     // Webhook ルータ（シークレット暗号化に crypto を注入・受信の実処理は未配線のため Null プロセッサへ縮退）。
     let webhook_routes = yuuka_webhook::routes_with(
         crypto.clone(),
@@ -425,6 +428,7 @@ async fn run() -> Result<(), String> {
         mcp_routes,
         integrated_routes,
         finance_routes,
+        schedule_routes,
         bot_management_routes,
         client_api_routes,
         addr,
@@ -805,6 +809,8 @@ struct WebService {
     integrated_routes: Router<AppState>,
     /// finance ルータ（`ReceiptParser` を `Extension` で内包済み・`/api/expenses/*`・upload-receipt live）。
     finance_routes: Router<AppState>,
+    /// schedule ルータ（予定の Google 同期先を `Extension` で内包済み・`/api/schedules*`）。
+    schedule_routes: Router<AppState>,
     /// Bot 管理ルータ（`BotViewRuntime`/crypto を `Extension` で内包済み・`/api/bots*`）。
     bot_management_routes: Router<AppState>,
     /// PWA クライアント API ルータ（`ChatEngine`/`RateLimiter` を `Extension` で内包済み・
@@ -836,6 +842,7 @@ impl SupervisedService for WebService {
             self.mcp_routes.clone(),
             self.integrated_routes.clone(),
             self.finance_routes.clone(),
+            self.schedule_routes.clone(),
             self.bot_management_routes.clone(),
             self.client_api_routes.clone(),
             self.dist_dir.as_deref(),

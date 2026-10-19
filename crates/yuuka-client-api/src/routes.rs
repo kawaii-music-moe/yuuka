@@ -29,10 +29,9 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, patch, post};
 use axum::{Extension, Json, Router};
 use serde::Deserialize;
-use serde_json::json;
 use tokio::time::timeout;
 use yuuka_core::datetime::{browser_local_to_db, db_to_utc_iso};
-use yuuka_core::{BotId, GuildId, ToolContext, UserId, UserScope};
+use yuuka_core::{BotId, GuildId, UserId, UserScope};
 use yuuka_discord::{
     rate_limit_message, IncomingChat, InlineMedia, RateLimiter, RichEmbed, StatusSink,
 };
@@ -44,8 +43,9 @@ use yuuka_orchestrator::{
 };
 use yuuka_persona::dto::{SavePersona, PERSONA_MAX_LENGTH};
 use yuuka_persona::repo::PersonaRepo;
-use yuuka_schedule::dto::Schedule;
+use yuuka_schedule::dto::NewSchedule;
 use yuuka_schedule::repo::ScheduleRepo;
+use yuuka_schedule::service::{AddOptions, ScheduleService};
 use yuuka_todo::dto::{NewTodo, Todo, TodoUpdate};
 use yuuka_todo::repo::TodoRepo;
 use yuuka_web::{resolve_scope, AppState, AuthenticatedUser, Db, ScopeError};
@@ -717,48 +717,6 @@ fn map_calendar_event(
     })
 }
 
-/// `addSchedule` ツールの成功応答（`{success, message, schedule}`）。
-#[derive(Debug, Deserialize)]
-struct AddScheduleOutcome {
-    success: bool,
-    #[serde(default)]
-    message: Option<String>,
-    #[serde(default)]
-    schedule: Option<Schedule>,
-}
-
-/// Discord（エージェント）と共通の `addSchedule` ツールで予定を登録し、作成された予定を返す。
-async fn call_add_schedule_tool(
-    db: &Db,
-    engine: &ChatEngine,
-    scope: &UserScope,
-    args: serde_json::Value,
-) -> Result<Schedule, ClientApiError> {
-    // Discord と同じく、エージェントに Google カレンダーが連携されていれば同期する。
-    let tools = yuuka_schedule::tools_with_calendar(db.clone(), engine.calendar_events())
-        .map_err(|e| ClientApiError::internal(format!("schedule tools: {e}")))?;
-    let tool = tools
-        .iter()
-        .find(|t| t.declaration().name.as_str() == "addSchedule")
-        .ok_or_else(|| ClientApiError::internal("addSchedule tool is not available"))?;
-    let ctx = ToolContext::new(scope.bot_id().clone(), scope.user_id().clone());
-    let outcome = tool
-        .call(&ctx, args)
-        .await
-        .map_err(|e| ClientApiError::internal(format!("addSchedule: {e}")))?;
-    let result: AddScheduleOutcome = serde_json::from_value(outcome.payload)
-        .map_err(|e| ClientApiError::internal(format!("addSchedule payload: {e}")))?;
-    match (result.success, result.schedule) {
-        (true, Some(schedule)) => Ok(schedule),
-        (true, None) => Err(ClientApiError::internal("addSchedule returned no schedule")),
-        (false, _) => Err(ClientApiError::bad_request(
-            result
-                .message
-                .unwrap_or_else(|| "addSchedule failed".to_owned()),
-        )),
-    }
-}
-
 /// PWA のカレンダー画面からの予定追加。日時はブラウザのローカル暦（`YYYY-MM-DDTHH:MM`）で受け、
 /// 一覧（[`calendar_events`]）と同じローカル暦文字列で `schedules` に保存する。
 async fn calendar_add(
@@ -789,15 +747,21 @@ async fn calendar_add(
             "endsAt must not be before startsAt",
         ));
     }
-    // 保存は Discord（エージェント）と同じ `addSchedule` ツールに任せ、登録経路を 1 本にする
-    // （リマインド既定・今後の Google カレンダー同期などもツール側の挙動がそのまま効く）。
-    let args = json!({
-        "title": title,
-        "start_at": start_at,
-        "end_at": end_at,
-        "description": body.description.filter(|s| !s.trim().is_empty()),
-    });
-    let created = call_add_schedule_tool(&db, &engine, &scope, args).await?;
+    // 保存は Discord（エージェント）・管理画面と同じ予定サービスに任せ、登録経路を 1 本にする
+    // （リマインド既定・Google カレンダー同期も同じ挙動になる・issue #127）。
+    let new = NewSchedule {
+        title,
+        start_at,
+        end_at,
+        remind_before_minutes: None,
+        description: body
+            .description
+            .map(|s| s.trim().to_owned())
+            .filter(|s| !s.is_empty()),
+    };
+    let (created, _sync) = ScheduleService::new(db, engine.calendar_events())
+        .add(&scope, new, AddOptions::default())
+        .await?;
     let event = map_calendar_event(
         created.id,
         created.title,
@@ -805,7 +769,7 @@ async fn calendar_add(
         created.end_at.as_deref(),
         None,
     )
-    .ok_or_else(|| ClientApiError::internal("addSchedule stored an unparsable start_at"))?;
+    .ok_or_else(|| ClientApiError::internal("stored schedule has an unparsable start_at"))?;
     Ok((StatusCode::CREATED, Json(event)))
 }
 

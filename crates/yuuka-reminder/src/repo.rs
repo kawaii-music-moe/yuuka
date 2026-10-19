@@ -12,6 +12,7 @@ use yuuka_db::{map_sqlite, ReadPool, WriterHandle};
 use yuuka_web::Db;
 
 use crate::dto::{NewReminder, Reminder};
+use crate::notify_target::UserNotifyTarget;
 
 /// 返却列（クリーンビュー・内部列 user_id/bot_id は含めない）。
 const REMINDER_COLUMNS: &str = "id, message, trigger_at, repeat_rule, target_type, target_id, \
@@ -103,13 +104,16 @@ impl<'a> ReminderRepo<'a> {
 
     /// リマインドを作成し、作成後の行を返す。
     ///
-    /// `target_type` 未指定は `"dm"`、`source` は `"manual"` 固定（Web UI 由来）。
+    /// `target_type` が `"dm"`/`"channel"` でなければ（未指定含む）ユーザー設定の既定送信先
+    /// （users.notify_target_*）を保存する。`target_id` は明示値を優先し、無ければ既定送信先の ID
+    /// （現行 `reminderFunctions.ts` / `reminderRoutes.ts` の送信先解決）。`source` は `"manual"` 固定。
     /// trigger_at は [`yuuka_core::datetime::input_to_db_local`] で DB 形式へ正規化する（**B4**: Node
     /// `reminderRepo.add` と同位置。LLM/Web の `T` 区切り ISO を空白区切りへ揃え cron の字句比較を
-    /// 正す）。cron 検証・既定送信先解決は deferred。過去日時の保護は addReminder ツール側で行う。
+    /// 正す）。
+    /// cron 検証と過去日時の保護は addReminder ツール側で行う。
     ///
     /// # Errors
-    /// 挿入失敗・作成後の取得失敗時 [`DbError`]。
+    /// 既定送信先の取得・挿入・作成後の取得失敗時 [`DbError`]。
     pub async fn add(&self, scope: &UserScope, input: NewReminder) -> Result<Reminder, DbError> {
         let (uid, bid) = scope_keys(scope);
         // trigger_at を DB 形式へ正規化（正規化不能な想定外入力は原文維持＝非破壊）。
@@ -118,9 +122,13 @@ impl<'a> ReminderRepo<'a> {
         let id = self
             .writer
             .transaction(move |tx| {
-                let target_type = match input.target_type.as_deref() {
-                    Some("channel") => "channel",
-                    _ => "dm",
+                let (target_type, target_id) = match input.target_type.as_deref() {
+                    Some("channel") => ("channel", input.target_id),
+                    Some("dm") => ("dm", input.target_id),
+                    _ => match crate::notify_target::query(tx, &uid)? {
+                        UserNotifyTarget::Channel(id) => ("channel", input.target_id.or(Some(id))),
+                        UserNotifyTarget::Dm => ("dm", input.target_id),
+                    },
                 };
                 tx.execute(
                     "INSERT INTO reminders \
@@ -135,7 +143,7 @@ impl<'a> ReminderRepo<'a> {
                         trigger_at,
                         input.repeat_rule,
                         target_type,
-                        input.target_id,
+                        target_id,
                     ],
                 )
                 .map_err(map_sqlite)?;

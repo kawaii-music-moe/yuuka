@@ -62,6 +62,7 @@ pub fn build_app(
     mcp_routes: Router<AppState>,
     integrated_routes: Router<AppState>,
     finance_routes: Router<AppState>,
+    schedule_routes: Router<AppState>,
     bot_management_routes: Router<AppState>,
     client_api_routes: Router<AppState>,
     dist_dir: Option<&Path>,
@@ -80,7 +81,7 @@ pub fn build_app(
         .merge(integrated_routes)
         .merge(finance_routes)
         .merge(yuuka_todo::routes())
-        .merge(yuuka_schedule::routes())
+        .merge(schedule_routes)
         .merge(yuuka_timeline::routes())
         .merge(yuuka_reminder::routes())
         .merge(yuuka_personal::routes())
@@ -258,6 +259,8 @@ mod tests {
             )),
             // finance ルータ（既定 NullReceiptParser）を merge して検証する。
             yuuka_finance::routes(),
+            // schedule ルータ（Google 同期なし）を merge して検証する。
+            yuuka_schedule::routes(),
             // Bot 管理ルータ（既定 NullBotViewRuntime・crypto なし）を merge して検証する。
             yuuka_orchestrator::bot_management_routes(),
             // client-api ルータ（fake ChatEngine・InMemoryRateLimiter）。上のコメント参照。

@@ -9,11 +9,8 @@
 //! system prompt が参照する **bare 名**（`addReminder` 等・namespace 無し）を使う。
 //!
 //! 移植済み: addReminder / listReminders / cancelReminder（Node reminderFunctions の全 3 ツール）。
-//! 過去日時の保護（単発は拒否・繰り返しは次回時刻へ補正）は addReminder が登録前に行う。
-//! 各ツールが依存する副機能のうち repo が持たないものは deferred（repo.rs / lib.rs の deferred
-//! 記述と同一）: trigger_at の ISO/Date 正規化（`toDbDateTime`）・
-//! cron 式の厳密検証（cron-parser。ここでは todo と同じ 5 フィールドの簡易検証）・
-//! 既定送信先解決（`getUserNotifyTarget`＝userRepo 跨ぎ。未指定時は repo が `"dm"` へ）。
+//! trigger_at の ISO/Date 正規化、過去日時補正、cron 式検証、既定送信先解決を実装済み。
+//! 送信先省略時の既定送信先解決（`getUserNotifyTarget`）は repo の `add` が行う（R17）。
 
 use std::sync::Arc;
 
@@ -297,8 +294,8 @@ impl Tool for AddReminderTool {
             Err(msg) => return Ok(fail_payload(msg)),
         };
 
-        // 送信先: 明示指定のみ採用（既定送信先解決 getUserNotifyTarget は deferred。
-        // target_type 未指定時は repo が "dm" へ既定化する）。target_id は既定送信先由来のため None。
+        // 送信先: 明示指定が無ければ repo がユーザー設定の既定送信先を保存する。
+        // target_id は既定送信先由来のため None。
         let new = NewReminder {
             message,
             trigger_at,
@@ -759,7 +756,7 @@ mod tests {
         let tools = tools(db).unwrap();
         let add = find(&tools, "addReminder");
 
-        // target=channel は保持。無効値は None（repo が "dm" 既定化）。
+        // target=channel は保持。無効値は None（repo が既定送信先へ・未設定なので "dm"）。
         let out = add
             .call(
                 &ctx(),
@@ -777,6 +774,48 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(out.payload["reminder"]["target_type"], "dm");
+    }
+
+    /// R17: target 省略時はユーザー設定の既定送信先（チャンネル）を保存する。明示 dm は DM のまま。
+    #[tokio::test]
+    async fn add_without_target_saves_user_default_channel() {
+        let db = seed_db();
+        // users 表は `Db::open` のマイグレーションが作る。
+        db.writer
+            .execute(|conn| {
+                conn.execute(
+                    "INSERT INTO users \
+                       (discord_id, username, salt, notify_target_type, notify_target_id) \
+                     VALUES ('userA', 'userA', '', 'channel', 'chan-1')",
+                    [],
+                )
+                .map_err(yuuka_db::map_sqlite)?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+        let tools = tools(db).unwrap();
+        let add = find(&tools, "addReminder");
+
+        let out = add
+            .call(
+                &ctx(),
+                json!({"message": "x", "trigger_at": "2999-01-01 09:00:00"}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(out.payload["reminder"]["target_type"], "channel");
+        assert_eq!(out.payload["reminder"]["target_id"], "chan-1");
+
+        let out = add
+            .call(
+                &ctx(),
+                json!({"message": "y", "trigger_at": "2999-01-01 09:00:00", "target": "dm"}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(out.payload["reminder"]["target_type"], "dm");
+        assert!(out.payload["reminder"]["target_id"].is_null());
     }
 
     #[tokio::test]

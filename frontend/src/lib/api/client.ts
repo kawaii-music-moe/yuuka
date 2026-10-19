@@ -164,7 +164,10 @@ export const api = {
 		});
 		if (!res.ok) {
 			const data = (await res.json().catch(() => ({}))) as { message?: string };
-			throw new ApiError(res.status, data.message ?? "ダウンロードに失敗しました");
+			throw new ApiError(
+				res.status,
+				data.message ?? "ダウンロードに失敗しました",
+			);
 		}
 		const disposition = res.headers.get("Content-Disposition");
 		const filename = disposition?.match(/filename="([^"]+)"/)?.[1] ?? null;

@@ -200,7 +200,6 @@ async function unsuspendBot(bot: AdminBotView) {
 	}
 }
 
-
 // ── ペルソナ: 非公開化 / 削除 ──
 async function unpublishPersona(p: PublicPersonaView) {
 	const ok = await confirmDialog({
