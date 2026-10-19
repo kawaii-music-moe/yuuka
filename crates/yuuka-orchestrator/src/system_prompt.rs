@@ -1,14 +1,13 @@
 //! システムプロンプト組立（Node `gemini.ts` `buildSystemInstruction` パリティ・§3.1.2）。
 //!
 //! 構成順: ペルソナ → 情報保存ルール → 承認フロー → リッチ返信ルール → 音声ルール → ファクトチェック →
-//! （検索スキル：縮退シーム）→ 機能一覧 → システムルール（現在日時・未実行の完了報告禁止）→
-//! （コンテキストノート／カレンダー：縮退シーム）。空セクションは除去して `\n` 結合する。
+//! 検索スキル → 機能一覧 → システムルール（現在日時・未実行の完了報告禁止）。空セクションは除去して
+//! `\n` 結合する。カレンダー情報・コンテキストノート・シナプス想起は engine 層で末尾へ追記する。
 //!
-//! **縮退シーム（現状は空で移植・remaining-work.md P2-E）**: 検索スキル（`docs/skills/search_skills.md`
-//! インライン・Docker に docs/ 非同梱のため配線時は `include_str!` 埋込）・カレンダー情報（Google
-//! カレンダー連携）・コンテキストノート（`personal` 連携）。いずれも Node で「未設定/エンジン不在」を
-//! 第一級サポートしており、未設定ユーザーには空文字で挙動が一致する（設定済みユーザーには機能低下）。
-//! シナプス想起は engine 層で配線済み（2026-07-16・`synapse_recall` を systemInstruction 末尾へ追記）。
+//! **検索スキル（R12・#109）**: Node は実行時に `docs/skills/search_skills.md` を読み、旧 Docker イメージは
+//! `docs/` を作業ディレクトリへ同梱していたため本番でも常に注入されていた。現行イメージは成果物のみで
+//! `docs/` を同梱しないため、ビルド時に `include_str!` で埋め込む（Dockerfile の rust-builder 段で
+//! `docs/skills` を COPY する）。
 
 use chrono::{Datelike, Local, TimeZone, Timelike};
 
@@ -62,6 +61,19 @@ const VOICE_RULE: &str = "
 const FACT_CHECK: &str = "# リアルタイム情報の正確性とファクトチェック（極めて重要）
 - ユーザーから天気予報、電車の運行情報、ニュース、最新技術トレンド、または事実確認を求められた場合、不正確な推測や無根拠なデータを伝えてはいけません。
 - 異なるソース同士で情報が食い違う場合は、数値の論理的整合性を確認し、必ず最も公式で最新のデータを優先してください。不確かな情報でユーザーの予定を狂わせないよう、徹底的に検証された正確な情報を伝えること。";
+
+/// 検索クロールスキル仕様書（`docs/skills/search_skills.md`・ビルド時埋込）。
+const SEARCH_SKILLS: &str = include_str!("../../../docs/skills/search_skills.md");
+
+/// 検索スキルセクション（Node `searchSkillsSection`）。資料が空なら Node と同じく空文字。
+fn search_skills_section(skills: &str) -> String {
+    if skills.trim().is_empty() {
+        return String::new();
+    }
+    format!(
+        "\n# 検索クロールスキル仕様書（インデックス）\n外部検索（searchWeb）や情報収集を行う際は、以下のスキル仕様書に合致するカテゴリがあれば、その推奨ドメイン・推奨クエリパターン・巡回（fetchDynamicPage）フローに従って調査を組み立ててください。\n\n{skills}"
+    )
+}
 
 const CAPABILITIES: &str = "# あなたの機能（Discordアシスタントボットとしてのツール）
 あなたはDiscord上の優秀なアシスタントボットとして以下の機能を持っています。ツールを適切に使い、論理的かつ効率的にユーザーをサポートしてください。
@@ -156,15 +168,17 @@ pub fn build_system_instruction(
         RICH_REPLY_OFF
     };
     let rules = system_rules(date_time_str);
+    let search_skills = search_skills_section(SEARCH_SKILLS);
 
     // Node の parts 配列（空要素は filter 除去）を `\n` 結合する。
-    let parts: [&str; 8] = [
+    let parts: [&str; 9] = [
         &persona_section,
         MEMORY_RULE,
         CONFIRMATION_RULE,
         rich,
         VOICE_RULE,
         FACT_CHECK,
+        &search_skills,
         CAPABILITIES,
         &rules,
     ];
@@ -227,7 +241,7 @@ pub fn build_system_bot_instruction(rich_reply: bool, date_time_str: &str) -> St
 mod tests {
     use super::{
         build_system_bot_instruction, build_system_instruction, format_date_time_ja,
-        DEFAULT_PERSONA,
+        search_skills_section, CAPABILITIES, DEFAULT_PERSONA, FACT_CHECK, SEARCH_SKILLS,
     };
     use chrono::{Local, TimeZone};
 
@@ -261,6 +275,38 @@ mod tests {
         assert!(!sys.contains(DEFAULT_PERSONA));
         assert!(sys.contains("リッチ返信は無効"));
         assert!(!sys.contains("リッチ返信の使い分け"));
+    }
+
+    /// R12（#109）: 検索スキル資料がファクトチェックと機能一覧の間に注入される（Node `searchSkillsSection`）。
+    #[test]
+    fn injects_search_skills_between_fact_check_and_capabilities() {
+        assert!(SEARCH_SKILLS.contains("検索スキル・インデックス"));
+        for sys in [
+            build_system_instruction(None, true, "d"),
+            build_system_instruction(Some("ペルソナ"), false, "d"),
+        ] {
+            let heading = sys
+                .find("# 検索クロールスキル仕様書（インデックス）")
+                .expect("search skills heading");
+            let body = sys.find(SEARCH_SKILLS).expect("search skills body");
+            let fact = sys.find(FACT_CHECK).expect("fact check");
+            let caps = sys.find(CAPABILITIES).expect("capabilities");
+            assert!(fact < heading && heading < body && body < caps);
+        }
+        // 現行に存在しないツール（Node 時代の readCodeFile）を呼ぶよう指示しない。
+        assert!(!SEARCH_SKILLS.contains("readCodeFile"));
+    }
+
+    #[test]
+    fn search_skills_section_is_empty_for_empty_document() {
+        assert_eq!(search_skills_section(""), "");
+        assert_eq!(search_skills_section(" \n"), "");
+    }
+
+    #[test]
+    fn system_bot_instruction_excludes_search_skills() {
+        let sys = build_system_bot_instruction(true, "d");
+        assert!(!sys.contains("検索クロールスキル仕様書"));
     }
 
     #[test]
