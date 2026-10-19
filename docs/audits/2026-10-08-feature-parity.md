@@ -136,3 +136,9 @@
 5. 残る生成補助・運用設定・計測を戻し、D02/D03/D04/D06/D07の共通化で経路間の再発を抑える。
 
 本調査では機能修正・削除・デプロイは行っていない。対応表とこの報告書を追加した。
+
+## 対応状況
+
+| ID | 状態 | 内容 |
+|---|---|---|
+| R19 / D04 | 対応済み（#116 / #128） | cron 式ユーティリティを `yuuka-services` から循環依存のない `crates/yuuka-core/src/cron_util.rs` へ移し、登録時検証 `cron_util::is_valid` を追加した。ToDo・支払い予定・リマインド・朝報/日報週報設定のツールと HTTP（`POST /api/tasks/add`・`POST /api/expenses/plans/add`・`POST /api/reminders/add` を含む）、Playbook スケジュールのWeb登録は、実行側と同じ croner parser で検証する（HTTP の不正式は 400、空の repeat_rule は単発扱い）。範囲外の値・発火日が実在しない式（例：`0 0 30 2 *`）は保存しない。Playbook は Node と同じく 400「無効なcron式です。」を返す。各ドメインに 5 フィールドだが不正な式の回帰テストを追加した。 |

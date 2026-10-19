@@ -17,6 +17,7 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 async-trait.workspace = true
 chrono.workspace = true              # 操作履歴レコーダーの記録時刻（Node `new Date().toISOString()`）
+croner.workspace = true              # cron 式の parse・次回発火（登録時検証と実行時判定を同じ実装に揃える）
 
 [dev-dependencies]
 tempfile = "3"

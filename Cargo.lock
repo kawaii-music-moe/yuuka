@@ -3829,6 +3829,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "chrono",
+ "croner",
  "secrecy",
  "serde",
  "serde_json",
@@ -4107,7 +4108,6 @@ dependencies = [
  "async-trait",
  "axum",
  "chrono",
- "croner",
  "rusqlite",
  "serde",
  "serde_json",
@@ -4159,7 +4159,6 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "chrono",
- "croner",
  "rusqlite",
  "tempfile",
  "thiserror",

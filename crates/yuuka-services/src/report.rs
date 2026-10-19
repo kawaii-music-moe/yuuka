@@ -35,9 +35,9 @@ use yuuka_db::map_sqlite;
 use yuuka_web::Db;
 
 use crate::context::ServiceContext;
-use crate::cron_util;
 use crate::notifier::{Notification, NotifyTarget};
 use crate::schedule::{CronService, Schedule};
+use yuuka_core::cron_util;
 
 /// 日報・週報定時配信サービス。
 pub struct ReportService;

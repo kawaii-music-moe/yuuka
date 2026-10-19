@@ -7,8 +7,8 @@
 //! スコープ = コア CRUD（list/save/delete、name キーの upsert）＋定期実行スケジュール
 //! （schedules の CRUD/toggle）と実行履歴（runs）＋ cron 横断走査 [`cron`]（全ユーザーの有効
 //! スケジュール列挙・run 記録・last_run 更新）。cron 式の due 判定と `executePlaybook` 本体は
-//! croner と会話エンジンを持つ `yuuka-services` の `PlaybookScheduleService` が担う（本 crate は
-//! croner 非依存を保つ）。route 層の cron 式の妥当性検証は依然 deferred（後述の routes.rs 参照）。
+//! 会話エンジンを持つ `yuuka-services` の `PlaybookScheduleService` が担う（本 crate は
+//! 会話エンジン非依存を保つ）。route 層の cron 式の妥当性検証は `yuuka_core::cron_util::is_valid`（実行側と同じ parser）。
 
 pub mod cron;
 pub mod dto;
@@ -619,6 +619,21 @@ mod tests {
             j["message"],
             serde_json::json!("マクロ「ghost」が見つかりません。")
         );
+    }
+
+    #[tokio::test]
+    async fn route_schedule_save_invalid_cron_400() {
+        // 5 フィールドでも実行時 parser が解釈できない式は保存させない（playbook 不在より先に判定）。
+        let app = app().await;
+        let resp = post_json(
+            &app,
+            "/api/playbooks/schedules/save",
+            r#"{"playbook_name":"ghost","cron_expression":"99 99 * * *"}"#,
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let j = body_json(resp).await;
+        assert_eq!(j["message"], serde_json::json!("無効なcron式です。"));
     }
 
     #[tokio::test]
