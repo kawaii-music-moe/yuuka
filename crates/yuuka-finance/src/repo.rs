@@ -4,7 +4,7 @@
 //! 「user_id/bot_id 無しクエリ」を型で不能化する。読みは [`ReadPool`]、書きは
 //! [`WriterHandle`]（BEGIN IMMEDIATE）へ送る。金銭データのためスコープを厳守する。
 
-use rusqlite::{params, Row};
+use rusqlite::{params, OptionalExtension, Row};
 use yuuka_core::scope::ScopedRepo;
 use yuuka_core::{DbError, UserScope};
 use yuuka_db::{map_sqlite, ReadPool, WriterHandle};
@@ -24,6 +24,24 @@ const PLAN_COLUMNS: &str = "id, title, amount, category, memo, due_date, repeat_
 
 /// 一覧のデフォルト取得件数（Node financeRoutes: listRecentExpenses(.., 30)）。
 const DEFAULT_LIMIT: i64 = 30;
+
+/// 支払い予定の消込結果（[`ExpenseRepo::settle_plan`] / [`ExpenseRepo::settle_plan_with_expense`]）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SettledPlan {
+    /// 消込に使った支出記録の id（新規に記帳した支出、または指定した記帳済みの支出）。
+    pub expense_id: i64,
+    /// 自動完了した紐付き ToDo の件数。
+    pub completed_todos: i64,
+    /// 止めた紐付きリマインドの id（pending の紐付きリマインドが無ければ `None`）。
+    pub cancelled_reminder_id: Option<i64>,
+}
+
+/// 支払い予定のキャンセル結果（[`ExpenseRepo::cancel_plan`]）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CancelledPlan {
+    /// 止めた紐付きリマインドの id（pending の紐付きリマインドが無ければ `None`）。
+    pub cancelled_reminder_id: Option<i64>,
+}
 
 /// finance リポジトリ（DB ハンドルを借用する軽量ラッパ・per-request 構築）。
 pub struct ExpenseRepo<'a> {
@@ -603,13 +621,20 @@ impl<'a> ExpenseRepo<'a> {
             .ok_or_else(|| DbError::Operation("inserted planned_payment not found".to_owned()))
     }
 
-    /// 支払い予定をキャンセルする（pending のみ対象・キャンセルできたら `true`）。
+    /// 支払い予定をキャンセルする（pending のみ対象）。
     ///
-    /// Node `cancelPlannedPayment` parity（`plans/delete` は成否 bool だけを返す）。
+    /// Node `cancelPlannedPayment` parity。同じトランザクションで紐付く期日前リマインドも止める
+    /// （R15・[`cancel_linked_reminder`]）。`plans/delete` は成否 bool だけを返す。
+    ///
+    /// 返り値: キャンセルできたら [`CancelledPlan`]、pending の予定が無ければ `None`。
     ///
     /// # Errors
     /// 更新失敗時 [`DbError`]。
-    pub async fn cancel_plan(&self, scope: &UserScope, id: i64) -> Result<bool, DbError> {
+    pub async fn cancel_plan(
+        &self,
+        scope: &UserScope,
+        id: i64,
+    ) -> Result<Option<CancelledPlan>, DbError> {
         let (uid, bid) = scope_keys(scope);
         self.writer
             .transaction(move |tx| {
@@ -621,7 +646,13 @@ impl<'a> ExpenseRepo<'a> {
                         params![uid, bid, id],
                     )
                     .map_err(map_sqlite)?;
-                Ok(n > 0)
+                if n == 0 {
+                    return Ok(None);
+                }
+                let cancelled_reminder_id = cancel_linked_reminder(tx, &uid, &bid, id)?;
+                Ok(Some(CancelledPlan {
+                    cancelled_reminder_id,
+                }))
             })
             .await
     }
@@ -784,11 +815,14 @@ impl<'a> ExpenseRepo<'a> {
     /// Node `plans/pay` の手順を1つの writer トランザクションで再現する:
     /// (1) 実支払いを Expense（source=manual・type=expense）として記録、
     /// (2) 予定を `status='settled'` + `settled_expense_id` へ更新、
-    /// (3) 紐付く未完了 ToDo（`linked_payment_id` = 予定 id・status='open'）を `done` へ自動完了。
+    /// (3) 紐付く未完了 ToDo（`linked_payment_id` = 予定 id・status='open'）を `done` へ自動完了、
+    /// (4) 紐付く期日前リマインドを止める（R15・[`cancel_linked_reminder`]）。
+    /// (4) は Node では LLM 経路（`settlePlannedPayment`）だけが行っていたが、支払済みの予定の
+    /// 通知が残らないよう HTTP 経路でも行う。
     /// Node は繰り返し予定の次回自動生成を **HTTP 経路では行わない**（cron/LLM 経路のみ）ため、
     /// ここでも `advance_recurring` 相当は行わない（厳密 parity）。
     ///
-    /// 返り値: 記録した Expense の id と、自動完了した ToDo 件数。
+    /// 返り値: 記録した Expense の id・自動完了した ToDo 件数・止めたリマインド（[`SettledPlan`]）。
     ///
     /// # Errors
     /// 各更新失敗時 [`DbError`]。
@@ -796,7 +830,7 @@ impl<'a> ExpenseRepo<'a> {
         &self,
         scope: &UserScope,
         plan: &PlannedPayment,
-    ) -> Result<(i64, i64), DbError> {
+    ) -> Result<SettledPlan, DbError> {
         let (uid, bid) = scope_keys(scope);
         let plan_id = plan.id;
         let amount = plan.amount;
@@ -828,9 +862,16 @@ impl<'a> ExpenseRepo<'a> {
                 .map_err(map_sqlite)?;
 
                 // (3) 紐付く未完了 ToDo を自動完了（§3.4.3 手順4）。件数を返す。
-                let completed = complete_linked_todos(tx, &uid, &bid, plan_id)?;
+                let completed_todos = complete_linked_todos(tx, &uid, &bid, plan_id)?;
 
-                Ok((expense_id, completed))
+                // (4) 支払済みになったので紐付く期日前リマインドを止める（R15）。
+                let cancelled_reminder_id = cancel_linked_reminder(tx, &uid, &bid, plan_id)?;
+
+                Ok(SettledPlan {
+                    expense_id,
+                    completed_todos,
+                    cancelled_reminder_id,
+                })
             })
             .await
     }
@@ -841,12 +882,13 @@ impl<'a> ExpenseRepo<'a> {
     /// [`Self::settle_plan`] と違い Expense を新規に記録しない（レシート等で先に記帳した支払いを
     /// 消込んでも二重計上にならない）。1 つの writer トランザクションで:
     /// (1) 予定を `status='settled'` + `settled_expense_id`=`expense_id` へ更新、
-    /// (2) 紐付く未完了 ToDo を `done` へ自動完了。
+    /// (2) 紐付く未完了 ToDo を `done` へ自動完了、(3) 紐付く期日前リマインドを止める（R15）。
     /// (1) は予定が pending で、かつ `expense_id` がスコープ内の `type='expense'` の記録である
     /// 場合だけ行う。支出の存在・種別は tool 層が先に確かめて個別のメッセージを返すが、その後の
     /// 削除・別経路の消込と競合しても誤って紐付けないよう、更新条件にも含める。
     ///
-    /// 返り値: 消込できたら自動完了した ToDo 件数、条件を満たさず何も変更しなかったら `None`。
+    /// 返り値: 消込できたら [`SettledPlan`]（`expense_id` は指定した支出）、条件を満たさず何も
+    /// 変更しなかったら `None`。
     ///
     /// # Errors
     /// 各更新失敗時 [`DbError`]。
@@ -855,7 +897,7 @@ impl<'a> ExpenseRepo<'a> {
         scope: &UserScope,
         plan_id: i64,
         expense_id: i64,
-    ) -> Result<Option<i64>, DbError> {
+    ) -> Result<Option<SettledPlan>, DbError> {
         let (uid, bid) = scope_keys(scope);
         self.writer
             .transaction(move |tx| {
@@ -877,7 +919,16 @@ impl<'a> ExpenseRepo<'a> {
                 }
 
                 // (2) 紐付く未完了 ToDo を自動完了（§3.4.3 手順4）。
-                complete_linked_todos(tx, &uid, &bid, plan_id).map(Some)
+                let completed_todos = complete_linked_todos(tx, &uid, &bid, plan_id)?;
+
+                // (3) 支払済みになったので紐付く期日前リマインドを止める（R15）。
+                let cancelled_reminder_id = cancel_linked_reminder(tx, &uid, &bid, plan_id)?;
+
+                Ok(Some(SettledPlan {
+                    expense_id,
+                    completed_todos,
+                    cancelled_reminder_id,
+                }))
             })
             .await
     }
@@ -901,6 +952,39 @@ fn complete_linked_todos(
         )
         .map_err(map_sqlite)?;
     Ok(i64::try_from(completed).unwrap_or(i64::MAX))
+}
+
+/// 支払い予定に紐付く期日前リマインド（`planned_payments.linked_reminder_id`）が pending なら
+/// `cancelled` にして通知を止め、その id を返す（消込・キャンセル時・R15・Node
+/// `reminderRepo.cancelReminder` 相当）。紐付きが無い、または送信済み・取消済み・削除済みなら
+/// 何もせず `None`。リマインドもスコープ（user_id/bot_id）で絞る。
+fn cancel_linked_reminder(
+    tx: &rusqlite::Transaction,
+    uid: &str,
+    bid: &str,
+    plan_id: i64,
+) -> Result<Option<i64>, DbError> {
+    let reminder_id: Option<i64> = tx
+        .query_row(
+            "SELECT linked_reminder_id FROM planned_payments \
+             WHERE user_id = ?1 AND bot_id = ?2 AND id = ?3",
+            params![uid, bid, plan_id],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(map_sqlite)?
+        .flatten();
+    let Some(reminder_id) = reminder_id else {
+        return Ok(None);
+    };
+    let n = tx
+        .execute(
+            "UPDATE reminders SET status = 'cancelled' \
+             WHERE id = ?1 AND user_id = ?2 AND bot_id = ?3 AND status = 'pending'",
+            params![reminder_id, uid, bid],
+        )
+        .map_err(map_sqlite)?;
+    Ok((n > 0).then_some(reminder_id))
 }
 
 /// スコープから所有 String キーを取り出す（`spawn_blocking` の `'static` クロージャ用）。
