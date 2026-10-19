@@ -10,6 +10,7 @@
 use std::future::Future;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
+use std::time::Duration;
 
 use secrecy::{ExposeSecret, SecretString};
 use twilight_gateway::{
@@ -25,8 +26,11 @@ use crate::interaction::{
     button_custom_id, decide, invoker_id, parse_custom_id, respond, InteractionDeps,
 };
 use crate::message_flow::{handle_message, FlowDeps, RuntimeBot};
-use crate::ports::BotStatus;
+use crate::ports::{BotDirectory, BotStatus};
 use crate::presence::build_presence;
+
+/// プロフィール定期同期の間隔（旧 Node `startProfileSyncTimer` の 1 時間ごと・R20）。
+const PROFILE_SYNC_INTERVAL: Duration = Duration::from_secs(60 * 60);
 
 /// テナント（1 ボットトークン）の起動設定。
 pub struct TenantConfig {
@@ -113,6 +117,14 @@ pub async fn run_tenant(
 
     let mut runtime: Option<RuntimeBot> = None;
     tokio::pin!(cancel);
+    // プロフィール定期同期（R20）。poll ループと並走させ、ループを抜ける（テナント停止）と drop されて止まる。
+    let profile_sync = profile_sync_ticker(
+        &cfg.bot_id,
+        flow.directory.as_ref(),
+        status,
+        PROFILE_SYNC_INTERVAL,
+    );
+    tokio::pin!(profile_sync);
 
     loop {
         tokio::select! {
@@ -120,6 +132,8 @@ pub async fn run_tenant(
                 tracing::info!(bot_id = %cfg.bot_id, "停止協調: テナントを graceful に閉じます");
                 break;
             }
+            // 完了しない future（同期は内部で行う）。
+            () = &mut profile_sync => {}
             item = shard.next_event(EventTypeFlags::all()) => {
                 let Some(item) = item else {
                     tracing::warn!(bot_id = %cfg.bot_id, "shard ストリーム終了");
@@ -139,13 +153,15 @@ pub async fn run_tenant(
                         // sender は同期に取り出す（`&Shard` を await 跨ぎで保持しない＝Shard は
                         // 非 Sync なので、保持すると future が !Send になり supervisor に載らない）。
                         let sender = shard.sender();
-                        runtime = Some(on_ready(cfg, &flow, sender, &ready.user).await);
-                        status.set_bot_user(GatewayBotUser {
-                            id: ready.user.id.get().to_string(),
-                            username: ready.user.name.clone(),
-                            avatar_url: current_user_avatar_url(&ready.user),
-                        });
+                        let bot_user = gateway_bot_user(&ready.user);
+                        runtime = Some(on_ready(cfg, &flow, sender, &ready.user, &bot_user).await);
+                        status.set_bot_user(bot_user);
                         status.set_connected(true);
+                    }
+                    Event::UserUpdate(update) => {
+                        // 稼働中のプロフィール変更（旧 `client.user` の自動更新相当）。DB への反映は
+                        // 定期同期に任せる（旧 Node と同じ）。
+                        status.set_bot_user(gateway_bot_user(&update));
                     }
                     Event::MessageCreate(msg) => {
                         if let Some(rt) = runtime.clone() {
@@ -269,19 +285,12 @@ async fn on_ready(
     flow: &FlowDeps,
     sender: MessageSender,
     user: &CurrentUser,
+    bot_user: &GatewayBotUser,
 ) -> RuntimeBot {
     let bot_user_id = user.id;
 
     // Discord プロフィールを DB へ同期。
-    let avatar = current_user_avatar_url(user);
-    flow.directory
-        .update_profile(
-            &cfg.bot_id,
-            &user.name,
-            &avatar,
-            &bot_user_id.get().to_string(),
-        )
-        .await;
+    sync_profile(flow.directory.as_ref(), &cfg.bot_id, bot_user).await;
 
     // 起動時は idle プレゼンス（現行 `setBotStatus(client, "idle")`）。
     if let Ok(presence) = build_presence(BotStatus::Idle) {
@@ -294,6 +303,48 @@ async fn on_ready(
         bot_user_id,
         sender,
         own_roles: std::sync::Arc::default(),
+    }
+}
+
+/// Discord プロフィール（名前・アバター・user id）を DB へ同期する（READY 時と定期同期で共用）。
+async fn sync_profile(directory: &dyn BotDirectory, bot_id: &BotId, user: &GatewayBotUser) {
+    directory
+        .update_profile(bot_id, &user.username, &user.avatar_url, &user.id)
+        .await;
+}
+
+/// 接続中の Bot プロフィールを `period` ごとに DB へ同期し続ける（旧 `syncAllBotProfiles` の
+/// 1 時間タイマー相当・R20）。完了しない future で、呼び出し側が drop すると止まる。
+///
+/// 同期する値は READY / USER_UPDATE で更新される `status` の最終値（旧 `client.user` 相当）。
+/// 未接続（READY 前・再接続待ち）の回は、旧 `client.readyAt` 判定と同じく飛ばす。
+async fn profile_sync_ticker(
+    bot_id: &BotId,
+    directory: &dyn BotDirectory,
+    status: &TenantStatus,
+    period: Duration,
+) {
+    // 初回は READY 時に同期済みなので 1 周期後から。
+    let mut interval = tokio::time::interval_at(tokio::time::Instant::now() + period, period);
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        interval.tick().await;
+        if !status.connected() {
+            continue;
+        }
+        if let Some(user) = status.bot_user() {
+            sync_profile(directory, bot_id, &user).await;
+            tracing::debug!(bot_id = %bot_id, user = %user.username, "プロフィール定期同期");
+        }
+    }
+}
+
+/// CurrentUser から web 層参照・DB 同期用の Bot ユーザー情報を作る。
+fn gateway_bot_user(user: &CurrentUser) -> GatewayBotUser {
+    GatewayBotUser {
+        id: user.id.get().to_string(),
+        username: user.name.clone(),
+        avatar_url: current_user_avatar_url(user),
     }
 }
 
@@ -387,5 +438,185 @@ fn is_fatal_close(frame: Option<&CloseFrame<'_>>) -> bool {
         Ok(code) => !code.can_reconnect(),
         // 未知コードは再接続可能側に倒す（無限再起動を避けるより取りこぼしを避ける）。
         Err(_) => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use async_trait::async_trait;
+    use secrecy::SecretString;
+    use yuuka_core::{GuildId, UserId};
+
+    use super::*;
+    use crate::ports::BotRecord;
+
+    const PERIOD: Duration = PROFILE_SYNC_INTERVAL;
+
+    /// `update_profile` の呼び出しだけを記録する directory。
+    #[derive(Default)]
+    struct RecordingDirectory {
+        profiles: Mutex<Vec<(String, String, String, String)>>,
+    }
+
+    impl RecordingDirectory {
+        fn synced(&self) -> Vec<(String, String, String, String)> {
+            self.profiles.lock().unwrap().clone()
+        }
+    }
+
+    #[async_trait]
+    impl BotDirectory for RecordingDirectory {
+        async fn get_bot(&self, _b: &BotId) -> Option<BotRecord> {
+            None
+        }
+        async fn list_all_bots(&self) -> Vec<BotRecord> {
+            Vec::new()
+        }
+        async fn list_bots_for_user(&self, _u: &UserId) -> Vec<BotId> {
+            Vec::new()
+        }
+        async fn decrypt_token(&self, _b: &BotId) -> Option<SecretString> {
+            None
+        }
+        async fn update_profile(&self, b: &BotId, u: &str, a: &str, d: &str) {
+            self.profiles.lock().unwrap().push((
+                b.to_string(),
+                u.to_owned(),
+                a.to_owned(),
+                d.to_owned(),
+            ));
+        }
+        async fn is_registered_user(&self, _u: &UserId) -> bool {
+            false
+        }
+        async fn is_bot_member(&self, _b: &BotId, _g: &GuildId, _u: &UserId) -> bool {
+            false
+        }
+        async fn is_guild_allowed(&self, _b: &BotId, _g: &GuildId) -> bool {
+            false
+        }
+        async fn is_channel_enabled(&self, _b: &BotId, _g: &GuildId, _c: &str) -> bool {
+            false
+        }
+        async fn is_channel_muted(&self, _b: &BotId, _g: &GuildId, _c: &str) -> bool {
+            false
+        }
+        async fn is_any_role_allowed(&self, _b: &BotId, _g: &GuildId, _r: &[String]) -> bool {
+            false
+        }
+    }
+
+    fn bot_user(name: &str) -> GatewayBotUser {
+        GatewayBotUser {
+            id: "42".to_owned(),
+            username: name.to_owned(),
+            avatar_url: format!("https://cdn.example/{name}.png"),
+        }
+    }
+
+    fn spawn_ticker(
+        dir: &Arc<RecordingDirectory>,
+        status: &Arc<TenantStatus>,
+    ) -> tokio::task::JoinHandle<()> {
+        let dir = dir.clone();
+        let status = status.clone();
+        tokio::spawn(async move {
+            profile_sync_ticker(&BotId::new("bot-1"), dir.as_ref(), &status, PERIOD).await;
+        })
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn profile_sync_runs_hourly_with_latest_user() {
+        let dir = Arc::new(RecordingDirectory::default());
+        let status = Arc::new(TenantStatus::default());
+        status.set_bot_user(bot_user("yuuka"));
+        status.set_connected(true);
+        let ticker = spawn_ticker(&dir, &status);
+
+        // 1 時間未満では同期しない（READY 時の同期と重ねない）。
+        tokio::time::sleep(PERIOD - Duration::from_secs(60)).await;
+        assert!(dir.synced().is_empty());
+
+        // 1 時間で 1 回目。
+        tokio::time::sleep(Duration::from_secs(120)).await;
+        assert_eq!(
+            dir.synced(),
+            vec![(
+                "bot-1".to_owned(),
+                "yuuka".to_owned(),
+                "https://cdn.example/yuuka.png".to_owned(),
+                "42".to_owned(),
+            )]
+        );
+
+        // 稼働中の変更（USER_UPDATE）は次の周期で DB に反映される。
+        status.set_bot_user(bot_user("yuuka2"));
+        tokio::time::sleep(PERIOD).await;
+        let synced = dir.synced();
+        assert_eq!(synced.len(), 2);
+        assert_eq!(synced[1].1, "yuuka2");
+        assert_eq!(synced[1].2, "https://cdn.example/yuuka2.png");
+
+        ticker.abort();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn profile_sync_skips_while_disconnected() {
+        let dir = Arc::new(RecordingDirectory::default());
+        let status = Arc::new(TenantStatus::default());
+        let ticker = spawn_ticker(&dir, &status);
+
+        // READY 前（Bot ユーザー未確定）は同期しない。
+        tokio::time::sleep(PERIOD * 2 + Duration::from_secs(1)).await;
+        assert!(dir.synced().is_empty());
+
+        // 再接続待ち（最終値はあるが未接続）も同期しない。
+        status.set_bot_user(bot_user("yuuka"));
+        tokio::time::sleep(PERIOD).await;
+        assert!(dir.synced().is_empty());
+
+        // 接続が戻れば次の周期で同期する。
+        status.set_connected(true);
+        tokio::time::sleep(PERIOD).await;
+        assert_eq!(dir.synced().len(), 1);
+
+        ticker.abort();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn profile_sync_stops_with_tenant() {
+        let dir = Arc::new(RecordingDirectory::default());
+        let status = Arc::new(TenantStatus::default());
+        status.set_bot_user(bot_user("yuuka"));
+        status.set_connected(true);
+
+        // run_tenant と同じく、停止協調の select! で抜けたら ticker が drop される。
+        let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
+        let tenant = {
+            let dir = dir.clone();
+            let status = status.clone();
+            tokio::spawn(async move {
+                let bot_id = BotId::new("bot-1");
+                let ticker = profile_sync_ticker(&bot_id, dir.as_ref(), &status, PERIOD);
+                tokio::pin!(ticker);
+                tokio::pin!(stop_rx);
+                loop {
+                    tokio::select! {
+                        _ = &mut stop_rx => break,
+                        () = &mut ticker => {}
+                    }
+                }
+            })
+        };
+
+        tokio::time::sleep(PERIOD + Duration::from_secs(1)).await;
+        assert_eq!(dir.synced().len(), 1);
+
+        stop_tx.send(()).unwrap();
+        tenant.await.unwrap();
+        tokio::time::sleep(PERIOD * 3).await;
+        assert_eq!(dir.synced().len(), 1, "停止後は同期しない");
     }
 }
