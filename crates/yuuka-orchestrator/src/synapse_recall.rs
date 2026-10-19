@@ -8,21 +8,56 @@
 use std::sync::Arc;
 
 use tokio::sync::Mutex;
+use yuuka_core::config;
 use yuuka_synapse::{RecencyContext, Scope, SynapseEngine, TimeContext};
 
 use crate::synapse_repo;
 use yuuka_web::Db;
 
-// ─── Node config 既定値（src/config.ts）を逐語移植 ────────────────────────────────
+/// L2 想起のチューニング設定（Node `config.synapseRecall*`）。main が config から組み立てて
+/// [`crate::ChatEngine::with_recall_settings`] で注入する。既定は Node の既定値と同じ。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RecallSettings {
+    /// L2 想起（1st Hop KNN）の取得件数（`SYNAPSE_RECALL_K`・既定 5）。
+    pub k: usize,
+    /// recency 加算ブースト重み（`SYNAPSE_RECENCY_WEIGHT`・既定 0.15）。0 で無効。
+    pub recency_weight: f32,
+    /// recency ブーストの半減期（時間・`SYNAPSE_RECENCY_HALFLIFE_HOURS`・既定 18）。0 で無効。
+    pub recency_halflife_hours: f32,
+}
 
-/// L2 想起（1st Hop KNN）の取得件数（Node `SYNAPSE_RECALL_K` 既定 5）。
-const RECALL_K: usize = 5;
+impl Default for RecallSettings {
+    fn default() -> Self {
+        Self {
+            k: config::DEFAULT_SYNAPSE_RECALL_K,
+            recency_weight: config::DEFAULT_SYNAPSE_RECENCY_WEIGHT,
+            recency_halflife_hours: config::DEFAULT_SYNAPSE_RECENCY_HALFLIFE_HOURS,
+        }
+    }
+}
 
-/// recency 加算ブースト重み（Node `SYNAPSE_RECENCY_WEIGHT` 既定 0.15）。0 で無効。
-const RECENCY_WEIGHT: f32 = 0.15;
+impl RecallSettings {
+    /// 検証済み config から組み立てる。
+    #[must_use]
+    pub fn from_config(cfg: &config::Config) -> Self {
+        Self {
+            k: cfg.synapse_recall_k,
+            recency_weight: cfg.synapse_recency_weight,
+            recency_halflife_hours: cfg.synapse_recency_halflife_hours,
+        }
+    }
 
-/// recency ブーストの半減期（時間・Node `SYNAPSE_RECENCY_HALFLIFE_HOURS` 既定 18）。
-const RECENCY_HALFLIFE_HOURS: f32 = 18.0;
+    /// recency 加算ブーストの文脈（重み・半減期のどちらかが 0 なら `None`＝無効）。
+    fn recency_context(&self, now_epoch: i64) -> Option<RecencyContext> {
+        (self.recency_weight > 0.0 && self.recency_halflife_hours > 0.0).then_some(RecencyContext {
+            now_epoch,
+            weight: self.recency_weight,
+            halflife_secs: self.recency_halflife_hours * 3600.0,
+        })
+    }
+}
+
+// ─── Node の固定値（src/config.ts / gemini.ts）を逐語移植 ────────────────────────
 
 /// 時刻文脈の再ランキング重み（Node `SYNAPSE_TIME_BIAS_WEIGHT` = 0.1）。意味KNN後にコサインへ補正。
 const TIME_BIAS_WEIGHT: f32 = 0.1;
@@ -67,9 +102,11 @@ pub fn build_recall_query(message_text: &str, reply_chain: &[String]) -> String 
 ///
 /// エンジン想起が空・クエリが空・失敗のときは `""`（呼び出し側は systemInstruction をそのまま使う）。
 /// 想起できた場合は鮮度更新（`touch_synapses`）を best-effort で行う（失敗は無視）。
+/// 取得件数・recency ブーストは `settings`（config `SYNAPSE_*`）に従う。
 pub async fn build_recall_section(
     db: &Db,
     engine: &Arc<Mutex<SynapseEngine>>,
+    settings: &RecallSettings,
     scope: &Scope,
     query: &str,
 ) -> String {
@@ -85,19 +122,11 @@ pub async fn build_recall_section(
         now_dow,
         weight: TIME_BIAS_WEIGHT,
     });
-    let recency_ctx = if RECENCY_WEIGHT > 0.0 && RECENCY_HALFLIFE_HOURS > 0.0 {
-        Some(RecencyContext {
-            now_epoch,
-            weight: RECENCY_WEIGHT,
-            halflife_secs: RECENCY_HALFLIFE_HOURS * 3600.0,
-        })
-    } else {
-        None
-    };
+    let recency_ctx = settings.recency_context(now_epoch);
 
     let neighbors = {
         let eng = engine.lock().await;
-        eng.assemble(scope, q, time_ctx, recency_ctx, RECALL_K)
+        eng.assemble(scope, q, time_ctx, recency_ctx, settings.k)
     };
     if neighbors.is_empty() {
         return String::new();
@@ -180,12 +209,15 @@ mod tests {
             bot_id: "b1".into(),
             guild_id: None,
         };
-        let section = build_recall_section(&db, &engine, &scope, "何か").await;
+        let section =
+            build_recall_section(&db, &engine, &RecallSettings::default(), &scope, "何か").await;
         assert!(section.is_empty(), "索引が空なら想起セクションは空");
         // 空クエリも空。
-        assert!(build_recall_section(&db, &engine, &scope, "   ")
-            .await
-            .is_empty());
+        assert!(
+            build_recall_section(&db, &engine, &RecallSettings::default(), &scope, "   ")
+                .await
+                .is_empty()
+        );
     }
 
     /// 索引に記憶を入れると想起され、フォーマット済みセクションが返り鮮度も更新される。
@@ -228,7 +260,14 @@ mod tests {
         );
         let engine = Arc::new(Mutex::new(engine));
 
-        let section = build_recall_section(&db, &engine, &scope, "好きな食べ物はカレーです").await;
+        let section = build_recall_section(
+            &db,
+            &engine,
+            &RecallSettings::default(),
+            &scope,
+            "好きな食べ物はカレーです",
+        )
+        .await;
         assert!(
             section.contains("# 関連する過去の記憶（連想想起／参考情報）"),
             "見出しを含む"
@@ -250,5 +289,80 @@ mod tests {
             .await
             .expect("read");
         assert_eq!(use_count, 1, "recall で touch されている");
+    }
+
+    /// 既定値は Node の既定（旧 Rust 定数）と同じ。
+    #[test]
+    fn recall_settings_default_matches_node_defaults() {
+        let s = RecallSettings::default();
+        assert_eq!(s.k, 5);
+        assert!((s.recency_weight - 0.15).abs() < f32::EPSILON);
+        assert!((s.recency_halflife_hours - 18.0).abs() < f32::EPSILON);
+        let rc = s.recency_context(1_000).expect("既定では recency 有効");
+        assert_eq!(rc.now_epoch, 1_000);
+        assert!((rc.halflife_secs - 18.0 * 3600.0).abs() < f32::EPSILON);
+    }
+
+    /// 重み・半減期のどちらかが 0 なら recency ブーストは無効。
+    #[test]
+    fn recall_settings_zero_disables_recency() {
+        let no_weight = RecallSettings {
+            recency_weight: 0.0,
+            ..RecallSettings::default()
+        };
+        assert!(no_weight.recency_context(0).is_none());
+        let no_halflife = RecallSettings {
+            recency_halflife_hours: 0.0,
+            ..RecallSettings::default()
+        };
+        assert!(no_halflife.recency_context(0).is_none());
+    }
+
+    /// `k`（config `SYNAPSE_RECALL_K`）が想起件数の上限として効く。
+    #[tokio::test]
+    async fn recall_k_limits_neighbors() {
+        use std::path::Path;
+        let dir = tempfile::tempdir().expect("tmp");
+        let path = dir.path().join("t.db");
+        drop(rusqlite::Connection::open(&path).expect("create empty"));
+        let db = Db::open(Path::new(&path)).expect("db");
+        let (mut engine, _) = SynapseEngine::boot(&path, yuuka_synapse::DEFAULT_DIM);
+        let scope = Scope {
+            user_id: "u1".into(),
+            bot_id: "b1".into(),
+            guild_id: None,
+        };
+        for (id, content) in [
+            (1, "好きな食べ物はカレーです"),
+            (2, "好きな飲み物はカレー味のラッシーです"),
+            (3, "好きなカレーの店は駅前です"),
+        ] {
+            engine.index(
+                scope.clone(),
+                id,
+                None,
+                content.into(),
+                yuuka_synapse::FormationContext::default(),
+            );
+        }
+        let engine = Arc::new(Mutex::new(engine));
+
+        let count_items = |section: &str| section.lines().filter(|l| l.starts_with("- ")).count();
+        let all = build_recall_section(
+            &db,
+            &engine,
+            &RecallSettings::default(),
+            &scope,
+            "好きなカレー",
+        )
+        .await;
+        assert_eq!(count_items(&all), 3, "既定 k=5 なら 3 件すべて");
+
+        let one = RecallSettings {
+            k: 1,
+            ..RecallSettings::default()
+        };
+        let limited = build_recall_section(&db, &engine, &one, &scope, "好きなカレー").await;
+        assert_eq!(count_items(&limited), 1, "k=1 なら 1 件だけ");
     }
 }

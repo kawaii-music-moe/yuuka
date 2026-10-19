@@ -23,18 +23,16 @@ use axum::{Json, Router};
 use rusqlite::{params, OptionalExtension};
 use serde::Deserialize;
 use serde_json::{json, Value};
+use yuuka_core::config::{DEFAULT_DESKTOP_DEVICE_CODE_TTL_SECS, DEFAULT_DESKTOP_TOKEN_TTL_DAYS};
 use yuuka_db::map_sqlite;
 use yuuka_web::{AppState, AuthenticatedUser, Db, ScopedJson};
 
 use crate::audit::add_audit_log;
 use crate::token::generate_token;
-use crate::{desktop, sha256_hex, DESKTOP_TOKEN_TTL_DAYS};
+use crate::{desktop, sha256_hex};
 
 /// ポーリング最小間隔（秒）。token エンドポイントが `interval` として返す（Node `POLL_INTERVAL_SEC`）。
 const POLL_INTERVAL_SECS: u64 = 5;
-
-/// device_code の既定 TTL（秒）。Node `config.desktopDeviceCodeTtlSec`（既定 `DESKTOP_DEVICE_CODE_TTL_SEC=600`）。
-const DEVICE_CODE_TTL_SECS: u64 = 600;
 
 /// Crockford Base32（紛らわしい I/L/O/U を除く）。user_code の文字空間（Node `CROCKFORD`）。
 const CROCKFORD: &[u8; 32] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
@@ -65,18 +63,39 @@ pub struct DeviceAuthStore {
     state: Mutex<StoreState>,
     /// 承認 URL のベース（Node `verificationBase`＝`base_url` or `http://host:port`）。
     verification_base: String,
+    /// device_code の有効期限（秒・config `DESKTOP_DEVICE_CODE_TTL_SEC`・Node `config.desktopDeviceCodeTtlSec`）。
+    device_code_ttl_secs: u64,
+    /// 発行するデスクトップトークンの TTL（日・config `DESKTOP_TOKEN_TTL_DAYS`）。token 応答の `expires_in` に使う。
+    token_ttl_days: u32,
 }
 
 impl DeviceAuthStore {
-    /// 承認 URL ベースから空の store を作る（main で 1 度だけ）。
+    /// 承認 URL ベースから空の store を作る（TTL は既定値＝device_code 600 秒・トークン 90 日）。
     #[must_use]
     pub fn new(verification_base: String) -> Arc<Self> {
+        Self::with_ttls(
+            verification_base,
+            DEFAULT_DESKTOP_DEVICE_CODE_TTL_SECS,
+            DEFAULT_DESKTOP_TOKEN_TTL_DAYS,
+        )
+    }
+
+    /// 承認 URL ベースと TTL（config `DESKTOP_DEVICE_CODE_TTL_SEC`・`DESKTOP_TOKEN_TTL_DAYS`）から
+    /// 空の store を作る（main で 1 度だけ）。
+    #[must_use]
+    pub fn with_ttls(
+        verification_base: String,
+        device_code_ttl_secs: u64,
+        token_ttl_days: u32,
+    ) -> Arc<Self> {
         Arc::new(Self {
             state: Mutex::new(StoreState {
                 by_hash: HashMap::new(),
                 by_user_code: HashMap::new(),
             }),
             verification_base,
+            device_code_ttl_secs,
+            token_ttl_days,
         })
     }
 
@@ -104,7 +123,7 @@ impl DeviceAuthStore {
         let device_code = generate_token()?;
         let hash = sha256_hex(&device_code);
         let now = Instant::now();
-        let expires_at = now + Duration::from_secs(DEVICE_CODE_TTL_SECS);
+        let expires_at = now + Duration::from_secs(self.device_code_ttl_secs);
 
         let mut state = self.lock();
         Self::sweep(&mut state, now);
@@ -137,7 +156,7 @@ impl DeviceAuthStore {
             "verification_uri": format!("{base}/device"),
             "verification_uri_complete": format!("{base}/device?code={user_code}"),
             "interval": POLL_INTERVAL_SECS,
-            "expires_in": DEVICE_CODE_TTL_SECS,
+            "expires_in": self.device_code_ttl_secs,
         }))
     }
 
@@ -442,7 +461,7 @@ async fn token_handler(
                 Json(json!({
                     "access_token": raw_token,
                     "token_type": "Bearer",
-                    "expires_in": DESKTOP_TOKEN_TTL_DAYS * 24 * 60 * 60,
+                    "expires_in": u64::from(store.token_ttl_days) * 24 * 60 * 60,
                     "user": {
                         "discordId": approved_user,
                         "username": username,
@@ -715,5 +734,49 @@ mod tests {
         .await;
         assert_eq!(st, StatusCode::OK);
         assert_eq!(j2["error"], serde_json::json!("slow_down"));
+    }
+
+    /// config の TTL（`DESKTOP_DEVICE_CODE_TTL_SEC`・`DESKTOP_TOKEN_TTL_DAYS`）が code 応答・レコード期限・
+    /// token 応答へ反映される（R26。既定値は `full_flow_code_approve_token` で確認）。
+    #[tokio::test]
+    async fn configured_ttls_apply_to_code_and_token() {
+        let store = DeviceAuthStore::with_ttls("https://ex.test".to_owned(), 120, 7);
+        let app = app(store.clone());
+
+        let (st, j) = send(&app, "/api/auth/device/code", "", "{}").await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(j["expires_in"], serde_json::json!(120));
+        let device_code = j["device_code"].as_str().unwrap().to_owned();
+        let user_code = j["user_code"].as_str().unwrap().to_owned();
+
+        // レコードの実際の期限も 120 秒後（600 秒ではない）。
+        let remaining = {
+            let state = store.lock();
+            let record = state
+                .by_hash
+                .get(&sha256_hex(&device_code))
+                .expect("record");
+            record.expires_at.saturating_duration_since(Instant::now())
+        };
+        assert!(remaining <= Duration::from_secs(120));
+        assert!(remaining > Duration::from_secs(110));
+
+        let (st, _) = send(
+            &app,
+            "/api/auth/device/approve",
+            "owner",
+            &format!(r#"{{"user_code":"{user_code}"}}"#),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK);
+        let (st, j) = send(
+            &app,
+            "/api/auth/device/token",
+            "",
+            &format!(r#"{{"device_code":"{device_code}"}}"#),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(j["expires_in"], serde_json::json!(7 * 24 * 60 * 60));
     }
 }

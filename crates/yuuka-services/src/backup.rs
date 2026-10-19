@@ -66,7 +66,7 @@ impl CronService for BackupService {
 
     fn schedule(&self) -> Schedule {
         // Node `cron.schedule("15 * * * *")`（毎時 15 分に間隔判定）。
-        Schedule::Cron("15 * * * *")
+        Schedule::Cron("15 * * * *".to_owned())
     }
 
     fn run_on_start(&self) -> bool {
@@ -379,7 +379,7 @@ mod tests {
     fn schedule_is_hourly_at_15() {
         assert!(matches!(
             BackupService.schedule(),
-            Schedule::Cron("15 * * * *")
+            Schedule::Cron(expr) if expr == "15 * * * *"
         ));
     }
 }

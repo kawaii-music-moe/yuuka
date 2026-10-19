@@ -50,4 +50,5 @@ pub use receipt_extract::{ReceiptDraft, ReceiptExtractError};
 pub use share_routes::{
     routes as bot_share_routes, routes_with as bot_share_routes_with, NullShareInviteDm,
 };
+pub use synapse_recall::RecallSettings;
 pub use tool_outcome::DbToolOutcomeSink;

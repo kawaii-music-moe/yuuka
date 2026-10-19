@@ -26,12 +26,10 @@ pub use session::SessionStore;
 
 use async_trait::async_trait;
 use sha2::{Digest, Sha256};
+use yuuka_core::config::DEFAULT_DESKTOP_TOKEN_TTL_DAYS;
 use yuuka_core::AuthError;
 use yuuka_types::SessionUser;
 use yuuka_web::{AuthBackend, Db};
-
-/// Node のデスクトップトークン既定 TTL（日）。`DESKTOP_TOKEN_TTL_DAYS` 相当（既定 90）。
-pub(crate) const DESKTOP_TOKEN_TTL_DAYS: i64 = 90;
 
 /// 生トークン文字列(UTF-8) の SHA-256 を**小文字 hex**で返す（Node `sha256Hex` と一致）。
 #[must_use]
@@ -47,6 +45,8 @@ pub struct CompositeAuth {
     db: Db,
     sessions: SessionStore,
     session_ttl_secs: u64,
+    /// デスクトップトークンの TTL（日・config `DESKTOP_TOKEN_TTL_DAYS`・既定 90）。
+    desktop_token_ttl_days: u32,
 }
 
 impl CompositeAuth {
@@ -57,7 +57,15 @@ impl CompositeAuth {
             db,
             sessions,
             session_ttl_secs: u64::from(session_ttl_days) * 24 * 60 * 60,
+            desktop_token_ttl_days: DEFAULT_DESKTOP_TOKEN_TTL_DAYS,
         }
+    }
+
+    /// デスクトップトークンの TTL（日・config `DESKTOP_TOKEN_TTL_DAYS`）を差し替える。未指定なら既定 90 日。
+    #[must_use]
+    pub fn with_desktop_token_ttl_days(mut self, days: u32) -> Self {
+        self.desktop_token_ttl_days = days;
+        self
     }
 }
 
@@ -70,7 +78,7 @@ impl AuthBackend for CompositeAuth {
 
     async fn desktop_user(&self, bearer_token: &str) -> Result<Option<SessionUser>, AuthError> {
         let hash = sha256_hex(bearer_token);
-        desktop::verify(&self.db, hash, DESKTOP_TOKEN_TTL_DAYS).await
+        desktop::verify(&self.db, hash, i64::from(self.desktop_token_ttl_days)).await
     }
 }
 
