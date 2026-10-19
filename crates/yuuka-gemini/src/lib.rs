@@ -372,6 +372,46 @@ mod loop_tests {
         );
     }
 
+    /// カウンタを溜める fake メトリクス記録先（実体の `MetricsRegistry` は services 側）。
+    #[derive(Default)]
+    struct FakeMetrics {
+        counters: Mutex<std::collections::HashMap<String, u64>>,
+    }
+
+    impl yuuka_core::MetricsSink for FakeMetrics {
+        fn incr(&self, name: &str, by: u64) {
+            *self
+                .counters
+                .lock()
+                .unwrap()
+                .entry(name.to_owned())
+                .or_insert(0) += by;
+        }
+
+        fn record_latency(&self, _kind: &str, _ms: u64) {}
+    }
+
+    /// dispatch 毎に `tool_calls` が増える（`{success:false}` の dispatch も数える・Node `incrMetric("tool_calls")`）。
+    #[tokio::test]
+    async fn counts_tool_calls_metric_per_dispatch() {
+        let backend = FakeBackend::new(success_and_failure_script());
+        let provider = FakeProvider::new();
+        let metrics = Arc::new(FakeMetrics::default());
+        let mut contents = vec![Content::user_text("牛乳と fail を追加して")];
+        let opts = LoopOptions {
+            metrics: Some(metrics.clone()),
+            ..LoopOptions::default()
+        };
+
+        run_function_calling_loop(&backend, &provider, "sys", &mut contents, &ctx(), &opts)
+            .await
+            .unwrap();
+        assert_eq!(
+            metrics.counters.lock().unwrap().get("tool_calls").copied(),
+            Some(2)
+        );
+    }
+
     #[test]
     fn outcome_status_follows_success_false_only() {
         assert_eq!(

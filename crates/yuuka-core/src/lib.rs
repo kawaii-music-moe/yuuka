@@ -10,6 +10,7 @@ pub mod cron_util;
 pub mod datetime;
 pub mod error;
 pub mod ids;
+pub mod metrics;
 pub mod scope;
 pub mod secrets;
 pub mod telemetry;
@@ -23,6 +24,7 @@ pub use error::{
     PluginError, RepoError, Retryability, ToolError, ValidationError, WebError,
 };
 pub use ids::{BotId, GuildId, UserId};
+pub use metrics::MetricsSink;
 pub use scope::{CronScan, CrossUserAccess, ScopedRepo, UserScope};
 pub use tool::{
     CapabilitySet, EmbedFieldPart, EmbedPart, FunctionDeclaration, ResponsePart, Tool, ToolContext,
