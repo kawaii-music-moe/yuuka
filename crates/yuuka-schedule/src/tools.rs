@@ -366,10 +366,10 @@ mod tests {
     static SEQ: AtomicU64 = AtomicU64::new(0);
 
     // lib.rs のテスト DDL を再利用（bot_id / google_* / created_at 既定を含む）。
-    const SCHEDULES_DDL: &str = "CREATE TABLE schedules (
+    const SCHEDULES_DDL: &str = "DROP TABLE IF EXISTS schedules; CREATE TABLE schedules (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id TEXT NOT NULL,
-        bot_id TEXT NOT NULL DEFAULT 'system_default',
+        bot_id TEXT NOT NULL,
         title TEXT NOT NULL,
         description TEXT,
         start_at TEXT NOT NULL,
@@ -388,7 +388,9 @@ mod tests {
             std::process::id()
         ));
         {
-            let conn = Connection::open(&path).unwrap();
+            let mut conn = Connection::open(&path).unwrap();
+            // Install the isolated unit schema after migrating the real schema (SD07).
+            yuuka_db::run_migrations(&mut conn).expect("migrate before unit fixture");
             conn.execute_batch(SCHEDULES_DDL).unwrap();
         }
         Db::open(&path).unwrap()

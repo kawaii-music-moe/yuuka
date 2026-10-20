@@ -350,8 +350,10 @@ impl ChatEngine {
         {
             Ok(ocr) => ocr,
             Err(ReceiptExtractError::NoGeminiKey) => return Ok(TurnReply::text(NO_KEY_MESSAGE)),
-            Err(ReceiptExtractError::NotReceipt) => {
+            Err(ReceiptExtractError::NotReceipt | ReceiptExtractError::InvalidImage(_)) => {
                 // Discord の秘書画像入口は普通の写真にも使われる。レシート以外は従来の画像会話を維持。
+                // OCR の入力検証（10 MiB 超・許可外形式）で弾かれた写真も、develop と同じく制限なしで
+                // 画像会話へ渡す。管理画面・PWA は入口で同じ検証をして 400 を返すので、ここには来ない。
                 return self
                     .secretary_turn(
                         bot_id,

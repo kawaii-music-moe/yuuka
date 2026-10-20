@@ -283,6 +283,59 @@ async fn receipt_draft_has_no_turn_side_effects_and_recording_uses_same_ocr() {
     }
 }
 
+/// Discord では OCR の入力検証（10 MiB 超・許可外形式）に通らない写真も、エラーにせず
+/// 従来の画像会話へ戻す（develop では Discord の画像はサイズ・形式の制限なしで秘書ターンに渡る）。
+#[tokio::test]
+async fn receipt_turn_falls_back_to_image_chat_when_ocr_rejects_image() {
+    let oversized = "A".repeat(10 * 1024 * 1024 + 4);
+    for (data, mime) in [("QUJD", "image/avif"), (oversized.as_str(), "image/jpeg")] {
+        let (db, path) = fresh_db();
+        let crypto =
+            Arc::new(SystemCrypto::new(SecretString::from("receipt-test-secret")).unwrap());
+        seed_user_with_key(&path, &crypto, "receipt-user");
+        let backend = Arc::new(ReceiptBackend {
+            calls: Mutex::new(Vec::new()),
+            readable: true,
+            is_receipt: true,
+        });
+        let engine = ChatEngine::new(
+            db,
+            Some(crypto),
+            ToolRegistry::new(),
+            Arc::new(ReceiptFactory(backend.clone())),
+            None,
+            Arc::new(yuuka_mcp::NullMcpClient),
+            None,
+        );
+        let uid = UserId::new("receipt-user");
+        let reply = engine
+            .receipt_turn(
+                &BotId::new("receipt-bot"),
+                &uid,
+                yuuka_discord::InlineMedia {
+                    data_base64: data.to_owned(),
+                    mime_type: mime.to_owned(),
+                },
+                Some("この写真どう？".to_owned()),
+                &null_sink(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(reply.text, "読み取り内容を確認しました。", "{mime}");
+        let calls = backend.calls.lock().unwrap();
+        assert_eq!(calls.len(), 1, "OCR は LLM を呼ばずに検証で弾く: {mime}");
+        assert_ne!(calls[0].0, ["readReceipt"]);
+        let turn = serde_json::to_string(&calls[0].1).unwrap();
+        assert!(
+            turn.contains("inlineData"),
+            "画像はそのまま会話へ渡す: {mime}"
+        );
+        assert!(turn.contains("この写真どう？"));
+        assert!(!turn.contains("receipt_ocr"));
+        assert_eq!(count_logs(&path, uid.as_str(), "user"), 1);
+    }
+}
+
 #[tokio::test]
 async fn secretary_turn_persists_and_replies() {
     let (db, path) = fresh_db();

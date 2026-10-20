@@ -21,7 +21,9 @@ pub fn seeded_db(ddl: &str) -> (Db, tempfile::TempDir) {
     let seq = SEQ.fetch_add(1, Ordering::Relaxed);
     let path = dir.path().join(format!("svc_test_{seq}.sqlite"));
     {
-        let conn = rusqlite::Connection::open(&path).expect("open seed conn");
+        let mut conn = rusqlite::Connection::open(&path).expect("open seed conn");
+        // Migrate a real schema before installing isolated FK-free unit fixtures.
+        yuuka_db::run_migrations(&mut conn).expect("migrate before unit fixture");
         conn.execute_batch(ddl).expect("seed ddl");
     }
     let db = Db::open(&path).expect("open db");
