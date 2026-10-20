@@ -47,9 +47,28 @@ impl TodoRepo<'_> {
     /// Claim at most four jobs atomically. Leases recover after a process crash; revisions cancel
     /// old work immediately on content/manual-tag changes. No LLM/network work runs in a transaction.
     ///
+    /// The worker polls every second, so an idle queue is detected on the read pool first and the
+    /// writer transaction (BEGIN IMMEDIATE) is only taken when a claimable job exists.
+    ///
     /// # Errors
     /// Database errors are returned to the background worker only.
     pub async fn claim_tag_jobs(&self, _cron: CrossUserAccess) -> Result<Vec<TagJob>, DbError> {
+        let claimable: bool = self
+            .read
+            .read(|c| {
+                c.query_row(
+                    "SELECT EXISTS (SELECT 1 FROM todo_tagging
+                     WHERE pending = 1 AND disabled = 0
+                       AND (lease_until IS NULL OR lease_until <= datetime('now')))",
+                    [],
+                    |r| r.get(0),
+                )
+                .map_err(map_sqlite)
+            })
+            .await?;
+        if !claimable {
+            return Ok(Vec::new());
+        }
         self.writer.transaction(|tx| {
             let jobs = {
                 let mut stmt = tx.prepare(

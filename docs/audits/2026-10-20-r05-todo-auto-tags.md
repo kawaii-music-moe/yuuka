@@ -21,7 +21,7 @@
 
 V28のINSERT/本文UPDATEトリガーが、ToDo保存と同じトランザクションで `todo_tagging` に予約する。全本番INSERTを検索し、`TodoRepo::add` と `FinanceRepo::link_todo` の2か所を確認した（残りはテストデータ）。入口ごとの予約呼び出し忘れを防ぎ、HTTP・会話経路を一致させる。
 
-supervisorが `AutoTagService` を1つ常時登録する。旧cron移行ゲート `YUUKA_RUST_CRON` には依存しない。1秒間隔で最大4件を取得し、最大4件を並行生成する。補助生成は既存 `GeminiAuxText`（本人の暗号化キー・本人の選択モデル、`GeminiClient::generate_aux`、1要求60秒・最大2回再試行）を再利用する。キー読込・語彙取得・再試行を含めた全体上限は200秒。240秒のリースと取得時の世代更新により、プロセス停止後の処理を回復し、古いリースの応答を破棄する。
+supervisorが `AutoTagService` を1つ常時登録する。旧cron移行ゲート `YUUKA_RUST_CRON` には依存しない。1秒間隔で最大4件を取得し、最大4件を並行生成する。取得前に read pool で取得可能な予約の有無を確認し、予約が無いtickではwriterトランザクション（BEGIN IMMEDIATE）を取らない（他の書き込みとのロック競合を避ける）。補助生成は既存 `GeminiAuxText`（本人の暗号化キー・本人の選択モデル、`GeminiClient::generate_aux`、1要求60秒・最大2回再試行）を再利用する。キー読込・語彙取得・再試行を含めた全体上限は200秒。240秒のリースと取得時の世代更新により、プロセス停止後の処理を回復し、古いリースの応答を破棄する。
 
 キー/暗号鍵未設定、復号失敗、通信失敗、タイムアウト、不正/空応答ではタグを維持し、その予約を終了する。次の本文変更で再予約する。保存障害ではログを残してリース期限後に再試行する。ToDo作成/更新のレスポンスは生成を待たず、LLM失敗の影響を受けない。
 
@@ -39,6 +39,7 @@ supervisorが `AutoTagService` を1つ常時登録する。旧cron移行ゲー�
 
 - 回帰テストコード: V26→V28の既存タグ保護・遡及なし、生成解析、明示/自動の置換、手動set/add/removeと停止・再開、世代競合・同時手動追加、リース回復・削除、Bot/ユーザー分離、語彙・表示/検索、fake補助LLMの成功/不正応答/未設定/タイムアウト、会話ツール親子作成・本文更新、HTTP作成/更新、PWA作成、支払い予定、Webhook固定タグ、繰り返し時の非再生成、バックアップの由来/停止状態を対象とした。
 - ローカル: `cargo fmt --all -- --check`、`cargo check -p yuuka-supervisor --all-targets`、`cargo clippy --workspace --all-targets --all-features -- -D warnings`。Clippyで全workspaceのテストコードもコンパイル確認する。
+- #188（SD07）追従: 単体テストの fixture は実マイグレーション後に `todos` を FK 無しの DDL で置き換えるため、`DROP TABLE` で V28 のトリガーが消える。`yuuka_db::test_support::execute_unit_ddl`（feature `test-support`）で、置き換え前の実スキーマのトリガー定義を控えて張り直す。todo・finance・services の `todos` 置き換え fixture はこれを使う。
 - 補足: Node内蔵SQLiteによるV28 SQL実行で既存タグ・予約・本文変更・全削除停止/再開・cascade削除を確認。NodeのSQLiteが拒否する既存V17の冗長FTS shadow table CREATE文のみ検証時に省き、V28は原文で実行した。
 - `CLAUDE.md` とユーザー指示に従い、非developのローカルで `cargo build/test/run/nextest` は実行しない。追加Rustテストは実行済みと扱わない。外部LLM実通信・本番・ブラウザの実操作は未実施。
 - PRの既存CIはfmt / cargo-deny / フロント等を実行する。Rust build/testジョブはdevelop→main限定なので、このPRではスキップされる。CI結果とcommitはPRを参照。

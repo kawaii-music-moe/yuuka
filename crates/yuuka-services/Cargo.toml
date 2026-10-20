@@ -30,6 +30,7 @@ chrono.workspace = true
 [dev-dependencies]
 tempfile = "3"
 serde_json.workspace = true   # runBriefingNow ツール引数（delivery の回帰テスト）
+yuuka-db = { workspace = true, features = ["test-support"] }
 
 [lints]
 workspace = true

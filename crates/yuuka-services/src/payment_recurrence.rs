@@ -65,13 +65,14 @@ mod tests {
     use crate::test_support::{ctx_null, seeded_db};
     use yuuka_db::map_sqlite;
 
-    const PLANNED_DDL: &str = "CREATE TABLE planned_payments (
+    const PLANNED_DDL: &str =
+        "DROP TABLE IF EXISTS planned_payments; CREATE TABLE planned_payments (
         id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, title TEXT NOT NULL,
         amount INTEGER NOT NULL, category TEXT, memo TEXT, due_date TEXT NOT NULL, repeat_rule TEXT,
         status TEXT NOT NULL DEFAULT 'pending',
         created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
         updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
-        bot_id TEXT NOT NULL DEFAULT 'system_default'
+        bot_id TEXT NOT NULL
     );";
 
     #[tokio::test]
@@ -82,8 +83,8 @@ mod tests {
             .writer
             .execute(|conn| {
                 conn.execute(
-                    "INSERT INTO planned_payments (user_id,title,amount,category,due_date,repeat_rule,status) \
-                     VALUES ('u','家賃',80000,'housing','2000-01-01','0 0 1 * *','pending')",
+                    "INSERT INTO planned_payments (user_id,bot_id,title,amount,category,due_date,repeat_rule,status) \
+                     VALUES ('u','test-bot','家賃',80000,'housing','2000-01-01','0 0 1 * *','pending')",
                     [],
                 )
                 .map_err(map_sqlite)?;
@@ -136,7 +137,7 @@ mod tests {
 
     #[tokio::test]
     async fn next_plan_keeps_bot_id() {
-        // 次回分は元の行の bot_id を引き継ぐ（省くと既定値 system_default が入り、元の Bot から見えなくなる）。
+        // 次回分は元の行の bot_id を引き継ぐ（V27 以降、省略は NOT NULL 制約で拒否される）。
         let (db, _dir) = seeded_db(PLANNED_DDL);
         let ctx = ctx_null(db);
         ctx.db

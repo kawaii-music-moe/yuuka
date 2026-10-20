@@ -12,6 +12,8 @@
 
 pub mod pool;
 pub mod schema;
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_support;
 pub mod writer;
 
 pub use pool::{open_conn, ReadPool};
@@ -115,44 +117,16 @@ mod tests {
         // 履歴なし）へ refinery が全マイグレーションを流す。baseline の CREATE 群が IF NOT EXISTS で
         // 冪等でないと「object already exists」で失敗し Rust writer が起動不能になる（#2 のガード）。
         //
-        // 注: post-baseline のマイグレーション（V19/V21/V22 の ALTER TABLE ADD COLUMN 等）は SQLite に
-        // IF NOT EXISTS が無く再走冪等にできないため、「全オブジェクト既存 + 履歴なし」ではなく
-        // 「Node 実スキーマ（baseline のみ既存）+ 履歴なし」を正確に再現する: 履歴を消した上で
-        // post-baseline の産物（bot_channels / message_logs.channel_id・source / todos.list /
-        // context_notes.title / message_logs.rich_content / message_attachments）も除去してから再走する。V20（bot_muted_channels）は
-        // `CREATE TABLE IF NOT EXISTS` のみで自然に冪等のため対象外。V25 が落とす users.password_hash は
-        // Node 実スキーマに合わせて戻しておく。
         let dir = tempdir().unwrap();
         let path = dir.path().join("populated.sqlite");
         seed_db(&path, "");
         let mut conn = open_conn(&path, false).unwrap();
 
-        // 1) 全オブジェクトを作成（+ refinery 履歴を刻む）。
-        run_migrations(&mut conn).unwrap();
-
-        // 2) refinery 履歴を消し、post-baseline 産物を落として「Node 作成 DB」状態を作る。
-        conn.execute_batch(
-            "DROP TABLE refinery_schema_history; \
-             DROP TABLE bot_channels; \
-             DROP INDEX idx_message_attachments_message_log_id; \
-             DROP TABLE message_attachments; \
-             ALTER TABLE message_logs DROP COLUMN rich_content; \
-             ALTER TABLE message_logs DROP COLUMN is_notice; \
-             DROP INDEX idx_message_logs_guild_channel; \
-             ALTER TABLE message_logs DROP COLUMN channel_id; \
-             DROP INDEX idx_message_logs_user_bot_source; \
-             ALTER TABLE message_logs DROP COLUMN source; \
-             ALTER TABLE todos DROP COLUMN list; \
-             ALTER TABLE context_notes DROP COLUMN title; \
-             DROP INDEX idx_users_sk_account_id; \
-             ALTER TABLE users DROP COLUMN sk_account_id; \
-             ALTER TABLE users ADD COLUMN password_hash TEXT NOT NULL DEFAULT ''; \
-             DROP INDEX idx_webhook_endpoints_user_bot; \
-             ALTER TABLE webhook_endpoints DROP COLUMN bot_id;",
-        )
-        .unwrap();
-
-        // 3) 全体を再走 — baseline は冪等 CREATE、post-baseline は対象不在なので成功する。
+        // Reproduce the Node-created V17 schema directly. Starting from the latest
+        // schema and undoing selected ALTERs is no longer a faithful V17 fixture:
+        // V27 also removes mcp_servers.bot_id and all implicit Bot defaults.
+        conn.execute_batch(include_str!("../migrations/V17__baseline.sql"))
+            .unwrap();
         run_migrations(&mut conn).unwrap();
 
         // #1: schema_version が '17' で刻まれている（Node がこの DB を開いても再 DROP しない）。

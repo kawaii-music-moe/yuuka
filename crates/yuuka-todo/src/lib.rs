@@ -60,10 +60,11 @@ mod tests {
 
     static SEQ: AtomicU64 = AtomicU64::new(0);
 
-    const TODOS_DDL: &str = "CREATE TABLE todos (
+    const TODOS_DDL: &str =
+        "DROP TABLE IF EXISTS todos; CREATE TABLE todos (list TEXT NOT NULL DEFAULT '個人',
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id TEXT NOT NULL,
-        bot_id TEXT NOT NULL DEFAULT 'system_default',
+        bot_id TEXT NOT NULL,
         title TEXT NOT NULL,
         description TEXT,
         due_date TEXT,
@@ -83,10 +84,11 @@ mod tests {
     );";
 
     /// task_progress_logs（進捗ログ）。V17__baseline.sql と同列（progress/note の追記対象）。
-    const PROGRESS_LOGS_DDL: &str = "CREATE TABLE task_progress_logs (
+    const PROGRESS_LOGS_DDL: &str =
+        "DROP TABLE IF EXISTS task_progress_logs; CREATE TABLE task_progress_logs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id TEXT NOT NULL,
-        bot_id TEXT NOT NULL DEFAULT 'system_default',
+        bot_id TEXT NOT NULL,
         todo_id INTEGER NOT NULL,
         progress INTEGER NOT NULL,
         note TEXT,
@@ -100,8 +102,10 @@ mod tests {
             std::process::id()
         ));
         {
-            let conn = rusqlite::Connection::open(&path).expect("seed db");
-            conn.execute_batch(TODOS_DDL).expect("create todos");
+            let mut conn = rusqlite::Connection::open(&path).expect("seed db");
+            // Install the isolated unit schema after migrating the real schema (SD07).
+            yuuka_db::run_migrations(&mut conn).expect("migrate before unit fixture");
+            yuuka_db::test_support::execute_unit_ddl(&conn, TODOS_DDL).expect("create todos");
             conn.execute_batch(PROGRESS_LOGS_DDL)
                 .expect("create task_progress_logs");
         }

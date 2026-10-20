@@ -57,10 +57,11 @@ mod tests {
     use super::*;
     use crate::test_support::{ctx_null, seeded_db};
 
-    const CLIPBOARD_DDL: &str = "CREATE TABLE clipboard_entries (
+    const CLIPBOARD_DDL: &str =
+        "DROP TABLE IF EXISTS clipboard_entries; CREATE TABLE clipboard_entries (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id TEXT NOT NULL,
-        bot_id TEXT NOT NULL DEFAULT 'system_default',
+        bot_id TEXT NOT NULL,
         content TEXT NOT NULL,
         expires_at TEXT
     );";
@@ -71,10 +72,10 @@ mod tests {
         db.writer
             .execute(|conn| {
                 conn.execute_batch(
-                    "INSERT INTO clipboard_entries (user_id, content, expires_at) VALUES \
-                     ('u','past', datetime('now','localtime','-1 hour')), \
-                     ('u','future', datetime('now','localtime','+1 hour')), \
-                     ('u','never', NULL);",
+                    "INSERT INTO clipboard_entries (user_id, bot_id, content, expires_at) VALUES \
+                     ('u','test-bot','past', datetime('now','localtime','-1 hour')), \
+                     ('u','test-bot','future', datetime('now','localtime','+1 hour')), \
+                     ('u','test-bot','never', NULL);",
                 )
                 .map_err(map_sqlite)?;
                 Ok(())

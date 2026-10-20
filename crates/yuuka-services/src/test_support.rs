@@ -21,8 +21,11 @@ pub fn seeded_db(ddl: &str) -> (Db, tempfile::TempDir) {
     let seq = SEQ.fetch_add(1, Ordering::Relaxed);
     let path = dir.path().join(format!("svc_test_{seq}.sqlite"));
     {
-        let conn = rusqlite::Connection::open(&path).expect("open seed conn");
-        conn.execute_batch(ddl).expect("seed ddl");
+        let mut conn = rusqlite::Connection::open(&path).expect("open seed conn");
+        // Migrate a real schema before installing isolated FK-free unit fixtures.
+        // `todos` を置き換える DDL でも、V28 の自動タグ予約トリガーは張り直す。
+        yuuka_db::run_migrations(&mut conn).expect("migrate before unit fixture");
+        yuuka_db::test_support::execute_unit_ddl(&conn, ddl).expect("seed ddl");
     }
     let db = Db::open(&path).expect("open db");
     (db, dir)

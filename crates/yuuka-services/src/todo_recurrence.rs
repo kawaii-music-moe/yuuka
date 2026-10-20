@@ -109,9 +109,9 @@ mod tests {
     use crate::test_support::{ctx_null, seeded_db};
     use yuuka_db::map_sqlite;
 
-    const TODOS_DDL: &str = "CREATE TABLE todos (
+    const TODOS_DDL: &str = "DROP TABLE IF EXISTS todos; CREATE TABLE todos (list TEXT NOT NULL DEFAULT '個人',
         id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL,
-        bot_id TEXT NOT NULL DEFAULT 'system_default', title TEXT NOT NULL, description TEXT,
+        bot_id TEXT NOT NULL, title TEXT NOT NULL, description TEXT,
         due_date TEXT, start_date TEXT, priority TEXT, tags TEXT NOT NULL DEFAULT '[]',
         status TEXT NOT NULL DEFAULT 'open', progress INTEGER NOT NULL DEFAULT 0, parent_id INTEGER,
         linked_payment_id INTEGER, due_reminded INTEGER NOT NULL DEFAULT 0, repeat_rule TEXT,
@@ -153,8 +153,8 @@ mod tests {
         // 数日前が期日の日次ルーチン（回数無制限）。cron 収束が 1000 回上限内に収まる現実的入力。
         insert(
             &ctx,
-            "INSERT INTO todos (user_id,title,due_date,status,progress,due_reminded,repeat_rule) \
-             VALUES ('u','routine', date('now','localtime','-3 days'),'done',100,1,'0 0 * * *')",
+            "INSERT INTO todos (user_id,bot_id,title,due_date,status,progress,due_reminded,repeat_rule) \
+             VALUES ('u','test-bot','routine', date('now','localtime','-3 days'),'done',100,1,'0 0 * * *')",
         )
         .await;
 
@@ -203,8 +203,8 @@ mod tests {
         let ctx = ctx_null(db);
         insert(
             &ctx,
-            "INSERT INTO todos (user_id,title,due_date,repeat_rule,repeat_count) \
-             VALUES ('u','last','2000-01-01','0 0 * * *',1)",
+            "INSERT INTO todos (user_id,bot_id,title,due_date,repeat_rule,repeat_count) \
+             VALUES ('u','test-bot','last','2000-01-01','0 0 * * *',1)",
         )
         .await;
 
@@ -220,8 +220,8 @@ mod tests {
         let (db, _dir) = seeded_db(TODOS_DDL);
         let ctx = ctx_null(db);
         // 期日は数日前、終了日は昨日 → 次回（今日以降）は until を越える → 終了。
-        insert(&ctx, "INSERT INTO todos (user_id,title,due_date,repeat_rule,repeat_until) \
-             VALUES ('u','ending', date('now','localtime','-3 days'),'0 0 * * *', date('now','localtime','-1 day'))").await;
+        insert(&ctx, "INSERT INTO todos (user_id,bot_id,title,due_date,repeat_rule,repeat_until) \
+             VALUES ('u','test-bot','ending', date('now','localtime','-3 days'),'0 0 * * *', date('now','localtime','-1 day'))").await;
 
         run(&ctx).await.unwrap();
 

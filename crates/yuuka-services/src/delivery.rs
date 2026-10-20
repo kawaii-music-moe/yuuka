@@ -21,7 +21,10 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use yuuka_briefing::{find_briefing, find_report, DeliveryRunner, EnabledBriefing, EnabledReport};
+use yuuka_briefing::{
+    find_briefing, find_report, DeliveryRunner, EnabledBriefing, EnabledReport, NewsSummarizer,
+    NullNewsSummarizer,
+};
 use yuuka_web::Db;
 
 use crate::notifier::{DefaultTargetNotifier, Notifier, NotifyTarget};
@@ -31,6 +34,7 @@ use crate::{briefing, report};
 pub struct NotifierDeliveryRunner {
     db: Db,
     notifier: Arc<dyn Notifier>,
+    news_summarizer: Arc<dyn NewsSummarizer>,
 }
 
 impl NotifierDeliveryRunner {
@@ -41,7 +45,18 @@ impl NotifierDeliveryRunner {
     #[must_use]
     pub fn new(db: Db, notifier: Arc<dyn Notifier>) -> Self {
         let notifier = Arc::new(DefaultTargetNotifier::new(db.clone(), notifier));
-        Self { db, notifier }
+        Self {
+            db,
+            notifier,
+            news_summarizer: Arc::new(NullNewsSummarizer),
+        }
+    }
+
+    /// 朝報ニュースの補助 LLM ポートを注入する。
+    #[must_use]
+    pub fn with_news_summarizer(mut self, news_summarizer: Arc<dyn NewsSummarizer>) -> Self {
+        self.news_summarizer = news_summarizer;
+        self
     }
 }
 
@@ -63,7 +78,14 @@ impl DeliveryRunner for NotifierDeliveryRunner {
             target_type: config.target_type,
             target_id: config.target_id,
         };
-        match briefing::deliver(&self.db, self.notifier.as_ref(), &target).await {
+        match briefing::deliver(
+            &self.db,
+            self.notifier.as_ref(),
+            self.news_summarizer.as_ref(),
+            &target,
+        )
+        .await
+        {
             Ok(sent) => sent,
             Err(e) => {
                 tracing::error!(user = %user_id, error = %e, "❌ 朝報のテスト配信に失敗");
