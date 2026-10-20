@@ -215,6 +215,7 @@ mod tests {
             capabilities: yuuka_core::CapabilitySet::default(),
             mode: yuuka_core::TurnMode::Secretary,
             rich_reply_enabled: rich,
+            conversation_attachments: Vec::new(),
         }
     }
 

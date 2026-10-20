@@ -41,7 +41,7 @@
 | R10 | 中 | 朝報ニュースのLLM要約 | **対応済み（#107）**。RSSの配信元＋見出しを最大30件、ユーザー本人の設定モデルへ既存の補助生成経路で渡し、日本語で3～5件に要約する。キー未設定・復号失敗・LLM障害・空応答時は先頭5件のタイトル列挙へ縮退し、朝報全体を維持する。 | 旧 `src/services/briefingService.ts:221`。現行 `crates/yuuka-briefing/src/service.rs`、`crates/yuuka-supervisor/src/webhook.rs`。 |
 | R11 | 中 | 日報・週報のLLMまとめ | 活動・会話サンプルなどから自然文を生成し、失敗時のみ生データに戻していた。**修正済み（#108）**：旧 Node と同じ直近24時間/7日の活動（タスクのタグ・優先度、予定、支払い期日、カテゴリ別支出を含む）と会話素材を使い、日本語800文字以内の要約を指示する。会話は本人・同じBotのDM限定、最新40件からユーザー発言を最大20件・各100文字。既存 `GeminiAuxText` を、朝報ニュース要約（R10）・Webhook と共通の `yuuka_core::aux_text::AuxTextGenerator`（`ServiceContext` / `NotifierDeliveryRunner` の `aux_text`）経由で定時/テスト配信へ注入し、本人のキー・選択モデルを利用する。キー無し・生成失敗・空白応答・要約素材取得失敗時は既存の生データ本文/集計フィールド/送信先を維持する。本文4000文字上限。 | 旧 `src/services/reportService.ts:241`。現行 `crates/yuuka-services/src/report.rs`・`context.rs`・`delivery.rs`、`crates/yuuka-core/src/aux_text.rs`、`crates/yuuka-supervisor/src/main.rs`・`webhook.rs`。`report.rs` に生成成功/失敗/空応答、会話スコープ・件数・文字数、期間、出力上限の回帰テストを追加（非developでの `cargo test/build/run` は `CLAUDE.md` により禁止のため未実行。`cargo check --all-targets` でテストコードも検査）。 |
 | R12 | 中 | 検索スキル資料のプロンプト注入 | 資料が存在する環境では検索先・巡回方針を読み込んで注入していた。Rustには読み込み・埋め込み・注入がない。検索ツール自体は残る。旧Dockerイメージで資料が同梱されていたかは、この静的比較では確定していない。**修正済み（#109）**：旧 Node イメージは `COPY docs ./docs` で作業ディレクトリへ資料を同梱しており、本番でも常に注入されていたため復旧した。現行イメージは `docs/` を同梱しないので `include_str!` でビルド時に埋め込み、旧版と同じ位置（ファクトチェックと機能一覧の間）へ同じ見出し・前置きで注入する（Dockerfile の rust-builder 段に `COPY docs/skills` を追加）。資料内の存在しない `readCodeFile` への参照は削除した。 | 旧 `src/gemini.ts:80,223`。現行 `crates/yuuka-orchestrator/src/system_prompt.rs:142`、`docs/skills/search_skills.md`。 |
-| R13 | 中 | 会話からタイムラインへ写真・動画を保存 | `discord_attachment_url` / `discord_attachment_mime` を受け取り保存していた。現在の `addTimelineRecord` は添付URL取得・保存を行わず、対応する引数も宣言にない。WebのメディアアップロードAPIは存在する。 | 旧 `src/functions/timelineFunctions.ts:195`。現行 `crates/yuuka-timeline/src/tools.rs:201`、`crates/yuuka-timeline/src/media.rs`。 |
+| R13 | 中 | 会話からタイムラインへ写真・動画を保存 | `discord_attachment_url` / `discord_attachment_mime` を受け取り保存していた。**修正済み（#110）**：Discord・PWA・WebSocketの現在の本人添付をindexで選択し、本体と記録をV29で原子的に保存する。再試行はuser/Bot/送信元/添付で冪等、明示的再保存は別キー。元の添付順・既存API/UIを維持し、配信認可・削除・実体バックアップにも対応。任意URL取得は許可しない。詳細は [R13監査](2026-10-20-r13-attachments-timeline.md)。 | 旧 `src/functions/timelineFunctions.ts:195`。現行 `crates/yuuka-timeline/src/tools.rs:201`、`crates/yuuka-timeline/src/media.rs`。 |
 
 ### 家計・通知・定期処理
 
@@ -116,7 +116,7 @@
 | 予定・Google Calendar | ツール3件、HTTP対応あり、作業中の同期あり | 経路重複（D03） |
 | リマインド・期限通知・誕生日 | ツール3件、定期サービスあり | 通知先・過去日時・cron（R17～R19） |
 | 家計・予算・支払い予定 | 旧ツール14件に更新/削除追加、HTTP対応あり | 消込・連動取消・補足結果（R14～R16） |
-| タイムライン・当日計画・メディア | ツール4件、HTTP対応あり | 会話添付の保存（R13） |
+| タイムライン・当日計画・メディア | ツール4件、HTTP対応あり。R13本人添付保存・配信認可・実体バックアップ対応済み | — |
 | 個人ノート・クリップボード・連絡先 | ツール3+3+5件、HTTP対応あり | 今回の比較では主要機能の欠落を確認せず |
 | 汎用Botノート等 | ツール9件、HTTP対応あり | 今回の比較では主要機能の欠落を確認せず |
 | Playbook・操作履歴 | ツール5件、HTTP/定期処理あり | cron（R19）、履歴のメモリ化 |

@@ -7,6 +7,7 @@ on:
   pull_request:
     paths:
       - "crates/**"
+      - "scripts/verify-r13.mjs"
       - "xtask/**"
       - "Cargo.toml"
       - "Cargo.lock"
@@ -36,6 +37,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Timeline attachment schema regression (R13)
+        run: node scripts/verify-r13.mjs
       # rust-toolchain.toml（channel=1.96.1・components=clippy,rustfmt）を rustup が尊重する。
       - name: Show toolchain
         run: rustc --version && cargo --version && cargo fmt --version

@@ -44,6 +44,8 @@ pub struct IncomingChat {
     /// その他の添付（PWA チャットの画像・音声・動画・PDF 等・複数可）。`image`/`audio` と同じく
     /// 直近のユーザー発言へ inline data として渡す。
     pub attachments: Vec<InlineMedia>,
+    /// Current speaker-owned attachments eligible for an explicit timeline save.
+    pub timeline_attachments: Vec<yuuka_core::tool::ConversationAttachment>,
     /// 受信 Discord メッセージ ID（会話ログ永続化用）。
     pub discord_msg_id: Option<String>,
     /// 返信元 Discord メッセージ ID（返信チェーン解決用）。
@@ -231,13 +233,16 @@ pub trait TurnProcessor: Send + Sync {
         delivery: Arc<dyn TurnDelivery>,
     ) -> Result<TurnReply, TurnError>;
 
-    /// 秘書のレシート画像経路（現行 `parseReceipt`）。
+    /// 秘書のレシート画像経路（現行 `parseReceipt`）。`timeline_attachments` は現メッセージの
+    /// 本人添付（タイムライン保存の候補・[`IncomingChat::timeline_attachments`] と同じ）。
+    #[allow(clippy::too_many_arguments)]
     async fn parse_receipt(
         &self,
         bot_id: &BotId,
         user_id: &UserId,
         image: InlineMedia,
         caption: Option<String>,
+        timeline_attachments: Vec<yuuka_core::tool::ConversationAttachment>,
         status: StatusSink,
         delivery: Arc<dyn TurnDelivery>,
     ) -> Result<TurnReply, TurnError>;

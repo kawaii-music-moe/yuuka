@@ -51,6 +51,12 @@ pub enum ClientFrame {
         /// 任意の音声添付（`{mime, data}`、推奨 `audio/ogg`）。
         #[serde(skip_serializing_if = "Option::is_none", default)]
         audio: Option<Attachment>,
+        /// Stable across retransmission of this frame (timeline attachment idempotency).
+        #[serde(rename = "messageId", skip_serializing_if = "Option::is_none", default)]
+        message_id: Option<String>,
+        /// Ordered photos/videos; legacy image/audio remain supported.
+        #[serde(skip_serializing_if = "Vec::is_empty", default)]
+        attachments: Vec<Attachment>,
         /// 任意: 返信チェーンの対象メッセージ ID。
         #[serde(rename = "replyToId", skip_serializing_if = "Option::is_none", default)]
         reply_to_id: Option<String>,
@@ -72,6 +78,20 @@ pub enum ClientFrame {
     },
 }
 
+/// Generate once per outgoing frame; clones/retries retain this identity.
+pub fn new_message_id() -> String {
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    format!(
+        "{now}-{}-{}",
+        std::process::id(),
+        SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    )
+}
+
 impl ClientFrame {
     /// テキストのみの発話を作るショートカット。
     pub fn text(text: impl Into<String>) -> Self {
@@ -80,6 +100,8 @@ impl ClientFrame {
             image: None,
             audio: None,
             reply_to_id: None,
+            message_id: Some(new_message_id()),
+            attachments: Vec::new(),
         }
     }
 }
@@ -429,7 +451,10 @@ mod tests {
         let frame = ClientFrame::text("こんにちは");
         let json = serde_json::to_string(&frame).unwrap();
         // image/audio/replyToId は None なので出力されないこと。
-        assert_eq!(json, r#"{"type":"msg","text":"こんにちは"}"#);
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(value["text"], "こんにちは");
+        assert!(value["messageId"].as_str().is_some());
+        assert!(value.get("attachments").is_none());
         let back: ClientFrame = serde_json::from_str(&json).unwrap();
         assert_eq!(frame, back);
     }
@@ -444,6 +469,8 @@ mod tests {
             }),
             audio: None,
             reply_to_id: Some("123".into()),
+            message_id: Some(new_message_id()),
+            attachments: Vec::new(),
         };
         let json = serde_json::to_string(&frame).unwrap();
         let back: ClientFrame = serde_json::from_str(&json).unwrap();

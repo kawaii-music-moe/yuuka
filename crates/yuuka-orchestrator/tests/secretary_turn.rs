@@ -241,6 +241,7 @@ async fn receipt_draft_has_no_turn_side_effects_and_recording_uses_same_ocr() {
                     mime_type: "image/png".to_owned(),
                 },
                 Some("保存せず内容だけ教えて".to_owned()),
+                Vec::new(),
                 &null_sink(),
             )
             .await
@@ -317,6 +318,7 @@ async fn receipt_turn_falls_back_to_image_chat_when_ocr_rejects_image() {
                     mime_type: mime.to_owned(),
                 },
                 Some("この写真どう？".to_owned()),
+                Vec::new(),
                 &null_sink(),
             )
             .await
@@ -983,4 +985,221 @@ async fn personal_bot_turn_keeps_the_secretary_prompt_and_tools() {
     assert!(sys.contains("addTodo"));
     tools.sort();
     assert_eq!(tools, ["addTodo", "showRichContent"]);
+}
+
+struct AttachmentProbe;
+#[async_trait]
+impl Tool for AttachmentProbe {
+    fn declaration(&self) -> yuuka_core::tool::FunctionDeclaration {
+        yuuka_core::tool::FunctionDeclaration {
+            name: ToolName::checked("addTimelineRecord".to_owned()).unwrap(),
+            description: "probe".to_owned(),
+            parameters_json_schema: json!({"type":"object"}),
+            requires_confirmation: false,
+        }
+    }
+    async fn call(
+        &self,
+        ctx: &ToolContext,
+        _: serde_json::Value,
+    ) -> Result<ToolOutcome, ToolError> {
+        assert_eq!(ctx.user_id.as_str(), "u13");
+        assert_eq!(ctx.bot_id.as_str(), "media-bot");
+        let attachments = &ctx.conversation_attachments;
+        assert_eq!(attachments.len(), 2);
+        assert_eq!(attachments.first().unwrap().position, 0);
+        assert_eq!(attachments.get(1).unwrap().position, 2);
+        assert_eq!(attachments.first().unwrap().source_message_id, "discord:13");
+        assert_eq!(attachments.get(1).unwrap().mime_type, "video/mp4");
+        assert_eq!(attachments.get(1).unwrap().data_base64, "BAUG");
+        Ok(ToolOutcome::from_payload(json!({"success":true})))
+    }
+}
+struct AttachmentFactory;
+impl GeminiFactory for AttachmentFactory {
+    fn build(&self, _: &str, _: SecretString) -> Result<Arc<dyn GenerateBackend>, GeminiError> {
+        let responses=[
+            json!({"candidates":[{"content":{"role":"model","parts":[{"functionCall":{"name":"addTimelineRecord","args":{"date":"2026-10-20","type":"media","attachment_indexes":[0,2]}}}]}}]}),
+            json!({"candidates":[{"content":{"role":"model","parts":[{"text":"保存しました。"}]}}]}),
+        ].into_iter().map(|v| serde_json::from_value(v).unwrap()).collect();
+        Ok(Arc::new(FakeBackend {
+            responses: Mutex::new(responses),
+        }))
+    }
+}
+fn attachment_engine() -> (ChatEngine, Vec<yuuka_core::tool::ConversationAttachment>) {
+    attachment_engine_with(Arc::new(AttachmentFactory))
+}
+fn attachment_engine_with(
+    factory: Arc<dyn GeminiFactory>,
+) -> (ChatEngine, Vec<yuuka_core::tool::ConversationAttachment>) {
+    let (db, path) = fresh_db();
+    let crypto =
+        Arc::new(SystemCrypto::new(SecretString::from("attachment-test".to_owned())).unwrap());
+    seed_user_with_key(&path, &crypto, "u13");
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute(
+            "INSERT INTO bots(id,user_id,name) VALUES('media-bot','u13','Media')",
+            [],
+        )
+        .unwrap();
+    let provider = NativeProvider::new()
+        .with_tool(Arc::new(AttachmentProbe))
+        .unwrap();
+    let engine = ChatEngine::new(
+        db,
+        Some(crypto),
+        ToolRegistry::new().with_provider(Arc::new(provider)),
+        factory,
+        None,
+        Arc::new(yuuka_mcp::NullMcpClient),
+        None,
+    );
+    let attachments = [(0, "image/png", "AQID"), (2, "video/mp4", "BAUG")]
+        .into_iter()
+        .map(
+            |(position, mime, bytes)| yuuka_core::tool::ConversationAttachment {
+                source_message_id: "discord:13".to_owned(),
+                attachment_id: position.to_string(),
+                position,
+                mime_type: mime.to_owned(),
+                data_base64: bytes.to_owned(),
+            },
+        )
+        .collect();
+    (engine, attachments)
+}
+
+struct NoopDelivery;
+#[async_trait]
+impl yuuka_discord::TurnDelivery for NoopDelivery {
+    async fn on_interim(&self, _text: String) {}
+    async fn deliver_final(&self, _reply: yuuka_discord::TurnReply) {}
+}
+
+/// 共通 OCR（`readReceipt`）に応答したあと、秘書ターンでは保存候補を `addTimelineRecord` で保存する。
+struct ReceiptAttachmentBackend {
+    is_receipt: bool,
+    calls: Mutex<Vec<(Vec<String>, Vec<Content>)>>,
+}
+#[async_trait]
+impl GenerateBackend for ReceiptAttachmentBackend {
+    async fn generate(
+        &self,
+        _system_instruction: Option<&str>,
+        declarations: &[FunctionDeclaration],
+        contents: &[Content],
+        _tool_config: Option<ToolConfig>,
+    ) -> Result<GenerateContentResponse, GeminiError> {
+        let names = declarations
+            .iter()
+            .map(|d| d.name.clone())
+            .collect::<Vec<_>>();
+        let is_ocr = names == ["readReceipt"];
+        let mut calls = self.calls.lock().unwrap();
+        let turn_calls = calls.iter().filter(|(n, _)| n != &["readReceipt"]).count();
+        calls.push((names, contents.to_vec()));
+        let parts = if is_ocr {
+            json!([{"functionCall": {"name": "readReceipt", "args": {
+                "isReceipt": self.is_receipt, "date": "2026-10-20", "kind": "expense",
+                "category": "食費", "description": "店: 卵", "amount": 600,
+                "lines": [{"description": "卵", "category": "食費", "amount": 600}]
+            }}}])
+        } else if turn_calls == 0 {
+            json!([{"functionCall": {"name": "addTimelineRecord", "args": {
+                "date": "2026-10-20", "type": "media", "attachment_indexes": [0, 2]
+            }}}])
+        } else {
+            json!([{"text": "保存しました。"}])
+        };
+        Ok(serde_json::from_value(
+            json!({"candidates": [{"content": {"role": "model", "parts": parts}}]}),
+        )
+        .unwrap())
+    }
+}
+struct ReceiptAttachmentFactory(Arc<ReceiptAttachmentBackend>);
+impl GeminiFactory for ReceiptAttachmentFactory {
+    fn build(&self, _: &str, _: SecretString) -> Result<Arc<dyn GenerateBackend>, GeminiError> {
+        Ok(self.0.clone())
+    }
+}
+
+/// Discord の写真はレシート経路（`parse_receipt` → 共通 OCR の `receipt_turn`）を通る。
+/// OCR 後の秘書ターン・レシート以外のフォールバック・OCR が弾く画像のフォールバックの
+/// いずれでも、保存候補を秘書ターン（カタログ通知と `ToolContext`）へ渡す。
+#[tokio::test]
+async fn receipt_path_keeps_timeline_attachment_catalog() {
+    use yuuka_discord::TurnProcessor;
+    for (is_receipt, mime) in [
+        (true, "image/png"),
+        (false, "image/png"),
+        (true, "image/avif"),
+    ] {
+        let backend = Arc::new(ReceiptAttachmentBackend {
+            is_receipt,
+            calls: Mutex::new(Vec::new()),
+        });
+        let (engine, attachments) =
+            attachment_engine_with(Arc::new(ReceiptAttachmentFactory(backend.clone())));
+        let reply = engine
+            .parse_receipt(
+                &BotId::new("media-bot"),
+                &UserId::new("u13"),
+                yuuka_discord::InlineMedia {
+                    data_base64: "AQID".to_owned(),
+                    mime_type: mime.to_owned(),
+                },
+                Some("このレシートと動画を保存して".to_owned()),
+                attachments,
+                null_sink(),
+                Arc::new(NoopDelivery),
+            )
+            .await
+            .unwrap();
+        assert_eq!(reply.text, "保存しました。", "{is_receipt} {mime}");
+        let calls = backend.calls.lock().unwrap();
+        let ocr_path = is_receipt && mime == "image/png";
+        let ocr_calls = calls.iter().filter(|(n, _)| n == &["readReceipt"]).count();
+        assert_eq!(ocr_calls, usize::from(mime == "image/png"), "{mime}");
+        let turn = calls
+            .iter()
+            .filter(|(n, _)| n != &["readReceipt"])
+            .map(|(_, c)| serde_json::to_string(c).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(turn.len(), 2, "{is_receipt} {mime}");
+        assert!(
+            turn[0].contains("現在の発話者本人の保存可能な添付"),
+            "保存候補のカタログを秘書ターンへ通知する: {is_receipt} {mime}"
+        );
+        assert_eq!(turn[0].contains("receipt_ocr"), ocr_path, "{mime}");
+        assert_eq!(
+            turn[0].contains("inlineData"),
+            !ocr_path,
+            "OCR 済みのレシートだけ画像を外す: {is_receipt} {mime}"
+        );
+        // AttachmentProbe が ToolContext の保存候補を検証して成功を返している。
+        assert!(turn[1].contains("functionResponse"), "{is_receipt} {mime}");
+        assert!(turn[1].contains("\"success\":true"), "{is_receipt} {mime}");
+    }
+}
+
+#[tokio::test]
+async fn secretary_fc_receives_trusted_attachment_catalog_in_order() {
+    let (engine, attachments) = attachment_engine();
+    let reply = engine
+        .secretary_turn(
+            &BotId::new("media-bot"),
+            &UserId::new("u13"),
+            IncomingChat {
+                text: "この写真と動画を保存して".to_owned(),
+                timeline_attachments: attachments,
+                ..IncomingChat::default()
+            },
+            &null_sink(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(reply.text, "保存しました。");
 }

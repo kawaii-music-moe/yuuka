@@ -152,8 +152,10 @@ httpServer.on("upgrade", (req, socket, head) => {
 {
   "type": "msg",
   "text": "明日10時に歯医者リマインド",
+  "messageId": "<発話ごとの安定ID、再送時は同じID>", // R13。最大128バイト、任意
   "image": { "mime": "image/png",  "data": "<base64>" },   // 任意
   "audio": { "mime": "audio/ogg",  "data": "<base64>" },   // 任意
+  "attachments": [{ "mime": "video/mp4", "data": "<base64>" }], // 任意・順序付き複数添付
   "replyToId": "<任意: 返信チェーン>"
 }
 
@@ -163,6 +165,8 @@ httpServer.on("upgrade", (req, socket, head) => {
 // keepalive（任意。WS ping/pong を使うなら不要）
 { "type": "ping" }
 ```
+
+R13の保存候補は現在のフレームの写真/動画だけで、`image → audio → attachments[]` の順にindexを付ける（音声は保存対象外）。合計10件まで、既存フレーム上限と保存対象合計20MiB上限を適用する。再送では同じ `messageId` を使う。省略する旧クライアントには受信ごとのIDを割り当てるため、別受信をまたぐ冪等性が必要なクライアントはIDを送る。デスクトップ実装はフレーム生成時にIDを付け、再送・cloneで保持する。
 
 > Bot を切り替えたい場合はメッセージで切り替えるのではなく、**WS を再接続**（`?botId=` を変えて張り直す）。これにより「1 接続 1 Bot」と「接続束縛 botId の検証」が単純に保たれる。
 

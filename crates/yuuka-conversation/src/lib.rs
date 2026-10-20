@@ -398,6 +398,7 @@ mod tests {
             capabilities: yuuka_core::CapabilitySet::from_granted(vec!["memory".to_owned()]),
             mode: yuuka_core::TurnMode::Secretary,
             rich_reply_enabled: true,
+            conversation_attachments: Vec::new(),
         };
 
         // 条件なし → fail。

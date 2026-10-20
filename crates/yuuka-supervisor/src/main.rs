@@ -294,13 +294,16 @@ async fn run() -> Result<(), String> {
     // 同一 Arc を settings ルート（手動 trigger）と cron 常駐サービス（定期実行）へ共有する。
     let google_backup_client: Option<Arc<yuuka_google::GoogleBackupClient>> = match crypto.clone() {
         Some(crypto) if cfg.google_client_id.is_some() && cfg.google_client_secret.is_some() => {
-            Some(Arc::new(yuuka_google::GoogleBackupClient::new(
-                cfg.google_client_id.clone().unwrap_or_default(),
-                cfg.google_client_secret.clone().unwrap_or_default(),
-                crypto,
-                db.clone(),
-                http_client.clone(),
-            )))
+            Some(Arc::new(
+                yuuka_google::GoogleBackupClient::new(
+                    cfg.google_client_id.clone().unwrap_or_default(),
+                    cfg.google_client_secret.clone().unwrap_or_default(),
+                    crypto,
+                    db.clone(),
+                    http_client.clone(),
+                )
+                .with_media_dir(yuuka_web::WebConfig::from_core(&cfg).media_dir),
+            ))
         }
         _ => None,
     };
@@ -723,6 +726,8 @@ impl yuuka_finance::ReceiptParser for ReceiptParserAdapter {
                 &uid,
                 image,
                 additional_text.map(str::to_owned),
+                // 管理画面のレシート読み取りは会話添付を持たない（タイムライン保存候補なし）。
+                Vec::new(),
                 &status,
             )
             .await

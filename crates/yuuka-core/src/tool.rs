@@ -12,6 +12,26 @@ use serde_json::Value;
 use crate::error::ToolError;
 use crate::ids::{BotId, GuildId, UserId};
 
+/// A current-message attachment supplied by an authenticated transport, never by tool arguments.
+/// Debug deliberately omits the base64 payload.
+#[derive(Clone)]
+pub struct ConversationAttachment {
+    pub source_message_id: String,
+    pub attachment_id: String,
+    pub position: usize,
+    pub mime_type: String,
+    pub data_base64: String,
+}
+
+impl std::fmt::Debug for ConversationAttachment {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ConversationAttachment")
+            .field("position", &self.position)
+            .field("mime_type", &self.mime_type)
+            .finish_non_exhaustive()
+    }
+}
+
 /// ツール実行の必須スコープと能力を運ぶコンテキスト。
 ///
 /// `user_id` はデータ分離の必須キー（newtype で欠落を型排除）。副作用は本体を
@@ -31,6 +51,8 @@ pub struct ToolContext {
     pub mode: TurnMode,
     /// リッチ返信が有効か（`false` のとき push 禁止は呼び出し側で担保）。
     pub rich_reply_enabled: bool,
+    /// Only the authenticated speaker's current-message photos/videos.
+    pub conversation_attachments: Vec<ConversationAttachment>,
 }
 
 impl ToolContext {
@@ -43,6 +65,7 @@ impl ToolContext {
             capabilities: CapabilitySet::default(),
             mode: TurnMode::Secretary,
             rich_reply_enabled: false,
+            conversation_attachments: Vec::new(),
         }
     }
 }

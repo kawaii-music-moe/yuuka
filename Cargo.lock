@@ -3803,6 +3803,7 @@ dependencies = [
  "yuuka-orchestrator",
  "yuuka-persona",
  "yuuka-schedule",
+ "yuuka-timeline",
  "yuuka-todo",
  "yuuka-tools",
  "yuuka-types",

@@ -59,6 +59,8 @@ const USER_SCOPED_TABLES: &[(&str, &str)] = &[
     ("personas", "owner_id"),
     ("bot_active_personas", "user_id"),
     ("message_logs", "user_id"),
+    ("timeline_records", "user_id"),
+    ("day_plan_blocks", "user_id"),
     ("todos", "user_id"),
     ("schedules", "user_id"),
     ("reminders", "user_id"),
@@ -152,6 +154,7 @@ pub struct GoogleBackupClient {
     crypto: Arc<SystemCrypto>,
     db: Db,
     http: reqwest::Client,
+    media_dir: std::path::PathBuf,
 }
 
 impl std::fmt::Debug for GoogleBackupClient {
@@ -178,7 +181,15 @@ impl GoogleBackupClient {
             crypto,
             db,
             http,
+            media_dir: std::path::PathBuf::from("data/media"),
         }
+    }
+
+    /// Use the same legacy media directory as the timeline HTTP routes.
+    #[must_use]
+    pub fn with_media_dir(mut self, media_dir: std::path::PathBuf) -> Self {
+        self.media_dir = media_dir;
+        self
     }
 
     /// primary アカウントの復号済みリフレッシュトークンからアクセストークンを得る（`GoogleHttpClient`
@@ -382,7 +393,7 @@ impl GoogleBackupClient {
     /// # Errors
     /// 一時 DB 作成 / コピー / ZIP 化失敗時 [`GoogleError::Upstream`]。
     async fn export_and_zip(&self, user_id: &str) -> Result<Vec<u8>, GoogleError> {
-        let db_bytes = export_user_database(&self.db, user_id)
+        let db_bytes = export_user_database_with_media_dir(&self.db, user_id, &self.media_dir)
             .await
             .map_err(|e| GoogleError::Upstream(e.to_string()))?;
 
@@ -394,7 +405,18 @@ impl GoogleBackupClient {
 /// 本人のアカウント設定・所有 Bot とその業務データだけを SQLite バイト列へ抽出する。
 /// Google Drive バックアップと PIN 付き移行パッケージが同じ抽出規則を共有するための入口。
 pub async fn export_user_database(db: &Db, user_id: &str) -> Result<Vec<u8>, DbError> {
+    export_user_database_with_media_dir(db, user_id, std::path::Path::new("data/media")).await
+}
+
+/// Embed legacy disk media into the exported SQLite alongside all V29 media bytes.
+/// A missing referenced legacy file fails the backup instead of claiming a complete archive.
+pub async fn export_user_database_with_media_dir(
+    db: &Db,
+    user_id: &str,
+    media_dir: &std::path::Path,
+) -> Result<Vec<u8>, DbError> {
     let uid = user_id.to_owned();
+    let media_dir = media_dir.to_path_buf();
     db.read
         .read(move |conn| {
             let tmp = tempfile::Builder::new()
@@ -405,11 +427,89 @@ pub async fn export_user_database(db: &Db, user_id: &str) -> Result<Vec<u8>, DbE
             let tmp_path = tmp.path().to_path_buf();
             {
                 let dest = Connection::open(&tmp_path).map_err(map_sqlite)?;
-                export_user_data(conn, &dest, &uid).map_err(map_sqlite)?;
+                // Keep metadata and DB-resident bytes in one read snapshot.
+                conn.execute_batch("BEGIN DEFERRED").map_err(map_sqlite)?;
+                let result = export_user_data(conn, &dest, &uid).map_err(map_sqlite);
+                conn.execute_batch("ROLLBACK").map_err(map_sqlite)?;
+                result?;
+                embed_legacy_media(&dest, &media_dir)?;
             }
             std::fs::read(&tmp_path).map_err(|e| DbError::Operation(format!("read temp db: {e}")))
         })
         .await
+}
+
+/// Read media from the completed export, avoiding a second live DB/filesystem snapshot.
+pub fn exported_timeline_media(database: &[u8]) -> Result<Vec<(String, Vec<u8>)>, DbError> {
+    let mut tmp = tempfile::NamedTempFile::new().map_err(|e| DbError::Operation(e.to_string()))?;
+    tmp.write_all(database)
+        .map_err(|e| DbError::Operation(e.to_string()))?;
+    let conn = Connection::open(tmp.path()).map_err(map_sqlite)?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT filename,bytes FROM timeline_media_assets GROUP BY filename ORDER BY filename",
+        )
+        .map_err(map_sqlite)?;
+    let rows = stmt
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .map_err(map_sqlite)?;
+    let media: Vec<(String, Vec<u8>)> = rows.collect::<Result<Vec<_>, _>>().map_err(map_sqlite)?;
+    if media.iter().any(|(name, _)| {
+        name.is_empty() || name.contains('/') || name.contains('\\') || name.contains("..")
+    }) {
+        return Err(DbError::Operation(
+            "バックアップ対象のメディア名が不正です。".to_owned(),
+        ));
+    }
+    Ok(media)
+}
+
+/// Convert only the exported snapshot's referenced legacy files to transactional DB media.
+fn embed_legacy_media(dest: &Connection, media_dir: &std::path::Path) -> Result<(), DbError> {
+    if !table_has_column(dest, "timeline_media_assets", "bytes").map_err(map_sqlite)? {
+        return Ok(());
+    }
+    let mut stmt = dest.prepare("SELECT r.id,r.media_path,r.user_id,r.bot_id FROM timeline_records r \
+        WHERE r.media_path IS NOT NULL AND NOT EXISTS(SELECT 1 FROM timeline_media_assets a WHERE a.record_id=r.id)").map_err(map_sqlite)?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, String>(3)?,
+            ))
+        })
+        .map_err(map_sqlite)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(map_sqlite)?;
+    for (id, filename, uid, bid) in rows {
+        if filename.is_empty()
+            || filename.contains('/')
+            || filename.contains('\\')
+            || filename.contains("..")
+        {
+            return Err(DbError::Operation(
+                "バックアップ対象のメディア名が不正です。".to_owned(),
+            ));
+        }
+        let root = media_dir
+            .canonicalize()
+            .map_err(|_| DbError::Operation("メディア保存先を読み込めませんでした。".to_owned()))?;
+        let path = root.join(&filename).canonicalize().map_err(|_| {
+            DbError::Operation("バックアップ対象のメディアが見つかりません。".to_owned())
+        })?;
+        if !path.starts_with(&root) {
+            return Err(DbError::Operation(
+                "メディアが保存先の外にあります。".to_owned(),
+            ));
+        }
+        let bytes = std::fs::read(path)
+            .map_err(|_| DbError::Operation("メディアのバックアップに失敗しました。".to_owned()))?;
+        dest.execute("INSERT INTO timeline_media_assets(record_id,filename,mime_type,bytes,user_id,bot_id) VALUES(?1,?2,'application/octet-stream',?3,?4,?5)",
+            rusqlite::params![id,filename,bytes,uid,bid]).map_err(map_sqlite)?;
+    }
+    Ok(())
 }
 
 // ─── 純ロジック（テスト対象） ──────────────────────────────────────────────────
@@ -485,7 +585,20 @@ fn export_user_data(src: &Connection, dest: &Connection, user_id: &str) -> rusql
          WHERE m.user_id = ?1 OR b.user_id = ?1",
         user_id,
     )?;
+    copy_rows_from_select(
+        src,
+        dest,
+        "timeline_media_assets",
+        "SELECT a.* FROM timeline_media_assets a JOIN timeline_records r ON r.id=a.record_id \
+         LEFT JOIN bots b ON b.id=r.bot_id WHERE r.user_id=?1 OR b.user_id=?1",
+        user_id,
+    )?;
     copy_rows(src, dest, "bots", "user_id", user_id)?;
+    // Preserve R13 lifecycle cleanup in the exported database too.
+    let mut triggers = src.prepare("SELECT sql FROM sqlite_master WHERE type='trigger' AND name IN ('timeline_media_user_delete','timeline_media_bot_delete')")?;
+    for sql in triggers.query_map([], |r| r.get::<_, String>(0))? {
+        dest.execute_batch(&sql?)?;
+    }
     Ok(())
 }
 
@@ -1153,5 +1266,46 @@ mod tests {
         assert!(parse_backup_files(r#"{"kind":"x"}"#).is_empty());
         assert!(parse_backup_files("nope").is_empty());
         assert!(parse_backup_files(r#"{"files":[]}"#).is_empty());
+    }
+
+    #[tokio::test]
+    async fn timeline_export_contains_db_and_legacy_bytes_from_only_exported_records() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("source.db");
+        Connection::open(&path).unwrap();
+        let db = yuuka_web::Db::open(&path).unwrap();
+        db.writer.transaction(|tx| {
+            tx.execute_batch("INSERT INTO users(discord_id,username,salt) VALUES('u','U','x'),('other','O','x');
+                INSERT INTO bots(id,user_id,name) VALUES('b','u','B'),('foreign','other','F');
+                INSERT INTO timeline_records(id,user_id,bot_id,date,type,media_path,media_type) VALUES
+                (1,'u','b','2026-10-20','media','current.png','photo'),
+                (2,'u','b','2026-10-20','media','legacy.png','photo'),
+                (3,'other','foreign','2026-10-20','media','private.png','photo');
+                INSERT INTO timeline_media_assets(record_id,user_id,bot_id,filename,mime_type,bytes) VALUES
+                (1,'u','b','current.png','image/png',x'010203'),
+                (3,'other','foreign','private.png','image/png',x'999999');").map_err(yuuka_db::map_sqlite)?;
+            Ok(())
+        }).await.unwrap();
+        std::fs::write(temp.path().join("legacy.png"), [4, 5, 6]).unwrap();
+        let bytes = super::export_user_database_with_media_dir(&db, "u", temp.path())
+            .await
+            .unwrap();
+        let media = super::exported_timeline_media(&bytes).unwrap();
+        assert_eq!(
+            media,
+            vec![
+                ("current.png".to_owned(), vec![1, 2, 3]),
+                ("legacy.png".to_owned(), vec![4, 5, 6])
+            ]
+        );
+        // The export is self-contained: the legacy original is no longer needed to read it.
+        std::fs::remove_file(temp.path().join("legacy.png")).unwrap();
+        assert_eq!(super::exported_timeline_media(&bytes).unwrap(), media);
+        assert!(
+            super::export_user_database_with_media_dir(&db, "u", temp.path())
+                .await
+                .is_err(),
+            "missing referenced bytes cannot be reported as a successful complete backup"
+        );
     }
 }

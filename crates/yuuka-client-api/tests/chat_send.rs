@@ -1194,3 +1194,76 @@ async fn invalid_attachments_are_rejected_with_bad_request() {
         assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
     }
 }
+
+struct TimelineSaveFactory;
+impl GeminiFactory for TimelineSaveFactory {
+    fn build(&self, _: &str, _: SecretString) -> Result<Arc<dyn GenerateBackend>, GeminiError> {
+        let call=serde_json::from_value(json!({"candidates":[{"content":{"role":"model","parts":[{"functionCall":{"name":"addTimelineRecord","args":{"date":"2026-10-20","type":"media","attachment_indexes":[2,0]}}}]}}]})).unwrap();
+        Ok(Arc::new(FakeBackend {
+            responses: Mutex::new(VecDeque::from([call, text_response("保存しました。")])),
+        }))
+    }
+}
+#[tokio::test]
+async fn pwa_photos_and_videos_save_in_original_order_with_durable_source_identity() {
+    let (db, path) = fresh_db();
+    let crypto =
+        Arc::new(SystemCrypto::new(SecretString::from("timeline-pwa-test".to_owned())).unwrap());
+    seed_user_with_key(&path, &crypto, "u1");
+    let mut provider = yuuka_tools::NativeProvider::new();
+    for tool in yuuka_timeline::tools(db.clone()).unwrap() {
+        provider.register(tool).unwrap();
+    }
+    let registry = ToolRegistry::new().with_provider(Arc::new(provider));
+    let engine = Arc::new(ChatEngine::new(
+        db.clone(),
+        Some(crypto),
+        registry,
+        Arc::new(TimelineSaveFactory),
+        None,
+        Arc::new(yuuka_mcp::NullMcpClient),
+        None,
+    ));
+    let app = app(engine, db.clone());
+    let (status, body) = post_chat_body(
+        &app,
+        "u1",
+        json!({"content":"この写真と動画を保存して","attachments":[
+            {"name":"photo.png","mimeType":"image/png","dataBase64":"AQID"},
+            {"name":"memo.pdf","mimeType":"application/pdf","dataBase64":"AQID"},
+            {"name":"video.mp4","mimeType":"video/mp4","dataBase64":"BAUG"}
+        ]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    poll_for_reply_after(
+        &app,
+        "u1",
+        body["sinceId"].as_str().unwrap().parse().unwrap(),
+        200,
+    )
+    .await;
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    let mut stmt=conn.prepare("SELECT a.position,a.source_message_id,a.user_id,a.bot_id,a.bytes FROM timeline_media_assets a ORDER BY record_id").unwrap();
+    let rows = stmt
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, String>(3)?,
+                r.get::<_, Vec<u8>>(4)?,
+            ))
+        })
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(rows.len(), 2);
+    assert_eq!((rows.first().unwrap().0, rows.get(1).unwrap().0), (0, 2));
+    assert!(rows
+        .iter()
+        .all(|r| r.1.starts_with("pwa:") && r.2 == "u1" && r.3 == bot_of("u1")));
+    assert_eq!(rows.first().unwrap().1, rows.get(1).unwrap().1);
+    assert_eq!(rows.first().unwrap().4, vec![1, 2, 3]);
+    assert_eq!(rows.get(1).unwrap().4, vec![4, 5, 6]);
+}

@@ -332,6 +332,8 @@ impl ChatEngine {
 
     /// Discord / 管理画面の記帳経路。抽出は PWA と共有し、保存は従来の秘書ツールに任せる。
     /// OCR が失敗した場合は記帳ターンを開始しない。承認のタイミングは変更しない。
+    /// `timeline_attachments` は現在の発話者本人の保存候補（R13）。OCR 後の秘書ターンと、
+    /// レシート以外の画像会話へのフォールバックの両方へ渡す（管理画面は空）。
     ///
     /// # Errors
     /// 抽出・秘書ターン失敗時 [`TurnError`]。
@@ -341,6 +343,7 @@ impl ChatEngine {
         user_id: &UserId,
         image: InlineMedia,
         caption: Option<String>,
+        timeline_attachments: Vec<yuuka_core::tool::ConversationAttachment>,
         status: &StatusSink,
     ) -> Result<TurnReply, TurnError> {
         let today = chrono::Local::now().format("%Y-%m-%d").to_string();
@@ -361,6 +364,7 @@ impl ChatEngine {
                         IncomingChat {
                             text: caption.unwrap_or_default(),
                             image: Some(image),
+                            timeline_attachments,
                             ..IncomingChat::default()
                         },
                         status,
@@ -398,6 +402,7 @@ impl ChatEngine {
             IncomingChat {
                 text: caption.unwrap_or_default(),
                 image: Some(image),
+                timeline_attachments,
                 ..IncomingChat::default()
             },
             status,
@@ -552,6 +557,19 @@ impl ChatEngine {
             current.parts.retain(|part| part.inline_data.is_none());
             current.parts.push(Part::text(context));
         }
+        if !msg.timeline_attachments.is_empty() {
+            let catalog: Vec<_> = msg
+                .timeline_attachments
+                .iter()
+                .map(|a| serde_json::json!({"index": a.position, "mime_type": a.mime_type}))
+                .collect();
+            let notice = Part::text(format!(
+                "現在の発話者本人の保存可能な添付（添付順）: {}。タイムラインへの保存を依頼された場合だけ、addTimelineRecord の type=media と attachment_indexes で指定する。URLを指定しない。明示的な再保存以外は resave_key を指定しない。", serde_json::json!(catalog)
+            ));
+            if let Some(last) = contents.last_mut().filter(|c| matches!(c.role, Role::User)) {
+                last.parts.push(notice);
+            }
+        }
 
         // 3. システムプロンプト。システム Bot（`system_default`）はシステムの案内役なので、ペルソナ・
         //    カレンダー・コンテキストノート・想起といった個人向けの文脈を入れず、案内用の固定プロンプトで組む。
@@ -596,6 +614,7 @@ impl ChatEngine {
         ctx.rich_reply_enabled = rich;
         ctx.capabilities = caps;
         ctx.mode = TurnMode::Secretary;
+        ctx.conversation_attachments = msg.timeline_attachments.clone();
         // MCP 動的ツール: `mcp` 能力があるときだけ Bot の許可スコープで探索し、そのターン限りの provider として
         // snapshot へ層状に足す（Node `resolveMcpModule`: `caps.has("mcp")` ガード → getMcpFunctionModuleForBot）。
         // 探索は DB + tools/list（ネットワーク）を伴うため FC ループ直前に一度だけ行う。取得失敗でも空 provider。
@@ -1200,11 +1219,20 @@ impl TurnProcessor for ChatEngine {
         user_id: &UserId,
         image: InlineMedia,
         caption: Option<String>,
+        timeline_attachments: Vec<yuuka_core::tool::ConversationAttachment>,
         status: StatusSink,
         _delivery: Arc<dyn TurnDelivery>,
     ) -> Result<TurnReply, TurnError> {
-        self.receipt_turn(bot_id, user_id, image, caption, &status)
-            .await
+        // 写真をタイムラインへ保存する依頼にも応えられるよう、本人添付の保存候補も OCR 経路へ渡す。
+        self.receipt_turn(
+            bot_id,
+            user_id,
+            image,
+            caption,
+            timeline_attachments,
+            &status,
+        )
+        .await
     }
 
     async fn process_guild(
