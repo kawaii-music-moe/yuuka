@@ -11,13 +11,11 @@ mod chromium;
 mod interactive;
 mod markdown;
 mod search;
-mod ssrf;
 mod tools;
 
 /// 対話ブラウザの per-user セッション管理。supervisor が 1 つ生成し、対話 6 ツールと
 /// `browserFillCredential`（yuuka-credential）へ同じ Arc を注入する。
 pub use interactive::BrowserManager;
-/// 外向き URL の SSRF 検査（DNS 解決先を含む・Node `assertSafeOutboundUrl`）。briefing の RSS 取得でも
-/// 取得直前に使う。
-pub use ssrf::assert_safe_outbound_url;
 pub use tools::tools;
+/// 外向き URL の SSRF 検査。既存利用者向けに共通クレートの API を再公開する。
+pub use yuuka_outbound::assert_safe_outbound_url;
