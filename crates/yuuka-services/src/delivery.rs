@@ -22,6 +22,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use yuuka_briefing::{find_briefing, find_report, DeliveryRunner, EnabledBriefing, EnabledReport};
+use yuuka_core::aux_text::{AuxTextGenerator, NullAuxTextGenerator};
 use yuuka_web::Db;
 
 use crate::notifier::{DefaultTargetNotifier, Notifier, NotifyTarget};
@@ -31,6 +32,7 @@ use crate::{briefing, report};
 pub struct NotifierDeliveryRunner {
     db: Db,
     notifier: Arc<dyn Notifier>,
+    report_generator: Arc<dyn AuxTextGenerator>,
 }
 
 impl NotifierDeliveryRunner {
@@ -41,7 +43,17 @@ impl NotifierDeliveryRunner {
     #[must_use]
     pub fn new(db: Db, notifier: Arc<dyn Notifier>) -> Self {
         let notifier = Arc::new(DefaultTargetNotifier::new(db.clone(), notifier));
-        Self { db, notifier }
+        Self {
+            db,
+            notifier,
+            report_generator: Arc::new(NullAuxTextGenerator),
+        }
+    }
+    /// 定時配信と同じ補助生成ポートを注入する。
+    #[must_use]
+    pub fn with_report_generator(mut self, generator: Arc<dyn AuxTextGenerator>) -> Self {
+        self.report_generator = generator;
+        self
     }
 }
 
@@ -96,11 +108,18 @@ impl DeliveryRunner for NotifierDeliveryRunner {
             target_id,
         };
         let result = if has_config {
-            report::deliver(&self.db, self.notifier.as_ref(), &target).await
+            report::deliver(
+                &self.db,
+                self.notifier.as_ref(),
+                self.report_generator.as_ref(),
+                &target,
+            )
+            .await
         } else {
             report::deliver_to(
                 &self.db,
                 self.notifier.as_ref(),
+                self.report_generator.as_ref(),
                 &target,
                 NotifyTarget::Default,
             )

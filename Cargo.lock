@@ -4166,6 +4166,7 @@ dependencies = [
  "tokio",
  "tracing",
  "yuuka-briefing",
+ "yuuka-conversation",
  "yuuka-core",
  "yuuka-db",
  "yuuka-personal",

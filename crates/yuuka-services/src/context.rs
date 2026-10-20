@@ -6,6 +6,7 @@
 
 use std::sync::Arc;
 
+use yuuka_core::aux_text::{AuxTextGenerator, NullAuxTextGenerator};
 use yuuka_core::CrossUserAccess;
 use yuuka_web::Db;
 
@@ -31,6 +32,8 @@ pub struct ServiceContext {
     pub backup: Arc<dyn BackupRunner>,
     /// Google カレンダーの定期取り込みポート（未配線時は [`NullCalendarSyncRunner`]）。
     pub calendar_sync: Arc<dyn CalendarSyncRunner>,
+    /// 日報・週報の補助生成（未配線・失敗時は生データ）。
+    pub report_generator: Arc<dyn AuxTextGenerator>,
     /// 横断（全ユーザー跨ぎ）アクセス証憑。cron の起点はここに限定される。
     pub cross: CrossUserAccess,
 }
@@ -52,8 +55,16 @@ impl ServiceContext {
             playbook_runner,
             backup: Arc::new(NullBackupRunner),
             calendar_sync: Arc::new(NullCalendarSyncRunner),
+            report_generator: Arc::new(NullAuxTextGenerator),
             cross: CrossUserAccess::for_scheduled_task(),
         }
+    }
+
+    /// 日報・週報へユーザーキーによる補助生成を注入する。
+    #[must_use]
+    pub fn with_report_generator(mut self, generator: Arc<dyn AuxTextGenerator>) -> Self {
+        self.report_generator = generator;
+        self
     }
 
     /// バックアップ実行ポートを差し替える（main が `GoogleBackupClient` アダプタを注入する）。

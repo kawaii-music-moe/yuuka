@@ -39,7 +39,7 @@
 | R08 | 中 | 返信元チェーンの文脈・想起への利用 | 返信元IDから過去の会話を遡り、本文と記憶検索に使っていた。現在はIDを受け取って保存するが、会話構築時にチェーンを復元しない。想起関数にも空配列を渡す。遠い発言への「あれについて」の理解が後退する。 | 旧 `src/gemini.ts:1030,1406,1514`。現行 `crates/yuuka-orchestrator/src/engine.rs:392,432`、`crates/yuuka-orchestrator/src/synapse_recall.rs:35`。 |
 | R09 | 中 | デスクトップ/WSのボタン操作・メッセージ更新 | WSの `interaction` を処理し、`update` や `push` を返していた。現在はinteractionフレームを無視し、返信のcomponentsも常に空。Discordのボタン処理は存在する。 | 旧 `src/server/chatWebSocket.ts:174`、`src/services/componentInteractionService.ts`。現行 `crates/yuuka-supervisor/src/ws.rs:143,269,341`。 |
 | R10 | 中 | 朝報ニュースのLLM要約 | RSSを補助LLMで3～5件にまとめていた。現在はタイトル一覧のみで、要約を呼ばない。天気取得・RSS取得・定期配信自体は存在する。 | 旧 `src/services/briefingService.ts:221`。現行 `crates/yuuka-briefing/src/service.rs:74`。 |
-| R11 | 中 | 日報・週報のLLMまとめ | 活動・会話サンプルなどから自然文を生成し、失敗時のみ生データに戻していた。現在は常に生データの定型出力。 | 旧 `src/services/reportService.ts:241`。現行 `crates/yuuka-services/src/report.rs:150,312`。`crates/yuuka-gemini/src/client.rs:251` の補助生成APIはあるが、この処理から呼ばれない。 |
+| R11 | 中 | 日報・週報のLLMまとめ | 活動・会話サンプルなどから自然文を生成し、失敗時のみ生データに戻していた。**修正済み（#108）**：旧 Node と同じ直近24時間/7日の活動（タスクのタグ・優先度、予定、支払い期日、カテゴリ別支出を含む）と会話素材を使い、日本語800文字以内の要約を指示する。会話は本人・同じBotのDM限定、最新40件からユーザー発言を最大20件・各100文字。既存 `GeminiAuxText` を共通ポート経由で定時/テスト配信へ注入し、本人のキー・選択モデルを利用する。キー無し・生成失敗・空白応答・要約素材取得失敗時は既存の生データ本文/集計フィールド/送信先を維持する。本文4000文字上限。 | 旧 `src/services/reportService.ts:241`。現行 `crates/yuuka-services/src/report.rs`・`context.rs`・`delivery.rs`、`crates/yuuka-core/src/aux_text.rs`、`crates/yuuka-supervisor/src/main.rs`・`webhook.rs`。`report.rs` に生成成功/失敗/空応答、会話スコープ・件数・文字数、期間、出力上限の回帰テストを追加（非developでの `cargo test/build/run` は `CLAUDE.md` により禁止のため未実行。`cargo check --all-targets` でテストコードも検査）。 |
 | R12 | 中 | 検索スキル資料のプロンプト注入 | 資料が存在する環境では検索先・巡回方針を読み込んで注入していた。Rustには読み込み・埋め込み・注入がない。検索ツール自体は残る。旧Dockerイメージで資料が同梱されていたかは、この静的比較では確定していない。**修正済み（#109）**：旧 Node イメージは `COPY docs ./docs` で作業ディレクトリへ資料を同梱しており、本番でも常に注入されていたため復旧した。現行イメージは `docs/` を同梱しないので `include_str!` でビルド時に埋め込み、旧版と同じ位置（ファクトチェックと機能一覧の間）へ同じ見出し・前置きで注入する（Dockerfile の rust-builder 段に `COPY docs/skills` を追加）。資料内の存在しない `readCodeFile` への参照は削除した。 | 旧 `src/gemini.ts:80,223`。現行 `crates/yuuka-orchestrator/src/system_prompt.rs:142`、`docs/skills/search_skills.md`。 |
 | R13 | 中 | 会話からタイムラインへ写真・動画を保存 | `discord_attachment_url` / `discord_attachment_mime` を受け取り保存していた。現在の `addTimelineRecord` は添付URL取得・保存を行わず、対応する引数も宣言にない。WebのメディアアップロードAPIは存在する。 | 旧 `src/functions/timelineFunctions.ts:195`。現行 `crates/yuuka-timeline/src/tools.rs:201`、`crates/yuuka-timeline/src/media.rs`。 |
 
@@ -120,7 +120,7 @@
 | 個人ノート・クリップボード・連絡先 | ツール3+3+5件、HTTP対応あり | 今回の比較では主要機能の欠落を確認せず |
 | 汎用Botノート等 | ツール9件、HTTP対応あり | 今回の比較では主要機能の欠落を確認せず |
 | Playbook・操作履歴 | ツール5件、HTTP/定期処理あり | cron（R19）、履歴のメモリ化 |
-| 朝報・日報・週報 | ツール4件、定期処理あり | 手動テスト・LLM生成・集計分離（R02/R10/R11/R24） |
+| 朝報・日報・週報 | ツール4件、定期処理あり | 手動テスト・LLM生成・集計分離（R02/R10/R11/R24。R11は #108 で対応） |
 | Webhook | HTTP対応あり、管理CRUDあり | 実受信処理の全面未接続（R01） |
 | ブラウザ・資格情報・チャート・リッチ返信 | ツール9+5+1+1件、実装接続あり | 個々の外部サイト動作は未検証、WS componentsはR09 |
 | MCP・Google認可・バックアップ | HTTPと実クライアントの接続あり | 実サービスへの通信成功は未検証 |

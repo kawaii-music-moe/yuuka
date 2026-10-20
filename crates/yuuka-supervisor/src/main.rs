@@ -397,8 +397,11 @@ async fn run() -> Result<(), String> {
     // 配信設定ルータ（issue #99）: 朝報・日報/週報のテスト配信を、定時配信と同じ生成・送信経路で
     // Discord Messenger へ送る。REST 送信は gateway 非依存のため YUUKA_RUST_CRON/DISCORD に関わらず live。
     // 同じ runner を runBriefingNow（`deliver: true`）にも設定する（issue #136）。
-    let delivery_runner: Arc<dyn yuuka_briefing::DeliveryRunner> =
-        Arc::new(NotifierDeliveryRunner::new(db.clone(), messenger.clone()));
+    let report_generator = Arc::new(GeminiAuxText::new(db.clone(), crypto.clone()));
+    let delivery_runner: Arc<dyn yuuka_briefing::DeliveryRunner> = Arc::new(
+        NotifierDeliveryRunner::new(db.clone(), messenger.clone())
+            .with_report_generator(report_generator.clone()),
+    );
     briefing_delivery.set(delivery_runner.clone());
     let briefing_routes = yuuka_briefing::routes_with(delivery_runner);
 
@@ -531,7 +534,9 @@ async fn run() -> Result<(), String> {
             db: service_ctx.db.clone(),
             calendar: google_events.clone(),
         });
-        service_ctx = service_ctx.with_calendar_sync(calendar_sync);
+        service_ctx = service_ctx
+            .with_calendar_sync(calendar_sync)
+            .with_report_generator(report_generator);
         let cron = build_supervised_services(&service_ctx, &cfg.reminder_cron);
         tracing::warn!(
             count = cron.len(),
