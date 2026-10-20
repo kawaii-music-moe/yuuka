@@ -278,7 +278,8 @@ impl Tool for AddExpenseTool {
                     "type": { "type": "string", "description": "収入か支出か。'expense'=支出（既定）/'income'=収入（任意）" },
                     "memo": { "type": "string", "description": "メモ。店名・品目・用途など（任意）" },
                     "date": { "type": "string", "description": "日付。形式 YYYY-MM-DD。省略=今日（任意）" },
-                    "time": { "type": "string", "description": "時刻。形式 HH:MM:SS（任意）" }
+                    "time": { "type": "string", "description": "時刻。形式 HH:MM:SS（任意）" },
+                    "source": { "type": "string", "enum": ["manual", "receipt_ocr"], "description": "レシート読み取りからの記帳は receipt_ocr。省略は manual" }
                 },
                 "required": ["amount", "category"]
             }),
@@ -313,7 +314,13 @@ impl Tool for AddExpenseTool {
         };
 
         let expense = ExpenseRepo::new(&self.db)
-            .add(&scope_of(ctx), new)
+            .add_with_source(
+                &scope_of(ctx),
+                new,
+                args.get("source")
+                    .and_then(Value::as_str)
+                    .unwrap_or("manual"),
+            )
             .await
             .map_err(exec_err)?;
 
@@ -1723,6 +1730,35 @@ mod tests {
             .iter()
             .find(|t| t.declaration().name.as_str() == name)
             .unwrap()
+    }
+
+    #[tokio::test]
+    async fn receipt_source_is_saved_by_existing_tool_and_scoped() {
+        let db = seed_db();
+        let tool_set = tools(db.clone()).unwrap();
+        let add = find(&tool_set, "addExpense");
+        for (source, expected) in [
+            (Some("receipt_ocr"), "receipt_ocr"),
+            (Some("unknown"), "manual"),
+            (None, "manual"),
+        ] {
+            let mut args = json!({"amount": 600, "category": "食費"});
+            if let Some(source) = source {
+                args["source"] = json!(source);
+            }
+            let out = add.call(&ctx(), args).await.unwrap();
+            assert_eq!(out.payload["success"], true);
+            let id = out.payload["expense"]["id"].as_i64().unwrap();
+            let repo = ExpenseRepo::new(&db);
+            let saved = repo.get(&scope_of(&ctx()), id).await.unwrap().unwrap();
+            assert_eq!(saved.source, expected);
+            for foreign in [
+                UserScope::new(UserId::new("other"), ctx().bot_id),
+                UserScope::new(ctx().user_id, BotId::new("other-bot")),
+            ] {
+                assert!(repo.get(&foreign, id).await.unwrap().is_none());
+            }
+        }
     }
 
     #[tokio::test]

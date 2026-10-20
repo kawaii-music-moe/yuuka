@@ -8,6 +8,7 @@ publish.workspace = true
 description = "yuuka foundation: 層別エラー・config・secrets・telemetry・UserId・Tool/Repo 契約トレイト"
 
 [dependencies]
+base64.workspace = true
 thiserror.workspace = true
 serde.workspace = true
 serde_json.workspace = true

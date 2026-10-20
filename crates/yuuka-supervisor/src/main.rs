@@ -710,23 +710,23 @@ impl yuuka_finance::ReceiptParser for ReceiptParserAdapter {
                 rate_limit_message(exceeded),
             ));
         }
-        // InlineMedia は `;` 以降を除去した MIME を要求する（Gemini inlineData 用）。
-        let clean_mime = mime_type
-            .split(';')
-            .next()
-            .unwrap_or(mime_type)
-            .trim()
-            .to_owned();
-        let msg = yuuka_discord::IncomingChat {
-            text: additional_text.unwrap_or_default().to_owned(),
-            image: Some(yuuka_discord::InlineMedia {
-                data_base64: image_base64.to_owned(),
-                mime_type: clean_mime,
-            }),
-            ..Default::default()
+        // 入口で共通検証・正規化済み。OCR 自体も同じ検証を使う。
+        let image = yuuka_discord::InlineMedia {
+            data_base64: image_base64.to_owned(),
+            mime_type: mime_type.to_owned(),
         };
         let status: yuuka_discord::StatusSink = Arc::new(|_| {});
-        match self.engine.secretary_turn(&bid, &uid, msg, &status).await {
+        match self
+            .engine
+            .receipt_turn(
+                &bid,
+                &uid,
+                image,
+                additional_text.map(str::to_owned),
+                &status,
+            )
+            .await
+        {
             Ok(reply) => Ok(serde_json::Value::String(reply.text)),
             // 秘書ターンの hard failure（LLM ソフトエラーは Ok(reply) に畳まれる）→ 503。
             Err(_) => Err(yuuka_finance::ReceiptError::Unavailable),
