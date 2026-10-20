@@ -51,7 +51,7 @@ mod tests {
     static SEQ: AtomicU64 = AtomicU64::new(0);
 
     // Node migrations の personas テーブル定義（owner_id スコープ・bot_id なし）。
-    const PERSONAS_DDL: &str = "CREATE TABLE personas (
+    const PERSONAS_DDL: &str = "DROP TABLE IF EXISTS personas; CREATE TABLE personas (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         owner_id TEXT NOT NULL,
         name TEXT NOT NULL,
@@ -68,7 +68,9 @@ mod tests {
             std::process::id()
         ));
         {
-            let conn = rusqlite::Connection::open(&path).expect("seed db");
+            let mut conn = rusqlite::Connection::open(&path).expect("seed db");
+            // Install the isolated unit schema after migrating the real schema (SD07).
+            yuuka_db::run_migrations(&mut conn).expect("migrate before unit fixture");
             conn.execute_batch(PERSONAS_DDL).expect("create personas");
         }
         Db::open(&path).expect("open db")
@@ -94,9 +96,10 @@ mod tests {
         UserScope::with_owner(UserId::new(user), BotId::new(bot), UserId::new(owner))
     }
 
-    const ACTIVE_DDL: &str = "CREATE TABLE bot_active_personas (
+    const ACTIVE_DDL: &str =
+        "DROP TABLE IF EXISTS bot_active_personas; CREATE TABLE bot_active_personas (
         user_id TEXT NOT NULL,
-        bot_id TEXT NOT NULL DEFAULT 'system_default',
+        bot_id TEXT NOT NULL,
         persona_id INTEGER NOT NULL,
         updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
         PRIMARY KEY (user_id, bot_id)
@@ -109,7 +112,9 @@ mod tests {
             std::process::id()
         ));
         {
-            let conn = rusqlite::Connection::open(&path).expect("seed db");
+            let mut conn = rusqlite::Connection::open(&path).expect("seed db");
+            // Install the isolated unit schema after migrating the real schema (SD07).
+            yuuka_db::run_migrations(&mut conn).expect("migrate before unit fixture");
             conn.execute_batch(PERSONAS_DDL).expect("create personas");
             conn.execute_batch(ACTIVE_DDL)
                 .expect("create bot_active_personas");
@@ -363,7 +368,9 @@ mod tests {
             std::process::id()
         ));
         {
-            let conn = rusqlite::Connection::open(&path).expect("seed db");
+            let mut conn = rusqlite::Connection::open(&path).expect("seed db");
+            // Install the isolated unit schema after migrating the real schema (SD07).
+            yuuka_db::run_migrations(&mut conn).expect("migrate before unit fixture");
             conn.execute_batch(PERSONAS_DDL).expect("create personas");
         }
         (Db::open(&path).expect("open db"), path)

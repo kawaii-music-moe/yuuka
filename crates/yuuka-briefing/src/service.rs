@@ -251,7 +251,7 @@ async fn summarize_news(
 
 async fn fetch_news(feeds: &[String], keywords: &[String]) -> Vec<NewsItem> {
     fetch_news_with(feeds, keywords, |url| async move {
-        yuuka_browser::assert_safe_outbound_url(&url).await.is_ok()
+        yuuka_outbound::assert_safe_outbound_url(&url).await.is_ok()
     })
     .await
 }

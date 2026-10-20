@@ -61,11 +61,11 @@ mod tests {
 
     static SEQ: AtomicU64 = AtomicU64::new(0);
 
-    // Node migrations.ts の reminders 表 + v3 で後付けされる bot_id 列（DEFAULT 'system_default'）。
-    const REMINDERS_DDL: &str = "CREATE TABLE reminders (
+    // reminders の単体fixture（V27同様、bot_id は NOT NULL・既定値なし）。
+    const REMINDERS_DDL: &str = "DROP TABLE IF EXISTS reminders; CREATE TABLE reminders (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id TEXT NOT NULL,
-        bot_id TEXT NOT NULL DEFAULT 'system_default',
+        bot_id TEXT NOT NULL,
         message TEXT NOT NULL,
         trigger_at TEXT NOT NULL,
         repeat_rule TEXT,
@@ -84,7 +84,9 @@ mod tests {
             std::process::id()
         ));
         {
-            let conn = rusqlite::Connection::open(&path).expect("seed db");
+            let mut conn = rusqlite::Connection::open(&path).expect("seed db");
+            // Install the isolated unit schema after migrating the real schema (SD07).
+            yuuka_db::run_migrations(&mut conn).expect("migrate before unit fixture");
             conn.execute_batch(REMINDERS_DDL).expect("create reminders");
         }
         Db::open(&path).expect("open db")

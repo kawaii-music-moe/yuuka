@@ -142,9 +142,17 @@
 | ID | 状態 | 内容 |
 |---|---|---|
 | R10 | 対応済み（#107） | `NewsSummarizer` ポートを朝報の手動表示・テスト配信・定期配信へ共通接続し、supervisor から既存 `GeminiClient::generate_aux`（ユーザー本人のキー・設定モデル、60秒タイムアウト、最大2リトライ）を注入した。旧Nodeと同じ最大30件の入力・日本語3～5件プロンプト・1024文字出力上限を維持し、補助生成を利用できない全ケースでは先頭5見出しへフォールバックする。 |
+| R25 / D06 | 対応済み（#122 / #130） | R25 は #156（`893d792`）で RSS の DNS 解決先と各リダイレクト先の検査を復旧済み。D06 は `yuuka-outbound` へ browser / MCP / briefing の検査を集約し、登録時は `RegistrationPolicy::BriefingLegacy` として既存の許容範囲を維持。DNS の全件検査・都度再検査・日本語エラー・RSS の最大5回の各ホップ検査を維持した。責務・全通信経路・既存の TOCTOU / redirect の制約・回帰確認は [詳細記録](2026-10-20-d06-ssrf-common.md) を参照。 |
 | R19 / D04 | 対応済み（#116 / #128） | cron 式ユーティリティを `yuuka-services` から循環依存のない `crates/yuuka-core/src/cron_util.rs` へ移し、登録時検証 `cron_util::is_valid` を追加した。ToDo・支払い予定・リマインド・朝報/日報週報設定のツールと HTTP（`POST /api/tasks/add`・`POST /api/expenses/plans/add`・`POST /api/reminders/add` を含む）、Playbook スケジュールのWeb登録は、実行側と同じ croner parser で検証する（HTTP の不正式は 400、空の repeat_rule は単発扱い）。範囲外の値・発火日が実在しない式（例：`0 0 30 2 *`）は保存しない。Playbook は Node と同じく 400「無効なcron式です。」を返す。各ドメインに 5 フィールドだが不正な式の回帰テストを追加した。 |
 | D05 | 対応済み（#129） | 日時の解釈・保存形式変換を `crates/yuuka-core/src/datetime.rs` に集め、`yuuka-reminder/src/datetime.rs`・`yuuka-schedule/src/datetime.rs`・`yuuka-client-api` の日時変換・`cron_util::to_db_datetime` を置き換えた。用途差は関数名で残した：リマインド入力 `input_to_db_local`（オフセット付きはサーバーのローカル TZ へ換算・Node `toDbDateTime` パリティ）、予定入力 `input_to_db_jst`（JST 固定へ換算）、PWA の `datetime-local` 入力 `browser_local_to_db`（`T` 区切りのみ受理）、PWA 向け出力 `db_to_utc_iso`、実行時の時刻 `local_to_db`。前 2 つの受理形式（日付のみ／`T`・空白区切り／秒・小数秒は任意／RFC 3339）は同じ parser に揃えた。挙動は変えていない（本番は `TZ=Asia/Tokyo` なので Local と JST 固定は同じ結果になる）。対象外として残る個別変換：`yuuka-google/src/http.rs` の Google API ⇔ ローカル暦変換、`yuuka-services` の `playbook_schedule.rs` / `backup.rs` の DB 文字列パース。 |
 | X01 | 仕様として受容（#133） | 操作履歴はメモリ保持のまま。理由は「設計上の変更・縮小」表を参照。 |
 | X02 | 仕様として受容（#134）＋一部修正 | 複数プロセス・再起動を跨ぐカウンタ共有は持たない。レシート読み取り（`/api/expenses/upload-receipt`）が別インスタンスのレート制限を使っていたため、Discord/PWA と同じ共有インスタンスへ揃えた。 |
 | X03 | 仕様として受容（#135） | 会話履歴は SQLite 直読みのまま。理由は「設計上の変更・縮小」表を参照。 |
 | X05 | 対応済み（#137） | services の通知 payload に Embed を通し、朝報・日報・週報と同じ経路を使うテスト配信を旧 Node 相当のカード表示へ戻した。LLM 要約など別の監査差分には変更を加えていない。 |
+
+## システムBotの暗黙帰属（SD07 / #145）
+
+V27で17テーブルの `bot_id NOT NULL` を維持してDEFAULTを除去し、退役済みの
+`mcp_servers.bot_id` とその専用索引を削除した。既存行は再帰属・削除せず保持する。
+対象18テーブル、参照/INSERT経路、FK・索引・FTS・移行失敗時の扱いと検証範囲は
+[SD07監査](2026-10-20-sd07-bot-id-default.md)を参照。

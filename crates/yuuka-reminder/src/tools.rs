@@ -472,10 +472,10 @@ mod tests {
     static SEQ: AtomicU64 = AtomicU64::new(0);
 
     // lib.rs の #[cfg(test)] REMINDERS_DDL と同一（Node migrations.ts の reminders 表 + bot_id 列）。
-    const REMINDERS_DDL: &str = "CREATE TABLE reminders (
+    const REMINDERS_DDL: &str = "DROP TABLE IF EXISTS reminders; CREATE TABLE reminders (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id TEXT NOT NULL,
-        bot_id TEXT NOT NULL DEFAULT 'system_default',
+        bot_id TEXT NOT NULL,
         message TEXT NOT NULL,
         trigger_at TEXT NOT NULL,
         repeat_rule TEXT,
@@ -494,7 +494,9 @@ mod tests {
             std::process::id()
         ));
         {
-            let conn = Connection::open(&path).unwrap();
+            let mut conn = Connection::open(&path).unwrap();
+            // Install the isolated unit schema after migrating the real schema (SD07).
+            yuuka_db::run_migrations(&mut conn).expect("migrate before unit fixture");
             conn.execute_batch(REMINDERS_DDL).unwrap();
         }
         Db::open(&path).unwrap()

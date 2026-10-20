@@ -68,55 +68,12 @@ pub fn tools_with_news_summarizer(
     ])
 }
 
-/// SSRF ガード: 公開 http(s) URL らしいか（Node `isLikelyPublicHttpUrl`）。内部/ローカル/非 http(s) を拒否。
+/// briefing 登録時の互換ポリシー。通信時は別途 DNS を含む厳密検査を行う。
 pub(crate) fn is_likely_public_http_url(raw: &str) -> bool {
-    let Some(rest) = raw
-        .strip_prefix("http://")
-        .or_else(|| raw.strip_prefix("https://"))
-    else {
-        return false;
-    };
-    // authority = 最初の '/' '?' '#' まで。
-    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
-    if authority.contains('@') {
-        return false; // userinfo は拒否。
-    }
-    // ホスト（ポート除去・IPv6 は角括弧内）。
-    let host = if let Some(stripped) = authority.strip_prefix('[') {
-        stripped.split(']').next().unwrap_or("")
-    } else {
-        authority.rsplit_once(':').map_or(authority, |(h, _)| h)
-    }
-    .to_ascii_lowercase();
-    if host.is_empty() || host == "localhost" || host.ends_with(".localhost") {
-        return false;
-    }
-    if let Ok(v4) = host.parse::<std::net::Ipv4Addr>() {
-        return !is_blocked_ipv4(v4);
-    }
-    if let Ok(v6) = host.parse::<std::net::Ipv6Addr>() {
-        return !is_blocked_ipv6(v6);
-    }
-    // ドメイン名は公開扱い（DNS リバインドは実行時の fetch 側で別途対処）。
-    true
-}
-
-fn is_blocked_ipv4(ip: std::net::Ipv4Addr) -> bool {
-    let o = ip.octets();
-    ip.is_private()
-        || ip.is_loopback()
-        || ip.is_link_local()
-        || ip.is_unspecified()
-        || o[0] == 0 // 0.0.0.0/8 "this host"
-        || (o[0] == 192 && o[1] == 0 && o[2] == 0) // 192.0.0.0/24
-}
-
-fn is_blocked_ipv6(ip: std::net::Ipv6Addr) -> bool {
-    let seg0 = ip.segments()[0];
-    ip.is_loopback()
-        || ip.is_unspecified()
-        || (seg0 & 0xfe00) == 0xfc00 // fc00::/7 ULA
-        || (seg0 & 0xffc0) == 0xfe80 // fe80::/10 link-local
+    yuuka_outbound::is_likely_public_http_url(
+        raw,
+        yuuka_outbound::RegistrationPolicy::BriefingLegacy,
+    )
 }
 
 fn fail(message: impl Into<String>) -> ToolOutcome {
@@ -508,17 +465,17 @@ mod tests {
 
     static SEQ: AtomicU64 = AtomicU64::new(0);
 
-    // briefing_configs / report_configs を FK 無しで先に作る（V17 の users FK を避ける）。
-    const DDL: &str = "CREATE TABLE briefing_configs (\
-        user_id TEXT NOT NULL, bot_id TEXT NOT NULL DEFAULT 'system_default', \
+    // briefing_configs / report_configs を migration 後に FK 無しで置き換える（V17 の users FK を避ける）。
+    const DDL: &str = "DROP TABLE IF EXISTS briefing_configs; CREATE TABLE briefing_configs (\
+        user_id TEXT NOT NULL, bot_id TEXT NOT NULL, \
         enabled INTEGER NOT NULL DEFAULT 0, schedule_cron TEXT NOT NULL DEFAULT '0 7 * * *', \
         target_type TEXT NOT NULL DEFAULT 'dm', target_id TEXT, weather_lat REAL, weather_lng REAL, \
         location_name TEXT, news_feeds TEXT NOT NULL DEFAULT '[]', \
         news_keywords TEXT NOT NULL DEFAULT '[]', \
         updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime')), PRIMARY KEY (user_id, bot_id));\
-        CREATE TABLE report_configs (\
+        DROP TABLE IF EXISTS report_configs; CREATE TABLE report_configs (\
         id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, \
-        bot_id TEXT NOT NULL DEFAULT 'system_default', type TEXT NOT NULL, \
+        bot_id TEXT NOT NULL, type TEXT NOT NULL, \
         enabled INTEGER NOT NULL DEFAULT 0, schedule_cron TEXT NOT NULL DEFAULT '0 21 * * *', \
         target_type TEXT NOT NULL DEFAULT 'dm', target_id TEXT, \
         updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime')), UNIQUE(user_id, bot_id, type));";
@@ -531,7 +488,9 @@ mod tests {
         ));
         let _ = std::fs::remove_file(&path);
         {
-            let conn = Connection::open(&path).unwrap();
+            let mut conn = Connection::open(&path).unwrap();
+            // Install the isolated unit schema after migrating the real schema (SD07).
+            yuuka_db::run_migrations(&mut conn).expect("migrate before unit fixture");
             conn.execute_batch(DDL).unwrap();
         }
         Db::open(&path).unwrap()
