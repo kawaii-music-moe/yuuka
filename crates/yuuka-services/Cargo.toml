@@ -20,6 +20,8 @@ yuuka-playbook.workspace = true
 # briefing 定時配信（朝報）: 横断走査 + 天気/RSS 生成 + テキスト整形プリミティブ（cron due 判定・
 # 配信ポート配線は本 crate 側）。briefing は services 非依存＝非循環。
 yuuka-briefing.workspace = true
+yuuka-conversation.workspace = true
+serde_json.workspace = true
 tokio.workspace = true
 async-trait.workspace = true
 tracing.workspace = true
@@ -29,7 +31,6 @@ chrono.workspace = true
 
 [dev-dependencies]
 tempfile = "3"
-serde_json.workspace = true   # runBriefingNow ツール引数（delivery の回帰テスト）
 
 [lints]
 workspace = true

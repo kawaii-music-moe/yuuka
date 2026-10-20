@@ -5,6 +5,7 @@
 //! 本クレートの契約は Phase 0（契約凍結）で確定し、以後変更しない（§12.2）。
 
 pub mod action_history;
+pub mod aux_text;
 pub mod config;
 pub mod cron_util;
 pub mod datetime;

@@ -2,35 +2,16 @@
 //!
 //! 天気は **Open-Meteo（api.open-meteo.com・API キー不要）**、ニュースは登録 RSS フィード（SSRF
 //! ガード付き・個別失敗は無視）。生成した [`BriefingContent`] を `runBriefingNow` ツールがインライン
-//! Embed として返す（手動確認用）。ニュースは [`NewsSummarizer`] ポート越しに補助 LLM へ渡し、
+//! Embed として返す（手動確認用）。ニュースは [`AuxTextGenerator`] ポート越しに補助 LLM へ渡し、
 //! キー未設定・生成失敗・空応答時はヘッドライン列挙へ安全に縮退する。定時配信（cron→DM/channel）は
 //! DeliveryRunner シーム（Discord live 配線時）が担い、本サービスと同じ生成ロジックを再利用できる。
 
 use std::time::Duration;
 
 use crate::repo::find_briefing;
-use async_trait::async_trait;
+use yuuka_core::aux_text::AuxTextGenerator;
 use yuuka_core::DbError;
 use yuuka_web::Db;
-
-/// 朝報ニュース用の補助 LLM ポート。
-///
-/// 実装は supervisor でユーザー本人の Gemini 設定へ接続する。キー未設定・復号失敗・LLM 障害は
-/// `None` を返し、呼び出し側が必ずタイトル列挙へ縮退する。
-#[async_trait]
-pub trait NewsSummarizer: Send + Sync {
-    async fn summarize_news(&self, user_id: &str, prompt: &str) -> Option<String>;
-}
-
-/// LLM 未配線時の安全な既定実装。
-pub struct NullNewsSummarizer;
-
-#[async_trait]
-impl NewsSummarizer for NullNewsSummarizer {
-    async fn summarize_news(&self, _user_id: &str, _prompt: &str) -> Option<String> {
-        None
-    }
-}
 
 /// 生成した朝報の中身（Embed の各フィールド）。
 pub struct BriefingContent {
@@ -45,7 +26,7 @@ pub struct BriefingContent {
 /// 設定読み取り失敗時 [`DbError`]。
 pub async fn build_briefing(
     db: &Db,
-    news_summarizer: &dyn NewsSummarizer,
+    aux_text: &dyn AuxTextGenerator,
     user_id: &str,
     bot_id: &str,
 ) -> Result<Option<BriefingContent>, DbError> {
@@ -100,7 +81,7 @@ pub async fn build_briefing(
                 "フィードから記事を取得できませんでした。".to_owned(),
             ));
         } else {
-            let text = summarize_news(news_summarizer, user_id, &items).await;
+            let text = summarize_news(aux_text, user_id, &items).await;
             fields.push(("📰 今朝のニュース".to_owned(), text));
             has_content = true;
         }
@@ -214,7 +195,7 @@ struct NewsItem {
 
 /// Node `briefingService.ts` と同じプロンプト・入力上限・フォールバックでニュース本文を作る。
 async fn summarize_news(
-    summarizer: &dyn NewsSummarizer,
+    summarizer: &dyn AuxTextGenerator,
     user_id: &str,
     items: &[NewsItem],
 ) -> String {
@@ -230,7 +211,7 @@ async fn summarize_news(
          要約のみを出力してください。\n\n{source}"
     );
     let generated = summarizer
-        .summarize_news(user_id, &prompt)
+        .generate_aux_text(user_id, &prompt)
         .await
         .map(|text| text.trim().to_owned())
         .filter(|text| !text.is_empty());
@@ -480,6 +461,7 @@ pub fn render_briefing_text(content: &BriefingContent) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use async_trait::async_trait;
 
     #[test]
     fn weather_labels_match_node() {
@@ -668,8 +650,8 @@ mod tests {
     }
 
     #[async_trait]
-    impl NewsSummarizer for FakeNewsSummarizer {
-        async fn summarize_news(&self, _user_id: &str, prompt: &str) -> Option<String> {
+    impl AuxTextGenerator for FakeNewsSummarizer {
+        async fn generate_aux_text(&self, _user_id: &str, prompt: &str) -> Option<String> {
             *self.seen_prompt.lock().unwrap() = Some(prompt.to_owned());
             self.response.clone()
         }

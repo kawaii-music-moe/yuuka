@@ -12,23 +12,16 @@
 //! 即時 tick を行わない。よって [`cron_util::cron_matches_now`] 単体で「その分に 1 回だけ配信」が成立し、
 //! 追加の last_run マーカーは不要。
 //!
-//! ## Node パリティの意図的 divergence
-//! - **LLM 要約（generateAuxText）は未配線**（Gemini オーケストレーション上位層が未整備）。Node 自身も
-//!   要約失敗時は `buildFallbackText(data)`（生データ）へフォールバックし本文を
-//!   「Yuuka レポート（生データ）」と表示する。Rust は**この Node 自前のフォールバック経路だけを実装**
-//!   する（briefing/runBriefingNow と同系統の意図的 divergence・生データ集約は Node と完全に等価）。
-//! - 定期配信の表示は Node と同じく、タイトル・本文・集計フィールド・フッタを持つブルーの Embed
-//!   とする。LLM 要約の差分はこの表示パリティとは分離して扱う。
-//!
-//! ## 集約フィールド（Node `collectReportData` → `buildFallbackText` が使う範囲のみ）
-//! `buildFallbackText` が参照するのは completedTodos / carryOverTodos / schedules / payments /
-//! incomeTotal / expenseTotal の 6 項目のみ（categoryBreakdown・conversationSamples は Gemini プロンプト
-//! 専用＝deferred のため fallback では未使用）。よってここでもその 6 項目だけを集約する。
+//! ## Node パリティ
+//! 直近24時間/7日の活動・カテゴリ別支出・本人のDM会話サンプルから、ユーザーキーで
+//! 補助生成する。キー無し・生成失敗・空応答時は既存の生データ本文へ戻す。
+//! 定時配信とテスト配信は同じ生成経路・Embed構造を使う。
 
 use async_trait::async_trait;
 use chrono::Local;
 use rusqlite::params;
 use yuuka_briefing::{list_enabled_reports, EnabledReport};
+use yuuka_core::aux_text::AuxTextGenerator;
 use yuuka_core::{BotId, DbError, EmbedFieldPart, EmbedPart, UserId};
 use yuuka_db::map_sqlite;
 use yuuka_web::Db;
@@ -73,7 +66,14 @@ async fn process_due_reports(ctx: &ServiceContext) -> Result<(), DbError> {
             continue;
         }
         tracing::info!(user = %config.user_id, r#type = %config.r#type, "📋 レポートを生成します");
-        if let Err(e) = deliver(&ctx.db, ctx.notifier.as_ref(), &config).await {
+        if let Err(e) = deliver(
+            &ctx.db,
+            ctx.notifier.as_ref(),
+            ctx.aux_text.as_ref(),
+            &config,
+        )
+        .await
+        {
             // 1 件の DB エラーで tick 全体を止めない（次設定・次 tick で復帰・Node の per-user try/catch）。
             tracing::error!(user = %config.user_id, error = %e, "❌ レポート配信に失敗");
         }
@@ -81,7 +81,7 @@ async fn process_due_reports(ctx: &ServiceContext) -> Result<(), DbError> {
     Ok(())
 }
 
-/// 1 件のレポートを生成して配信先へ送る（Node `runReportForUser` の生データフォールバック経路）。
+/// 1 件のレポートを生成して配信先へ送る（Node `runReportForUser`）。
 /// 送信できたら `true`。
 ///
 /// 定時配信（[`process_due_reports`]）とテスト配信（[`crate::delivery::NotifierDeliveryRunner`]）の
@@ -90,9 +90,10 @@ async fn process_due_reports(ctx: &ServiceContext) -> Result<(), DbError> {
 pub(crate) async fn deliver(
     db: &Db,
     notifier: &dyn Notifier,
+    generator: &dyn AuxTextGenerator,
     config: &EnabledReport,
 ) -> Result<bool, DbError> {
-    deliver_to(db, notifier, config, resolve_target(config)).await
+    deliver_to(db, notifier, generator, config, resolve_target(config)).await
 }
 
 /// [`deliver`] の送信先指定版。テスト配信で設定行が無いとき、[`NotifyTarget::Default`]
@@ -100,17 +101,25 @@ pub(crate) async fn deliver(
 pub(crate) async fn deliver_to(
     db: &Db,
     notifier: &dyn Notifier,
+    generator: &dyn AuxTextGenerator,
     config: &EnabledReport,
     target: NotifyTarget,
 ) -> Result<bool, DbError> {
     let is_weekly = config.r#type == "weekly";
     let data = collect_report_data(db, &config.user_id, &config.bot_id, is_weekly).await?;
 
-    // LLM 要約は未配線＝Node の `buildFallbackText(data)` 経路（フッタ「Yuuka レポート（生データ）」）。
+    // 補助素材の読み取りも含め、要約経路の失敗で生データ配信を失わない。
+    let summary = match build_summary_prompt(db, config, &data).await {
+        Ok(prompt) => generator.generate_aux_text(&config.user_id, &prompt).await,
+        Err(e) => {
+            tracing::warn!(user = %config.user_id, error = %e, "レポート要約素材の取得に失敗（生データへ縮退）");
+            None
+        }
+    };
     let notification = Notification::embed(
         UserId::new(config.user_id.clone()),
         BotId::new(config.bot_id.clone()),
-        report_embed(&data),
+        report_embed(&data, summary.as_deref()),
     )
     .with_target(target);
 
@@ -137,27 +146,30 @@ fn resolve_target(config: &EnabledReport) -> NotifyTarget {
     }
 }
 
-// ─── 期間活動データの集約（Node `collectReportData` の fallback 使用範囲） ───────────────────
+// ─── 期間活動データの集約（Node `collectReportData`） ───────────────────
 
-/// 期間中の活動データ（Node `ReportData` の `buildFallbackText` が使う範囲のみ）。
+/// 期間中の活動データ（生データと要約で共有）。
 struct ReportData {
     period_label: String,
-    completed_todos: Vec<String>,
-    carry_over_todos: Vec<(String, Option<String>)>, // (title, due_date)
-    schedules: Vec<(String, String)>,                // (title, start_at)
+    from: String,
+    to: String,
+    completed_todos: Vec<(String, Vec<String>)>, // (title, tags)
+    carry_over_todos: Vec<(String, Option<String>, Option<String>)>, // (title, due_date, priority)
+    schedules: Vec<(String, String)>,            // (title, start_at)
     payments: Vec<PaymentRow>,
     income_total: i64,
     expense_total: i64,
 }
 
-/// 支払い予定 1 件（Node `payments` 要素の `buildFallbackText` 使用フィールド）。
+/// 支払い予定 1 件（Node `payments` 要素）。
 struct PaymentRow {
     title: String,
     amount: i64,
     status: String,
+    due_date: String,
 }
 
-/// 当該期間の活動データを集約する（Node `collectReportData` の生データフォールバック使用範囲）。
+/// 当該期間の活動データを集約する（Node `collectReportData`）。
 ///
 /// 期間ウィンドウは Node と同一: daily = 直近 24h、weekly = 直近 7 日（`now - periodMs` 〜 `now`）。
 /// datetime 比較列（todos.updated_at）は `'YYYY-MM-DD HH:MM:SS'` の `from`/`to` で、date 比較列
@@ -174,12 +186,12 @@ async fn collect_report_data(
     is_weekly: bool,
 ) -> Result<ReportData, DbError> {
     let now = Local::now();
-    let period_ms = if is_weekly {
+    let period_seconds = if is_weekly {
         7 * 24 * 60 * 60
     } else {
         24 * 60 * 60
     };
-    let from_dt = now - chrono::Duration::seconds(period_ms);
+    let from_dt = now - chrono::Duration::seconds(period_seconds);
     let from = datetime::local_to_db(from_dt);
     let to = datetime::local_to_db(now);
     let from_day = from[..10].to_owned();
@@ -212,14 +224,20 @@ async fn collect_report_data(
             // 完了タスク: 当該期間内に更新された done（Node `completedTodos`・updated_at 範囲・上限30）。
             let mut stmt = conn
                 .prepare(
-                    "SELECT title FROM todos \
+                    "SELECT title, tags FROM todos \
                      WHERE user_id = ?1 AND bot_id = ?2 AND status = 'done' \
                        AND updated_at >= ?3 AND updated_at <= ?4 \
                      ORDER BY updated_at DESC LIMIT 30",
                 )
                 .map_err(map_sqlite)?;
             let completed_todos = stmt
-                .query_map(params![u, b, from_c, to_c], |r| r.get::<_, String>(0))
+                .query_map(params![u, b, from_c, to_c], |r| {
+                    let tags: String = r.get(1)?;
+                    Ok((
+                        r.get(0)?,
+                        serde_json::from_str::<Vec<String>>(&tags).unwrap_or_default(),
+                    ))
+                })
                 .map_err(map_sqlite)?
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(map_sqlite)?;
@@ -227,7 +245,7 @@ async fn collect_report_data(
             // 持ち越しタスク: open かつ期限が当該期間内（Node `carryOverTodos`・date(due_date) 範囲・上限30）。
             let mut stmt = conn
                 .prepare(
-                    "SELECT title, due_date FROM todos \
+                    "SELECT title, due_date, priority FROM todos \
                      WHERE user_id = ?1 AND bot_id = ?2 AND status = 'open' \
                        AND due_date IS NOT NULL \
                        AND date(due_date) >= date(?3) AND date(due_date) <= date(?4) \
@@ -236,7 +254,11 @@ async fn collect_report_data(
                 .map_err(map_sqlite)?;
             let carry_over_todos = stmt
                 .query_map(params![u, b, from_day_c, to_day_c], |r| {
-                    Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?))
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, Option<String>>(1)?,
+                        r.get::<_, Option<String>>(2)?,
+                    ))
                 })
                 .map_err(map_sqlite)?
                 .collect::<Result<Vec<_>, _>>()
@@ -263,7 +285,7 @@ async fn collect_report_data(
             // 同じく user_id + bot_id で絞り、同じユーザーの別 Bot の支払い予定を混ぜない（R24）。
             let mut stmt = conn
                 .prepare(
-                    "SELECT title, amount, status FROM planned_payments \
+                    "SELECT title, amount, status, due_date FROM planned_payments \
                      WHERE user_id = ?1 AND bot_id = ?2 \
                        AND date(due_date) >= date(?3) AND date(due_date) <= date(?4) \
                      ORDER BY due_date ASC LIMIT 20",
@@ -275,6 +297,7 @@ async fn collect_report_data(
                         title: r.get::<_, String>(0)?,
                         amount: r.get::<_, i64>(1)?,
                         status: r.get::<_, String>(2)?,
+                        due_date: r.get(3)?,
                     })
                 })
                 .map_err(map_sqlite)?
@@ -303,6 +326,8 @@ async fn collect_report_data(
 
             Ok(ReportData {
                 period_label,
+                from,
+                to,
                 completed_todos,
                 carry_over_todos,
                 schedules,
@@ -312,6 +337,109 @@ async fn collect_report_data(
             })
         })
         .await
+}
+
+/// Node のプロンプト専用素材。生データとは分け、取得失敗時も配信可能にする。
+async fn build_summary_prompt(
+    db: &Db,
+    config: &EnabledReport,
+    data: &ReportData,
+) -> Result<String, DbError> {
+    let (u, b) = (config.user_id.clone(), config.bot_id.clone());
+    let (from_day, to_day) = (data.from[..10].to_owned(), data.to[..10].to_owned());
+    let categories = db
+        .read
+        .read(move |conn| {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT category, SUM(amount) FROM expenses \
+                     WHERE user_id = ?1 AND bot_id = ?2 AND type = 'expense' \
+                       AND date >= ?3 AND date <= ?4 \
+                     GROUP BY category ORDER BY SUM(amount) DESC",
+                )
+                .map_err(map_sqlite)?;
+            let rows = stmt
+                .query_map(params![u, b, from_day, to_day], |r| {
+                    Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+                })
+                .map_err(map_sqlite)?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(map_sqlite)?;
+            Ok(rows)
+        })
+        .await?;
+    // 最新40件（assistantを含む）からユーザー発言を20件、各100文字。guild会話は除外する。
+    let messages = yuuka_conversation::search_messages(
+        db,
+        &config.user_id,
+        &config.bot_id,
+        None,
+        Some(&data.from),
+        Some(&data.to),
+        40,
+    )
+    .await?;
+    let mut source = vec![format!("# 完了タスク（{}件）", data.completed_todos.len())];
+    source.extend(
+        data.completed_todos
+            .iter()
+            .map(|(title, tags)| format!("- {title} [{}]", tags.join("/"))),
+    );
+    source.push(format!(
+        "# 持ち越しタスク（{}件）",
+        data.carry_over_todos.len()
+    ));
+    source.extend(data.carry_over_todos.iter().map(|(title, due, priority)| {
+        format!(
+            "- {title}（期限: {}、優先度: {}）",
+            due.as_deref().unwrap_or(""),
+            priority.as_deref().unwrap_or("未設定")
+        )
+    }));
+    source.push(format!("# 予定（{}件）", data.schedules.len()));
+    source.extend(
+        data.schedules
+            .iter()
+            .map(|(title, start)| format!("- {title} ({start})")),
+    );
+    source.push("# 支払い予定".to_owned());
+    source.extend(data.payments.iter().map(|p| {
+        format!(
+            "- {} {}円 期日{} 状態:{}",
+            p.title, p.amount, p.due_date, p.status
+        )
+    }));
+    source.push(format!(
+        "# 家計: 収入{}円 / 支出{}円",
+        data.income_total, data.expense_total
+    ));
+    source.extend(
+        categories
+            .iter()
+            .map(|(category, total)| format!("- {category}: {total}円")),
+    );
+    source.push(
+        "# 会話トピックの素材（ユーザー発言の抜粋。詳細は書かずトピック傾向のみ要約すること）"
+            .to_owned(),
+    );
+    source.extend(
+        messages
+            .iter()
+            .filter(|m| m.role == "user")
+            .take(20)
+            .map(|m| format!("- {}", m.content.chars().take(100).collect::<String>())),
+    );
+    let type_label = if config.r#type == "weekly" {
+        "週報"
+    } else {
+        "日報"
+    };
+    Ok(format!(
+        "以下は{type_label}（対象期間: {}）の活動データです。\
+         Discord通知用の{type_label}サマリを日本語で簡潔に生成してください（800文字以内）。\
+         構成: 1)タスクの進捗 2)予定・支払いのトピック 3)家計サマリ 4)主な会話トピック（プライバシーに配慮し詳細は省く） 5)ひとことコメント。\
+         サマリ本文のみを出力してください。\n\n{}", data.period_label, source.join("\n")
+    ))
 }
 
 // ─── Embed 整形（Node `buildFallbackText` + `EmbedBuilder`） ────────────────────────────────
@@ -326,14 +454,14 @@ fn title_line(is_weekly: bool, period_label: &str) -> String {
 fn render_report_body(data: &ReportData) -> String {
     let mut lines: Vec<String> = Vec::new();
     lines.push(format!("✅ 完了タスク: {}件", data.completed_todos.len()));
-    for t in data.completed_todos.iter().take(8) {
+    for (t, _) in data.completed_todos.iter().take(8) {
         lines.push(format!("  ・{t}"));
     }
     lines.push(format!(
         "📌 持ち越しタスク: {}件",
         data.carry_over_todos.len()
     ));
-    for (title, due) in data.carry_over_todos.iter().take(8) {
+    for (title, due, _) in data.carry_over_todos.iter().take(8) {
         let due = due.as_deref().unwrap_or("");
         lines.push(format!("  ・{title}（期限: {due}）"));
     }
@@ -366,12 +494,16 @@ fn render_report_body(data: &ReportData) -> String {
     lines.join("\n")
 }
 
-/// 生データレポートを旧 Node と同じ構造の Embed にする。
-fn report_embed(data: &ReportData) -> EmbedPart {
+/// 生成本文または生データを旧 Node と同じ構造の Embed にする。
+fn report_embed(data: &ReportData, summary: Option<&str>) -> EmbedPart {
+    let summary = summary.map(str::trim).filter(|s| !s.is_empty());
+    let body = summary
+        .map(str::to_owned)
+        .unwrap_or_else(|| render_report_body(data));
     let is_weekly = data.period_label.contains('〜');
     EmbedPart {
         title: Some(title_line(is_weekly, &data.period_label)),
-        description: Some(render_report_body(data).chars().take(4000).collect()),
+        description: Some(body.chars().take(4000).collect()),
         color: 0x58_65_F2,
         fields: vec![
             EmbedFieldPart {
@@ -394,7 +526,14 @@ fn report_embed(data: &ReportData) -> EmbedPart {
                 inline: true,
             },
         ],
-        footer: Some("Yuuka レポート（生データ）".to_owned()),
+        footer: Some(
+            if summary.is_some() {
+                "Yuuka 自動生成レポート"
+            } else {
+                "Yuuka レポート（生データ）"
+            }
+            .to_owned(),
+        ),
     }
 }
 
@@ -493,6 +632,7 @@ mod tests {
             )
             .expect("seed row");
         }
+        // 会話サンプル（message_logs）と通知先（users）は実マイグレーションのスキーマをそのまま使う。
         let db = Db::open(&path).expect("open db");
         (db, dir)
     }
@@ -654,6 +794,280 @@ mod tests {
         let body = sent[0].embeds[0].description.as_deref().unwrap_or_default();
         assert!(body.contains("  ・家賃 ¥80,000 [未払い]"), "body: {body}");
         assert!(!body.contains("別Botのサブスク"), "body: {body}");
+    }
+
+    #[derive(Default)]
+    struct RecordingGenerator {
+        response: Option<String>,
+        calls: std::sync::Mutex<Vec<(String, String)>>,
+    }
+
+    #[async_trait]
+    impl AuxTextGenerator for RecordingGenerator {
+        async fn generate_aux_text(&self, user_id: &str, prompt: &str) -> Option<String> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push((user_id.to_owned(), prompt.to_owned()));
+            self.response.clone()
+        }
+    }
+
+    #[tokio::test]
+    async fn summary_is_used_by_scheduled_and_manual_reports() {
+        use yuuka_briefing::DeliveryRunner;
+        let (db, _dir) = seed(true, "* * * * *", "weekly", "channel", Some("chan-1"));
+        db.writer.execute(|conn| {
+            conn.execute_batch(r#"
+                INSERT INTO todos (user_id, bot_id, title, status, tags, updated_at)
+                    VALUES ('u','system_default','完了資料','done','["仕事"]',datetime('now','localtime'));
+                INSERT INTO todos (user_id, bot_id, title, status, due_date, priority)
+                    VALUES ('u','system_default','提出資料','open',date('now','localtime'),'high');
+                INSERT INTO schedules (user_id, bot_id, title, start_at)
+                    VALUES ('u','system_default','面談',datetime('now','localtime'));
+                INSERT INTO planned_payments (user_id, bot_id, title, amount, due_date)
+                    VALUES ('u','system_default','家賃',80000,date('now','localtime'));
+                INSERT INTO expenses (user_id, bot_id, amount, category, date)
+                    VALUES ('u','system_default',1500,'食費',date('now','localtime'));
+                INSERT INTO expenses (user_id, bot_id, amount, category, date)
+                    VALUES ('other','system_default',9999,'別ユーザー家計',date('now','localtime'));
+                INSERT INTO expenses (user_id, bot_id, amount, category, date)
+                    VALUES ('u','other',9999,'別Bot家計',date('now','localtime'));
+                INSERT INTO message_logs (user_id, bot_id, role, content, created_at)
+                    VALUES ('u','system_default','user','旅行の相談',datetime('now','localtime'));
+            "#).map_err(map_sqlite)?;
+            Ok(())
+        }).await.unwrap();
+        let generator = Arc::new(RecordingGenerator {
+            response: Some("  今週のまとめ。\n".to_owned()),
+            ..Default::default()
+        });
+        let notifier = Arc::new(RecordingNotifier::new(true));
+        let ctx = ctx_with(db.clone(), notifier.clone()).with_aux_text(generator.clone());
+        ReportService.tick(&ctx).await;
+        let runner = crate::NotifierDeliveryRunner::new(db, notifier.clone())
+            .with_aux_text(generator.clone());
+        assert!(runner.run_report("u", "system_default", "weekly").await);
+        let calls = generator.calls.lock().unwrap();
+        assert_eq!(calls.len(), 2);
+        for (user, prompt) in calls.iter() {
+            assert_eq!(user, "u");
+            for expected in [
+                "以下は週報",
+                "800文字以内",
+                "プライバシーに配慮し詳細は省く",
+                "完了資料 [仕事]",
+                "提出資料（期限:",
+                "優先度: high",
+                "面談",
+                "家賃 80000円 期日",
+                "食費: 1500円",
+                "旅行の相談",
+            ] {
+                assert!(prompt.contains(expected), "missing {expected}: {prompt}");
+            }
+            assert!(!prompt.contains("別ユーザー家計"));
+            assert!(!prompt.contains("別Bot家計"));
+        }
+        let sent = notifier.sent.lock().unwrap();
+        assert_eq!(sent.len(), 2);
+        for notification in sent.iter() {
+            assert_eq!(
+                notification.target,
+                NotifyTarget::Channel("chan-1".to_owned())
+            );
+            let embed = &notification.embeds[0];
+            assert_eq!(embed.description.as_deref(), Some("今週のまとめ。"));
+            assert_eq!(embed.footer.as_deref(), Some("Yuuka 自動生成レポート"));
+            assert_eq!(embed.fields[0].value, "1件");
+            assert_eq!(embed.fields[2].value, "+¥0 / -¥1,500");
+        }
+    }
+
+    #[tokio::test]
+    async fn manual_report_without_config_uses_summary_and_default_target() {
+        use yuuka_briefing::DeliveryRunner;
+        let (db, _dir) = seed(false, "* * * * *", "weekly", "dm", None);
+        db.writer.execute(|conn| {
+            conn.execute_batch("INSERT INTO users (discord_id, username, salt, notify_target_type, notify_target_id)
+                VALUES ('u','u','','channel','default-channel');").map_err(map_sqlite)?;
+            Ok(())
+        }).await.unwrap();
+        let notifier = Arc::new(RecordingNotifier::new(true));
+        let generator = Arc::new(RecordingGenerator {
+            response: Some("今日のまとめ。".to_owned()),
+            ..Default::default()
+        });
+        let runner = crate::NotifierDeliveryRunner::new(db, notifier.clone())
+            .with_aux_text(generator.clone());
+        assert!(runner.run_report("u", "system_default", "daily").await);
+        let calls = generator.calls.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, "u");
+        assert!(calls[0].1.contains("以下は日報"));
+        let sent = notifier.sent.lock().unwrap();
+        assert_eq!(sent.len(), 1);
+        assert_eq!(
+            sent[0].target,
+            NotifyTarget::Channel("default-channel".to_owned())
+        );
+        assert_eq!(
+            sent[0].embeds[0].description.as_deref(),
+            Some("今日のまとめ。")
+        );
+    }
+
+    #[tokio::test]
+    async fn missing_or_empty_generation_keeps_raw_report() {
+        for response in [None, Some(String::new()), Some(" \n\t ".to_owned())] {
+            let (db, _dir) = seed(true, "* * * * *", "daily", "dm", None);
+            let notifier = Arc::new(RecordingNotifier::new(true));
+            let generator = Arc::new(RecordingGenerator {
+                response,
+                ..Default::default()
+            });
+            let ctx = ctx_with(db, notifier.clone()).with_aux_text(generator.clone());
+            ReportService.tick(&ctx).await;
+            assert_eq!(generator.calls.lock().unwrap().len(), 1);
+            let sent = notifier.sent.lock().unwrap();
+            assert_eq!(sent.len(), 1);
+            assert_eq!(
+                sent[0].embeds[0].footer.as_deref(),
+                Some("Yuuka レポート（生データ）")
+            );
+            assert!(sent[0].embeds[0]
+                .description
+                .as_ref()
+                .unwrap()
+                .contains("✅ 完了タスク: 0件"));
+        }
+    }
+
+    #[tokio::test]
+    async fn missing_summary_material_keeps_raw_delivery() {
+        let (db, _dir) = seed(true, "* * * * *", "daily", "dm", None);
+        db.writer
+            .execute(|conn| {
+                conn.execute_batch("DROP TABLE message_logs")
+                    .map_err(map_sqlite)?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+        let notifier = Arc::new(RecordingNotifier::new(true));
+        let generator = Arc::new(RecordingGenerator::default());
+        let ctx = ctx_with(db, notifier.clone()).with_aux_text(generator.clone());
+        ReportService.tick(&ctx).await;
+        assert!(generator.calls.lock().unwrap().is_empty());
+        let sent = notifier.sent.lock().unwrap();
+        assert_eq!(sent.len(), 1);
+        assert_eq!(
+            sent[0].embeds[0].footer.as_deref(),
+            Some("Yuuka レポート（生データ）")
+        );
+    }
+
+    #[tokio::test]
+    async fn prompt_samples_are_scoped_and_bounded_like_node() {
+        let (db, _dir) = seed(true, "* * * * *", "daily", "dm", None);
+        db.writer.execute(|conn| {
+            let insert = |user: &str, bot: &str, guild: Option<&str>, role: &str, content: &str, date: &str| {
+                conn.execute("INSERT INTO message_logs (user_id, bot_id, guild_id, role, content, created_at) VALUES (?1,?2,?3,?4,?5,?6)", params![user, bot, guild, role, content, date]).map_err(map_sqlite)
+            };
+            let now = datetime::local_to_db(Local::now());
+            // 40件窓から落ちる発言。
+            insert("u", "system_default", None, "user", "古い発言", &now)?;
+            for i in 0..40 {
+                let role = if i % 2 == 0 { "user" } else { "assistant" };
+                let content = if role == "user" { format!("抜粋{i:02}{}末尾", "あ".repeat(110)) } else { "アシスタント発言".to_owned() };
+                insert("u", "system_default", None, role, &content, &now)?;
+            }
+            for (user, bot, guild, date, content) in [
+                ("other", "system_default", None, now.as_str(), "別ユーザー発言"),
+                ("u", "other", None, now.as_str(), "別Bot発言"),
+                ("u", "system_default", Some("guild"), now.as_str(), "ギルド発言"),
+                ("u", "system_default", None, "2000-01-01 00:00:00", "期間外発言"),
+                ("u", "system_default", None, "2999-01-01 00:00:00", "未来発言"),
+            ] { insert(user, bot, guild, "user", content, date)?; }
+            Ok(())
+        }).await.unwrap();
+        let data = collect_report_data(&db, "u", "system_default", false)
+            .await
+            .unwrap();
+        let config = list_enabled_reports(&db, yuuka_core::CrossUserAccess::for_scheduled_task())
+            .await
+            .unwrap()
+            .remove(0);
+        let prompt = build_summary_prompt(&db, &config, &data).await.unwrap();
+        let samples: Vec<_> = prompt.lines().filter(|s| s.starts_with("- 抜粋")).collect();
+        assert_eq!(samples.len(), 20);
+        assert!(samples[0].starts_with("- 抜粋38"));
+        assert!(samples.iter().all(|s| s.chars().count() == 102));
+        for excluded in [
+            "別ユーザー発言",
+            "別Bot発言",
+            "ギルド発言",
+            "期間外発言",
+            "未来発言",
+            "古い発言",
+            "アシスタント発言",
+            "末尾",
+        ] {
+            assert!(!prompt.contains(excluded));
+        }
+        // ユーザー発言だけでも20件まで（40件窓と別の上限）。
+        db.writer
+            .execute(|conn| {
+                conn.execute(
+                    "UPDATE message_logs SET role = 'user' WHERE role = 'assistant'",
+                    [],
+                )
+                .map_err(map_sqlite)?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+        let prompt = build_summary_prompt(&db, &config, &data).await.unwrap();
+        assert_eq!(
+            prompt
+                .lines()
+                .filter(|s| s.starts_with("- 抜粋") || s.starts_with("- アシスタント発言"))
+                .count(),
+            20
+        );
+    }
+
+    #[tokio::test]
+    async fn daily_and_weekly_use_rolling_periods_and_bound_description() {
+        let (db, _dir) = seed(true, "* * * * *", "daily", "dm", None);
+        db.writer
+            .execute(|conn| {
+                conn.execute_batch(
+                    "INSERT INTO todos (user_id, bot_id, title, status, updated_at) VALUES
+                ('u','system_default','2日前','done',datetime('now','localtime','-2 days')),
+                ('u','system_default','8日前','done',datetime('now','localtime','-8 days'));",
+                )
+                .map_err(map_sqlite)?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+        for (weekly, days, count) in [(false, 1, 0), (true, 7, 1)] {
+            let data = collect_report_data(&db, "u", "system_default", weekly)
+                .await
+                .unwrap();
+            let parse =
+                |s: &str| chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S").unwrap();
+            assert_eq!(
+                parse(&data.to) - parse(&data.from),
+                chrono::Duration::days(days)
+            );
+            assert_eq!(data.completed_todos.len(), count);
+            let long = "あ😀".repeat(3000);
+            let embed = report_embed(&data, Some(&long));
+            assert_eq!(embed.description.unwrap().chars().count(), 4000);
+            assert_eq!(embed.footer.as_deref(), Some("Yuuka 自動生成レポート"));
+        }
     }
 
     #[test]
