@@ -13,11 +13,8 @@
 //! [`cron_util::cron_matches_now`] 単体で「その分に 1 回だけ配信」が成立し、追加の last_run マーカーは
 //! 不要（reminder/playbook が「分境界整列 + 逐次ループ」で構造的に二重発火を避けるのと同規律）。
 //!
-//! ## Node パリティの意図的 divergence
-//! - **LLM 要約（generateAuxText）は未配線**。Node はニュースを Gemini で 3〜5 件に要約するが、Rust は
-//!   `build_briefing` のヘッドライン列挙で代替する（手動 `runBriefingNow` と同じ意図的 divergence）。
-//! - 定期配信の表示は Node と同じく、タイトル・天気/ニュースフィールド・フッタを持つスカイブルーの
-//!   Embed とする。LLM 要約の差分はこの表示パリティとは分離して扱う。
+//! ニュースは補助 LLM で要約し、利用不可時はヘッドライン列挙へ縮退する。
+//! 定期配信は Node と同じく、タイトル・天気/ニュースフィールド・フッタを持つスカイブルーの Embed とする。
 
 use async_trait::async_trait;
 use chrono::Local;
@@ -65,7 +62,14 @@ async fn process_due_briefings(ctx: &ServiceContext) -> Result<(), DbError> {
             continue;
         }
         tracing::info!(user = %config.user_id, "🌅 朝報を配信します");
-        if let Err(e) = deliver(&ctx.db, ctx.notifier.as_ref(), &config).await {
+        if let Err(e) = deliver(
+            &ctx.db,
+            ctx.notifier.as_ref(),
+            ctx.news_summarizer.as_ref(),
+            &config,
+        )
+        .await
+        {
             // 1 件の DB エラーで tick 全体を止めない（次設定・次 tick で復帰・Node の per-user try/catch）。
             tracing::error!(user = %config.user_id, error = %e, "❌ 朝報配信に失敗");
         }
@@ -80,10 +84,13 @@ async fn process_due_briefings(ctx: &ServiceContext) -> Result<(), DbError> {
 pub(crate) async fn deliver(
     db: &Db,
     notifier: &dyn Notifier,
+    news_summarizer: &dyn yuuka_briefing::NewsSummarizer,
     config: &EnabledBriefing,
 ) -> Result<bool, DbError> {
     // 本人設定を再読込して天気/RSS を生成（走査行の直後に設定が消えた等は None → 何もしない）。
-    let Some(content) = build_briefing(db, &config.user_id, &config.bot_id).await? else {
+    let Some(content) =
+        build_briefing(db, news_summarizer, &config.user_id, &config.bot_id).await?
+    else {
         return Ok(false);
     };
 

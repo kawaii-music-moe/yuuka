@@ -17,7 +17,7 @@ use yuuka_web::Db;
 
 use crate::repo::{self, BriefingConfig, ReportConfig};
 use crate::routes::{DeliveryRunner, NullDeliveryRunner};
-use crate::service;
+use crate::service::{self, NewsSummarizer, NullNewsSummarizer};
 
 /// このクレートが公開するツール（配信 runner 未注入＝`runBriefingNow` の `deliver: true` は常に未配信）。
 ///
@@ -36,6 +36,16 @@ pub fn tools_with(
     db: Db,
     runner: Arc<dyn DeliveryRunner>,
 ) -> Result<Vec<Arc<dyn Tool>>, ToolError> {
+    tools_with_news_summarizer(db, runner, Arc::new(NullNewsSummarizer))
+}
+
+/// 補助 LLM を注入してツール群を構築する。本番 assembly はこの経路を使い、未配線時は [`tools`] が
+/// タイトル列挙へ安全に縮退する。
+pub fn tools_with_news_summarizer(
+    db: Db,
+    runner: Arc<dyn DeliveryRunner>,
+    news_summarizer: Arc<dyn NewsSummarizer>,
+) -> Result<Vec<Arc<dyn Tool>>, ToolError> {
     Ok(vec![
         Arc::new(ConfigureReportTool {
             name: ToolName::checked("configureReport".to_owned())?,
@@ -53,6 +63,7 @@ pub fn tools_with(
             name: ToolName::checked("runBriefingNow".to_owned())?,
             db,
             runner,
+            news_summarizer,
         }),
     ])
 }
@@ -381,6 +392,7 @@ struct RunBriefingNowTool {
     name: ToolName,
     db: Db,
     runner: Arc<dyn DeliveryRunner>,
+    news_summarizer: Arc<dyn NewsSummarizer>,
 }
 
 impl RunBriefingNowTool {
@@ -441,9 +453,14 @@ impl Tool for RunBriefingNowTool {
             return self.deliver(ctx).await;
         }
 
-        let content = service::build_briefing(&self.db, ctx.user_id.as_str(), ctx.bot_id.as_str())
-            .await
-            .map_err(exec_err)?;
+        let content = service::build_briefing(
+            &self.db,
+            self.news_summarizer.as_ref(),
+            ctx.user_id.as_str(),
+            ctx.bot_id.as_str(),
+        )
+        .await
+        .map_err(exec_err)?;
         let Some(content) = content else {
             return Ok(fail(
                 "朝報がまだ設定されていません。先に configureBriefing で天気の地点やニュースフィードを設定してください。",
