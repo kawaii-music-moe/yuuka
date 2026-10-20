@@ -52,7 +52,7 @@ UNIQUE(user_id, bot_id, source_message_id, source_attachment_id, save_key)と単
 
 - `node scripts/verify-r13.mjs`: SQLite 3.53.3でV26→V29、既存metadata保持、スコープ付きUNIQUE、明示的再保存、本体保持、バッチrollback、record/Bot/user削除が成功。
 - `node scripts/verify-r13.mjs /tmp/issue110-V27.sql /tmp/issue110-V28.sql`: V27→V28→V29も同じ検査に成功。Node SQLiteが拒否する既存V17の冗長FTS shadow table CREATE 4文のみ省略（仮想表が同じshadowを作成）。V29は原文を使用。
-- 軽量Rust CIで同じNode/SQLite検査を継続実行する。
+- 軽量Rust CIで同じNode/SQLite検査を継続実行する。`Biome 2.5.0 check frontend/src scripts`も成功（既存警告あり）。
 - Rust回帰コード: 会話FCへのcatalog注入、PWA HTTP→実ツール→DB、WS複数/順序/安定ID/返信元除外、不正添付/任意URL拒否、冪等/再保存/Bot分離、保存rollback、配信認可/失効、実体削除、旧ファイル最後の参照、バックアップ本体/欠落失敗。
 - `CARGO_BUILD_JOBS=1 cargo check --workspace --all-targets`、`cargo clippy --workspace --all-targets --all-features -- -D warnings`、`cargo fmt --all -- --check`、`git diff --check`: 成功（既存ts-rs serde属性警告あり）。
 - デスクトップの変更対象model.rsをlibとして参照する一時manifestで`cargo check --all-targets`: 成功。GUI全体は対象外。
