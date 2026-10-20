@@ -12,7 +12,7 @@
 
 | 経路 | 実装・境界 |
 | --- | --- |
-| Discord秘書 | 現在の受信メッセージだけを列挙。CDNのHTTPS `/attachments/` URLのみ、redirectなし、30秒timeout、合計20MiBを読込中に検査。返信先添付は文脈のみで保存候補にしない。写真は既存parse_receiptと同じ秘書エンジンへ渡し、OCRルールも利用できる。音声併送は文脈として保持。 |
+| Discord秘書 | 会話の入力は従来どおり（音声→画像1枚を `parse_receipt`→本文の順。動画はLLMへ送らない）。保存候補は現在の受信メッセージの写真・動画だけを列挙し、CDNのHTTPS `/attachments/` URLのみ、redirectなし、合計20MiB（Discordの通知サイズで取得前に除外し、読込中も検査）・最大10件・取得30秒以内。取得失敗・上限超過の添付は候補から外すだけで、会話のターンは失敗させない（件数・容量は保存ツールでも再検査）。候補のバイト列はGeminiへinlineで送らない。返信先添付は文脈のみで保存候補にしない。写真は `parse_receipt`（レシート経路）にも保存候補を渡す。音声併送時も保存候補を渡す。 |
 | PWA | 認証済み発話者が受理済みのmessage_log IDを `pwa:<id>` として使用。添付の元indexを保持し、音声/PDF等を候補から除外。既存202処理・会話履歴の本体とは独立にtimeline用コピーを保存。 |
 | WebSocket | 接続時Bearer認証・Bot固定を維持。`image/audio`を後方互換で受理し、`attachments[]`と安定した`messageId`を追加。省略する旧クライアントは受信ごとのID、送るクライアントは再送で同じIDを使う。デスクトップ送信フレームもIDを保持。 |
 | 汎用モード/サービス | 保存用catalogを注入しない。過去ログ・返信元・生成添付・任意URLを保存元にできない。 |
@@ -57,3 +57,9 @@ UNIQUE(user_id, bot_id, source_message_id, source_attachment_id, save_key)と単
 - `CARGO_BUILD_JOBS=1 cargo check --workspace --all-targets`、`cargo clippy --workspace --all-targets --all-features -- -D warnings`、`cargo fmt --all -- --check`、`git diff --check`: 成功（既存ts-rs serde属性警告あり）。
 - デスクトップの変更対象model.rsをlibとして参照する一時manifestで`cargo check --all-targets`: 成功。GUI全体は対象外。
 - 最終CIの結果はPR本文に記載。非developのためcargo build/test/run/nextestは未実行。追加Rust回帰テストの実行結果、実Discord/Gemini/Drive通信、ブラウザ操作、デスクトップアプリ全体の検証は未確認。
+
+## レビュー対応（#191）
+
+- Discord: 写真・動画を添えた通常の会話が、保存候補の取得失敗・20MiB超・10件超で `TurnError::Failed` になっていた。会話の入力を develop と同じ経路へ戻し、保存候補は取得できたものだけにした（上記の表）。保存しない会話で全添付を毎ターン inline 送信していた点も解消した。
+- #193（レシートOCRの共通化）との統合: このPRは写真を `parse_receipt` 経由に戻し、`TurnProcessor::parse_receipt` に保存候補（`timeline_attachments`）を渡す。#193 では `parse_receipt` が `receipt_turn`（専用OCR）になるため、後からマージする側で `receipt_turn` が作る秘書ターン（OCR結果付きのターンと、`NotReceipt` / `InvalidImage` のフォールバック）へ `timeline_attachments` を渡す。
+- V29 は #190 の V28 より後に適用される必要がある（refinery の `abort_missing`）。#190 のマージ後に develop を取り込む。

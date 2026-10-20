@@ -515,26 +515,10 @@ async fn secretary_flow(deps: &FlowDeps, rt: &RuntimeBot, bot: &BotRecord, messa
 
     // Only the current message's authenticated author can supply saveable attachments.
     // Reference images remain context only; their bytes never enter the save catalog.
-    let has_current_media = message.attachments.iter().any(is_photo_or_video);
-    let result: Result<TurnReply, TurnError> = if has_current_media {
-        match current_timeline_media(&message).await {
-            Ok((attachments, timeline_attachments)) => {
-                let chat = IncomingChat {
-                    text: full_text.clone(),
-                    attachments,
-                    timeline_attachments,
-                    discord_msg_id,
-                    reply_to_msg_id,
-                    channel_id,
-                    ..IncomingChat::default()
-                };
-                deps.processor
-                    .process_secretary(&rt.bot_id, &author, chat, status.clone(), delivery.clone())
-                    .await
-            }
-            Err(e) => Err(TurnError::Failed(e.to_string())),
-        }
-    } else if let Some(att) = audio {
+    // 会話の入力（画像1枚・音声）は従来どおりで、保存候補のバイト列は Gemini へ送らない。
+    // 取得できない・上限を超える添付は候補から外すだけで、ターンは失敗させない。
+    let timeline_attachments = current_timeline_attachments(message.id, &message.attachments).await;
+    let result: Result<TurnReply, TurnError> = if let Some(att) = audio {
         match fetch_inline_media(&att, "audio/ogg").await {
             Ok(media) => {
                 // 現行 `const instruction = fullText.trim() || placeholder`（trim 済み）。
@@ -551,6 +535,7 @@ async fn secretary_flow(deps: &FlowDeps, rt: &RuntimeBot, bot: &BotRecord, messa
                 let chat = IncomingChat {
                     text: instruction,
                     audio: Some(media),
+                    timeline_attachments,
                     discord_msg_id,
                     reply_to_msg_id,
                     channel_id,
@@ -563,7 +548,19 @@ async fn secretary_flow(deps: &FlowDeps, rt: &RuntimeBot, bot: &BotRecord, messa
             Err(e) => Err(TurnError::Failed(e.to_string())),
         }
     } else if let Some(att) = image {
-        match fetch_inline_media(&att, "image/jpeg").await {
+        // 現メッセージの画像は保存候補として取得済みなら再利用する（同じ添付を二重に取得しない）。
+        let current = timeline_attachments
+            .iter()
+            .find(|a| a.attachment_id == att.id.to_string())
+            .map(|a| InlineMedia {
+                data_base64: a.data_base64.clone(),
+                mime_type: a.mime_type.clone(),
+            });
+        let media = match current {
+            Some(media) => Ok(media),
+            None => fetch_inline_media(&att, "image/jpeg").await,
+        };
+        match media {
             Ok(media) => {
                 // レシート OCR は秘書専用。caption は現メッセージ本文（空なら None）。
                 let caption = if text.is_empty() {
@@ -577,6 +574,7 @@ async fn secretary_flow(deps: &FlowDeps, rt: &RuntimeBot, bot: &BotRecord, messa
                         &author,
                         media,
                         caption,
+                        timeline_attachments,
                         status.clone(),
                         delivery.clone(),
                     )
@@ -585,8 +583,10 @@ async fn secretary_flow(deps: &FlowDeps, rt: &RuntimeBot, bot: &BotRecord, messa
             Err(e) => Err(TurnError::Failed(e.to_string())),
         }
     } else if !full_text.trim().is_empty() {
+        // 動画だけを添えた発話もここに来る（動画は従来どおり会話の入力にせず、保存候補だけ渡す）。
         let chat = IncomingChat {
             text: full_text.clone(),
+            timeline_attachments,
             discord_msg_id,
             reply_to_msg_id,
             channel_id,
@@ -905,74 +905,71 @@ fn is_photo_or_video(a: &Attachment) -> bool {
         .is_some_and(|m| m.starts_with("image/") || m.starts_with("video/"))
 }
 
-/// Fetch only Discord's authenticated current-message CDN attachments, with no redirects.
-async fn current_timeline_media(
-    message: &Message,
-) -> Result<
-    (
-        Vec<InlineMedia>,
-        Vec<yuuka_core::tool::ConversationAttachment>,
-    ),
-    DiscordError,
-> {
-    let client = reqwest::Client::builder()
+/// タイムライン保存候補の上限（保存ツール `addTimelineRecord` の検査と同じ値）。
+const TIMELINE_ATTACHMENT_MAX_COUNT: usize = 10;
+const TIMELINE_ATTACHMENT_MAX_TOTAL_BYTES: usize = 20 * 1024 * 1024;
+/// 保存候補の取得にかける時間の上限（会話の応答をこれ以上待たせない）。
+const TIMELINE_ATTACHMENT_FETCH_BUDGET: Duration = Duration::from_secs(30);
+
+/// 現メッセージの写真・動画を、タイムライン保存の候補として取得する。
+///
+/// Discord の認証済み CDN（`/attachments/`）だけをリダイレクト無しで取得する。会話そのものは
+/// 止めないため、取得に失敗した添付や、件数・合計サイズ・取得時間の上限を超える添付は候補から外す
+/// （`warn` ログのみ）。候補は保存ツールの入力にだけ使い、Gemini へ inline では送らない。
+async fn current_timeline_attachments(
+    message_id: Id<MessageMarker>,
+    attachments: &[Attachment],
+) -> Vec<yuuka_core::tool::ConversationAttachment> {
+    let candidates: Vec<(usize, &Attachment)> = attachments
+        .iter()
+        .enumerate()
+        .filter(|(_, a)| is_photo_or_video(a))
+        .collect();
+    if candidates.is_empty() {
+        return Vec::new();
+    }
+    let client = match reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
-        .timeout(std::time::Duration::from_secs(30))
+        .timeout(TIMELINE_ATTACHMENT_FETCH_BUDGET)
         .build()
-        .map_err(|_| DiscordError::Transport("添付取得を開始できませんでした。".to_owned()))?;
-    let mut inline = Vec::new();
+    {
+        Ok(client) => client,
+        Err(e) => {
+            tracing::warn!(error = %e, "保存候補の添付を取得できません（候補なしで続行）");
+            return Vec::new();
+        }
+    };
+    let deadline = tokio::time::Instant::now() + TIMELINE_ATTACHMENT_FETCH_BUDGET;
     let mut catalog = Vec::new();
     let mut total = 0usize;
-    for (position, att) in message.attachments.iter().enumerate().filter(|(_, a)| {
-        is_photo_or_video(a) || a.content_type.as_deref().is_some_and(is_supported_audio)
-    }) {
-        if catalog.len() >= 10 {
-            return Err(DiscordError::Transport("添付は10件までです。".to_owned()));
+    for (position, att) in candidates {
+        if catalog.len() >= TIMELINE_ATTACHMENT_MAX_COUNT {
+            tracing::warn!(attachment = %att.id, "保存候補の件数上限を超えた添付を除外");
+            continue;
         }
-        let url = reqwest::Url::parse(&att.url)
-            .map_err(|_| DiscordError::Transport("添付URLが不正です。".to_owned()))?;
-        if url.scheme() != "https"
-            || !matches!(
-                url.host_str(),
-                Some("cdn.discordapp.com" | "media.discordapp.net")
-            )
-            || !url.path().starts_with("/attachments/")
-            || !url.username().is_empty()
-            || url.password().is_some()
-            || url.port().is_some()
+        // Discord が通知するサイズで、取得する前に合計上限の超過を除外する（取得中も実バイト数で再確認）。
+        let remaining = TIMELINE_ATTACHMENT_MAX_TOTAL_BYTES - total;
+        if !usize::try_from(att.size).is_ok_and(|size| size <= remaining) {
+            tracing::warn!(attachment = %att.id, size = att.size, "保存候補の合計サイズ上限を超えた添付を除外");
+            continue;
+        }
+        let bytes = match tokio::time::timeout_at(
+            deadline,
+            fetch_timeline_attachment(&client, att, remaining),
+        )
+        .await
         {
-            return Err(DiscordError::Transport(
-                "Discord添付以外は取得できません。".to_owned(),
-            ));
-        }
-        let mut response = client
-            .get(url)
-            .send()
-            .await
-            .and_then(reqwest::Response::error_for_status)
-            .map_err(|_| DiscordError::Transport("添付取得に失敗しました。".to_owned()))?;
-        if response.status().is_redirection() {
-            return Err(DiscordError::Transport(
-                "添付の転送は許可されません。".to_owned(),
-            ));
-        }
-        let mut bytes = Vec::new();
-        while let Some(chunk) = response
-            .chunk()
-            .await
-            .map_err(|_| DiscordError::Transport("添付の読込に失敗しました。".to_owned()))?
-        {
-            total += chunk.len();
-            if total > 20 * 1024 * 1024 {
-                return Err(DiscordError::Transport(
-                    "添付合計の上限は20MiBです。".to_owned(),
-                ));
+            Ok(Ok(bytes)) => bytes,
+            Ok(Err(reason)) => {
+                tracing::warn!(attachment = %att.id, reason, "保存候補の添付を除外");
+                continue;
             }
-            bytes.extend_from_slice(&chunk);
-        }
-        if bytes.is_empty() {
-            return Err(DiscordError::Transport("添付が空です。".to_owned()));
-        }
+            Err(_) => {
+                tracing::warn!(attachment = %att.id, "保存候補の取得時間の上限に達したため、以降の添付を除外");
+                break;
+            }
+        };
+        total += bytes.len();
         let mime_type = att
             .content_type
             .as_deref()
@@ -982,22 +979,60 @@ async fn current_timeline_media(
             .unwrap_or_default()
             .trim()
             .to_ascii_lowercase();
-        let data_base64 = base64::engine::general_purpose::STANDARD.encode(bytes);
-        inline.push(InlineMedia {
-            data_base64: data_base64.clone(),
-            mime_type: mime_type.clone(),
+        catalog.push(yuuka_core::tool::ConversationAttachment {
+            source_message_id: format!("discord:{message_id}"),
+            attachment_id: att.id.to_string(),
+            position,
+            mime_type,
+            data_base64: base64::engine::general_purpose::STANDARD.encode(bytes),
         });
-        if is_photo_or_video(att) {
-            catalog.push(yuuka_core::tool::ConversationAttachment {
-                source_message_id: format!("discord:{}", message.id),
-                attachment_id: att.id.to_string(),
-                position,
-                mime_type,
-                data_base64,
-            });
-        }
     }
-    Ok((inline, catalog))
+    catalog
+}
+
+/// Fetch only Discord's authenticated current-message CDN attachments, with no redirects.
+async fn fetch_timeline_attachment(
+    client: &reqwest::Client,
+    att: &Attachment,
+    limit: usize,
+) -> Result<Vec<u8>, &'static str> {
+    let url = reqwest::Url::parse(&att.url).map_err(|_| "添付URLが不正です")?;
+    if url.scheme() != "https"
+        || !matches!(
+            url.host_str(),
+            Some("cdn.discordapp.com" | "media.discordapp.net")
+        )
+        || !url.path().starts_with("/attachments/")
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.port().is_some()
+    {
+        return Err("Discord添付以外は取得しません");
+    }
+    let mut response = client
+        .get(url)
+        .send()
+        .await
+        .and_then(reqwest::Response::error_for_status)
+        .map_err(|_| "添付の取得に失敗しました")?;
+    if response.status().is_redirection() {
+        return Err("添付の転送は許可しません");
+    }
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|_| "添付の読込に失敗しました")?
+    {
+        if bytes.len() + chunk.len() > limit {
+            return Err("添付合計の上限（20MiB）を超えます");
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    if bytes.is_empty() {
+        return Err("添付が空です");
+    }
+    Ok(bytes)
 }
 
 /// 添付を URL 取得 → base64 化する（現行 fetch → Buffer.toString("base64")）。
@@ -1048,6 +1083,32 @@ mod tests {
         let atts = vec![mk("image/png"), mk("audio/ogg; codecs=opus")];
         assert!(select_audio(&atts).is_some());
         assert!(select_image(&atts).is_some());
+    }
+
+    /// 保存候補を作れない添付があっても失敗にせず、候補から外して会話を続ける（R13 レビュー指摘）。
+    /// どちらの添付も取得前に除外されるため、ネットワークには出ない。
+    #[tokio::test]
+    async fn timeline_catalog_skips_oversized_and_foreign_attachments() {
+        let video = Attachment {
+            content_type: Some("video/mp4".to_owned()),
+            size: 20 * 1024 * 1024 + 1,
+            url: "https://cdn.discordapp.com/attachments/1/2/large.mp4".to_owned(),
+            ..dummy_attachment()
+        };
+        let foreign = Attachment {
+            content_type: Some("image/png".to_owned()),
+            id: Id::new(2),
+            size: 3,
+            url: "https://example.invalid/attachments/photo.png".to_owned(),
+            ..dummy_attachment()
+        };
+        let audio = Attachment {
+            content_type: Some("audio/ogg".to_owned()),
+            id: Id::new(3),
+            ..dummy_attachment()
+        };
+        let catalog = current_timeline_attachments(Id::new(42), &[video, foreign, audio]).await;
+        assert!(catalog.is_empty());
     }
 
     fn roles(ids: &[u64]) -> Vec<Id<RoleMarker>> {

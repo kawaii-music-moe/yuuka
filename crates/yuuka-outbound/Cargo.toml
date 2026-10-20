@@ -1,0 +1,15 @@
+[package]
+name = "yuuka-outbound"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "外向き URL/IP の共通 SSRF 検査（通信時 DNS 検査・登録時互換ポリシー）"
+
+[dependencies]
+tokio.workspace = true
+url = "2"
+
+[lints]
+workspace = true

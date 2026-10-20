@@ -57,10 +57,10 @@ mod tests {
     static SEQ: AtomicU64 = AtomicU64::new(0);
 
     // schedules テーブル: CREATE TABLE 定義 + 移行で後付けされる bot_id 列を含む。
-    const SCHEDULES_DDL: &str = "CREATE TABLE schedules (
+    const SCHEDULES_DDL: &str = "DROP TABLE IF EXISTS schedules; CREATE TABLE schedules (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id TEXT NOT NULL,
-        bot_id TEXT NOT NULL DEFAULT 'system_default',
+        bot_id TEXT NOT NULL,
         title TEXT NOT NULL,
         description TEXT,
         start_at TEXT NOT NULL,
@@ -79,7 +79,9 @@ mod tests {
             std::process::id()
         ));
         {
-            let conn = rusqlite::Connection::open(&path).expect("seed db");
+            let mut conn = rusqlite::Connection::open(&path).expect("seed db");
+            // Install the isolated unit schema after migrating the real schema (SD07).
+            yuuka_db::run_migrations(&mut conn).expect("migrate before unit fixture");
             conn.execute_batch(SCHEDULES_DDL).expect("create schedules");
         }
         Db::open(&path).expect("open db")

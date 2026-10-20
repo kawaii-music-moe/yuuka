@@ -62,10 +62,10 @@ mod tests {
     static SEQ: AtomicU64 = AtomicU64::new(0);
 
     // Node migrations.ts の contacts DDL + v3 で後付けされる bot_id 列を反映。
-    const CONTACTS_DDL: &str = "CREATE TABLE contacts (
+    const CONTACTS_DDL: &str = "DROP TABLE IF EXISTS contacts; CREATE TABLE contacts (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id TEXT NOT NULL,
-        bot_id TEXT NOT NULL DEFAULT 'system_default',
+        bot_id TEXT NOT NULL,
         name TEXT NOT NULL,
         birthday TEXT,
         relationship TEXT,
@@ -77,20 +77,21 @@ mod tests {
         updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
     );";
 
-    // V17__baseline.sql の clipboard_entries を反映（bot_id は後付け列・default system_default）。
-    const CLIPBOARD_DDL: &str = "CREATE TABLE clipboard_entries (
+    // clipboard_entries の単体fixture（V27同様、bot_id は NOT NULL・既定値なし）。
+    const CLIPBOARD_DDL: &str =
+        "DROP TABLE IF EXISTS clipboard_entries; CREATE TABLE clipboard_entries (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id TEXT NOT NULL,
         content TEXT NOT NULL,
         expires_at TEXT,
         created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
-        bot_id TEXT NOT NULL DEFAULT 'system_default'
+        bot_id TEXT NOT NULL
     );";
 
     // V17__baseline.sql の context_notes を反映（PK(user_id, bot_id)・upsert 対象）。
-    const CONTEXT_NOTES_DDL: &str = "CREATE TABLE context_notes (
+    const CONTEXT_NOTES_DDL: &str = "DROP TABLE IF EXISTS context_notes; CREATE TABLE context_notes (title TEXT NOT NULL DEFAULT 'Shared note',
         user_id TEXT NOT NULL,
-        bot_id TEXT NOT NULL DEFAULT 'system_default',
+        bot_id TEXT NOT NULL,
         content TEXT NOT NULL DEFAULT '',
         updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
         PRIMARY KEY (user_id, bot_id)
@@ -103,7 +104,9 @@ mod tests {
             std::process::id()
         ));
         {
-            let conn = rusqlite::Connection::open(&path).expect("seed db");
+            let mut conn = rusqlite::Connection::open(&path).expect("seed db");
+            // Install the isolated unit schema after migrating the real schema (SD07).
+            yuuka_db::run_migrations(&mut conn).expect("migrate before unit fixture");
             conn.execute_batch(CONTACTS_DDL).expect("create contacts");
             conn.execute_batch(CLIPBOARD_DDL).expect("create clipboard");
             conn.execute_batch(CONTEXT_NOTES_DDL)

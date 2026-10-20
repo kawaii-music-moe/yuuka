@@ -1288,21 +1288,23 @@ mod tests {
 
     static SEQ: AtomicU64 = AtomicU64::new(0);
 
-    const TODOS_DDL: &str = "CREATE TABLE todos (
+    const TODOS_DDL: &str =
+        "DROP TABLE IF EXISTS todos; CREATE TABLE todos (list TEXT NOT NULL DEFAULT '個人',
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id TEXT NOT NULL,
-        bot_id TEXT NOT NULL DEFAULT 'system_default',
+        bot_id TEXT NOT NULL,
         title TEXT NOT NULL, description TEXT, due_date TEXT, start_date TEXT,
         priority TEXT, tags TEXT NOT NULL DEFAULT '[]', status TEXT NOT NULL DEFAULT 'open',
         progress INTEGER NOT NULL DEFAULT 0, parent_id INTEGER, linked_payment_id INTEGER,
         due_reminded INTEGER NOT NULL DEFAULT 0, repeat_rule TEXT, repeat_until TEXT,
         repeat_count INTEGER, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);";
 
-    // task_progress_logs を FK 無しで先に作る（V17 の users/todos FK を避ける・lib.rs テストと同方針）。
-    const PROGRESS_LOGS_DDL: &str = "CREATE TABLE task_progress_logs (
+    // task_progress_logs を migration 後に FK 無しで置き換える（V17 の users/todos FK を避ける・lib.rs テストと同方針）。
+    const PROGRESS_LOGS_DDL: &str =
+        "DROP TABLE IF EXISTS task_progress_logs; CREATE TABLE task_progress_logs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id TEXT NOT NULL,
-        bot_id TEXT NOT NULL DEFAULT 'system_default',
+        bot_id TEXT NOT NULL,
         todo_id INTEGER NOT NULL,
         progress INTEGER NOT NULL,
         note TEXT,
@@ -1316,7 +1318,9 @@ mod tests {
             std::process::id()
         ));
         {
-            let conn = Connection::open(&path).unwrap();
+            let mut conn = Connection::open(&path).unwrap();
+            // Install the isolated unit schema after migrating the real schema (SD07).
+            yuuka_db::run_migrations(&mut conn).expect("migrate before unit fixture");
             conn.execute_batch(TODOS_DDL).unwrap();
             conn.execute_batch(PROGRESS_LOGS_DDL).unwrap();
         }

@@ -834,8 +834,7 @@ impl GeminiFactory for AttachmentFactory {
         }))
     }
 }
-#[tokio::test]
-async fn secretary_fc_receives_trusted_attachment_catalog_in_order() {
+fn attachment_engine() -> (ChatEngine, Vec<yuuka_core::tool::ConversationAttachment>) {
     let (db, path) = fresh_db();
     let crypto =
         Arc::new(SystemCrypto::new(SecretString::from("attachment-test".to_owned())).unwrap());
@@ -871,6 +870,42 @@ async fn secretary_fc_receives_trusted_attachment_catalog_in_order() {
             },
         )
         .collect();
+    (engine, attachments)
+}
+
+struct NoopDelivery;
+#[async_trait]
+impl yuuka_discord::TurnDelivery for NoopDelivery {
+    async fn on_interim(&self, _text: String) {}
+    async fn deliver_final(&self, _reply: yuuka_discord::TurnReply) {}
+}
+
+/// Discord の写真はレシート経路（`parse_receipt`）を通るので、そこでも保存候補を秘書ターンへ渡す。
+#[tokio::test]
+async fn receipt_path_keeps_timeline_attachment_catalog() {
+    use yuuka_discord::TurnProcessor;
+    let (engine, attachments) = attachment_engine();
+    let reply = engine
+        .parse_receipt(
+            &BotId::new("media-bot"),
+            &UserId::new("u13"),
+            yuuka_discord::InlineMedia {
+                data_base64: "AQID".to_owned(),
+                mime_type: "image/png".to_owned(),
+            },
+            Some("この写真と動画を保存して".to_owned()),
+            attachments,
+            null_sink(),
+            Arc::new(NoopDelivery),
+        )
+        .await
+        .unwrap();
+    assert_eq!(reply.text, "保存しました。");
+}
+
+#[tokio::test]
+async fn secretary_fc_receives_trusted_attachment_catalog_in_order() {
+    let (engine, attachments) = attachment_engine();
     let reply = engine
         .secretary_turn(
             &BotId::new("media-bot"),

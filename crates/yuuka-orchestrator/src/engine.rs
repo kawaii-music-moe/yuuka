@@ -1118,14 +1118,17 @@ impl TurnProcessor for ChatEngine {
         user_id: &UserId,
         image: InlineMedia,
         caption: Option<String>,
+        timeline_attachments: Vec<yuuka_core::tool::ConversationAttachment>,
         status: StatusSink,
         _delivery: Arc<dyn TurnDelivery>,
     ) -> Result<TurnReply, TurnError> {
         // レシート経路は画像 + キャプションを 1 ターンとして秘書処理へ流す（system prompt の OCR ルール
         // が分類・記録を誘導する）。専用の receipt プロンプト差し込みは後続で拡張。
+        // 写真をタイムラインへ保存する依頼にも応えられるよう、本人添付の保存候補も渡す。
         let msg = IncomingChat {
             text: caption.unwrap_or_default(),
             image: Some(image),
+            timeline_attachments,
             ..IncomingChat::default()
         };
         self.secretary_turn(bot_id, user_id, msg, &status).await

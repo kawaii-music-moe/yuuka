@@ -233,13 +233,16 @@ pub trait TurnProcessor: Send + Sync {
         delivery: Arc<dyn TurnDelivery>,
     ) -> Result<TurnReply, TurnError>;
 
-    /// 秘書のレシート画像経路（現行 `parseReceipt`）。
+    /// 秘書のレシート画像経路（現行 `parseReceipt`）。`timeline_attachments` は現メッセージの
+    /// 本人添付（タイムライン保存の候補・[`IncomingChat::timeline_attachments`] と同じ）。
+    #[allow(clippy::too_many_arguments)]
     async fn parse_receipt(
         &self,
         bot_id: &BotId,
         user_id: &UserId,
         image: InlineMedia,
         caption: Option<String>,
+        timeline_attachments: Vec<yuuka_core::tool::ConversationAttachment>,
         status: StatusSink,
         delivery: Arc<dyn TurnDelivery>,
     ) -> Result<TurnReply, TurnError>;

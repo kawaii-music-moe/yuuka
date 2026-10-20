@@ -108,9 +108,9 @@ mod tests {
     use std::sync::Arc;
     use yuuka_db::map_sqlite;
 
-    const CONTACTS_DDL: &str = "CREATE TABLE contacts (
+    const CONTACTS_DDL: &str = "DROP TABLE IF EXISTS contacts; CREATE TABLE contacts (
         id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL,
-        bot_id TEXT NOT NULL DEFAULT 'system_default', name TEXT NOT NULL, birthday TEXT,
+        bot_id TEXT NOT NULL, name TEXT NOT NULL, birthday TEXT,
         relationship TEXT, notes TEXT, tags TEXT NOT NULL DEFAULT '[]',
         birthday_reminded_year INTEGER,
         created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
@@ -173,8 +173,8 @@ mod tests {
         db.writer
             .execute(move |conn| {
                 conn.execute(
-                    "INSERT INTO contacts (user_id, name, birthday, birthday_reminded_year) \
-                     VALUES ('u','再送なし', \
+                    "INSERT INTO contacts (user_id, bot_id, name, birthday, birthday_reminded_year) \
+                     VALUES ('u','test-bot','再送なし', \
                        '1990-' || strftime('%m-%d','now','localtime','+1 day'), ?1)",
                     rusqlite::params![this_year],
                 )

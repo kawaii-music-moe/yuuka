@@ -14,6 +14,7 @@ on:
       - "deny.toml"
       - "clippy.toml"
       - "rust-toolchain.toml"
+      - "scripts/verify-sd07.py"
       - ".github/workflows/rust-ci.yml"
   push:
     branches: [develop, main, feature/rust-rewrite]
@@ -46,6 +47,8 @@ jobs:
         run: rustc --version && cargo --version && cargo fmt --version
       - name: Format check (P3-2)
         run: cargo fmt --all -- --check
+      - name: SQLite migration regression (SD07)
+        run: python3 scripts/verify-sd07.py
 
   # ── 重い clippy / build / test は develop -> main の PR でのみ実行 ──
   check:

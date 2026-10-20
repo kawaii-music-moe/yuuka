@@ -13,7 +13,8 @@ use yuuka_core::tool::FunctionDeclaration;
 use yuuka_core::{Tool, ToolContext, ToolError, ToolName, ToolOutcome};
 
 use crate::interactive::BrowserManager;
-use crate::{chromium, markdown, search, ssrf};
+use crate::{chromium, markdown, search};
+use yuuka_outbound::assert_safe_outbound_url;
 
 /// markdown 上限（Node の 30000 文字 slice）。
 const MARKDOWN_LIMIT: usize = 30_000;
@@ -159,7 +160,7 @@ impl Tool for FetchDynamicPageTool {
         let Some(url) = arg_str(&args, "url") else {
             return Ok(fail("URL を指定してください。"));
         };
-        if let Err(msg) = ssrf::assert_safe_outbound_url(&url).await {
+        if let Err(msg) = assert_safe_outbound_url(&url).await {
             return Ok(fail(msg));
         }
 
@@ -237,7 +238,7 @@ impl Tool for TakePageScreenshotTool {
         let Some(url) = arg_str(&args, "url") else {
             return Ok(fail("URL を指定してください。"));
         };
-        if let Err(msg) = ssrf::assert_safe_outbound_url(&url).await {
+        if let Err(msg) = assert_safe_outbound_url(&url).await {
             return Ok(fail(msg));
         }
 
@@ -314,7 +315,7 @@ impl Tool for InteractiveOpenTool {
         let Some(url) = arg_str(&args, "url") else {
             return Ok(fail("URL を指定してください。"));
         };
-        if let Err(msg) = ssrf::assert_safe_outbound_url(&url).await {
+        if let Err(msg) = assert_safe_outbound_url(&url).await {
             return Ok(fail(msg));
         }
         match self.manager.open(ctx.user_id.as_str(), &url).await {

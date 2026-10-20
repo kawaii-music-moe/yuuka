@@ -3739,9 +3739,9 @@ dependencies = [
  "tokio",
  "tower",
  "tracing",
- "yuuka-browser",
  "yuuka-core",
  "yuuka-db",
+ "yuuka-outbound",
  "yuuka-types",
  "yuuka-web",
 ]
@@ -3759,8 +3759,8 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
- "url",
  "yuuka-core",
+ "yuuka-outbound",
 ]
 
 [[package]]
@@ -4009,6 +4009,7 @@ dependencies = [
  "yuuka-core",
  "yuuka-crypto",
  "yuuka-db",
+ "yuuka-outbound",
  "yuuka-types",
  "yuuka-web",
 ]
@@ -4043,6 +4044,14 @@ dependencies = [
  "yuuka-tools",
  "yuuka-types",
  "yuuka-web",
+]
+
+[[package]]
+name = "yuuka-outbound"
+version = "0.1.0"
+dependencies = [
+ "tokio",
+ "url",
 ]
 
 [[package]]

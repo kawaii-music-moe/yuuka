@@ -72,12 +72,12 @@ mod tests {
 
     static SEQ: AtomicU64 = AtomicU64::new(0);
 
-    // V17__baseline.sql と同一スキーマ（schedules/runs は enabled 0/1・UNIQUE(user_id,
-    // playbook_name)・bot_id 列・FK CASCADE を含む）。
-    const PLAYBOOKS_DDL: &str = "CREATE TABLE playbooks (
+    // playbook の FK 無し単体fixture（enabled 0/1・UNIQUE(user_id,playbook_name)・
+    // bot_id 列は保持し、DEFAULT は置かない）。
+    const PLAYBOOKS_DDL: &str = "DROP TABLE IF EXISTS playbooks; CREATE TABLE playbooks (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id TEXT NOT NULL,
-        bot_id TEXT NOT NULL DEFAULT 'system_default',
+        bot_id TEXT NOT NULL,
         name TEXT NOT NULL,
         title TEXT NOT NULL,
         keywords TEXT DEFAULT '[]',
@@ -87,10 +87,10 @@ mod tests {
         updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
         UNIQUE(user_id, bot_id, name)
     );
-    CREATE TABLE playbook_schedules (
+    DROP TABLE IF EXISTS playbook_schedules; CREATE TABLE playbook_schedules (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id TEXT NOT NULL,
-        bot_id TEXT NOT NULL DEFAULT 'system_default',
+        bot_id TEXT NOT NULL,
         playbook_name TEXT NOT NULL,
         cron_expression TEXT NOT NULL,
         description TEXT DEFAULT '',
@@ -101,7 +101,7 @@ mod tests {
         updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
         UNIQUE(user_id, playbook_name)
     );
-    CREATE TABLE playbook_runs (
+    DROP TABLE IF EXISTS playbook_runs; CREATE TABLE playbook_runs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         schedule_id INTEGER NOT NULL,
         user_id TEXT NOT NULL,
@@ -110,7 +110,7 @@ mod tests {
         output TEXT DEFAULT '',
         started_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
         finished_at TEXT,
-        bot_id TEXT NOT NULL DEFAULT 'system_default'
+        bot_id TEXT NOT NULL
     );";
 
     fn seed_db_with_path() -> (Db, std::path::PathBuf) {
@@ -120,7 +120,9 @@ mod tests {
             std::process::id()
         ));
         {
-            let conn = rusqlite::Connection::open(&path).expect("seed db");
+            let mut conn = rusqlite::Connection::open(&path).expect("seed db");
+            // Install the isolated unit schema after migrating the real schema (SD07).
+            yuuka_db::run_migrations(&mut conn).expect("migrate before unit fixture");
             conn.execute_batch(PLAYBOOKS_DDL).expect("create playbooks");
         }
         let db = Db::open(&path).expect("open db");
