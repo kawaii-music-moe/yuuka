@@ -146,7 +146,7 @@ impl<'a> ExpenseRepo<'a> {
             .await
     }
 
-    /// 収支を記録し、作成後の行を返す（source は常に `manual`）。
+    /// 収支を記録し、作成後の行を返す（source は `manual`）。
     ///
     /// date/time 未指定時は SQLite の localtime を採用（Node 既定と一致）。
     /// type は `income` 以外を `expense` に正規化する（Node financeRoutes parity）。
@@ -154,6 +154,24 @@ impl<'a> ExpenseRepo<'a> {
     /// # Errors
     /// 挿入失敗・作成後の取得失敗時 [`DbError`]。
     pub async fn add(&self, scope: &UserScope, input: NewExpense) -> Result<Expense, DbError> {
+        self.add_with_source(scope, input, "manual").await
+    }
+
+    /// 既存の記帳ツール用。OCR source 以外は manual に正規化する。
+    ///
+    /// # Errors
+    /// 挿入・取得失敗時 [`DbError`]。
+    pub async fn add_with_source(
+        &self,
+        scope: &UserScope,
+        input: NewExpense,
+        source: &str,
+    ) -> Result<Expense, DbError> {
+        let source = if source == "receipt_ocr" {
+            "receipt_ocr"
+        } else {
+            "manual"
+        };
         let (uid, bid) = scope_keys(scope);
         let id = self
             .writer
@@ -170,7 +188,7 @@ impl<'a> ExpenseRepo<'a> {
                      VALUES (?1, ?2, ?3, ?4, ?5, ?6, \
                              COALESCE(?7, date('now', 'localtime')), \
                              COALESCE(?8, time('now', 'localtime')), \
-                             'manual', datetime('now', 'localtime'))",
+                             ?9, datetime('now', 'localtime'))",
                     params![
                         uid,
                         bid,
@@ -180,6 +198,7 @@ impl<'a> ExpenseRepo<'a> {
                         input.description,
                         input.date,
                         input.time,
+                        source,
                     ],
                 )
                 .map_err(map_sqlite)?;

@@ -11,6 +11,8 @@ pub mod datetime;
 pub mod error;
 pub mod ids;
 pub mod metrics;
+/// レシート専用入口で共有する添付検証。
+pub mod receipt_image;
 pub mod scope;
 pub mod secrets;
 pub mod telemetry;
