@@ -69,7 +69,7 @@ async fn process_due_reports(ctx: &ServiceContext) -> Result<(), DbError> {
         if let Err(e) = deliver(
             &ctx.db,
             ctx.notifier.as_ref(),
-            ctx.report_generator.as_ref(),
+            ctx.aux_text.as_ref(),
             &config,
         )
         .await
@@ -573,38 +573,38 @@ mod tests {
     /// report_configs + 集約元テーブル（todos/schedules/planned_payments/expenses）を FK 無しで作る
     /// （各ドメイン crate のテスト DDL と同形・集約と cron 判定に必要な列を持つ）。
     const DDL: &str = "\
-        CREATE TABLE report_configs (\
+        DROP TABLE IF EXISTS report_configs; CREATE TABLE report_configs (\
             id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, \
-            bot_id TEXT NOT NULL DEFAULT 'system_default', type TEXT NOT NULL, \
+            bot_id TEXT NOT NULL, type TEXT NOT NULL, \
             enabled INTEGER NOT NULL DEFAULT 0, schedule_cron TEXT NOT NULL DEFAULT '0 21 * * *', \
             target_type TEXT NOT NULL DEFAULT 'dm', target_id TEXT, \
             updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime')), \
             UNIQUE (user_id, bot_id, type));\
-        CREATE TABLE todos (\
+        DROP TABLE IF EXISTS todos; CREATE TABLE todos (list TEXT NOT NULL DEFAULT '個人', \
             id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, \
-            bot_id TEXT NOT NULL DEFAULT 'system_default', title TEXT NOT NULL, description TEXT, \
+            bot_id TEXT NOT NULL, title TEXT NOT NULL, description TEXT, \
             due_date TEXT, start_date TEXT, priority TEXT, tags TEXT NOT NULL DEFAULT '[]', \
             status TEXT NOT NULL DEFAULT 'open', progress INTEGER NOT NULL DEFAULT 0, parent_id INTEGER, \
             linked_payment_id INTEGER, due_reminded INTEGER NOT NULL DEFAULT 0, repeat_rule TEXT, \
             repeat_until TEXT, repeat_count INTEGER, \
             created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')), \
             updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime')));\
-        CREATE TABLE schedules (\
+        DROP TABLE IF EXISTS schedules; CREATE TABLE schedules (\
             id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, \
-            bot_id TEXT NOT NULL DEFAULT 'system_default', title TEXT NOT NULL, description TEXT, \
+            bot_id TEXT NOT NULL, title TEXT NOT NULL, description TEXT, \
             start_at TEXT NOT NULL, end_at TEXT, remind_before_minutes INTEGER NOT NULL DEFAULT 10, \
             reminded INTEGER NOT NULL DEFAULT 0, google_event_id TEXT, google_calendar_id TEXT, \
             created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')));\
-        CREATE TABLE planned_payments (\
+        DROP TABLE IF EXISTS planned_payments; CREATE TABLE planned_payments (\
             id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, title TEXT NOT NULL, \
             amount INTEGER NOT NULL, category TEXT, memo TEXT, due_date TEXT NOT NULL, repeat_rule TEXT, \
             status TEXT NOT NULL DEFAULT 'pending', \
             created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')), \
             updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime')), \
-            bot_id TEXT NOT NULL DEFAULT 'system_default');\
-        CREATE TABLE expenses (\
+            bot_id TEXT NOT NULL);\
+        DROP TABLE IF EXISTS expenses; CREATE TABLE expenses (\
             id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, \
-            bot_id TEXT NOT NULL DEFAULT 'system_default', type TEXT NOT NULL DEFAULT 'expense', \
+            bot_id TEXT NOT NULL, type TEXT NOT NULL DEFAULT 'expense', \
             amount INTEGER NOT NULL, category TEXT NOT NULL, memo TEXT, date TEXT NOT NULL, time TEXT, \
             source TEXT NOT NULL DEFAULT 'manual', \
             created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')));";
@@ -621,7 +621,9 @@ mod tests {
         let seq = SEQ.fetch_add(1, Ordering::Relaxed);
         let path = dir.path().join(format!("report_svc_{seq}.sqlite"));
         {
-            let conn = rusqlite::Connection::open(&path).expect("empty file");
+            let mut conn = rusqlite::Connection::open(&path).expect("empty file");
+            // Install the isolated unit schema after migrating the real schema (SD07).
+            yuuka_db::run_migrations(&mut conn).expect("migrate before unit fixture");
             conn.execute_batch(DDL).expect("ddl");
             conn.execute(
                 "INSERT INTO report_configs (user_id, bot_id, type, enabled, schedule_cron, target_type, target_id) \
@@ -630,19 +632,9 @@ mod tests {
             )
             .expect("seed row");
         }
-        db_seed_messages(&path);
+        // 会話サンプル（message_logs）と通知先（users）は実マイグレーションのスキーマをそのまま使う。
         let db = Db::open(&path).expect("open db");
         (db, dir)
-    }
-
-    fn db_seed_messages(path: &std::path::Path) {
-        let conn = rusqlite::Connection::open(path).unwrap();
-        conn.execute_batch(
-            "CREATE TABLE message_logs (id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id TEXT NOT NULL, bot_id TEXT NOT NULL, guild_id TEXT,
-            role TEXT NOT NULL, content TEXT NOT NULL, created_at TEXT NOT NULL);",
-        )
-        .unwrap();
     }
 
     #[tokio::test]
@@ -851,10 +843,10 @@ mod tests {
             ..Default::default()
         });
         let notifier = Arc::new(RecordingNotifier::new(true));
-        let ctx = ctx_with(db.clone(), notifier.clone()).with_report_generator(generator.clone());
+        let ctx = ctx_with(db.clone(), notifier.clone()).with_aux_text(generator.clone());
         ReportService.tick(&ctx).await;
         let runner = crate::NotifierDeliveryRunner::new(db, notifier.clone())
-            .with_report_generator(generator.clone());
+            .with_aux_text(generator.clone());
         assert!(runner.run_report("u", "system_default", "weekly").await);
         let calls = generator.calls.lock().unwrap();
         assert_eq!(calls.len(), 2);
@@ -897,8 +889,8 @@ mod tests {
         use yuuka_briefing::DeliveryRunner;
         let (db, _dir) = seed(false, "* * * * *", "weekly", "dm", None);
         db.writer.execute(|conn| {
-            conn.execute_batch("CREATE TABLE users (discord_id TEXT PRIMARY KEY, notify_target_type TEXT, notify_target_id TEXT);
-                INSERT INTO users VALUES ('u','channel','default-channel');").map_err(map_sqlite)?;
+            conn.execute_batch("INSERT INTO users (discord_id, username, salt, notify_target_type, notify_target_id)
+                VALUES ('u','u','','channel','default-channel');").map_err(map_sqlite)?;
             Ok(())
         }).await.unwrap();
         let notifier = Arc::new(RecordingNotifier::new(true));
@@ -907,7 +899,7 @@ mod tests {
             ..Default::default()
         });
         let runner = crate::NotifierDeliveryRunner::new(db, notifier.clone())
-            .with_report_generator(generator.clone());
+            .with_aux_text(generator.clone());
         assert!(runner.run_report("u", "system_default", "daily").await);
         let calls = generator.calls.lock().unwrap();
         assert_eq!(calls.len(), 1);
@@ -934,7 +926,7 @@ mod tests {
                 response,
                 ..Default::default()
             });
-            let ctx = ctx_with(db, notifier.clone()).with_report_generator(generator.clone());
+            let ctx = ctx_with(db, notifier.clone()).with_aux_text(generator.clone());
             ReportService.tick(&ctx).await;
             assert_eq!(generator.calls.lock().unwrap().len(), 1);
             let sent = notifier.sent.lock().unwrap();
@@ -964,7 +956,7 @@ mod tests {
             .unwrap();
         let notifier = Arc::new(RecordingNotifier::new(true));
         let generator = Arc::new(RecordingGenerator::default());
-        let ctx = ctx_with(db, notifier.clone()).with_report_generator(generator.clone());
+        let ctx = ctx_with(db, notifier.clone()).with_aux_text(generator.clone());
         ReportService.tick(&ctx).await;
         assert!(generator.calls.lock().unwrap().is_empty());
         let sent = notifier.sent.lock().unwrap();

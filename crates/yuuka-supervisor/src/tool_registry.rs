@@ -80,7 +80,7 @@ fn all_domain_tools(
     // credential: browserFillCredential が復号値を対話ブラウザへ入力するため manager を注入。
     all.extend(yuuka_credential::tools(
         db.clone(),
-        crypto,
+        crypto.clone(),
         Some(Arc::clone(&browser_manager)),
     )?);
     all.extend(yuuka_playbook::tools(db.clone(), recorder)?);
@@ -90,7 +90,11 @@ fn all_domain_tools(
     // runBriefingNow の `deliver: true` は /api/briefing/test と同じ配信 runner で送る（未配線なら未配信）。
     let briefing_delivery: Arc<dyn DeliveryRunner> =
         briefing_delivery.unwrap_or_else(|| Arc::new(yuuka_briefing::NullDeliveryRunner));
-    all.extend(yuuka_briefing::tools_with(db.clone(), briefing_delivery)?);
+    all.extend(yuuka_briefing::tools_with_aux_text(
+        db.clone(),
+        briefing_delivery,
+        Arc::new(crate::webhook::GeminiAuxText::new(db.clone(), crypto)),
+    )?);
     // 会話ログ要約（秘書経路・memory 能力）。
     all.extend(yuuka_conversation::tools(db.clone())?);
     // リッチ返信 Embed（core・秘書/汎用モード両経路で常時露出・db 非依存）。
@@ -117,9 +121,10 @@ mod tests {
     static SEQ: AtomicU64 = AtomicU64::new(0);
 
     // 参照系ツールの dispatch に必要な最小スキーマ（addTodo の縦スライス検証用に todos のみ）。
-    const DDL: &str = "CREATE TABLE todos (
+    const DDL: &str =
+        "DROP TABLE IF EXISTS todos; CREATE TABLE todos (list TEXT NOT NULL DEFAULT '個人',
         id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL,
-        bot_id TEXT NOT NULL DEFAULT 'system_default', title TEXT NOT NULL, description TEXT,
+        bot_id TEXT NOT NULL, title TEXT NOT NULL, description TEXT,
         due_date TEXT, start_date TEXT, priority TEXT, tags TEXT NOT NULL DEFAULT '[]',
         status TEXT NOT NULL DEFAULT 'open', progress INTEGER NOT NULL DEFAULT 0,
         parent_id INTEGER, linked_payment_id INTEGER, due_reminded INTEGER NOT NULL DEFAULT 0,
@@ -133,7 +138,9 @@ mod tests {
             std::process::id()
         ));
         {
-            let conn = Connection::open(&path).unwrap();
+            let mut conn = Connection::open(&path).unwrap();
+            // Install the isolated unit schema after migrating the real schema (SD07).
+            yuuka_db::run_migrations(&mut conn).expect("migrate before unit fixture");
             conn.execute_batch(DDL).unwrap();
         }
         Db::open(&path).unwrap()

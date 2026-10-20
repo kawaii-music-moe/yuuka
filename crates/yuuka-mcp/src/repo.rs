@@ -1,8 +1,8 @@
 //! MCP サーバー拡張リポジトリ（Node `src/db/mcpRepo.ts` パリティ・自己完結）。
 //!
 //! `user_id = NULL` の行はシステムレベル登録（Admin のみ管理・全ユーザー利用可）。owner（`user_id`）
-//! 所有のまま「使わせる Bot を許可リスト（`bot_mcp_access`）で選ぶ」共有モデル。`bot_id` 列は退役
-//! （NOT NULL DEFAULT `'system_default'` が入るのみ・参照しない）。
+//! 所有のまま「使わせる Bot を許可リスト（`bot_mcp_access`）で選ぶ」共有モデル。
+//! 退役した `mcp_servers.bot_id` 列は V27 で削除済み。
 
 use rusqlite::{params, OptionalExtension};
 use serde_json::Value;

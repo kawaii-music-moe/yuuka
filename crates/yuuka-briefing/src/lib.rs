@@ -27,4 +27,4 @@ pub use repo::{
 };
 pub use routes::{routes, routes_with, DeliveryRunner, LateDeliveryRunner, NullDeliveryRunner};
 pub use service::{build_briefing, render_briefing_text, BriefingContent};
-pub use tools::{tools, tools_with};
+pub use tools::{tools, tools_with, tools_with_aux_text};

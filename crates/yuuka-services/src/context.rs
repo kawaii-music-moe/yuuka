@@ -28,12 +28,13 @@ pub struct ServiceContext {
     pub metrics: Arc<MetricsRegistry>,
     /// マクロ定期実行の秘書ターン起動ポート（未配線時は [`crate::turn::NullPlaybookRunner`]）。
     pub playbook_runner: Arc<dyn PlaybookRunner>,
+    /// ユーザー本人のキーで行う補助テキスト生成（朝報ニュースの要約・日報/週報のまとめ）。
+    /// 未配線・障害時は [`NullAuxTextGenerator`] と同じく、朝報はタイトル列挙・日報/週報は生データへ縮退する。
+    pub aux_text: Arc<dyn AuxTextGenerator>,
     /// 定期バックアップの実行ポート（未配線時は [`NullBackupRunner`]・[`crate::backup::BackupService`] が使う）。
     pub backup: Arc<dyn BackupRunner>,
     /// Google カレンダーの定期取り込みポート（未配線時は [`NullCalendarSyncRunner`]）。
     pub calendar_sync: Arc<dyn CalendarSyncRunner>,
-    /// 日報・週報の補助生成（未配線・失敗時は生データ）。
-    pub report_generator: Arc<dyn AuxTextGenerator>,
     /// 横断（全ユーザー跨ぎ）アクセス証憑。cron の起点はここに限定される。
     pub cross: CrossUserAccess,
 }
@@ -53,18 +54,11 @@ impl ServiceContext {
             db,
             metrics,
             playbook_runner,
+            aux_text: Arc::new(NullAuxTextGenerator),
             backup: Arc::new(NullBackupRunner),
             calendar_sync: Arc::new(NullCalendarSyncRunner),
-            report_generator: Arc::new(NullAuxTextGenerator),
             cross: CrossUserAccess::for_scheduled_task(),
         }
-    }
-
-    /// 日報・週報へユーザーキーによる補助生成を注入する。
-    #[must_use]
-    pub fn with_report_generator(mut self, generator: Arc<dyn AuxTextGenerator>) -> Self {
-        self.report_generator = generator;
-        self
     }
 
     /// バックアップ実行ポートを差し替える（main が `GoogleBackupClient` アダプタを注入する）。
@@ -78,6 +72,13 @@ impl ServiceContext {
     #[must_use]
     pub fn with_calendar_sync(mut self, calendar_sync: Arc<dyn CalendarSyncRunner>) -> Self {
         self.calendar_sync = calendar_sync;
+        self
+    }
+
+    /// 補助テキスト生成ポートを差し替える（main が `GeminiAuxText` を注入する）。
+    #[must_use]
+    pub fn with_aux_text(mut self, aux_text: Arc<dyn AuxTextGenerator>) -> Self {
+        self.aux_text = aux_text;
         self
     }
 }

@@ -13,15 +13,13 @@
 //! [`cron_util::cron_matches_now`] 単体で「その分に 1 回だけ配信」が成立し、追加の last_run マーカーは
 //! 不要（reminder/playbook が「分境界整列 + 逐次ループ」で構造的に二重発火を避けるのと同規律）。
 //!
-//! ## Node パリティの意図的 divergence
-//! - **LLM 要約（generateAuxText）は未配線**。Node はニュースを Gemini で 3〜5 件に要約するが、Rust は
-//!   `build_briefing` のヘッドライン列挙で代替する（手動 `runBriefingNow` と同じ意図的 divergence）。
-//! - 定期配信の表示は Node と同じく、タイトル・天気/ニュースフィールド・フッタを持つスカイブルーの
-//!   Embed とする。LLM 要約の差分はこの表示パリティとは分離して扱う。
+//! ニュースは補助 LLM で要約し、利用不可時はヘッドライン列挙へ縮退する。
+//! 定期配信は Node と同じく、タイトル・天気/ニュースフィールド・フッタを持つスカイブルーの Embed とする。
 
 use async_trait::async_trait;
 use chrono::Local;
 use yuuka_briefing::{build_briefing, list_enabled_briefings, BriefingContent, EnabledBriefing};
+use yuuka_core::aux_text::AuxTextGenerator;
 use yuuka_core::{BotId, DbError, EmbedFieldPart, EmbedPart, UserId};
 use yuuka_web::Db;
 
@@ -65,7 +63,14 @@ async fn process_due_briefings(ctx: &ServiceContext) -> Result<(), DbError> {
             continue;
         }
         tracing::info!(user = %config.user_id, "🌅 朝報を配信します");
-        if let Err(e) = deliver(&ctx.db, ctx.notifier.as_ref(), &config).await {
+        if let Err(e) = deliver(
+            &ctx.db,
+            ctx.notifier.as_ref(),
+            ctx.aux_text.as_ref(),
+            &config,
+        )
+        .await
+        {
             // 1 件の DB エラーで tick 全体を止めない（次設定・次 tick で復帰・Node の per-user try/catch）。
             tracing::error!(user = %config.user_id, error = %e, "❌ 朝報配信に失敗");
         }
@@ -80,10 +85,11 @@ async fn process_due_briefings(ctx: &ServiceContext) -> Result<(), DbError> {
 pub(crate) async fn deliver(
     db: &Db,
     notifier: &dyn Notifier,
+    aux_text: &dyn AuxTextGenerator,
     config: &EnabledBriefing,
 ) -> Result<bool, DbError> {
     // 本人設定を再読込して天気/RSS を生成（走査行の直後に設定が消えた等は None → 何もしない）。
-    let Some(content) = build_briefing(db, &config.user_id, &config.bot_id).await? else {
+    let Some(content) = build_briefing(db, aux_text, &config.user_id, &config.bot_id).await? else {
         return Ok(false);
     };
 
@@ -153,8 +159,8 @@ mod tests {
     static SEQ: AtomicU64 = AtomicU64::new(0);
 
     /// briefing_configs だけを FK 無しで作る（tools.rs の DDL と同形・cron 判定に必要な列を持つ）。
-    const DDL: &str = "CREATE TABLE briefing_configs (\
-        user_id TEXT NOT NULL, bot_id TEXT NOT NULL DEFAULT 'system_default', \
+    const DDL: &str = "DROP TABLE IF EXISTS briefing_configs; CREATE TABLE briefing_configs (\
+        user_id TEXT NOT NULL, bot_id TEXT NOT NULL, \
         enabled INTEGER NOT NULL DEFAULT 0, schedule_cron TEXT NOT NULL DEFAULT '0 7 * * *', \
         target_type TEXT NOT NULL DEFAULT 'dm', target_id TEXT, weather_lat REAL, weather_lng REAL, \
         location_name TEXT, news_feeds TEXT NOT NULL DEFAULT '[]', \
@@ -176,7 +182,9 @@ mod tests {
         let seq = SEQ.fetch_add(1, Ordering::Relaxed);
         let path = dir.path().join(format!("briefing_svc_{seq}.sqlite"));
         {
-            let conn = rusqlite::Connection::open(&path).expect("empty file");
+            let mut conn = rusqlite::Connection::open(&path).expect("empty file");
+            // Install the isolated unit schema after migrating the real schema (SD07).
+            yuuka_db::run_migrations(&mut conn).expect("migrate before unit fixture");
             conn.execute_batch(DDL).expect("ddl");
             conn.execute(
                 "INSERT INTO briefing_configs (user_id, bot_id, enabled, schedule_cron, target_type, target_id) \

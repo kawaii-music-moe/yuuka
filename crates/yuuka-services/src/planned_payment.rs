@@ -2,7 +2,7 @@
 //! `listOverdueRecurringAcrossUsers` / `advanceRecurring`）。
 //!
 //! cron 専用 SQL を本 crate が直接持つ。次回分の行は元の行の `user_id` / `bot_id` を引き継ぐ
-//! （`bot_id` を省くと列の既定値 `system_default` が入り、元の Bot から見えなくなる）。
+//! （V27 以降、`bot_id` の省略は NOT NULL 制約で拒否される）。
 //! 横断アクセスは [`CrossUserAccess`] 証憑を要求する。
 
 use rusqlite::types::Value;

@@ -32,7 +32,7 @@ use crate::{briefing, report};
 pub struct NotifierDeliveryRunner {
     db: Db,
     notifier: Arc<dyn Notifier>,
-    report_generator: Arc<dyn AuxTextGenerator>,
+    aux_text: Arc<dyn AuxTextGenerator>,
 }
 
 impl NotifierDeliveryRunner {
@@ -46,13 +46,14 @@ impl NotifierDeliveryRunner {
         Self {
             db,
             notifier,
-            report_generator: Arc::new(NullAuxTextGenerator),
+            aux_text: Arc::new(NullAuxTextGenerator),
         }
     }
-    /// 定時配信と同じ補助生成ポートを注入する。
+
+    /// 定時配信と同じ補助テキスト生成ポート（朝報ニュース要約・日報/週報まとめ）を注入する。
     #[must_use]
-    pub fn with_report_generator(mut self, generator: Arc<dyn AuxTextGenerator>) -> Self {
-        self.report_generator = generator;
+    pub fn with_aux_text(mut self, aux_text: Arc<dyn AuxTextGenerator>) -> Self {
+        self.aux_text = aux_text;
         self
     }
 }
@@ -75,7 +76,14 @@ impl DeliveryRunner for NotifierDeliveryRunner {
             target_type: config.target_type,
             target_id: config.target_id,
         };
-        match briefing::deliver(&self.db, self.notifier.as_ref(), &target).await {
+        match briefing::deliver(
+            &self.db,
+            self.notifier.as_ref(),
+            self.aux_text.as_ref(),
+            &target,
+        )
+        .await
+        {
             Ok(sent) => sent,
             Err(e) => {
                 tracing::error!(user = %user_id, error = %e, "❌ 朝報のテスト配信に失敗");
@@ -111,7 +119,7 @@ impl DeliveryRunner for NotifierDeliveryRunner {
             report::deliver(
                 &self.db,
                 self.notifier.as_ref(),
-                self.report_generator.as_ref(),
+                self.aux_text.as_ref(),
                 &target,
             )
             .await
@@ -119,7 +127,7 @@ impl DeliveryRunner for NotifierDeliveryRunner {
             report::deliver_to(
                 &self.db,
                 self.notifier.as_ref(),
-                self.report_generator.as_ref(),
+                self.aux_text.as_ref(),
                 &target,
                 NotifyTarget::Default,
             )

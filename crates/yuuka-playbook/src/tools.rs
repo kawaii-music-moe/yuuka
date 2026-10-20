@@ -386,10 +386,10 @@ mod tests {
 
     static SEQ: AtomicU64 = AtomicU64::new(0);
 
-    const PLAYBOOKS_DDL: &str = "CREATE TABLE playbooks (
+    const PLAYBOOKS_DDL: &str = "DROP TABLE IF EXISTS playbooks; CREATE TABLE playbooks (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id TEXT NOT NULL,
-        bot_id TEXT NOT NULL DEFAULT 'system_default',
+        bot_id TEXT NOT NULL,
         name TEXT NOT NULL,
         title TEXT NOT NULL,
         keywords TEXT DEFAULT '[]',
@@ -407,7 +407,9 @@ mod tests {
             std::process::id()
         ));
         {
-            let conn = Connection::open(&path).unwrap();
+            let mut conn = Connection::open(&path).unwrap();
+            // Install the isolated unit schema after migrating the real schema (SD07).
+            yuuka_db::run_migrations(&mut conn).expect("migrate before unit fixture");
             conn.execute_batch(PLAYBOOKS_DDL).unwrap();
         }
         Db::open(&path).unwrap()
