@@ -145,6 +145,199 @@ fn null_sink() -> StatusSink {
     Arc::new(|_: BotStatus| {})
 }
 
+/// OCR と秘書ターンで同じユーザー鍵・モデルを使い、OCR はツールを実行しない。
+struct ReceiptBackend {
+    calls: Mutex<Vec<(Vec<String>, Vec<Content>)>>,
+    readable: bool,
+    is_receipt: bool,
+}
+
+#[async_trait]
+impl GenerateBackend for ReceiptBackend {
+    async fn generate(
+        &self,
+        _system_instruction: Option<&str>,
+        declarations: &[FunctionDeclaration],
+        contents: &[Content],
+        _tool_config: Option<ToolConfig>,
+    ) -> Result<GenerateContentResponse, GeminiError> {
+        let names = declarations
+            .iter()
+            .map(|d| d.name.clone())
+            .collect::<Vec<_>>();
+        let is_ocr = names == ["readReceipt"];
+        self.calls.lock().unwrap().push((names, contents.to_vec()));
+        let parts = if is_ocr {
+            json!([{"functionCall": {"name": "readReceipt", "args": {
+                "isReceipt": self.is_receipt, "date": "2026-10-20", "kind": "expense",
+                "category": "食費", "description": if self.readable { "店: 卵" } else { "" },
+                "amount": if self.readable { 600 } else { 0 },
+                "lines": if self.readable { json!([{"description": "卵", "category": "食費", "amount": 600}]) } else { json!([]) }
+            }}}])
+        } else {
+            json!([{"text": "読み取り内容を確認しました。"}])
+        };
+        Ok(serde_json::from_value(
+            json!({"candidates": [{"content": {"role": "model", "parts": parts}}]}),
+        )
+        .unwrap())
+    }
+}
+
+struct ReceiptFactory(Arc<ReceiptBackend>);
+impl GeminiFactory for ReceiptFactory {
+    fn build(
+        &self,
+        model: &str,
+        key: SecretString,
+    ) -> Result<Arc<dyn GenerateBackend>, GeminiError> {
+        use secrecy::ExposeSecret;
+        if model != "gemini-3.1-flash-lite" || key.expose_secret() != "fake-gemini-key" {
+            return Err(GeminiError::KeyUnavailable {
+                scope: "test: incorrect receipt user key/model".to_owned(),
+            });
+        }
+        Ok(self.0.clone())
+    }
+}
+
+#[tokio::test]
+async fn receipt_draft_has_no_turn_side_effects_and_recording_uses_same_ocr() {
+    for (is_receipt, readable) in [(true, true), (true, false), (false, false)] {
+        let (db, path) = fresh_db();
+        let crypto =
+            Arc::new(SystemCrypto::new(SecretString::from("receipt-test-secret")).unwrap());
+        seed_user_with_key(&path, &crypto, "receipt-user");
+        let backend = Arc::new(ReceiptBackend {
+            calls: Mutex::new(Vec::new()),
+            readable,
+            is_receipt,
+        });
+        let engine = ChatEngine::new(
+            db,
+            Some(crypto),
+            ToolRegistry::new(),
+            Arc::new(ReceiptFactory(backend.clone())),
+            None,
+            Arc::new(yuuka_mcp::NullMcpClient),
+            None,
+        );
+        let uid = UserId::new("receipt-user");
+        let draft = engine
+            .extract_receipt(&uid, "QUJD", "IMAGE/PNG; x=y", "2026-10-20")
+            .await;
+        assert_eq!(draft.is_ok(), readable);
+        if let Ok(draft) = draft {
+            assert_eq!(draft.amount, Some(600));
+        }
+        assert_eq!(count_logs(&path, uid.as_str(), "user"), 0);
+        assert_eq!(count_logs(&path, uid.as_str(), "assistant"), 0);
+        let reply = engine
+            .receipt_turn(
+                &BotId::new("receipt-bot"),
+                &uid,
+                yuuka_discord::InlineMedia {
+                    data_base64: "QUJD".to_owned(),
+                    mime_type: "image/png".to_owned(),
+                },
+                Some("保存せず内容だけ教えて".to_owned()),
+                Vec::new(),
+                &null_sink(),
+            )
+            .await
+            .unwrap();
+        let calls = backend.calls.lock().unwrap();
+        assert_eq!(calls.len(), if readable || !is_receipt { 3 } else { 2 });
+        assert_eq!(calls[0].0, ["readReceipt"]);
+        assert_eq!(calls[1].0, ["readReceipt"]);
+        if readable {
+            let turn = serde_json::to_string(&calls[2].1).unwrap();
+            assert!(turn.contains("receipt_ocr"));
+            assert!(turn.contains("保存せず内容だけ教えて"));
+            assert!(turn.contains("卵"));
+            assert!(
+                !turn.contains("inlineData"),
+                "秘書ターンで画像を再解析しない"
+            );
+            let logs = log_contents(&path, uid.as_str(), "user");
+            assert_eq!(logs.len(), 1);
+            assert!(
+                !logs[0].contains("卵"),
+                "OCR 明細をユーザー発言として保存しない"
+            );
+        } else if !is_receipt {
+            let turn = serde_json::to_string(&calls[2].1).unwrap();
+            assert!(
+                turn.contains("inlineData"),
+                "普通の写真は従来の画像会話へ戻す"
+            );
+            assert!(!turn.contains("receipt_ocr"));
+        } else {
+            assert!(reply.text.contains("読み取れませんでした"));
+            assert_eq!(count_logs(&path, uid.as_str(), "user"), 0);
+        }
+        let conn = rusqlite::Connection::open(path).unwrap();
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM expenses", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 0, "OCR 自体は保存しない");
+    }
+}
+
+/// Discord では OCR の入力検証（10 MiB 超・許可外形式）に通らない写真も、エラーにせず
+/// 従来の画像会話へ戻す（develop では Discord の画像はサイズ・形式の制限なしで秘書ターンに渡る）。
+#[tokio::test]
+async fn receipt_turn_falls_back_to_image_chat_when_ocr_rejects_image() {
+    let oversized = "A".repeat(10 * 1024 * 1024 + 4);
+    for (data, mime) in [("QUJD", "image/avif"), (oversized.as_str(), "image/jpeg")] {
+        let (db, path) = fresh_db();
+        let crypto =
+            Arc::new(SystemCrypto::new(SecretString::from("receipt-test-secret")).unwrap());
+        seed_user_with_key(&path, &crypto, "receipt-user");
+        let backend = Arc::new(ReceiptBackend {
+            calls: Mutex::new(Vec::new()),
+            readable: true,
+            is_receipt: true,
+        });
+        let engine = ChatEngine::new(
+            db,
+            Some(crypto),
+            ToolRegistry::new(),
+            Arc::new(ReceiptFactory(backend.clone())),
+            None,
+            Arc::new(yuuka_mcp::NullMcpClient),
+            None,
+        );
+        let uid = UserId::new("receipt-user");
+        let reply = engine
+            .receipt_turn(
+                &BotId::new("receipt-bot"),
+                &uid,
+                yuuka_discord::InlineMedia {
+                    data_base64: data.to_owned(),
+                    mime_type: mime.to_owned(),
+                },
+                Some("この写真どう？".to_owned()),
+                Vec::new(),
+                &null_sink(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(reply.text, "読み取り内容を確認しました。", "{mime}");
+        let calls = backend.calls.lock().unwrap();
+        assert_eq!(calls.len(), 1, "OCR は LLM を呼ばずに検証で弾く: {mime}");
+        assert_ne!(calls[0].0, ["readReceipt"]);
+        let turn = serde_json::to_string(&calls[0].1).unwrap();
+        assert!(
+            turn.contains("inlineData"),
+            "画像はそのまま会話へ渡す: {mime}"
+        );
+        assert!(turn.contains("この写真どう？"));
+        assert!(!turn.contains("receipt_ocr"));
+        assert_eq!(count_logs(&path, uid.as_str(), "user"), 1);
+    }
+}
+
 #[tokio::test]
 async fn secretary_turn_persists_and_replies() {
     let (db, path) = fresh_db();
@@ -835,6 +1028,11 @@ impl GeminiFactory for AttachmentFactory {
     }
 }
 fn attachment_engine() -> (ChatEngine, Vec<yuuka_core::tool::ConversationAttachment>) {
+    attachment_engine_with(Arc::new(AttachmentFactory))
+}
+fn attachment_engine_with(
+    factory: Arc<dyn GeminiFactory>,
+) -> (ChatEngine, Vec<yuuka_core::tool::ConversationAttachment>) {
     let (db, path) = fresh_db();
     let crypto =
         Arc::new(SystemCrypto::new(SecretString::from("attachment-test".to_owned())).unwrap());
@@ -853,7 +1051,7 @@ fn attachment_engine() -> (ChatEngine, Vec<yuuka_core::tool::ConversationAttachm
         db,
         Some(crypto),
         ToolRegistry::new().with_provider(Arc::new(provider)),
-        Arc::new(AttachmentFactory),
+        factory,
         None,
         Arc::new(yuuka_mcp::NullMcpClient),
         None,
@@ -880,27 +1078,111 @@ impl yuuka_discord::TurnDelivery for NoopDelivery {
     async fn deliver_final(&self, _reply: yuuka_discord::TurnReply) {}
 }
 
-/// Discord の写真はレシート経路（`parse_receipt`）を通るので、そこでも保存候補を秘書ターンへ渡す。
+/// 共通 OCR（`readReceipt`）に応答したあと、秘書ターンでは保存候補を `addTimelineRecord` で保存する。
+struct ReceiptAttachmentBackend {
+    is_receipt: bool,
+    calls: Mutex<Vec<(Vec<String>, Vec<Content>)>>,
+}
+#[async_trait]
+impl GenerateBackend for ReceiptAttachmentBackend {
+    async fn generate(
+        &self,
+        _system_instruction: Option<&str>,
+        declarations: &[FunctionDeclaration],
+        contents: &[Content],
+        _tool_config: Option<ToolConfig>,
+    ) -> Result<GenerateContentResponse, GeminiError> {
+        let names = declarations
+            .iter()
+            .map(|d| d.name.clone())
+            .collect::<Vec<_>>();
+        let is_ocr = names == ["readReceipt"];
+        let mut calls = self.calls.lock().unwrap();
+        let turn_calls = calls.iter().filter(|(n, _)| n != &["readReceipt"]).count();
+        calls.push((names, contents.to_vec()));
+        let parts = if is_ocr {
+            json!([{"functionCall": {"name": "readReceipt", "args": {
+                "isReceipt": self.is_receipt, "date": "2026-10-20", "kind": "expense",
+                "category": "食費", "description": "店: 卵", "amount": 600,
+                "lines": [{"description": "卵", "category": "食費", "amount": 600}]
+            }}}])
+        } else if turn_calls == 0 {
+            json!([{"functionCall": {"name": "addTimelineRecord", "args": {
+                "date": "2026-10-20", "type": "media", "attachment_indexes": [0, 2]
+            }}}])
+        } else {
+            json!([{"text": "保存しました。"}])
+        };
+        Ok(serde_json::from_value(
+            json!({"candidates": [{"content": {"role": "model", "parts": parts}}]}),
+        )
+        .unwrap())
+    }
+}
+struct ReceiptAttachmentFactory(Arc<ReceiptAttachmentBackend>);
+impl GeminiFactory for ReceiptAttachmentFactory {
+    fn build(&self, _: &str, _: SecretString) -> Result<Arc<dyn GenerateBackend>, GeminiError> {
+        Ok(self.0.clone())
+    }
+}
+
+/// Discord の写真はレシート経路（`parse_receipt` → 共通 OCR の `receipt_turn`）を通る。
+/// OCR 後の秘書ターン・レシート以外のフォールバック・OCR が弾く画像のフォールバックの
+/// いずれでも、保存候補を秘書ターン（カタログ通知と `ToolContext`）へ渡す。
 #[tokio::test]
 async fn receipt_path_keeps_timeline_attachment_catalog() {
     use yuuka_discord::TurnProcessor;
-    let (engine, attachments) = attachment_engine();
-    let reply = engine
-        .parse_receipt(
-            &BotId::new("media-bot"),
-            &UserId::new("u13"),
-            yuuka_discord::InlineMedia {
-                data_base64: "AQID".to_owned(),
-                mime_type: "image/png".to_owned(),
-            },
-            Some("この写真と動画を保存して".to_owned()),
-            attachments,
-            null_sink(),
-            Arc::new(NoopDelivery),
-        )
-        .await
-        .unwrap();
-    assert_eq!(reply.text, "保存しました。");
+    for (is_receipt, mime) in [
+        (true, "image/png"),
+        (false, "image/png"),
+        (true, "image/avif"),
+    ] {
+        let backend = Arc::new(ReceiptAttachmentBackend {
+            is_receipt,
+            calls: Mutex::new(Vec::new()),
+        });
+        let (engine, attachments) =
+            attachment_engine_with(Arc::new(ReceiptAttachmentFactory(backend.clone())));
+        let reply = engine
+            .parse_receipt(
+                &BotId::new("media-bot"),
+                &UserId::new("u13"),
+                yuuka_discord::InlineMedia {
+                    data_base64: "AQID".to_owned(),
+                    mime_type: mime.to_owned(),
+                },
+                Some("このレシートと動画を保存して".to_owned()),
+                attachments,
+                null_sink(),
+                Arc::new(NoopDelivery),
+            )
+            .await
+            .unwrap();
+        assert_eq!(reply.text, "保存しました。", "{is_receipt} {mime}");
+        let calls = backend.calls.lock().unwrap();
+        let ocr_path = is_receipt && mime == "image/png";
+        let ocr_calls = calls.iter().filter(|(n, _)| n == &["readReceipt"]).count();
+        assert_eq!(ocr_calls, usize::from(mime == "image/png"), "{mime}");
+        let turn = calls
+            .iter()
+            .filter(|(n, _)| n != &["readReceipt"])
+            .map(|(_, c)| serde_json::to_string(c).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(turn.len(), 2, "{is_receipt} {mime}");
+        assert!(
+            turn[0].contains("現在の発話者本人の保存可能な添付"),
+            "保存候補のカタログを秘書ターンへ通知する: {is_receipt} {mime}"
+        );
+        assert_eq!(turn[0].contains("receipt_ocr"), ocr_path, "{mime}");
+        assert_eq!(
+            turn[0].contains("inlineData"),
+            !ocr_path,
+            "OCR 済みのレシートだけ画像を外す: {is_receipt} {mime}"
+        );
+        // AttachmentProbe が ToolContext の保存候補を検証して成功を返している。
+        assert!(turn[1].contains("functionResponse"), "{is_receipt} {mime}");
+        assert!(turn[1].contains("\"success\":true"), "{is_receipt} {mime}");
+    }
 }
 
 #[tokio::test]

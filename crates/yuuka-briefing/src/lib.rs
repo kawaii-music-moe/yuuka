@@ -26,7 +26,5 @@ pub use repo::{
     EnabledBriefing, EnabledReport, ReportConfig,
 };
 pub use routes::{routes, routes_with, DeliveryRunner, LateDeliveryRunner, NullDeliveryRunner};
-pub use service::{
-    build_briefing, render_briefing_text, BriefingContent, NewsSummarizer, NullNewsSummarizer,
-};
-pub use tools::{tools, tools_with, tools_with_news_summarizer};
+pub use service::{build_briefing, render_briefing_text, BriefingContent};
+pub use tools::{tools, tools_with, tools_with_aux_text};

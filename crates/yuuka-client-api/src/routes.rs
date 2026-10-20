@@ -883,17 +883,6 @@ async fn finance_add(
 
 // ─── chat（履歴・送信・添付） ───────────────────────────────────────────────────
 
-/// レシート画像として受け付ける形式（`upload-receipt` と同じ・LLM に渡せる画像形式）。
-const RECEIPT_MIME_TYPES: [&str; 7] = [
-    "image/png",
-    "image/jpeg",
-    "image/jpg",
-    "image/webp",
-    "image/heic",
-    "image/heif",
-    "image/gif",
-];
-
 /// レシート画像を読み取り、家計簿フォームの下書き（[`ReceiptDraft`]）を返す。**登録はしない**
 /// （ユーザーが PWA のフォームで内容を直してから `POST /api/client/finance/transactions` で登録する）。
 /// LLM を呼ぶので、チャット送信と同じレート制限を消費する。
@@ -904,25 +893,8 @@ async fn finance_receipt(
     Json(body): Json<ReceiptScanInput>,
 ) -> Result<Json<ReceiptDraft>, ClientApiError> {
     let image = body.image_base64.unwrap_or_default();
-    let mime = body
-        .mime_type
-        .unwrap_or_default()
-        .to_lowercase()
-        .split(';')
-        .next()
-        .unwrap_or_default()
-        .trim()
-        .to_owned();
-    if image.is_empty() || mime.is_empty() {
-        return Err(ClientApiError::bad_request(
-            "画像データ(base64)とMIMEタイプが必要です。",
-        ));
-    }
-    if !RECEIPT_MIME_TYPES.contains(&mime.as_str()) {
-        return Err(ClientApiError::bad_request(
-            "対応していない画像形式です（png/jpeg/webp/heic/gif）。",
-        ));
-    }
+    let mime = yuuka_core::receipt_image::validate(&image, &body.mime_type.unwrap_or_default())
+        .map_err(ClientApiError::bad_request)?;
     if !engine.user_has_gemini_key(scope.user_id().as_str()).await {
         return Err(ClientApiError::bad_request(
             "Gemini APIキーが未設定です。管理画面から設定してください。",
@@ -948,13 +920,18 @@ async fn finance_receipt(
         .await
     {
         Ok(draft) => Ok(Json(draft)),
+        Err(ReceiptExtractError::InvalidImage(message)) => {
+            Err(ClientApiError::bad_request(message))
+        }
         Err(ReceiptExtractError::NoGeminiKey) => Err(ClientApiError::bad_request(
             "Gemini APIキーが未設定です。管理画面から設定してください。",
         )),
-        Err(ReceiptExtractError::Unreadable) => Err(ClientApiError {
-            status: StatusCode::UNPROCESSABLE_ENTITY,
-            message: "レシートを読み取れませんでした。別の写真でお試しください。".to_owned(),
-        }),
+        Err(ReceiptExtractError::Unreadable | ReceiptExtractError::NotReceipt) => {
+            Err(ClientApiError {
+                status: StatusCode::UNPROCESSABLE_ENTITY,
+                message: "レシートを読み取れませんでした。別の写真でお試しください。".to_owned(),
+            })
+        }
         Err(ReceiptExtractError::Llm(e)) => {
             tracing::warn!(error = %e, "client-api: receipt extraction failed");
             Err(ClientApiError {

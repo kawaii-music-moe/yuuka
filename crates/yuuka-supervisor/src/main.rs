@@ -358,6 +358,10 @@ async fn run() -> Result<(), String> {
     // schedule ルータ: 管理画面からの登録・削除もエージェントと同じく Google カレンダーへ反映する（#127）。
     let schedule_routes = yuuka_schedule::routes_with_calendar(Some(google_events.clone()));
 
+    // ユーザー本人のキーで行う補助テキスト生成（Webhook 整形・朝報ニュース要約・日報/週報まとめで共有）。
+    let aux_text: Arc<dyn yuuka_core::aux_text::AuxTextGenerator> =
+        Arc::new(GeminiAuxText::new(db.clone(), crypto.clone()));
+
     // Webhook ルータ（署名検証・通知・ToDo/リマインド化・受信履歴を実処理へ配線）。
     let webhook_routes = yuuka_webhook::routes_with(
         crypto.clone(),
@@ -365,7 +369,7 @@ async fn run() -> Result<(), String> {
             db.clone(),
             crypto.clone(),
             Arc::new(MessengerWebhookNotifier::new(messenger.clone())),
-            Arc::new(GeminiAuxText::new(db.clone(), crypto.clone())),
+            aux_text.clone(),
         )),
     );
 
@@ -401,8 +405,7 @@ async fn run() -> Result<(), String> {
     // Discord Messenger へ送る。REST 送信は gateway 非依存のため YUUKA_RUST_CRON/DISCORD に関わらず live。
     // 同じ runner を runBriefingNow（`deliver: true`）にも設定する（issue #136）。
     let delivery_runner: Arc<dyn yuuka_briefing::DeliveryRunner> = Arc::new(
-        NotifierDeliveryRunner::new(db.clone(), messenger.clone())
-            .with_news_summarizer(Arc::new(GeminiAuxText::new(db.clone(), crypto.clone()))),
+        NotifierDeliveryRunner::new(db.clone(), messenger.clone()).with_aux_text(aux_text.clone()),
     );
     briefing_delivery.set(delivery_runner.clone());
     let briefing_routes = yuuka_briefing::routes_with(delivery_runner);
@@ -515,6 +518,20 @@ async fn run() -> Result<(), String> {
     //    P1-4: `impl yuuka_services::Notifier for DiscordMessenger`（notify_bridge）+ 上の Discord
     //    Messenger 構築（P1-3）が揃ったので、通知先を実 Discord Messenger に配線する。デフォルト Bot が
     //    未起動ならリマインド等は送信 false のまま保持され、Bot 起動後に配信可能になる。
+    // R05: interactive ToDo tagging is always active, independent of the legacy cron gate.
+    let tag_ctx = ServiceContext::new(
+        db.clone(),
+        messenger.clone(),
+        metrics.clone(),
+        Arc::new(yuuka_services::NullPlaybookRunner),
+    );
+    supervisor = supervisor.service(Arc::new(yuuka_supervisor::CronSupervised::new(
+        Arc::new(yuuka_services::auto_tags::AutoTagService {
+            generator: Arc::new(GeminiAuxText::new(db.clone(), crypto.clone())),
+        }),
+        tag_ctx,
+    )));
+
     if rust_cron_enabled() {
         // マクロ定期実行（playbook）は会話エンジンを秘書ターンとして起動する。services→orchestrator の
         // 逆依存を避けるため、両者を知る supervisor 層でアダプタ経由に注入する（P2 縮退の解消）。
@@ -526,7 +543,7 @@ async fn run() -> Result<(), String> {
                 engine: chat_engine.clone(),
             }),
         )
-        .with_news_summarizer(Arc::new(GeminiAuxText::new(db.clone(), crypto.clone())));
+        .with_aux_text(aux_text);
         // 定期バックアップの実行ポートを注入（実 Drive クライアントがあれば live・無ければ NullBackupRunner
         // 据え置き＝走査はするが実行は失敗）。手動 trigger（settings）と同一の GoogleBackupClient を共有する。
         if let Some(client) = google_backup_client.clone() {
@@ -696,23 +713,25 @@ impl yuuka_finance::ReceiptParser for ReceiptParserAdapter {
                 rate_limit_message(exceeded),
             ));
         }
-        // InlineMedia は `;` 以降を除去した MIME を要求する（Gemini inlineData 用）。
-        let clean_mime = mime_type
-            .split(';')
-            .next()
-            .unwrap_or(mime_type)
-            .trim()
-            .to_owned();
-        let msg = yuuka_discord::IncomingChat {
-            text: additional_text.unwrap_or_default().to_owned(),
-            image: Some(yuuka_discord::InlineMedia {
-                data_base64: image_base64.to_owned(),
-                mime_type: clean_mime,
-            }),
-            ..Default::default()
+        // 入口で共通検証・正規化済み。OCR 自体も同じ検証を使う。
+        let image = yuuka_discord::InlineMedia {
+            data_base64: image_base64.to_owned(),
+            mime_type: mime_type.to_owned(),
         };
         let status: yuuka_discord::StatusSink = Arc::new(|_| {});
-        match self.engine.secretary_turn(&bid, &uid, msg, &status).await {
+        match self
+            .engine
+            .receipt_turn(
+                &bid,
+                &uid,
+                image,
+                additional_text.map(str::to_owned),
+                // 管理画面のレシート読み取りは会話添付を持たない（タイムライン保存候補なし）。
+                Vec::new(),
+                &status,
+            )
+            .await
+        {
             Ok(reply) => Ok(serde_json::Value::String(reply.text)),
             // 秘書ターンの hard failure（LLM ソフトエラーは Ok(reply) に畳まれる）→ 503。
             Err(_) => Err(yuuka_finance::ReceiptError::Unavailable),

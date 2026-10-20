@@ -21,10 +21,8 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use yuuka_briefing::{
-    find_briefing, find_report, DeliveryRunner, EnabledBriefing, EnabledReport, NewsSummarizer,
-    NullNewsSummarizer,
-};
+use yuuka_briefing::{find_briefing, find_report, DeliveryRunner, EnabledBriefing, EnabledReport};
+use yuuka_core::aux_text::{AuxTextGenerator, NullAuxTextGenerator};
 use yuuka_web::Db;
 
 use crate::notifier::{DefaultTargetNotifier, Notifier, NotifyTarget};
@@ -34,7 +32,7 @@ use crate::{briefing, report};
 pub struct NotifierDeliveryRunner {
     db: Db,
     notifier: Arc<dyn Notifier>,
-    news_summarizer: Arc<dyn NewsSummarizer>,
+    aux_text: Arc<dyn AuxTextGenerator>,
 }
 
 impl NotifierDeliveryRunner {
@@ -48,14 +46,14 @@ impl NotifierDeliveryRunner {
         Self {
             db,
             notifier,
-            news_summarizer: Arc::new(NullNewsSummarizer),
+            aux_text: Arc::new(NullAuxTextGenerator),
         }
     }
 
-    /// 朝報ニュースの補助 LLM ポートを注入する。
+    /// 定時配信と同じ補助テキスト生成ポート（朝報ニュース要約・日報/週報まとめ）を注入する。
     #[must_use]
-    pub fn with_news_summarizer(mut self, news_summarizer: Arc<dyn NewsSummarizer>) -> Self {
-        self.news_summarizer = news_summarizer;
+    pub fn with_aux_text(mut self, aux_text: Arc<dyn AuxTextGenerator>) -> Self {
+        self.aux_text = aux_text;
         self
     }
 }
@@ -81,7 +79,7 @@ impl DeliveryRunner for NotifierDeliveryRunner {
         match briefing::deliver(
             &self.db,
             self.notifier.as_ref(),
-            self.news_summarizer.as_ref(),
+            self.aux_text.as_ref(),
             &target,
         )
         .await
@@ -118,11 +116,18 @@ impl DeliveryRunner for NotifierDeliveryRunner {
             target_id,
         };
         let result = if has_config {
-            report::deliver(&self.db, self.notifier.as_ref(), &target).await
+            report::deliver(
+                &self.db,
+                self.notifier.as_ref(),
+                self.aux_text.as_ref(),
+                &target,
+            )
+            .await
         } else {
             report::deliver_to(
                 &self.db,
                 self.notifier.as_ref(),
+                self.aux_text.as_ref(),
                 &target,
                 NotifyTarget::Default,
             )

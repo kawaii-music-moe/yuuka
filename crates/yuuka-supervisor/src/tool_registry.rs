@@ -90,7 +90,7 @@ fn all_domain_tools(
     // runBriefingNow の `deliver: true` は /api/briefing/test と同じ配信 runner で送る（未配線なら未配信）。
     let briefing_delivery: Arc<dyn DeliveryRunner> =
         briefing_delivery.unwrap_or_else(|| Arc::new(yuuka_briefing::NullDeliveryRunner));
-    all.extend(yuuka_briefing::tools_with_news_summarizer(
+    all.extend(yuuka_briefing::tools_with_aux_text(
         db.clone(),
         briefing_delivery,
         Arc::new(crate::webhook::GeminiAuxText::new(db.clone(), crypto)),

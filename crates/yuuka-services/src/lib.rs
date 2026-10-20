@@ -14,14 +14,15 @@
 //! - metrics / clipboard / reminder / todo-recurrence / payment-recurrence / birthday /
 //!   **playbook-schedule**（マクロ定期実行・[`turn::PlaybookRunner`] ポート経由で会話エンジンを起動）/
 //!   **briefing**（朝報の天気/RSS 定時配信・`yuuka-briefing` の生成プリミティブを再利用）/
-//!   **report**（日報/週報の活動データ集約 + 定時配信・LLM 要約は未配線＝Node 自前の生データ
-//!   フォールバックを実装）/ **backup**（ユーザー別 Google Drive バックアップの定期実行・実 Drive
+//!   **report**（日報/週報の活動・会話素材から補助 LLM で要約して定時配信・失敗時は生データ
+//!   フォールバック）/ **backup**（ユーザー別 Google Drive バックアップの定期実行・実 Drive
 //!   アップロードは [`backup::BackupRunner`] ポート経由＝main で `GoogleBackupClient` へ橋渡し）
 //! - 朝報・日報/週報の**テスト配信**（[`NotifierDeliveryRunner`]・`yuuka_briefing::DeliveryRunner` の実装。
 //!   定時配信と同じ `deliver` を本人・選択中 Bot の設定で 1 回呼ぶ）
 
 use std::sync::Arc;
 
+pub mod auto_tags;
 pub mod backup;
 pub mod calendar_sync;
 pub mod context;

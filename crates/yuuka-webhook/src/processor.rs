@@ -57,12 +57,7 @@ pub trait WebhookNotifier: Send + Sync {
     async fn notify(&self, user_id: &str, bot_id: &str, notice: WebhookNotice) -> bool;
 }
 
-/// 補助 LLM のテキスト生成ポート（Node `generateAuxText`）。ユーザー本人の Gemini キーで生成し、
-/// キー未設定・失敗時は `None` を返す（呼び出し側はフォールバック整形へ縮退する）。
-#[async_trait]
-pub trait AuxTextGenerator: Send + Sync {
-    async fn generate_aux_text(&self, user_id: &str, prompt: &str) -> Option<String>;
-}
+pub use yuuka_core::aux_text::AuxTextGenerator;
 
 /// 受信履歴（`webhook_deliveries.status`）に残す処理結果。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -904,6 +899,12 @@ mod tests {
             .unwrap();
         assert_eq!(title, "[Webhook] ビルドが成功しました");
         assert_eq!(tags, r#"["webhook","CI"]"#);
+        let (explicit, pending): (String, i64) = fx.db.read.read(|c| {
+            c.query_row("SELECT s.explicit_tags, s.pending FROM todo_tagging s JOIN todos t ON t.id=s.todo_id WHERE t.user_id='u' AND t.bot_id='test_bot'", [], |r| Ok((r.get(0)?, r.get(1)?))).map_err(yuuka_db::map_sqlite)
+        }).await.unwrap();
+        assert_eq!(explicit, tags);
+        assert_eq!(pending, 1);
+
         assert_eq!(bot, "test_bot");
 
         let (message, target_type, target_id, source, source_id, in_future): (

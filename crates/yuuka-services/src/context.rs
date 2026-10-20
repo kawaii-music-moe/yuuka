@@ -6,7 +6,7 @@
 
 use std::sync::Arc;
 
-use yuuka_briefing::{NewsSummarizer, NullNewsSummarizer};
+use yuuka_core::aux_text::{AuxTextGenerator, NullAuxTextGenerator};
 use yuuka_core::CrossUserAccess;
 use yuuka_web::Db;
 
@@ -28,8 +28,9 @@ pub struct ServiceContext {
     pub metrics: Arc<MetricsRegistry>,
     /// マクロ定期実行の秘書ターン起動ポート（未配線時は [`crate::turn::NullPlaybookRunner`]）。
     pub playbook_runner: Arc<dyn PlaybookRunner>,
-    /// 朝報ニュースの補助 LLM（未配線・障害時は [`NullNewsSummarizer`] と同じくタイトル列挙へ縮退）。
-    pub news_summarizer: Arc<dyn NewsSummarizer>,
+    /// ユーザー本人のキーで行う補助テキスト生成（朝報ニュースの要約・日報/週報のまとめ）。
+    /// 未配線・障害時は [`NullAuxTextGenerator`] と同じく、朝報はタイトル列挙・日報/週報は生データへ縮退する。
+    pub aux_text: Arc<dyn AuxTextGenerator>,
     /// 定期バックアップの実行ポート（未配線時は [`NullBackupRunner`]・[`crate::backup::BackupService`] が使う）。
     pub backup: Arc<dyn BackupRunner>,
     /// Google カレンダーの定期取り込みポート（未配線時は [`NullCalendarSyncRunner`]）。
@@ -53,7 +54,7 @@ impl ServiceContext {
             db,
             metrics,
             playbook_runner,
-            news_summarizer: Arc::new(NullNewsSummarizer),
+            aux_text: Arc::new(NullAuxTextGenerator),
             backup: Arc::new(NullBackupRunner),
             calendar_sync: Arc::new(NullCalendarSyncRunner),
             cross: CrossUserAccess::for_scheduled_task(),
@@ -74,10 +75,10 @@ impl ServiceContext {
         self
     }
 
-    /// 朝報ニュースの補助 LLM ポートを差し替える。
+    /// 補助テキスト生成ポートを差し替える（main が `GeminiAuxText` を注入する）。
     #[must_use]
-    pub fn with_news_summarizer(mut self, news_summarizer: Arc<dyn NewsSummarizer>) -> Self {
-        self.news_summarizer = news_summarizer;
+    pub fn with_aux_text(mut self, aux_text: Arc<dyn AuxTextGenerator>) -> Self {
+        self.aux_text = aux_text;
         self
     }
 }

@@ -33,13 +33,13 @@
 
 | ID | 優先度 | 機能 | 旧Nodeの動作 → 現行の動作 | 根拠・復旧箇所 |
 |---|---|---|---|---|
-| R05 | 高 | ToDoの自動タグ付け | 追加やタイトル・説明変更後に補助LLMでタグを付け直していた。現在は自動タグ処理がなく、追加時は空タグ。それでもツール結果とプロンプトが「バックグラウンドで自動付与」と案内する。手動タグ編集は残る。 | 旧 `src/services/autoTagService.ts:87,129`、`src/functions/todoFunctions.ts`。現行 `crates/yuuka-todo/src/tools.rs:282,302`、`crates/yuuka-orchestrator/src/system_prompt.rs`。 |
+| R05 | 高 | ToDoの自動タグ付け | 追加やタイトル・説明変更後に補助LLMでタグを付け直していた。現在は自動タグ処理がなく、追加時は空タグ。それでもツール結果とプロンプトが「バックグラウンドで自動付与」と案内する。手動タグ編集は残る。**修正済み（#102）**：全作成経路・タイトル/説明の実変更をDBトリガーで予約し、本人の補助LLMで非同期付与する。由来を保存し、既存/明示タグを保護して自動タグだけ再生成。手動全削除で停止し、世代チェックで競合を防ぐ。[経路監査・決定・検証](2026-10-20-r05-todo-auto-tags.md)。 | 旧 `src/services/autoTagService.ts:87,129`、`src/functions/todoFunctions.ts`。現行 `crates/yuuka-todo/src/tools.rs:282,302`、`crates/yuuka-orchestrator/src/system_prompt.rs`。 |
 | R06 | 中 | ターンの事前計画・必要ツール選定 | `planTurn` で手順・利用ツール・重い処理を判定し、計画をプロンプトに注入していた。現在のengineには対応する実行経路がない。 | 旧 `src/gemini.ts:883`、`src/services/turnPlanner.ts`。現行 `crates/yuuka-orchestrator/src/engine.rs` のツール選定～FCループ。 |
 | R07 | 中 | 重い処理の途中応答と後続配信 | 先に途中応答を返し、最終結果を後で配信していた。現在は同期処理が基本で、engineが渡された `TurnDelivery` を使用しない。PWAのHTTP 202＋ポーリングは別の仕組みで、Discord/WSのこの機能を補わない。 | 旧 `src/gemini.ts:901,946`。現行 `crates/yuuka-orchestrator/src/engine.rs:998,1030`、`crates/yuuka-supervisor/src/ws.rs:342`。 |
 | R08 | 中 | 返信元チェーンの文脈・想起への利用 | 返信元IDから過去の会話を遡り、本文と記憶検索に使っていた。現在はIDを受け取って保存するが、会話構築時にチェーンを復元しない。想起関数にも空配列を渡す。遠い発言への「あれについて」の理解が後退する。 | 旧 `src/gemini.ts:1030,1406,1514`。現行 `crates/yuuka-orchestrator/src/engine.rs:392,432`、`crates/yuuka-orchestrator/src/synapse_recall.rs:35`。 |
 | R09 | 中 | デスクトップ/WSのボタン操作・メッセージ更新 | WSの `interaction` を処理し、`update` や `push` を返していた。現在はinteractionフレームを無視し、返信のcomponentsも常に空。Discordのボタン処理は存在する。 | 旧 `src/server/chatWebSocket.ts:174`、`src/services/componentInteractionService.ts`。現行 `crates/yuuka-supervisor/src/ws.rs:143,269,341`。 |
 | R10 | 中 | 朝報ニュースのLLM要約 | **対応済み（#107）**。RSSの配信元＋見出しを最大30件、ユーザー本人の設定モデルへ既存の補助生成経路で渡し、日本語で3～5件に要約する。キー未設定・復号失敗・LLM障害・空応答時は先頭5件のタイトル列挙へ縮退し、朝報全体を維持する。 | 旧 `src/services/briefingService.ts:221`。現行 `crates/yuuka-briefing/src/service.rs`、`crates/yuuka-supervisor/src/webhook.rs`。 |
-| R11 | 中 | 日報・週報のLLMまとめ | 活動・会話サンプルなどから自然文を生成し、失敗時のみ生データに戻していた。現在は常に生データの定型出力。 | 旧 `src/services/reportService.ts:241`。現行 `crates/yuuka-services/src/report.rs:150,312`。`crates/yuuka-gemini/src/client.rs:251` の補助生成APIはあるが、この処理から呼ばれない。 |
+| R11 | 中 | 日報・週報のLLMまとめ | 活動・会話サンプルなどから自然文を生成し、失敗時のみ生データに戻していた。**修正済み（#108）**：旧 Node と同じ直近24時間/7日の活動（タスクのタグ・優先度、予定、支払い期日、カテゴリ別支出を含む）と会話素材を使い、日本語800文字以内の要約を指示する。会話は本人・同じBotのDM限定、最新40件からユーザー発言を最大20件・各100文字。既存 `GeminiAuxText` を、朝報ニュース要約（R10）・Webhook と共通の `yuuka_core::aux_text::AuxTextGenerator`（`ServiceContext` / `NotifierDeliveryRunner` の `aux_text`）経由で定時/テスト配信へ注入し、本人のキー・選択モデルを利用する。キー無し・生成失敗・空白応答・要約素材取得失敗時は既存の生データ本文/集計フィールド/送信先を維持する。本文4000文字上限。 | 旧 `src/services/reportService.ts:241`。現行 `crates/yuuka-services/src/report.rs`・`context.rs`・`delivery.rs`、`crates/yuuka-core/src/aux_text.rs`、`crates/yuuka-supervisor/src/main.rs`・`webhook.rs`。`report.rs` に生成成功/失敗/空応答、会話スコープ・件数・文字数、期間、出力上限の回帰テストを追加（非developでの `cargo test/build/run` は `CLAUDE.md` により禁止のため未実行。`cargo check --all-targets` でテストコードも検査）。 |
 | R12 | 中 | 検索スキル資料のプロンプト注入 | 資料が存在する環境では検索先・巡回方針を読み込んで注入していた。Rustには読み込み・埋め込み・注入がない。検索ツール自体は残る。旧Dockerイメージで資料が同梱されていたかは、この静的比較では確定していない。**修正済み（#109）**：旧 Node イメージは `COPY docs ./docs` で作業ディレクトリへ資料を同梱しており、本番でも常に注入されていたため復旧した。現行イメージは `docs/` を同梱しないので `include_str!` でビルド時に埋め込み、旧版と同じ位置（ファクトチェックと機能一覧の間）へ同じ見出し・前置きで注入する（Dockerfile の rust-builder 段に `COPY docs/skills` を追加）。資料内の存在しない `readCodeFile` への参照は削除した。 | 旧 `src/gemini.ts:80,223`。現行 `crates/yuuka-orchestrator/src/system_prompt.rs:142`、`docs/skills/search_skills.md`。 |
 | R13 | 中 | 会話からタイムラインへ写真・動画を保存 | `discord_attachment_url` / `discord_attachment_mime` を受け取り保存していた。**修正済み（#110）**：Discord・PWA・WebSocketの現在の本人添付をindexで選択し、本体と記録をV29で原子的に保存する。再試行はuser/Bot/送信元/添付で冪等、明示的再保存は別キー。元の添付順・既存API/UIを維持し、配信認可・削除・実体バックアップにも対応。任意URL取得は許可しない。詳細は [R13監査](2026-10-20-r13-attachments-timeline.md)。 | 旧 `src/functions/timelineFunctions.ts:195`。現行 `crates/yuuka-timeline/src/tools.rs:201`、`crates/yuuka-timeline/src/media.rs`。 |
 
@@ -112,7 +112,7 @@
 | ログイン・招待・セッション・デバイス認証 | HTTP対応あり、発行/検証の接続あり | デスクトップTTL設定（R26） |
 | Bot管理・共有・利用申請・ペルソナ | HTTP対応あり、Discord側も実装あり | Web DM（R03/R04）、プロフィール同期（R20） |
 | 秘書会話・汎用Bot・Discord/WS/PWA | engineへの接続あり | 計画・途中応答・返信チェーン・WSボタン（R06～R09） |
-| ToDo・階層・ガント・タグ・ルーチン | ツール15件、HTTP対応あり | 自動タグ（R05）、cron（R19） |
+| ToDo・階層・ガント・タグ・ルーチン | ツール15件、HTTP対応あり | 自動タグは復旧（R05の詳細記録を参照）、cron（R19） |
 | 予定・Google Calendar | ツール3件、HTTP対応あり、作業中の同期あり | 経路重複（D03） |
 | リマインド・期限通知・誕生日 | ツール3件、定期サービスあり | 通知先・過去日時・cron（R17～R19） |
 | 家計・予算・支払い予定 | 旧ツール14件に更新/削除追加、HTTP対応あり | 消込・連動取消・補足結果（R14～R16） |
@@ -120,7 +120,7 @@
 | 個人ノート・クリップボード・連絡先 | ツール3+3+5件、HTTP対応あり | 今回の比較では主要機能の欠落を確認せず |
 | 汎用Botノート等 | ツール9件、HTTP対応あり | 今回の比較では主要機能の欠落を確認せず |
 | Playbook・操作履歴 | ツール5件、HTTP/定期処理あり | cron（R19）、履歴のメモリ化 |
-| 朝報・日報・週報 | ツール4件、定期処理あり | 手動テスト・日報/週報のLLM生成・集計分離（R02/R11/R24）。朝報ニュース要約はR10で復旧済み。 |
+| 朝報・日報・週報 | ツール4件、定期処理あり | 手動テスト・集計分離（R02/R24）。朝報ニュース要約はR10（#107）、日報/週報のLLM生成はR11（#108）で復旧済み。 |
 | Webhook | HTTP対応あり、管理CRUDあり | 実受信処理の全面未接続（R01） |
 | ブラウザ・資格情報・チャート・リッチ返信 | ツール9+5+1+1件、実装接続あり | 個々の外部サイト動作は未検証、WS componentsはR09 |
 | MCP・Google認可・バックアップ | HTTPと実クライアントの接続あり | 実サービスへの通信成功は未検証 |
@@ -141,8 +141,9 @@
 
 | ID | 状態 | 内容 |
 |---|---|---|
-| R10 | 対応済み（#107） | `NewsSummarizer` ポートを朝報の手動表示・テスト配信・定期配信へ共通接続し、supervisor から既存 `GeminiClient::generate_aux`（ユーザー本人のキー・設定モデル、60秒タイムアウト、最大2リトライ）を注入した。旧Nodeと同じ最大30件の入力・日本語3～5件プロンプト・1024文字出力上限を維持し、補助生成を利用できない全ケースでは先頭5見出しへフォールバックする。 |
+| R10 | 対応済み（#107） | 補助生成ポート（#108 で日報・週報・Webhook と共通の `yuuka_core::aux_text::AuxTextGenerator` に統一）を朝報の手動表示・テスト配信・定期配信へ共通接続し、supervisor から既存 `GeminiClient::generate_aux`（ユーザー本人のキー・設定モデル、60秒タイムアウト、最大2リトライ）を注入した。旧Nodeと同じ最大30件の入力・日本語3～5件プロンプト・1024文字出力上限を維持し、補助生成を利用できない全ケースでは先頭5見出しへフォールバックする。 |
 | R25 / D06 | 対応済み（#122 / #130） | R25 は #156（`893d792`）で RSS の DNS 解決先と各リダイレクト先の検査を復旧済み。D06 は `yuuka-outbound` へ browser / MCP / briefing の検査を集約し、登録時は `RegistrationPolicy::BriefingLegacy` として既存の許容範囲を維持。DNS の全件検査・都度再検査・日本語エラー・RSS の最大5回の各ホップ検査を維持した。責務・全通信経路・既存の TOCTOU / redirect の制約・回帰確認は [詳細記録](2026-10-20-d06-ssrf-common.md) を参照。 |
+| D08 | 対応済み（#132） | レシート専用入口の OCR を明細＋税込合計の抽出に共通化し、PWA は単一ドラフトへ変換する。Discord／管理画面の秘書ターンと PWA の手動登録タイミングは維持。既存 addExpense／repo に receipt_ocr の保存を復旧した。仕様の承認手順との差、入口・検証・キー・スコープ・再送・失敗・副作用・回帰確認は [D08 個別監査](2026-10-20-d08-receipt-common.md) を参照。migration なし。 |
 | R19 / D04 | 対応済み（#116 / #128） | cron 式ユーティリティを `yuuka-services` から循環依存のない `crates/yuuka-core/src/cron_util.rs` へ移し、登録時検証 `cron_util::is_valid` を追加した。ToDo・支払い予定・リマインド・朝報/日報週報設定のツールと HTTP（`POST /api/tasks/add`・`POST /api/expenses/plans/add`・`POST /api/reminders/add` を含む）、Playbook スケジュールのWeb登録は、実行側と同じ croner parser で検証する（HTTP の不正式は 400、空の repeat_rule は単発扱い）。範囲外の値・発火日が実在しない式（例：`0 0 30 2 *`）は保存しない。Playbook は Node と同じく 400「無効なcron式です。」を返す。各ドメインに 5 フィールドだが不正な式の回帰テストを追加した。 |
 | D05 | 対応済み（#129） | 日時の解釈・保存形式変換を `crates/yuuka-core/src/datetime.rs` に集め、`yuuka-reminder/src/datetime.rs`・`yuuka-schedule/src/datetime.rs`・`yuuka-client-api` の日時変換・`cron_util::to_db_datetime` を置き換えた。用途差は関数名で残した：リマインド入力 `input_to_db_local`（オフセット付きはサーバーのローカル TZ へ換算・Node `toDbDateTime` パリティ）、予定入力 `input_to_db_jst`（JST 固定へ換算）、PWA の `datetime-local` 入力 `browser_local_to_db`（`T` 区切りのみ受理）、PWA 向け出力 `db_to_utc_iso`、実行時の時刻 `local_to_db`。前 2 つの受理形式（日付のみ／`T`・空白区切り／秒・小数秒は任意／RFC 3339）は同じ parser に揃えた。挙動は変えていない（本番は `TZ=Asia/Tokyo` なので Local と JST 固定は同じ結果になる）。対象外として残る個別変換：`yuuka-google/src/http.rs` の Google API ⇔ ローカル暦変換、`yuuka-services` の `playbook_schedule.rs` / `backup.rs` の DB 文字列パース。 |
 | X01 | 仕様として受容（#133） | 操作履歴はメモリ保持のまま。理由は「設計上の変更・縮小」表を参照。 |

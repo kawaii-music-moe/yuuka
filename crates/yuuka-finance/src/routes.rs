@@ -31,17 +31,6 @@ use crate::dto::{
 use crate::receipt::{ReceiptError, ReceiptParser};
 use crate::repo::ExpenseRepo;
 
-/// レシート画像の MIME 許可リスト（LLM に渡せる画像形式に限定・Node `ALLOWED_RECEIPT_MIME`）。
-const ALLOWED_RECEIPT_MIME: [&str; 7] = [
-    "image/png",
-    "image/jpeg",
-    "image/jpg",
-    "image/webp",
-    "image/heic",
-    "image/heif",
-    "image/gif",
-];
-
 #[derive(Debug, Deserialize)]
 struct BotQuery {
     #[serde(default, rename = "botId")]
@@ -123,26 +112,10 @@ async fn upload_receipt(
 ) -> Response {
     let image = body.image_base64.unwrap_or_default();
     let mime = body.mime_type.unwrap_or_default();
-    if image.is_empty() || mime.is_empty() {
-        return receipt_error(
-            StatusCode::BAD_REQUEST,
-            "画像データ(base64)とMIMEタイプが必要です。",
-        );
-    }
-    // MIME 検証: `toLowerCase().split(";")[0].trim()` で画像形式のみ許可する。
-    let mime_key = mime
-        .to_lowercase()
-        .split(';')
-        .next()
-        .unwrap_or_default()
-        .trim()
-        .to_owned();
-    if !ALLOWED_RECEIPT_MIME.contains(&mime_key.as_str()) {
-        return receipt_error(
-            StatusCode::BAD_REQUEST,
-            "対応していない画像形式です（png/jpeg/webp/heic/gif）。",
-        );
-    }
+    let mime = match yuuka_core::receipt_image::validate(&image, &mime) {
+        Ok(mime) => mime,
+        Err(message) => return receipt_error(StatusCode::BAD_REQUEST, message),
+    };
 
     // 取引の下書きはユーザーの Bot にだけ置く。未指定・system_default は 403、アクセス不可は 404
     // （システム Bot へは落とさない・issue #141）。
