@@ -17,9 +17,9 @@
 | 支払い予定からの生成 | `FinanceRepo::link_todo` の同一トランザクション内の直接INSERT | 作成時。`支払い`・カテゴリなど既定タグを保持 |
 | 繰り返しToDo | 初回は共通作成経路。次回は `advance_routine` が同じ行の期限・進捗・状態を更新 | 初回のみ。次回繰越ではタグを維持 |
 | 完了・進捗・優先度・期限・開始日・ルーチン停止・タイムライン連動・支払い消込 | 既存repo更新 | 本文が変わらないため再生成しない |
-| 既存ToDo | V27 migration | タグをそのまま明示タグとして保存。一括遡及・外部通信はなし。以後の本文変更から対象 |
+| 既存ToDo | V28 migration | タグをそのまま明示タグとして保存。一括遡及・外部通信はなし。以後の本文変更から対象 |
 
-V27のINSERT/本文UPDATEトリガーが、ToDo保存と同じトランザクションで `todo_tagging` に予約する。全本番INSERTを検索し、`TodoRepo::add` と `FinanceRepo::link_todo` の2か所を確認した（残りはテストデータ）。入口ごとの予約呼び出し忘れを防ぎ、HTTP・会話経路を一致させる。
+V28のINSERT/本文UPDATEトリガーが、ToDo保存と同じトランザクションで `todo_tagging` に予約する。全本番INSERTを検索し、`TodoRepo::add` と `FinanceRepo::link_todo` の2か所を確認した（残りはテストデータ）。入口ごとの予約呼び出し忘れを防ぎ、HTTP・会話経路を一致させる。
 
 supervisorが `AutoTagService` を1つ常時登録する。旧cron移行ゲート `YUUKA_RUST_CRON` には依存しない。1秒間隔で最大4件を取得し、最大4件を並行生成する。補助生成は既存 `GeminiAuxText`（本人の暗号化キー・本人の選択モデル、`GeminiClient::generate_aux`、1要求60秒・最大2回再試行）を再利用する。キー読込・語彙取得・再試行を含めた全体上限は200秒。240秒のリースと取得時の世代更新により、プロセス停止後の処理を回復し、古いリースの応答を破棄する。
 
@@ -37,8 +37,8 @@ supervisorが `AutoTagService` を1つ常時登録する。旧cron移行ゲー�
 
 ## 検証
 
-- 回帰テストコード: V26→V27の既存タグ保護・遡及なし、生成解析、明示/自動の置換、手動set/add/removeと停止・再開、世代競合・同時手動追加、リース回復・削除、Bot/ユーザー分離、語彙・表示/検索、fake補助LLMの成功/不正応答/未設定/タイムアウト、会話ツール親子作成・本文更新、HTTP作成/更新、PWA作成、支払い予定、Webhook固定タグ、繰り返し時の非再生成、バックアップの由来/停止状態を対象とした。
+- 回帰テストコード: V26→V28の既存タグ保護・遡及なし、生成解析、明示/自動の置換、手動set/add/removeと停止・再開、世代競合・同時手動追加、リース回復・削除、Bot/ユーザー分離、語彙・表示/検索、fake補助LLMの成功/不正応答/未設定/タイムアウト、会話ツール親子作成・本文更新、HTTP作成/更新、PWA作成、支払い予定、Webhook固定タグ、繰り返し時の非再生成、バックアップの由来/停止状態を対象とした。
 - ローカル: `cargo fmt --all -- --check`、`cargo check -p yuuka-supervisor --all-targets`、`cargo clippy --workspace --all-targets --all-features -- -D warnings`。Clippyで全workspaceのテストコードもコンパイル確認する。
-- 補足: Node内蔵SQLiteによるV27 SQL実行で既存タグ・予約・本文変更・全削除停止/再開・cascade削除を確認。NodeのSQLiteが拒否する既存V17の冗長FTS shadow table CREATE文のみ検証時に省き、V27は原文で実行した。
+- 補足: Node内蔵SQLiteによるV28 SQL実行で既存タグ・予約・本文変更・全削除停止/再開・cascade削除を確認。NodeのSQLiteが拒否する既存V17の冗長FTS shadow table CREATE文のみ検証時に省き、V28は原文で実行した。
 - `CLAUDE.md` とユーザー指示に従い、非developのローカルで `cargo build/test/run/nextest` は実行しない。追加Rustテストは実行済みと扱わない。外部LLM実通信・本番・ブラウザの実操作は未実施。
 - PRの既存CIはfmt / cargo-deny / フロント等を実行する。Rust build/testジョブはdevelop→main限定なので、このPRではスキップされる。CI結果とcommitはPRを参照。

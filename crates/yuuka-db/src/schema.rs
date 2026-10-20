@@ -96,7 +96,7 @@ mod tests {
         assert_eq!(password_col, 0);
     }
     #[test]
-    fn v27_preserves_legacy_tags_without_retrospective_tagging() {
+    fn v28_preserves_legacy_tags_without_retrospective_tagging() {
         let mut conn = Connection::open_in_memory().unwrap();
         embedded::migrations::runner()
             .set_target(refinery::Target::Version(26))

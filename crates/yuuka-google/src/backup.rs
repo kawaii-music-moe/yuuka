@@ -464,7 +464,7 @@ fn export_user_data(src: &Connection, dest: &Connection, user_id: &str) -> rusql
         );
         copy_rows_from_select(src, dest, table, &select, user_id)?;
     }
-    // V27: tag provenance/opt-out belong to the same exported todos (personal or owned Bot).
+    // V28: tag provenance/opt-out belong to the same exported todos (personal or owned Bot).
     copy_rows_from_select(
         src,
         dest,
