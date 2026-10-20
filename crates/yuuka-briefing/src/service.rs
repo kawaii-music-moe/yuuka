@@ -2,15 +2,35 @@
 //!
 //! 天気は **Open-Meteo（api.open-meteo.com・API キー不要）**、ニュースは登録 RSS フィード（SSRF
 //! ガード付き・個別失敗は無視）。生成した [`BriefingContent`] を `runBriefingNow` ツールがインライン
-//! Embed として返す（手動確認用）。**LLM 要約（generateAuxText）は Gemini 依存のため未配線**＝
-//! フォールバックのヘッドライン列挙で代替する。定時配信（cron→DM/channel）は DeliveryRunner シーム
-//! （Discord live 配線時）が担い、本サービスと同じ生成ロジックを再利用できる。
+//! Embed として返す（手動確認用）。ニュースは [`NewsSummarizer`] ポート越しに補助 LLM へ渡し、
+//! キー未設定・生成失敗・空応答時はヘッドライン列挙へ安全に縮退する。定時配信（cron→DM/channel）は
+//! DeliveryRunner シーム（Discord live 配線時）が担い、本サービスと同じ生成ロジックを再利用できる。
 
 use std::time::Duration;
 
 use crate::repo::find_briefing;
+use async_trait::async_trait;
 use yuuka_core::DbError;
 use yuuka_web::Db;
+
+/// 朝報ニュース用の補助 LLM ポート。
+///
+/// 実装は supervisor でユーザー本人の Gemini 設定へ接続する。キー未設定・復号失敗・LLM 障害は
+/// `None` を返し、呼び出し側が必ずタイトル列挙へ縮退する。
+#[async_trait]
+pub trait NewsSummarizer: Send + Sync {
+    async fn summarize_news(&self, user_id: &str, prompt: &str) -> Option<String>;
+}
+
+/// LLM 未配線時の安全な既定実装。
+pub struct NullNewsSummarizer;
+
+#[async_trait]
+impl NewsSummarizer for NullNewsSummarizer {
+    async fn summarize_news(&self, _user_id: &str, _prompt: &str) -> Option<String> {
+        None
+    }
+}
 
 /// 生成した朝報の中身（Embed の各フィールド）。
 pub struct BriefingContent {
@@ -25,6 +45,7 @@ pub struct BriefingContent {
 /// 設定読み取り失敗時 [`DbError`]。
 pub async fn build_briefing(
     db: &Db,
+    news_summarizer: &dyn NewsSummarizer,
     user_id: &str,
     bot_id: &str,
 ) -> Result<Option<BriefingContent>, DbError> {
@@ -70,7 +91,7 @@ pub async fn build_briefing(
         }
     }
 
-    // ── ニュース（RSS・LLM 要約は未配線のためヘッドライン列挙で代替） ──
+    // ── ニュース（RSS → 補助 LLM で 3〜5 件要約、失敗時はタイトル列挙） ──
     if !config.news_feeds.is_empty() {
         let items = fetch_news(&config.news_feeds, &config.news_keywords).await;
         if items.is_empty() {
@@ -79,14 +100,8 @@ pub async fn build_briefing(
                 "フィードから記事を取得できませんでした。".to_owned(),
             ));
         } else {
-            let text: String = items
-                .iter()
-                .take(5)
-                .map(|i| format!("・{}", i.title))
-                .collect::<Vec<_>>()
-                .join("\n");
-            let clipped: String = text.chars().take(1024).collect();
-            fields.push(("📰 今朝のニュース".to_owned(), clipped));
+            let text = summarize_news(news_summarizer, user_id, &items).await;
+            fields.push(("📰 今朝のニュース".to_owned(), text));
             has_content = true;
         }
     }
@@ -194,6 +209,44 @@ fn weather_code_label(code: i64) -> String {
 
 struct NewsItem {
     title: String,
+    source: String,
+}
+
+/// Node `briefingService.ts` と同じプロンプト・入力上限・フォールバックでニュース本文を作る。
+async fn summarize_news(
+    summarizer: &dyn NewsSummarizer,
+    user_id: &str,
+    items: &[NewsItem],
+) -> String {
+    let source = items
+        .iter()
+        .take(30)
+        .map(|i| format!("- [{}] {}", i.source, i.title))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let prompt = format!(
+        "以下はRSSフィードから取得した今朝のニュースヘッドライン一覧です。\
+         重要・有用なものを3〜5件選び、それぞれ1行（「・見出し — ひとこと補足」形式）で日本語に要約してください。\
+         要約のみを出力してください。\n\n{source}"
+    );
+    let generated = summarizer
+        .summarize_news(user_id, &prompt)
+        .await
+        .map(|text| text.trim().to_owned())
+        .filter(|text| !text.is_empty());
+    let fallback = || {
+        items
+            .iter()
+            .take(5)
+            .map(|i| format!("・{}", i.title))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    generated
+        .unwrap_or_else(fallback)
+        .chars()
+        .take(1024)
+        .collect()
 }
 
 async fn fetch_news(feeds: &[String], keywords: &[String]) -> Vec<NewsItem> {
@@ -230,11 +283,20 @@ where
         let Some(resp) = fetch_feed(&client, feed, &is_safe).await else {
             continue;
         };
+        // Node は `feed.title || new URL(登録URL).hostname`。リダイレクト後 URL ではなく登録 URL を使う。
+        let fallback_source = reqwest::Url::parse(feed)
+            .ok()
+            .and_then(|url| url.host_str().map(str::to_owned))
+            .unwrap_or_else(|| "不明なフィード".to_owned());
         let Ok(body) = resp.text().await else {
             continue;
         };
+        let source = parse_feed_source(&body).unwrap_or(fallback_source);
         for title in parse_feed_titles(&body).into_iter().take(10) {
-            items.push(NewsItem { title });
+            items.push(NewsItem {
+                title,
+                source: source.clone(),
+            });
         }
     }
 
@@ -247,6 +309,7 @@ where
         .filter(|it| keywords.iter().any(|k| it.title.contains(k)))
         .map(|it| NewsItem {
             title: it.title.clone(),
+            source: it.source.clone(),
         })
         .collect();
     if filtered.is_empty() {
@@ -306,6 +369,16 @@ fn parse_feed_titles(xml: &str) -> Vec<String> {
         }
     }
     out
+}
+
+/// RSS の channel / Atom feed タイトル（最初の item/entry より前の最初の title）を取得する。
+fn parse_feed_source(xml: &str) -> Option<String> {
+    let end = find_ci(xml, "<item")
+        .or_else(|| find_ci(xml, "<entry"))
+        .unwrap_or(xml.len());
+    extract_first_tag(xml.get(..end)?, "title")
+        .map(|title| decode_min(&title))
+        .filter(|title| !title.is_empty())
 }
 
 /// `<item ...>` / `<entry ...>` の開始位置以降を各チャンクにする（先頭のチャンネル部は捨てる）。
@@ -587,6 +660,83 @@ mod tests {
     #[test]
     fn decode_min_unescapes_entities() {
         assert_eq!(decode_min("A &amp; B &lt;x&gt;"), "A & B <x>");
+    }
+
+    struct FakeNewsSummarizer {
+        response: Option<String>,
+        seen_prompt: std::sync::Mutex<Option<String>>,
+    }
+
+    #[async_trait]
+    impl NewsSummarizer for FakeNewsSummarizer {
+        async fn summarize_news(&self, _user_id: &str, prompt: &str) -> Option<String> {
+            *self.seen_prompt.lock().unwrap() = Some(prompt.to_owned());
+            self.response.clone()
+        }
+    }
+
+    #[tokio::test]
+    async fn news_summary_matches_node_prompt_and_limits_input_to_30_items() {
+        let items: Vec<NewsItem> = (1..=31)
+            .map(|n| NewsItem {
+                title: format!("記事{n}"),
+                source: format!("配信元{n}"),
+            })
+            .collect();
+        let summarizer = FakeNewsSummarizer {
+            response: Some("  ・重要記事 — 補足  ".to_owned()),
+            seen_prompt: std::sync::Mutex::new(None),
+        };
+
+        let text = summarize_news(&summarizer, "user-1", &items).await;
+
+        assert_eq!(text, "・重要記事 — 補足");
+        let prompt = summarizer.seen_prompt.lock().unwrap().clone().unwrap();
+        assert!(prompt.contains("3〜5件"));
+        assert!(prompt.contains("日本語に要約"));
+        assert!(prompt.contains("- [配信元1] 記事1"));
+        assert!(prompt.contains("- [配信元30] 記事30"));
+        assert!(!prompt.contains("配信元31"));
+    }
+
+    #[tokio::test]
+    async fn news_summary_failure_and_empty_response_fall_back_to_five_titles() {
+        let items: Vec<NewsItem> = (1..=6)
+            .map(|n| NewsItem {
+                title: format!("記事{n}"),
+                source: "配信元".to_owned(),
+            })
+            .collect();
+        for response in [None, Some(" \n ".to_owned())] {
+            let summarizer = FakeNewsSummarizer {
+                response,
+                seen_prompt: std::sync::Mutex::new(None),
+            };
+            let text = summarize_news(&summarizer, "user-1", &items).await;
+            assert_eq!(text, "・記事1\n・記事2\n・記事3\n・記事4\n・記事5");
+        }
+    }
+
+    #[tokio::test]
+    async fn news_summary_is_clipped_to_embed_limit() {
+        let summarizer = FakeNewsSummarizer {
+            response: Some("あ".repeat(1025)),
+            seen_prompt: std::sync::Mutex::new(None),
+        };
+        let items = vec![NewsItem {
+            title: "記事".to_owned(),
+            source: "配信元".to_owned(),
+        }];
+
+        let text = summarize_news(&summarizer, "user-1", &items).await;
+
+        assert_eq!(text.chars().count(), 1024);
+    }
+
+    #[test]
+    fn parse_feed_source_uses_channel_title() {
+        let xml = "<rss><channel><title>配信元 &amp; News</title><item><title>記事</title></item></channel></rss>";
+        assert_eq!(parse_feed_source(xml).as_deref(), Some("配信元 & News"));
     }
 
     #[test]

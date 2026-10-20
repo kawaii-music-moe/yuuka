@@ -6,6 +6,7 @@
 
 use std::sync::Arc;
 
+use yuuka_briefing::{NewsSummarizer, NullNewsSummarizer};
 use yuuka_core::CrossUserAccess;
 use yuuka_web::Db;
 
@@ -27,6 +28,8 @@ pub struct ServiceContext {
     pub metrics: Arc<MetricsRegistry>,
     /// マクロ定期実行の秘書ターン起動ポート（未配線時は [`crate::turn::NullPlaybookRunner`]）。
     pub playbook_runner: Arc<dyn PlaybookRunner>,
+    /// 朝報ニュースの補助 LLM（未配線・障害時は [`NullNewsSummarizer`] と同じくタイトル列挙へ縮退）。
+    pub news_summarizer: Arc<dyn NewsSummarizer>,
     /// 定期バックアップの実行ポート（未配線時は [`NullBackupRunner`]・[`crate::backup::BackupService`] が使う）。
     pub backup: Arc<dyn BackupRunner>,
     /// Google カレンダーの定期取り込みポート（未配線時は [`NullCalendarSyncRunner`]）。
@@ -50,6 +53,7 @@ impl ServiceContext {
             db,
             metrics,
             playbook_runner,
+            news_summarizer: Arc::new(NullNewsSummarizer),
             backup: Arc::new(NullBackupRunner),
             calendar_sync: Arc::new(NullCalendarSyncRunner),
             cross: CrossUserAccess::for_scheduled_task(),
@@ -67,6 +71,13 @@ impl ServiceContext {
     #[must_use]
     pub fn with_calendar_sync(mut self, calendar_sync: Arc<dyn CalendarSyncRunner>) -> Self {
         self.calendar_sync = calendar_sync;
+        self
+    }
+
+    /// 朝報ニュースの補助 LLM ポートを差し替える。
+    #[must_use]
+    pub fn with_news_summarizer(mut self, news_summarizer: Arc<dyn NewsSummarizer>) -> Self {
+        self.news_summarizer = news_summarizer;
         self
     }
 }
