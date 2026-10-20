@@ -57,55 +57,12 @@ pub fn tools_with(
     ])
 }
 
-/// SSRF ガード: 公開 http(s) URL らしいか（Node `isLikelyPublicHttpUrl`）。内部/ローカル/非 http(s) を拒否。
+/// briefing 登録時の互換ポリシー。通信時は別途 DNS を含む厳密検査を行う。
 pub(crate) fn is_likely_public_http_url(raw: &str) -> bool {
-    let Some(rest) = raw
-        .strip_prefix("http://")
-        .or_else(|| raw.strip_prefix("https://"))
-    else {
-        return false;
-    };
-    // authority = 最初の '/' '?' '#' まで。
-    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
-    if authority.contains('@') {
-        return false; // userinfo は拒否。
-    }
-    // ホスト（ポート除去・IPv6 は角括弧内）。
-    let host = if let Some(stripped) = authority.strip_prefix('[') {
-        stripped.split(']').next().unwrap_or("")
-    } else {
-        authority.rsplit_once(':').map_or(authority, |(h, _)| h)
-    }
-    .to_ascii_lowercase();
-    if host.is_empty() || host == "localhost" || host.ends_with(".localhost") {
-        return false;
-    }
-    if let Ok(v4) = host.parse::<std::net::Ipv4Addr>() {
-        return !is_blocked_ipv4(v4);
-    }
-    if let Ok(v6) = host.parse::<std::net::Ipv6Addr>() {
-        return !is_blocked_ipv6(v6);
-    }
-    // ドメイン名は公開扱い（DNS リバインドは実行時の fetch 側で別途対処）。
-    true
-}
-
-fn is_blocked_ipv4(ip: std::net::Ipv4Addr) -> bool {
-    let o = ip.octets();
-    ip.is_private()
-        || ip.is_loopback()
-        || ip.is_link_local()
-        || ip.is_unspecified()
-        || o[0] == 0 // 0.0.0.0/8 "this host"
-        || (o[0] == 192 && o[1] == 0 && o[2] == 0) // 192.0.0.0/24
-}
-
-fn is_blocked_ipv6(ip: std::net::Ipv6Addr) -> bool {
-    let seg0 = ip.segments()[0];
-    ip.is_loopback()
-        || ip.is_unspecified()
-        || (seg0 & 0xfe00) == 0xfc00 // fc00::/7 ULA
-        || (seg0 & 0xffc0) == 0xfe80 // fe80::/10 link-local
+    yuuka_outbound::is_likely_public_http_url(
+        raw,
+        yuuka_outbound::RegistrationPolicy::BriefingLegacy,
+    )
 }
 
 fn fail(message: impl Into<String>) -> ToolOutcome {
