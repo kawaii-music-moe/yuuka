@@ -25,6 +25,7 @@ tokio.workspace = true
 tower = { workspace = true, features = ["util"] }
 tempfile = "3"
 yuuka-web = { workspace = true, features = ["test-support"] }
+yuuka-db = { workspace = true, features = ["test-support"] }
 
 [lints]
 workspace = true

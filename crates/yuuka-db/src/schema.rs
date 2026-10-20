@@ -251,4 +251,33 @@ mod tests {
             .unwrap();
         assert_eq!(password_col, 0);
     }
+    #[test]
+    fn v28_preserves_legacy_tags_without_retrospective_tagging() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        embedded::migrations::runner()
+            .set_target(refinery::Target::Version(26))
+            .run(&mut conn)
+            .unwrap();
+        conn.execute_batch(r#"INSERT INTO users (discord_id, username, salt, sk_account_id) VALUES ('u','u','s','acc-u');
+            INSERT INTO todos (user_id, title, tags) VALUES ('u','legacy','["業務","独自タグ"]'), ('u','empty','[]'), ('u','bad','broken');"#).unwrap();
+        run_migrations(&mut conn).unwrap();
+        let rows: Vec<(String, String, i64, i64)> = conn.prepare("SELECT t.tags, s.explicit_tags, s.pending, s.disabled FROM todos t JOIN todo_tagging s ON s.todo_id=t.id ORDER BY t.id").unwrap()
+            .query_map([], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).unwrap().collect::<Result<_,_>>().unwrap();
+        assert_eq!(rows.len(), 3);
+        for (tags, explicit, pending, disabled) in rows {
+            assert_eq!(tags, explicit);
+            assert_eq!(pending, 0);
+            assert_eq!(disabled, 0);
+        }
+        run_migrations(&mut conn).unwrap();
+        conn.execute(
+            "UPDATE todos SET title = 'edited' WHERE title = 'legacy'",
+            [],
+        )
+        .unwrap();
+        let pending: i64 = conn
+            .query_row("SELECT sum(pending) FROM todo_tagging", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(pending, 1);
+    }
 }

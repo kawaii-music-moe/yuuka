@@ -22,6 +22,7 @@
 
 use std::sync::Arc;
 
+pub mod auto_tags;
 pub mod backup;
 pub mod calendar_sync;
 pub mod context;

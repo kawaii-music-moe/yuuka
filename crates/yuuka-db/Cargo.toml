@@ -23,6 +23,10 @@ refinery.workspace = true
 # ため、read pool は Phase 0 では内製（tokio Semaphore + コネクション freelist + spawn_blocking）
 # とする。deadpool/r2d2 が rusqlite 0.40 対応版を出したら Phase 1 で差し替え可（内部実装のみ）。
 
+[features]
+# 他クレートの単体テスト用ヘルパ（`test_support`）。本番ビルドでは有効にしない。
+test-support = []
+
 [dev-dependencies]
 tempfile = "3"
 

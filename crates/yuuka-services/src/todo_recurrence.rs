@@ -158,8 +158,26 @@ mod tests {
         )
         .await;
 
+        insert(&ctx, "UPDATE todo_tagging SET pending=0").await;
         run(&ctx).await.unwrap();
 
+        let pending: i64 = ctx
+            .db
+            .read
+            .read(|c| {
+                c.query_row(
+                    "SELECT pending FROM todo_tagging WHERE todo_id=1",
+                    [],
+                    |r| r.get(0),
+                )
+                .map_err(map_sqlite)
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            pending, 0,
+            "recurrence preserves existing tags without regeneration"
+        );
         let (status, due, _count, rule) = row(&ctx).await;
         // 進捗/状態/リマインドがリセットされ、期日が今日以降へ進む。
         assert_eq!(status, "open");
