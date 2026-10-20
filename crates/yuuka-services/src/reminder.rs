@@ -219,9 +219,9 @@ mod tests {
     use std::sync::Arc;
     use yuuka_db::map_sqlite;
 
-    const REMINDERS_DDL: &str = "CREATE TABLE reminders (
+    const REMINDERS_DDL: &str = "DROP TABLE IF EXISTS reminders; CREATE TABLE reminders (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id TEXT NOT NULL, bot_id TEXT NOT NULL DEFAULT 'system_default',
+        user_id TEXT NOT NULL, bot_id TEXT NOT NULL,
         message TEXT NOT NULL, trigger_at TEXT NOT NULL, repeat_rule TEXT,
         target_type TEXT NOT NULL DEFAULT 'dm', target_id TEXT,
         status TEXT NOT NULL DEFAULT 'pending', source TEXT NOT NULL DEFAULT 'manual',

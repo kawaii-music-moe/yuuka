@@ -448,17 +448,17 @@ mod tests {
 
     static SEQ: AtomicU64 = AtomicU64::new(0);
 
-    // briefing_configs / report_configs を FK 無しで先に作る（V17 の users FK を避ける）。
-    const DDL: &str = "CREATE TABLE briefing_configs (\
-        user_id TEXT NOT NULL, bot_id TEXT NOT NULL DEFAULT 'system_default', \
+    // briefing_configs / report_configs を migration 後に FK 無しで置き換える（V17 の users FK を避ける）。
+    const DDL: &str = "DROP TABLE IF EXISTS briefing_configs; CREATE TABLE briefing_configs (\
+        user_id TEXT NOT NULL, bot_id TEXT NOT NULL, \
         enabled INTEGER NOT NULL DEFAULT 0, schedule_cron TEXT NOT NULL DEFAULT '0 7 * * *', \
         target_type TEXT NOT NULL DEFAULT 'dm', target_id TEXT, weather_lat REAL, weather_lng REAL, \
         location_name TEXT, news_feeds TEXT NOT NULL DEFAULT '[]', \
         news_keywords TEXT NOT NULL DEFAULT '[]', \
         updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime')), PRIMARY KEY (user_id, bot_id));\
-        CREATE TABLE report_configs (\
+        DROP TABLE IF EXISTS report_configs; CREATE TABLE report_configs (\
         id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, \
-        bot_id TEXT NOT NULL DEFAULT 'system_default', type TEXT NOT NULL, \
+        bot_id TEXT NOT NULL, type TEXT NOT NULL, \
         enabled INTEGER NOT NULL DEFAULT 0, schedule_cron TEXT NOT NULL DEFAULT '0 21 * * *', \
         target_type TEXT NOT NULL DEFAULT 'dm', target_id TEXT, \
         updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime')), UNIQUE(user_id, bot_id, type));";
@@ -471,7 +471,9 @@ mod tests {
         ));
         let _ = std::fs::remove_file(&path);
         {
-            let conn = Connection::open(&path).unwrap();
+            let mut conn = Connection::open(&path).unwrap();
+            // Install the isolated unit schema after migrating the real schema (SD07).
+            yuuka_db::run_migrations(&mut conn).expect("migrate before unit fixture");
             conn.execute_batch(DDL).unwrap();
         }
         Db::open(&path).unwrap()

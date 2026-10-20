@@ -153,8 +153,8 @@ mod tests {
     static SEQ: AtomicU64 = AtomicU64::new(0);
 
     /// briefing_configs だけを FK 無しで作る（tools.rs の DDL と同形・cron 判定に必要な列を持つ）。
-    const DDL: &str = "CREATE TABLE briefing_configs (\
-        user_id TEXT NOT NULL, bot_id TEXT NOT NULL DEFAULT 'system_default', \
+    const DDL: &str = "DROP TABLE IF EXISTS briefing_configs; CREATE TABLE briefing_configs (\
+        user_id TEXT NOT NULL, bot_id TEXT NOT NULL, \
         enabled INTEGER NOT NULL DEFAULT 0, schedule_cron TEXT NOT NULL DEFAULT '0 7 * * *', \
         target_type TEXT NOT NULL DEFAULT 'dm', target_id TEXT, weather_lat REAL, weather_lng REAL, \
         location_name TEXT, news_feeds TEXT NOT NULL DEFAULT '[]', \
@@ -176,7 +176,9 @@ mod tests {
         let seq = SEQ.fetch_add(1, Ordering::Relaxed);
         let path = dir.path().join(format!("briefing_svc_{seq}.sqlite"));
         {
-            let conn = rusqlite::Connection::open(&path).expect("empty file");
+            let mut conn = rusqlite::Connection::open(&path).expect("empty file");
+            // Install the isolated unit schema after migrating the real schema (SD07).
+            yuuka_db::run_migrations(&mut conn).expect("migrate before unit fixture");
             conn.execute_batch(DDL).expect("ddl");
             conn.execute(
                 "INSERT INTO briefing_configs (user_id, bot_id, enabled, schedule_cron, target_type, target_id) \

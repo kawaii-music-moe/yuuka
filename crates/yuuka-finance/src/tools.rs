@@ -1621,10 +1621,10 @@ mod tests {
     static SEQ: AtomicU64 = AtomicU64::new(0);
 
     // lib.rs の #[cfg(test)] と同一の実効スキーマ（migrations.ts + bot_id ALTER）。
-    const EXPENSES_DDL: &str = "CREATE TABLE expenses (
+    const EXPENSES_DDL: &str = "DROP TABLE IF EXISTS expenses; CREATE TABLE expenses (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id TEXT NOT NULL,
-        bot_id TEXT NOT NULL DEFAULT 'system_default',
+        bot_id TEXT NOT NULL,
         type TEXT NOT NULL DEFAULT 'expense',
         amount INTEGER NOT NULL,
         category TEXT NOT NULL,
@@ -1635,21 +1635,23 @@ mod tests {
         created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
     );";
 
-    // budget_limits を FK 無しで先に作る（V17 の users FK を避ける・todo tools テストと同方針）。
-    const BUDGET_LIMITS_DDL: &str = "CREATE TABLE budget_limits (
+    // budget_limits を migration 後に FK 無しで置き換える（V17 の users FK を避ける・todo tools テストと同方針）。
+    const BUDGET_LIMITS_DDL: &str =
+        "DROP TABLE IF EXISTS budget_limits; CREATE TABLE budget_limits (
         user_id TEXT NOT NULL,
-        bot_id TEXT NOT NULL DEFAULT 'system_default',
+        bot_id TEXT NOT NULL,
         category TEXT NOT NULL,
         limit_amount INTEGER NOT NULL DEFAULT 50000,
         updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
         PRIMARY KEY (user_id, bot_id, category)
     );";
 
-    // planned_payments を FK 無しで先に作る（V17 の users FK を避ける）。
-    const PLANNED_PAYMENTS_DDL: &str = "CREATE TABLE planned_payments (
+    // planned_payments を migration 後に FK 無しで置き換える（V17 の users FK を避ける）。
+    const PLANNED_PAYMENTS_DDL: &str =
+        "DROP TABLE IF EXISTS planned_payments; CREATE TABLE planned_payments (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id TEXT NOT NULL,
-        bot_id TEXT NOT NULL DEFAULT 'system_default',
+        bot_id TEXT NOT NULL,
         title TEXT NOT NULL,
         amount INTEGER NOT NULL,
         category TEXT NOT NULL,
@@ -1666,10 +1668,11 @@ mod tests {
 
     // settle_plan が紐付き ToDo を自動完了するため todos を用意（FK 無し・migration の index が参照
     // する列を欠かさないよう V17 全列を持つ・todo crate テストと同一 DDL）。
-    const TODOS_DDL: &str = "CREATE TABLE todos (
+    const TODOS_DDL: &str =
+        "DROP TABLE IF EXISTS todos; CREATE TABLE todos (list TEXT NOT NULL DEFAULT '個人',
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id TEXT NOT NULL,
-        bot_id TEXT NOT NULL DEFAULT 'system_default',
+        bot_id TEXT NOT NULL,
         title TEXT NOT NULL, description TEXT, due_date TEXT, start_date TEXT,
         priority TEXT, tags TEXT NOT NULL DEFAULT '[]', status TEXT NOT NULL DEFAULT 'open',
         progress INTEGER NOT NULL DEFAULT 0, parent_id INTEGER, linked_payment_id INTEGER,
@@ -1678,10 +1681,10 @@ mod tests {
         updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime')));";
 
     // link_reminder が reminders へ挿入するため FK 無しで用意（V17 の users FK を避ける）。
-    const REMINDERS_DDL: &str = "CREATE TABLE reminders (
+    const REMINDERS_DDL: &str = "DROP TABLE IF EXISTS reminders; CREATE TABLE reminders (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id TEXT NOT NULL,
-        bot_id TEXT NOT NULL DEFAULT 'system_default',
+        bot_id TEXT NOT NULL,
         message TEXT NOT NULL,
         trigger_at TEXT NOT NULL,
         repeat_rule TEXT,
@@ -1699,7 +1702,9 @@ mod tests {
             std::process::id()
         ));
         {
-            let conn = Connection::open(&path).unwrap();
+            let mut conn = Connection::open(&path).unwrap();
+            // Install the isolated unit schema after migrating the real schema (SD07).
+            yuuka_db::run_migrations(&mut conn).expect("migrate before unit fixture");
             conn.execute_batch(EXPENSES_DDL).unwrap();
             conn.execute_batch(BUDGET_LIMITS_DDL).unwrap();
             conn.execute_batch(PLANNED_PAYMENTS_DDL).unwrap();
