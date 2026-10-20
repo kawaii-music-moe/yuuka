@@ -904,6 +904,12 @@ mod tests {
             .unwrap();
         assert_eq!(title, "[Webhook] ビルドが成功しました");
         assert_eq!(tags, r#"["webhook","CI"]"#);
+        let (explicit, pending): (String, i64) = fx.db.read.read(|c| {
+            c.query_row("SELECT s.explicit_tags, s.pending FROM todo_tagging s JOIN todos t ON t.id=s.todo_id WHERE t.user_id='u' AND t.bot_id='test_bot'", [], |r| Ok((r.get(0)?, r.get(1)?))).map_err(yuuka_db::map_sqlite)
+        }).await.unwrap();
+        assert_eq!(explicit, tags);
+        assert_eq!(pending, 1);
+
         assert_eq!(bot, "test_bot");
 
         let (message, target_type, target_id, source, source_id, in_future): (

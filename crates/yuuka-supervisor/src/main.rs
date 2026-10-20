@@ -510,6 +510,20 @@ async fn run() -> Result<(), String> {
     //    P1-4: `impl yuuka_services::Notifier for DiscordMessenger`（notify_bridge）+ 上の Discord
     //    Messenger 構築（P1-3）が揃ったので、通知先を実 Discord Messenger に配線する。デフォルト Bot が
     //    未起動ならリマインド等は送信 false のまま保持され、Bot 起動後に配信可能になる。
+    // R05: interactive ToDo tagging is always active, independent of the legacy cron gate.
+    let tag_ctx = ServiceContext::new(
+        db.clone(),
+        messenger.clone(),
+        metrics.clone(),
+        Arc::new(yuuka_services::NullPlaybookRunner),
+    );
+    supervisor = supervisor.service(Arc::new(yuuka_supervisor::CronSupervised::new(
+        Arc::new(yuuka_services::auto_tags::AutoTagService {
+            generator: Arc::new(GeminiAuxText::new(db.clone(), crypto.clone())),
+        }),
+        tag_ctx,
+    )));
+
     if rust_cron_enabled() {
         // マクロ定期実行（playbook）は会話エンジンを秘書ターンとして起動する。services→orchestrator の
         // 逆依存を避けるため、両者を知る supervisor 層でアダプタ経由に注入する（P2 縮退の解消）。

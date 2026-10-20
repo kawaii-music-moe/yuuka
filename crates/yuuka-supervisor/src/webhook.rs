@@ -106,3 +106,10 @@ impl AuxTextGenerator for GeminiAuxText {
         Some(resp.text())
     }
 }
+
+#[async_trait]
+impl yuuka_services::auto_tags::TagGenerator for GeminiAuxText {
+    async fn generate(&self, user_id: &str, prompt: &str) -> Option<String> {
+        AuxTextGenerator::generate_aux_text(self, user_id, prompt).await
+    }
+}

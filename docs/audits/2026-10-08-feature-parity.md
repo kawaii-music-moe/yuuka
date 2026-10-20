@@ -33,7 +33,7 @@
 
 | ID | 優先度 | 機能 | 旧Nodeの動作 → 現行の動作 | 根拠・復旧箇所 |
 |---|---|---|---|---|
-| R05 | 高 | ToDoの自動タグ付け | 追加やタイトル・説明変更後に補助LLMでタグを付け直していた。現在は自動タグ処理がなく、追加時は空タグ。それでもツール結果とプロンプトが「バックグラウンドで自動付与」と案内する。手動タグ編集は残る。 | 旧 `src/services/autoTagService.ts:87,129`、`src/functions/todoFunctions.ts`。現行 `crates/yuuka-todo/src/tools.rs:282,302`、`crates/yuuka-orchestrator/src/system_prompt.rs`。 |
+| R05 | 高 | ToDoの自動タグ付け | 追加やタイトル・説明変更後に補助LLMでタグを付け直していた。現在は自動タグ処理がなく、追加時は空タグ。それでもツール結果とプロンプトが「バックグラウンドで自動付与」と案内する。手動タグ編集は残る。**修正済み（#102）**：全作成経路・タイトル/説明の実変更をDBトリガーで予約し、本人の補助LLMで非同期付与する。由来を保存し、既存/明示タグを保護して自動タグだけ再生成。手動全削除で停止し、世代チェックで競合を防ぐ。[経路監査・決定・検証](2026-10-20-r05-todo-auto-tags.md)。 | 旧 `src/services/autoTagService.ts:87,129`、`src/functions/todoFunctions.ts`。現行 `crates/yuuka-todo/src/tools.rs:282,302`、`crates/yuuka-orchestrator/src/system_prompt.rs`。 |
 | R06 | 中 | ターンの事前計画・必要ツール選定 | `planTurn` で手順・利用ツール・重い処理を判定し、計画をプロンプトに注入していた。現在のengineには対応する実行経路がない。 | 旧 `src/gemini.ts:883`、`src/services/turnPlanner.ts`。現行 `crates/yuuka-orchestrator/src/engine.rs` のツール選定～FCループ。 |
 | R07 | 中 | 重い処理の途中応答と後続配信 | 先に途中応答を返し、最終結果を後で配信していた。現在は同期処理が基本で、engineが渡された `TurnDelivery` を使用しない。PWAのHTTP 202＋ポーリングは別の仕組みで、Discord/WSのこの機能を補わない。 | 旧 `src/gemini.ts:901,946`。現行 `crates/yuuka-orchestrator/src/engine.rs:998,1030`、`crates/yuuka-supervisor/src/ws.rs:342`。 |
 | R08 | 中 | 返信元チェーンの文脈・想起への利用 | 返信元IDから過去の会話を遡り、本文と記憶検索に使っていた。現在はIDを受け取って保存するが、会話構築時にチェーンを復元しない。想起関数にも空配列を渡す。遠い発言への「あれについて」の理解が後退する。 | 旧 `src/gemini.ts:1030,1406,1514`。現行 `crates/yuuka-orchestrator/src/engine.rs:392,432`、`crates/yuuka-orchestrator/src/synapse_recall.rs:35`。 |
@@ -112,7 +112,7 @@
 | ログイン・招待・セッション・デバイス認証 | HTTP対応あり、発行/検証の接続あり | デスクトップTTL設定（R26） |
 | Bot管理・共有・利用申請・ペルソナ | HTTP対応あり、Discord側も実装あり | Web DM（R03/R04）、プロフィール同期（R20） |
 | 秘書会話・汎用Bot・Discord/WS/PWA | engineへの接続あり | 計画・途中応答・返信チェーン・WSボタン（R06～R09） |
-| ToDo・階層・ガント・タグ・ルーチン | ツール15件、HTTP対応あり | 自動タグ（R05）、cron（R19） |
+| ToDo・階層・ガント・タグ・ルーチン | ツール15件、HTTP対応あり | 自動タグは復旧（R05の詳細記録を参照）、cron（R19） |
 | 予定・Google Calendar | ツール3件、HTTP対応あり、作業中の同期あり | 経路重複（D03） |
 | リマインド・期限通知・誕生日 | ツール3件、定期サービスあり | 通知先・過去日時・cron（R17～R19） |
 | 家計・予算・支払い予定 | 旧ツール14件に更新/削除追加、HTTP対応あり | 消込・連動取消・補足結果（R14～R16） |

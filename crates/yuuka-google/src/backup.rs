@@ -464,6 +464,15 @@ fn export_user_data(src: &Connection, dest: &Connection, user_id: &str) -> rusql
         );
         copy_rows_from_select(src, dest, table, &select, user_id)?;
     }
+    // V27: tag provenance/opt-out belong to the same exported todos (personal or owned Bot).
+    copy_rows_from_select(
+        src,
+        dest,
+        "todo_tagging",
+        "SELECT s.* FROM todo_tagging s JOIN todos t ON t.id=s.todo_id
+         WHERE t.user_id=?1 OR EXISTS (SELECT 1 FROM bots b WHERE b.id=t.bot_id AND b.user_id=?1)",
+        user_id,
+    )?;
     // V22: 添付には user_id 列がない。親の message_logs を介して本人分だけをコピーする。
     // これを省くと返信本文は復元できても、グラフ等のファイル実体が失われる。
     copy_rows_from_select(
@@ -801,6 +810,29 @@ mod tests {
         conn
     }
 
+    #[test]
+    fn export_preserves_tag_provenance_and_opt_out_without_other_users() {
+        let src = source_db();
+        src.execute_batch(r#"ALTER TABLE todos ADD COLUMN bot_id TEXT;
+            CREATE TABLE todo_tagging (todo_id INTEGER PRIMARY KEY, explicit_tags TEXT, auto_tags TEXT, disabled INTEGER);
+            INSERT INTO todo_tagging VALUES (1,'["manual"]','["auto"]',0), (2,'[]','[]',1), (3,'["secret"]','[]',0);"#).unwrap();
+        let dest = Connection::open_in_memory().unwrap();
+        export_user_data(&src, &dest, "alice").unwrap();
+        let rows: Vec<(i64, String, String, i64)> = dest
+            .prepare("SELECT * FROM todo_tagging ORDER BY todo_id")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(
+            rows,
+            vec![
+                (1, r#"["manual"]"#.into(), r#"["auto"]"#.into(), 0),
+                (2, "[]".into(), "[]".into(), 1)
+            ]
+        );
+    }
     #[test]
     fn export_copies_only_target_user_rows() {
         let src = source_db();

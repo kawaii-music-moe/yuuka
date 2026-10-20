@@ -148,7 +148,7 @@ fn todo_count(path: &std::path::Path) -> i64 {
 #[tokio::test]
 async fn data_is_separated_per_agent() {
     let (db, _path) = fresh_db();
-    let app = app(db);
+    let app = app(db.clone());
 
     assert_eq!(
         add_todo(&app, "?botId=mybot", "my bot task").await,
@@ -161,6 +161,18 @@ async fn data_is_separated_per_agent() {
 
     assert_eq!(todo_titles(&app, "?botId=mybot").await, ["my bot task"]);
     assert_eq!(todo_titles(&app, "?botId=sharedbot").await, ["shared task"]);
+    let jobs = yuuka_todo::repo::TodoRepo::new(&db)
+        .claim_tag_jobs(yuuka_core::CrossUserAccess::for_scheduled_task())
+        .await
+        .unwrap();
+    assert_eq!(jobs.len(), 2);
+    assert!(jobs.iter().all(|job| job.scope.user_id().as_str() == ME));
+    assert!(jobs
+        .iter()
+        .any(|job| job.scope.bot_id().as_str() == "mybot"));
+    assert!(jobs
+        .iter()
+        .any(|job| job.scope.bot_id().as_str() == "sharedbot"));
 }
 
 #[tokio::test]

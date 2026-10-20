@@ -9,9 +9,8 @@
 //! snake_case**（`due_date`・Node の Gemini 宣言と一致）。ツール名は Node の system prompt が
 //! 参照する **bare 名**（`addTodo` 等・namespace 無し）を使う（MCP/WASM のみ namespace 接頭辞）。
 //!
-//! 移植済み: addTodo / listTodos / completeTodo / deleteTodo（コア 4 経路）。
-//! 未移植（後続・repo 拡張要）: addSubtask / updateTodo / タグ系 / 優先度整理 / ルーチン停止 等
-//! 11 ツール、および自動タグ付与（scheduleAutoTagging＝バックグラウンドサービス）。
+//! ToDo・サブタスク・タグ・進捗・優先度・ルーチンの15ツール。
+//! 自動タグはDBトリガーで予約し、supervisorのバックグラウンドサービスが生成する。
 
 use std::sync::Arc;
 
@@ -294,7 +293,7 @@ impl Tool for AddTodoTool {
             .await
             .map_err(exec_err)?;
 
-        // NOTE: 自動タグ付与（scheduleAutoTagging）はバックグラウンドサービス。後続で services 側へ。
+        // 自動タグは INSERT トリガーで予約済み（応答は生成を待たない）。
         let message = format!(
             "ToDo「{}」を追加しました (ID: #{}、優先度: {})。タグはバックグラウンドで自動付与されます。",
             todo.title,
@@ -1010,33 +1009,13 @@ impl Tool for EditTodoTagsTool {
         }
         let scope = scope_of(ctx);
         let repo = TodoRepo::new(&self.db);
-        let Some(todo) = repo.get(&scope, todo_id).await.map_err(exec_err)? else {
+        if repo.get(&scope, todo_id).await.map_err(exec_err)?.is_none() {
             return Ok(fail_payload(format!(
                 "タスク #{todo_id} が見つかりません。"
             )));
-        };
-        let current = todo.tags;
-        let next: Vec<String> = match mode.as_str() {
-            "set" => input_tags,
-            "add" => {
-                // 既存 + 入力を再正規化（重複除去・最大 8）。
-                let merged: Vec<Value> = current
-                    .iter()
-                    .chain(input_tags.iter())
-                    .map(|t| Value::String(t.clone()))
-                    .collect();
-                normalize_tags(&Value::Array(merged))
-            }
-            _ => {
-                let remove: std::collections::HashSet<&String> = input_tags.iter().collect();
-                current
-                    .into_iter()
-                    .filter(|t| !remove.contains(t))
-                    .collect()
-            }
-        };
+        }
         match repo
-            .update_tags(&scope, todo_id, next)
+            .edit_tags(&scope, todo_id, &mode, input_tags)
             .await
             .map_err(exec_err)?
         {
@@ -1532,7 +1511,7 @@ mod tests {
         let by_tag = find(&tools, "listTasksByTag");
         let guide = find(&tools, "getTaskUsageGuide");
 
-        // タグ付き ToDo を repo 直挿し（addTodo ツールは tags=[]・自動タグは deferred のため）。
+        // タグ付き ToDo を repo 直挿し（このテストではバックグラウンド worker は起動しない）。
         let scope = scope_of(&ctx());
         let repo = TodoRepo::new(&seed);
         for (title, tags) in [

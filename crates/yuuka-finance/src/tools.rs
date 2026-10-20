@@ -2349,7 +2349,7 @@ mod tests {
     #[tokio::test]
     async fn link_planned_payment_todo() {
         let db = seed_db();
-        let tools = tools(db).unwrap();
+        let tools = tools(db.clone()).unwrap();
         let add = find(&tools, "addPlannedPayment");
         let link = find(&tools, "linkPlannedPaymentTodo");
         let list = find(&tools, "listPlannedPayments");
@@ -2373,6 +2373,20 @@ mod tests {
         let todo_id = out.payload["todo_id"].as_i64().unwrap();
         assert!(todo_id > 0);
 
+        let (explicit, pending): (String, i64) = db
+            .read
+            .read(move |c| {
+                c.query_row(
+                    "SELECT explicit_tags, pending FROM todo_tagging WHERE todo_id = ?1",
+                    [todo_id],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .map_err(yuuka_db::map_sqlite)
+            })
+            .await
+            .unwrap();
+        assert!(explicit.contains("支払い"));
+        assert_eq!(pending, 1);
         // 予定に linked_todo_id が入る。
         let out = list.call(&ctx(), json!({})).await.unwrap();
         let plan = &out.payload["plans"][0];

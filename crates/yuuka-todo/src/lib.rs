@@ -9,6 +9,7 @@
 //! Phase 4 で [`cron`] に追加済み。recurrence の登録 UI・finance 連携・gantt/someday・progress log・
 //! 優先度2段・15 tool function・subtree 削除は todo 完成パスで追加。
 
+pub mod auto_tags;
 pub mod cron;
 pub mod dto;
 pub mod repo;
@@ -351,7 +352,7 @@ mod tests {
         }
     }
 
-    async fn app() -> axum::Router {
+    async fn app_with_db() -> (axum::Router, Db) {
         let auth = Arc::new(FakeAuth {
             user: SessionUser {
                 discord_id: "u".to_owned(),
@@ -361,10 +362,68 @@ mod tests {
         });
         let db = seed_db();
         yuuka_web::test_support::seed_bot(&db, TEST_BOT_ID, "u").await;
-        let state = AppState::new(auth, WebConfig::default(), db);
-        with_bot_query(super::routes().with_state(state), TEST_BOT_ID)
+        let state = AppState::new(auth, WebConfig::default(), db.clone());
+        (
+            with_bot_query(super::routes().with_state(state), TEST_BOT_ID),
+            db,
+        )
     }
 
+    async fn app() -> axum::Router {
+        app_with_db().await.0
+    }
+
+    #[tokio::test]
+    async fn api_add_and_description_edit_enqueue_scoped_tag_jobs() {
+        let (app, db) = app_with_db().await;
+        let post = |uri: &str, body: &str| {
+            Request::builder()
+                .method("POST")
+                .uri(uri)
+                .header("cookie", "__Host-yuuka-session=good")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_owned()))
+                .unwrap()
+        };
+        let response = app
+            .clone()
+            .oneshot(post(
+                "/api/tasks/add",
+                r#"{"title":"API","tags":["explicit"]}"#,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let repo = TodoRepo::new(&db);
+        let cron = yuuka_core::CrossUserAccess::for_scheduled_task();
+        let job = repo.claim_tag_jobs(cron).await.unwrap().pop().unwrap();
+        assert_eq!(job.scope.user_id().as_str(), "u");
+        assert_eq!(job.scope.bot_id().as_str(), TEST_BOT_ID);
+        let id = job.id;
+        repo.finish_tag_job(job, vec!["auto".into()]).await.unwrap();
+        let response = app
+            .oneshot(post(
+                "/api/tasks/update",
+                &format!(r#"{{"id":{id},"description":"new description"}}"#),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let job = repo.claim_tag_jobs(cron).await.unwrap().pop().unwrap();
+        assert_eq!(job.description.as_deref(), Some("new description"));
+        repo.finish_tag_job(job, vec!["new auto".into()])
+            .await
+            .unwrap();
+        let task = repo
+            .get(
+                &UserScope::new(UserId::new("u"), BotId::new(TEST_BOT_ID)),
+                id,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(task.tags, vec!["explicit", "new auto"]);
+    }
     #[tokio::test]
     async fn route_add_validates_repeat_rule_with_runtime_parser() {
         // R19: 5 フィールドでも実行時 parser が解釈できない式は保存しない（ツールと同じ判定）。
