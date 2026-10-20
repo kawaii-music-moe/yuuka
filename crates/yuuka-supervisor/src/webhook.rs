@@ -108,13 +108,6 @@ impl AuxTextGenerator for GeminiAuxText {
 }
 
 #[async_trait]
-impl yuuka_briefing::NewsSummarizer for GeminiAuxText {
-    async fn summarize_news(&self, user_id: &str, prompt: &str) -> Option<String> {
-        AuxTextGenerator::generate_aux_text(self, user_id, prompt).await
-    }
-}
-
-#[async_trait]
 impl yuuka_services::auto_tags::TagGenerator for GeminiAuxText {
     async fn generate(&self, user_id: &str, prompt: &str) -> Option<String> {
         AuxTextGenerator::generate_aux_text(self, user_id, prompt).await

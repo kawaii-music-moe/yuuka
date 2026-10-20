@@ -19,6 +19,7 @@
 use async_trait::async_trait;
 use chrono::Local;
 use yuuka_briefing::{build_briefing, list_enabled_briefings, BriefingContent, EnabledBriefing};
+use yuuka_core::aux_text::AuxTextGenerator;
 use yuuka_core::{BotId, DbError, EmbedFieldPart, EmbedPart, UserId};
 use yuuka_web::Db;
 
@@ -65,7 +66,7 @@ async fn process_due_briefings(ctx: &ServiceContext) -> Result<(), DbError> {
         if let Err(e) = deliver(
             &ctx.db,
             ctx.notifier.as_ref(),
-            ctx.news_summarizer.as_ref(),
+            ctx.aux_text.as_ref(),
             &config,
         )
         .await
@@ -84,13 +85,11 @@ async fn process_due_briefings(ctx: &ServiceContext) -> Result<(), DbError> {
 pub(crate) async fn deliver(
     db: &Db,
     notifier: &dyn Notifier,
-    news_summarizer: &dyn yuuka_briefing::NewsSummarizer,
+    aux_text: &dyn AuxTextGenerator,
     config: &EnabledBriefing,
 ) -> Result<bool, DbError> {
     // 本人設定を再読込して天気/RSS を生成（走査行の直後に設定が消えた等は None → 何もしない）。
-    let Some(content) =
-        build_briefing(db, news_summarizer, &config.user_id, &config.bot_id).await?
-    else {
+    let Some(content) = build_briefing(db, aux_text, &config.user_id, &config.bot_id).await? else {
         return Ok(false);
     };
 

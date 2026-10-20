@@ -355,6 +355,10 @@ async fn run() -> Result<(), String> {
     // schedule ルータ: 管理画面からの登録・削除もエージェントと同じく Google カレンダーへ反映する（#127）。
     let schedule_routes = yuuka_schedule::routes_with_calendar(Some(google_events.clone()));
 
+    // ユーザー本人のキーで行う補助テキスト生成（Webhook 整形・朝報ニュース要約・日報/週報まとめで共有）。
+    let aux_text: Arc<dyn yuuka_core::aux_text::AuxTextGenerator> =
+        Arc::new(GeminiAuxText::new(db.clone(), crypto.clone()));
+
     // Webhook ルータ（署名検証・通知・ToDo/リマインド化・受信履歴を実処理へ配線）。
     let webhook_routes = yuuka_webhook::routes_with(
         crypto.clone(),
@@ -362,7 +366,7 @@ async fn run() -> Result<(), String> {
             db.clone(),
             crypto.clone(),
             Arc::new(MessengerWebhookNotifier::new(messenger.clone())),
-            Arc::new(GeminiAuxText::new(db.clone(), crypto.clone())),
+            aux_text.clone(),
         )),
     );
 
@@ -398,8 +402,7 @@ async fn run() -> Result<(), String> {
     // Discord Messenger へ送る。REST 送信は gateway 非依存のため YUUKA_RUST_CRON/DISCORD に関わらず live。
     // 同じ runner を runBriefingNow（`deliver: true`）にも設定する（issue #136）。
     let delivery_runner: Arc<dyn yuuka_briefing::DeliveryRunner> = Arc::new(
-        NotifierDeliveryRunner::new(db.clone(), messenger.clone())
-            .with_news_summarizer(Arc::new(GeminiAuxText::new(db.clone(), crypto.clone()))),
+        NotifierDeliveryRunner::new(db.clone(), messenger.clone()).with_aux_text(aux_text.clone()),
     );
     briefing_delivery.set(delivery_runner.clone());
     let briefing_routes = yuuka_briefing::routes_with(delivery_runner);
@@ -537,7 +540,7 @@ async fn run() -> Result<(), String> {
                 engine: chat_engine.clone(),
             }),
         )
-        .with_news_summarizer(Arc::new(GeminiAuxText::new(db.clone(), crypto.clone())));
+        .with_aux_text(aux_text);
         // 定期バックアップの実行ポートを注入（実 Drive クライアントがあれば live・無ければ NullBackupRunner
         // 据え置き＝走査はするが実行は失敗）。手動 trigger（settings）と同一の GoogleBackupClient を共有する。
         if let Some(client) = google_backup_client.clone() {

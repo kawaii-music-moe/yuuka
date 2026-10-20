@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde_json::{json, Value};
+use yuuka_core::aux_text::{AuxTextGenerator, NullAuxTextGenerator};
 use yuuka_core::cron_util;
 use yuuka_core::tool::FunctionDeclaration;
 use yuuka_core::{
@@ -17,7 +18,7 @@ use yuuka_web::Db;
 
 use crate::repo::{self, BriefingConfig, ReportConfig};
 use crate::routes::{DeliveryRunner, NullDeliveryRunner};
-use crate::service::{self, NewsSummarizer, NullNewsSummarizer};
+use crate::service;
 
 /// このクレートが公開するツール（配信 runner 未注入＝`runBriefingNow` の `deliver: true` は常に未配信）。
 ///
@@ -36,15 +37,18 @@ pub fn tools_with(
     db: Db,
     runner: Arc<dyn DeliveryRunner>,
 ) -> Result<Vec<Arc<dyn Tool>>, ToolError> {
-    tools_with_news_summarizer(db, runner, Arc::new(NullNewsSummarizer))
+    tools_with_aux_text(db, runner, Arc::new(NullAuxTextGenerator))
 }
 
 /// 補助 LLM を注入してツール群を構築する。本番 assembly はこの経路を使い、未配線時は [`tools`] が
 /// タイトル列挙へ安全に縮退する。
-pub fn tools_with_news_summarizer(
+///
+/// # Errors
+/// ツール名が Gemini 制約に反する場合 [`ToolError`]。
+pub fn tools_with_aux_text(
     db: Db,
     runner: Arc<dyn DeliveryRunner>,
-    news_summarizer: Arc<dyn NewsSummarizer>,
+    aux_text: Arc<dyn AuxTextGenerator>,
 ) -> Result<Vec<Arc<dyn Tool>>, ToolError> {
     Ok(vec![
         Arc::new(ConfigureReportTool {
@@ -63,7 +67,7 @@ pub fn tools_with_news_summarizer(
             name: ToolName::checked("runBriefingNow".to_owned())?,
             db,
             runner,
-            news_summarizer,
+            aux_text,
         }),
     ])
 }
@@ -349,7 +353,7 @@ struct RunBriefingNowTool {
     name: ToolName,
     db: Db,
     runner: Arc<dyn DeliveryRunner>,
-    news_summarizer: Arc<dyn NewsSummarizer>,
+    aux_text: Arc<dyn AuxTextGenerator>,
 }
 
 impl RunBriefingNowTool {
@@ -412,7 +416,7 @@ impl Tool for RunBriefingNowTool {
 
         let content = service::build_briefing(
             &self.db,
-            self.news_summarizer.as_ref(),
+            self.aux_text.as_ref(),
             ctx.user_id.as_str(),
             ctx.bot_id.as_str(),
         )
