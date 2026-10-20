@@ -513,7 +513,28 @@ async fn secretary_flow(deps: &FlowDeps, rt: &RuntimeBot, bot: &BotRecord, messa
     let reply_to_msg_id = reference_message_id(&message);
     let channel_id = Some(message.channel_id.get().to_string());
 
-    let result: Result<TurnReply, TurnError> = if let Some(att) = audio {
+    // Only the current message's authenticated author can supply saveable attachments.
+    // Reference images remain context only; their bytes never enter the save catalog.
+    let has_current_media = message.attachments.iter().any(is_photo_or_video);
+    let result: Result<TurnReply, TurnError> = if has_current_media {
+        match current_timeline_media(&message).await {
+            Ok((attachments, timeline_attachments)) => {
+                let chat = IncomingChat {
+                    text: full_text.clone(),
+                    attachments,
+                    timeline_attachments,
+                    discord_msg_id,
+                    reply_to_msg_id,
+                    channel_id,
+                    ..IncomingChat::default()
+                };
+                deps.processor
+                    .process_secretary(&rt.bot_id, &author, chat, status.clone(), delivery.clone())
+                    .await
+            }
+            Err(e) => Err(TurnError::Failed(e.to_string())),
+        }
+    } else if let Some(att) = audio {
         match fetch_inline_media(&att, "audio/ogg").await {
             Ok(media) => {
                 // 現行 `const instruction = fullText.trim() || placeholder`（trim 済み）。
@@ -876,6 +897,107 @@ fn select_audio(attachments: &[Attachment]) -> Option<&Attachment> {
     attachments
         .iter()
         .find(|a| a.content_type.as_deref().is_some_and(is_supported_audio))
+}
+
+fn is_photo_or_video(a: &Attachment) -> bool {
+    a.content_type
+        .as_deref()
+        .is_some_and(|m| m.starts_with("image/") || m.starts_with("video/"))
+}
+
+/// Fetch only Discord's authenticated current-message CDN attachments, with no redirects.
+async fn current_timeline_media(
+    message: &Message,
+) -> Result<
+    (
+        Vec<InlineMedia>,
+        Vec<yuuka_core::tool::ConversationAttachment>,
+    ),
+    DiscordError,
+> {
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|_| DiscordError::Transport("添付取得を開始できませんでした。".to_owned()))?;
+    let mut inline = Vec::new();
+    let mut catalog = Vec::new();
+    let mut total = 0usize;
+    for (position, att) in message.attachments.iter().enumerate().filter(|(_, a)| {
+        is_photo_or_video(a) || a.content_type.as_deref().is_some_and(is_supported_audio)
+    }) {
+        if catalog.len() >= 10 {
+            return Err(DiscordError::Transport("添付は10件までです。".to_owned()));
+        }
+        let url = reqwest::Url::parse(&att.url)
+            .map_err(|_| DiscordError::Transport("添付URLが不正です。".to_owned()))?;
+        if url.scheme() != "https"
+            || !matches!(
+                url.host_str(),
+                Some("cdn.discordapp.com" | "media.discordapp.net")
+            )
+            || !url.path().starts_with("/attachments/")
+            || !url.username().is_empty()
+            || url.password().is_some()
+            || url.port().is_some()
+        {
+            return Err(DiscordError::Transport(
+                "Discord添付以外は取得できません。".to_owned(),
+            ));
+        }
+        let mut response = client
+            .get(url)
+            .send()
+            .await
+            .and_then(reqwest::Response::error_for_status)
+            .map_err(|_| DiscordError::Transport("添付取得に失敗しました。".to_owned()))?;
+        if response.status().is_redirection() {
+            return Err(DiscordError::Transport(
+                "添付の転送は許可されません。".to_owned(),
+            ));
+        }
+        let mut bytes = Vec::new();
+        while let Some(chunk) = response
+            .chunk()
+            .await
+            .map_err(|_| DiscordError::Transport("添付の読込に失敗しました。".to_owned()))?
+        {
+            total += chunk.len();
+            if total > 20 * 1024 * 1024 {
+                return Err(DiscordError::Transport(
+                    "添付合計の上限は20MiBです。".to_owned(),
+                ));
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        if bytes.is_empty() {
+            return Err(DiscordError::Transport("添付が空です。".to_owned()));
+        }
+        let mime_type = att
+            .content_type
+            .as_deref()
+            .unwrap_or_default()
+            .split(';')
+            .next()
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase();
+        let data_base64 = base64::engine::general_purpose::STANDARD.encode(bytes);
+        inline.push(InlineMedia {
+            data_base64: data_base64.clone(),
+            mime_type: mime_type.clone(),
+        });
+        if is_photo_or_video(att) {
+            catalog.push(yuuka_core::tool::ConversationAttachment {
+                source_message_id: format!("discord:{}", message.id),
+                attachment_id: att.id.to_string(),
+                position,
+                mime_type,
+                data_base64,
+            });
+        }
+    }
+    Ok((inline, catalog))
 }
 
 /// 添付を URL 取得 → base64 化する（現行 fetch → Buffer.toString("base64")）。

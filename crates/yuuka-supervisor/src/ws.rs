@@ -146,6 +146,10 @@ enum ClientFrame {
         image: Option<WsAttachment>,
         #[serde(default)]
         audio: Option<WsAttachment>,
+        #[serde(default)]
+        attachments: Vec<WsAttachment>,
+        #[serde(default, rename = "messageId")]
+        message_id: Option<String>,
         #[serde(default, rename = "replyToId")]
         reply_to_id: Option<String>,
     },
@@ -268,9 +272,23 @@ async fn handle_text(
             text,
             image,
             audio,
+            attachments,
+            message_id,
             reply_to_id,
         } => {
-            process_msg(user, bot_id, engine, tx, text, image, audio, reply_to_id).await;
+            process_msg(
+                user,
+                bot_id,
+                engine,
+                tx,
+                text,
+                image,
+                audio,
+                attachments,
+                message_id,
+                reply_to_id,
+            )
+            .await;
         }
         ClientFrame::Reset => {
             if let Err(e) = engine.reset_context(user.discord_id.as_str(), bot_id).await {
@@ -292,6 +310,8 @@ async fn process_msg(
     text: String,
     image: Option<WsAttachment>,
     audio: Option<WsAttachment>,
+    attachments: Vec<WsAttachment>,
+    message_id: Option<String>,
     reply_to_id: Option<String>,
 ) {
     // Gemini キー事前チェック（Node は processMessage 前に error/no_gemini_key を返す）。
@@ -303,12 +323,13 @@ async fn process_msg(
         return;
     }
 
-    let incoming = IncomingChat {
-        text,
-        image: image.map(to_media),
-        audio: audio.map(to_media),
-        reply_to_msg_id: reply_to_id,
-        ..IncomingChat::default()
+    let incoming = match incoming_ws_chat(text, image, audio, attachments, message_id, reply_to_id)
+    {
+        Ok(incoming) => incoming,
+        Err(message) => {
+            let _ = tx.send(json_msg(&err_frame("invalid_attachment", message)));
+            return;
+        }
     };
     let status = status_sink(tx.clone());
     let bot = yuuka_core::BotId::new(bot_id.to_owned());
@@ -326,6 +347,65 @@ async fn process_msg(
             )));
         }
     }
+}
+
+/// Build the save catalog only from this authenticated frame, never a reply reference.
+fn incoming_ws_chat(
+    text: String,
+    image: Option<WsAttachment>,
+    audio: Option<WsAttachment>,
+    attachments: Vec<WsAttachment>,
+    message_id: Option<String>,
+    reply_to_id: Option<String>,
+) -> Result<IncomingChat, &'static str> {
+    if attachments.len() + usize::from(image.is_some()) + usize::from(audio.is_some()) > 10
+        || message_id
+            .as_ref()
+            .is_some_and(|id| id.is_empty() || id.len() > 128)
+    {
+        return Err("添付またはmessageIdが不正です。");
+    }
+    let source_id = format!("ws:{}", message_id.unwrap_or_else(random_message_id));
+    let mut timeline_attachments = Vec::new();
+    for (position, a) in image
+        .iter()
+        .chain(audio.iter())
+        .chain(attachments.iter())
+        .enumerate()
+    {
+        if base64::engine::general_purpose::STANDARD
+            .decode(&a.data)
+            .ok()
+            .is_none_or(|b| b.is_empty())
+        {
+            return Err("添付を読み込めませんでした。");
+        }
+        let mime = a
+            .mime
+            .split(';')
+            .next()
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase();
+        if mime.starts_with("image/") || mime.starts_with("video/") {
+            timeline_attachments.push(yuuka_core::tool::ConversationAttachment {
+                source_message_id: source_id.clone(),
+                attachment_id: position.to_string(),
+                position,
+                mime_type: mime,
+                data_base64: a.data.clone(),
+            });
+        }
+    }
+    Ok(IncomingChat {
+        text,
+        timeline_attachments,
+        attachments: attachments.into_iter().map(to_media).collect(),
+        image: image.map(to_media),
+        audio: audio.map(to_media),
+        reply_to_msg_id: reply_to_id,
+        ..IncomingChat::default()
+    })
 }
 
 /// ステータスコールバックを WS `status` フレームへ橋渡しする（`idle` は送らない）。
@@ -493,7 +573,7 @@ fn clone_bot(b: &BotInfo) -> BotInfo {
 
 #[cfg(test)]
 mod tests {
-    use super::{err_frame, BotInfo, ServerFrame};
+    use super::{err_frame, incoming_ws_chat, BotInfo, ServerFrame, WsAttachment};
     use yuuka_types::{Role, SessionUser};
 
     #[test]
@@ -621,5 +701,70 @@ mod tests {
             assert_eq!(image.unwrap().mime, "image/png");
             assert_eq!(reply_to_id.as_deref(), Some("9"));
         }
+    }
+
+    #[test]
+    fn ordered_current_media_catalog_and_stable_frame_identity() {
+        let att = |mime: &str| WsAttachment {
+            mime: mime.to_owned(),
+            data: "AQID".to_owned(),
+        };
+        let first = incoming_ws_chat(
+            "save".to_owned(),
+            Some(att("image/png")),
+            Some(att("audio/ogg")),
+            vec![att("video/mp4")],
+            Some("frame-42".to_owned()),
+            Some("someone-elses-message".to_owned()),
+        )
+        .unwrap();
+        assert_eq!(
+            first
+                .timeline_attachments
+                .iter()
+                .map(|a| a.position)
+                .collect::<Vec<_>>(),
+            vec![0, 2]
+        );
+        assert!(first
+            .timeline_attachments
+            .iter()
+            .all(|a| a.source_message_id == "ws:frame-42"));
+        assert_eq!(first.timeline_attachments[1].mime_type, "video/mp4");
+        let replay = incoming_ws_chat(
+            "save".to_owned(),
+            Some(att("image/png")),
+            None,
+            Vec::new(),
+            Some("frame-42".to_owned()),
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            replay.timeline_attachments[0].source_message_id,
+            first.timeline_attachments[0].source_message_id
+        );
+        let reference_only = incoming_ws_chat(
+            "save".to_owned(),
+            None,
+            None,
+            Vec::new(),
+            None,
+            Some("old".to_owned()),
+        )
+        .unwrap();
+        assert!(reference_only.timeline_attachments.is_empty());
+        assert!(incoming_ws_chat(
+            String::new(),
+            Some(WsAttachment {
+                mime: "image/png".to_owned(),
+                data: "invalid".to_owned()
+            }),
+            None,
+            Vec::new(),
+            None,
+            None
+        )
+        .is_err());
     }
 }

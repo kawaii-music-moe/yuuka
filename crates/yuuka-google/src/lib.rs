@@ -11,8 +11,8 @@ pub mod ports;
 pub mod repo;
 
 pub use backup::{
-    export_user_database, read_backup_config, touch_backup_last_run, BackupConfig,
-    GoogleBackupClient,
+    export_user_database, export_user_database_with_media_dir, exported_timeline_media,
+    read_backup_config, touch_backup_last_run, BackupConfig, GoogleBackupClient,
 };
 pub use http::GoogleHttpClient;
 pub use ports::{

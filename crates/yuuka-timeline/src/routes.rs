@@ -12,7 +12,7 @@
 //! `day_plan_blocks` の CRUD（plan add / update / delete・day list に blocks 同梱）＋
 //! cross-domain 副作用（`type=expense` の expenses 二重登録・`type=task_done` の todos 完了）＋
 //! メディア（`POST /api/timeline/media` base64 アップロード・`GET /api/timeline/media/{filename}`
-//! 認証付き配信）。tool 経由の Discord 添付 URL からのメディア取得のみ deferred（reqwest 依存）。
+//! 認証・所有者確認付き配信）。会話ツールは現在の本人添付だけを保存する（R13）。
 
 use axum::body::Body;
 use axum::extract::{Path, Query, State};
@@ -185,21 +185,22 @@ async fn add(
 
 async fn delete(
     user: AuthenticatedUser,
-    State(db): State<Db>,
+    State(state): State<AppState>,
     ScopedJson {
         bot_id,
         value: input,
     }: ScopedJson<IdInput>,
 ) -> Result<Json<Envelope<EmptyData>>, ApiError> {
-    let scope = resolve_scope(&user.0, &db, bot_id.as_deref()).await?;
-    let ok = TimelineRepo::new(&db).delete(&scope, input.id).await?;
+    let scope = resolve_scope(&user.0, &state.db, bot_id.as_deref()).await?;
+    let ok = TimelineRepo::new(&state.db)
+        .delete_with_media_dir(&scope, input.id, state.config.media_dir.clone())
+        .await?;
     Ok(Json(Envelope::bare(ok)))
 }
 
 /// `POST /api/timeline/media` — base64 メディアを保存し `type=media` 記録を作る（Node media ハンドラ）。
 ///
-/// 保存先は `config.media_dir`。MIME 不正・保存失敗は Node と同じく **400 `{success:false, message}`**
-/// （`saveMediaFile` の throw に対応）。`State<AppState>` から DB と media_dir の双方を取る。
+/// MIME/base64を検証し、本体と記録を単一DBトランザクションで保存する。
 async fn media_upload(
     user: AuthenticatedUser,
     State(state): State<AppState>,
@@ -218,16 +219,16 @@ async fn media_upload(
         )));
     }
     let scope = resolve_scope(&user.0, &state.db, bot_id.as_deref()).await?;
-    // メディア保存（MIME 検証・書き込み）。失敗は Node 同様 400（生の内部エラーは出さない）。
-    let media_path = media::save_media_base64(
-        &state.config.media_dir,
-        &input.base64,
-        &input.mime_type,
-        &input.date,
-    )
-    .await
-    .map_err(|msg| ApiError(WebError::Validation(msg)))?;
-    let media_type = media::media_type_of(&input.mime_type).to_owned();
+    let bytes = media::decode_media(&input.base64, &input.mime_type)
+        .map_err(|msg| ApiError(WebError::Validation(msg)))?;
+    let media_input = crate::repo::MediaInput {
+        bytes,
+        mime_type: input.mime_type,
+        source_message_id: None,
+        attachment_id: None,
+        save_key: String::new(),
+        position: 0,
+    };
     let record_fields = NewTimelineRecord {
         date: input.date,
         r#type: "media".to_owned(),
@@ -240,32 +241,53 @@ async fn media_upload(
         location: input.location,
     };
     let record = TimelineRepo::new(&state.db)
-        .add_media_record(&scope, &record_fields, media_path, media_type)
-        .await?;
+        .save_media(&scope, record_fields, vec![media_input])
+        .await?
+        .into_iter()
+        .next()
+        .ok_or(ApiError(WebError::Internal))?;
     Ok(Json(Envelope::ok(TimelineRecordData { record })))
 }
 
 /// `GET /api/timeline/media/{filename}` — 認証付きメディア配信（Node media 配信ハンドラ）。
 ///
 /// path traversal 対策（[`media::resolve_media_path`]）で不正名/未存在は **404 "Not Found"**。存在時は
-/// `Content-Type`（拡張子から）+ `Cache-Control: private, max-age=86400` を付けてバイト列を返す。
+/// 記録の所有者とBotアクセス権を確認し、no-storeでバイト列を返す。
 async fn media_serve(
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
     State(state): State<AppState>,
     Path(filename): Path<String>,
 ) -> Response {
     let Some(full) = media::resolve_media_path(&state.config.media_dir, &filename) else {
         return not_found();
     };
-    match tokio::fs::read(&full).await {
-        Ok(bytes) => Response::builder()
-            .status(StatusCode::OK)
-            .header(header::CONTENT_TYPE, media::content_type_for(&filename))
-            .header(header::CACHE_CONTROL, "private, max-age=86400")
-            .body(Body::from(bytes))
-            .unwrap_or_else(|_| not_found()),
-        Err(_) => not_found(),
+    let Ok(Some((bot_id, stored))) = TimelineRepo::new(&state.db)
+        .owned_media(&user.0.discord_id, &filename)
+        .await
+    else {
+        return not_found();
+    };
+    if bot_id == yuuka_core::BotId::SYSTEM_DEFAULT
+        || !yuuka_web::has_bot_access(&state.db, &user.0.discord_id, &bot_id)
+            .await
+            .unwrap_or(false)
+    {
+        return not_found();
     }
+    let bytes = match stored {
+        Some(bytes) => bytes,
+        None => match tokio::fs::read(&full).await {
+            Ok(bytes) => bytes,
+            Err(_) => return not_found(),
+        },
+    };
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, media::content_type_for(&filename))
+        .header(header::CACHE_CONTROL, "private, no-store")
+        .header("X-Content-Type-Options", "nosniff")
+        .body(Body::from(bytes))
+        .unwrap_or_else(|_| not_found())
 }
 
 /// メディア未存在/不正名の 404（Node `ctx.res.writeHead(404); ctx.res.end("Not Found")`）。

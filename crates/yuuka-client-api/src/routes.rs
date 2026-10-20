@@ -1246,8 +1246,21 @@ async fn chat_send(
     // 「完了済み」と判定され、ガードの drop を待たずに次の送信へ引き継げる（[`InFlightTurns`] の doc 参照）。
     guard.mark_accepted(since_id);
 
+    let timeline_attachments = attachments
+        .iter()
+        .enumerate()
+        .filter(|(_, a)| a.mime_type.starts_with("image/") || a.mime_type.starts_with("video/"))
+        .map(|(position, a)| yuuka_core::tool::ConversationAttachment {
+            source_message_id: format!("pwa:{}", accepted.message_id),
+            attachment_id: position.to_string(),
+            position,
+            mime_type: a.mime_type.clone(),
+            data_base64: a.data_base64.clone(),
+        })
+        .collect();
     let incoming = IncomingChat {
         text: content,
+        timeline_attachments,
         attachments: attachments
             .into_iter()
             .map(|a| InlineMedia {

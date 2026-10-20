@@ -5,7 +5,7 @@
 //! 参照スコープ = `timeline_records` のコア CRUD（day list / add / delete）＋
 //! `day_plan_blocks` CRUD（plan add / update / delete・day に blocks 同梱）＋ cross-domain 副作用
 //! （`type=expense` の expenses 二重登録・`type=task_done` の todos 完了連携）＋ メディア保存/配信
-//! （[`media`]・`/api/timeline/media*`）。tool 経由の Discord 添付 URL 取得のみ deferred（reqwest 依存）。
+//! （[`media`]・`/api/timeline/media*`）。R13 は現在の本人添付を選択してDBへ原子的に保存する。
 
 pub mod dto;
 pub mod media;
@@ -1025,5 +1025,210 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    fn attachment(position: usize, key: &str) -> crate::repo::MediaInput {
+        crate::repo::MediaInput {
+            bytes: vec![position as u8 + 1, 2, 3],
+            mime_type: "image/png".to_owned(),
+            source_message_id: Some("discord:42".to_owned()),
+            attachment_id: Some(position.to_string()),
+            save_key: key.to_owned(),
+            position,
+        }
+    }
+
+    #[tokio::test]
+    async fn conversation_media_atomic_replay_order_resave_and_scope() {
+        let db = seed_db();
+        yuuka_web::test_support::seed_bot(&db, TEST_BOT_ID, "u").await;
+        let scope = UserScope::new(UserId::new("u"), BotId::new(TEST_BOT_ID));
+        let repo = TimelineRepo::new(&db);
+        let input = new_memo("2026-10-20", "写真");
+        let first = repo
+            .save_media(
+                &scope,
+                input.clone(),
+                vec![attachment(2, ""), attachment(0, "")],
+            )
+            .await
+            .unwrap();
+        assert_eq!(first.len(), 2);
+        assert!(first[0].id < first[1].id);
+        let listed = repo
+            .list(&scope, Some("2026-10-20".to_owned()))
+            .await
+            .unwrap();
+        assert_eq!(
+            listed.iter().map(|r| r.id).collect::<Vec<_>>(),
+            first.iter().map(|r| r.id).collect::<Vec<_>>()
+        );
+        let replay = repo
+            .save_media(
+                &scope,
+                input.clone(),
+                vec![attachment(0, ""), attachment(2, "")],
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            replay.iter().map(|r| r.id).collect::<Vec<_>>(),
+            first.iter().map(|r| r.id).collect::<Vec<_>>()
+        );
+        let resave = repo
+            .save_media(
+                &scope,
+                input.clone(),
+                vec![attachment(0, "explicit-save-2")],
+            )
+            .await
+            .unwrap();
+        assert_ne!(resave[0].id, first[0].id);
+        let foreign = UserScope::new(UserId::new("other"), BotId::new(TEST_BOT_ID));
+        assert!(repo.get(&foreign, first[0].id).await.unwrap().is_none());
+        assert!(repo
+            .owned_media("other", first[0].media_path.as_ref().unwrap())
+            .await
+            .unwrap()
+            .is_none());
+        assert!(!repo.delete(&foreign, first[0].id).await.unwrap());
+        let mut invalid = attachment(4, "");
+        invalid.bytes.clear();
+        assert!(repo
+            .save_media(&scope, input.clone(), vec![attachment(3, ""), invalid])
+            .await
+            .is_err());
+        assert_eq!(
+            repo.list(&scope, Some("2026-10-20".to_owned()))
+                .await
+                .unwrap()
+                .len(),
+            3,
+            "failed batch rolls back metadata and bytes"
+        );
+        assert!(repo.delete(&scope, first[0].id).await.unwrap());
+        let count = db
+            .read
+            .read(|c| {
+                c.query_row("SELECT count(*) FROM timeline_media_assets", [], |r| {
+                    r.get::<_, i64>(0)
+                })
+                .map_err(yuuka_db::map_sqlite)
+            })
+            .await
+            .unwrap();
+        assert_eq!(count, 2, "record deletion cascades to bytes and provenance");
+        assert!(repo
+            .owned_media("u", first[0].media_path.as_ref().unwrap())
+            .await
+            .unwrap()
+            .is_none());
+        // A second Bot has an independent replay key even for the same source attachment.
+        yuuka_web::test_support::seed_bot(&db, "second-bot", "u").await;
+        let second_scope = UserScope::new(UserId::new("u"), BotId::new("second-bot"));
+        assert!(
+            repo.save_media(&second_scope, input, vec![attachment(2, "")])
+                .await
+                .unwrap()[0]
+                .id
+                != first[1].id
+        );
+    }
+
+    #[tokio::test]
+    async fn legacy_media_last_reference_cleanup() {
+        let db = seed_db();
+        let repo = TimelineRepo::new(&db);
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("legacy.png"), b"old-photo").unwrap();
+        let input = new_memo("2026-10-20", "legacy");
+        let first = repo
+            .add_media_record(
+                &scope("u"),
+                &input,
+                "legacy.png".to_owned(),
+                "photo".to_owned(),
+            )
+            .await
+            .unwrap();
+        let second = repo
+            .add_media_record(
+                &scope("u"),
+                &input,
+                "legacy.png".to_owned(),
+                "photo".to_owned(),
+            )
+            .await
+            .unwrap();
+        assert!(repo
+            .delete_with_media_dir(&scope("u"), first.id, dir.path().to_path_buf())
+            .await
+            .unwrap());
+        assert!(dir.path().join("legacy.png").exists());
+        assert!(repo
+            .delete_with_media_dir(&scope("u"), second.id, dir.path().to_path_buf())
+            .await
+            .unwrap());
+        assert!(!dir.path().join("legacy.png").exists());
+    }
+
+    #[tokio::test]
+    async fn media_serve_requires_record_owner_and_active_bot_access() {
+        let db = seed_db();
+        yuuka_web::test_support::seed_bot(&db, TEST_BOT_ID, "u").await;
+        let auth = |id: &str| {
+            Arc::new(FakeAuth {
+                user: SessionUser {
+                    discord_id: id.to_owned(),
+                    username: id.to_owned(),
+                    role: Role::User,
+                },
+            })
+        };
+        let scope = UserScope::new(UserId::new("u"), BotId::new(TEST_BOT_ID));
+        let record = TimelineRepo::new(&db)
+            .save_media(
+                &scope,
+                new_memo("2026-10-20", "private"),
+                vec![attachment(0, "")],
+            )
+            .await
+            .unwrap()
+            .remove(0);
+        let path = format!("/api/timeline/media/{}", record.media_path.unwrap());
+        let request = || {
+            Request::builder()
+                .uri(&path)
+                .header("cookie", "__Host-yuuka-session=good")
+                .body(Body::empty())
+                .unwrap()
+        };
+        let app = super::routes().with_state(AppState::new(
+            auth("other"),
+            WebConfig::default(),
+            db.clone(),
+        ));
+        assert_eq!(
+            app.oneshot(request()).await.unwrap().status(),
+            StatusCode::NOT_FOUND
+        );
+        let app =
+            super::routes().with_state(AppState::new(auth("u"), WebConfig::default(), db.clone()));
+        assert_eq!(
+            app.clone().oneshot(request()).await.unwrap().status(),
+            StatusCode::OK
+        );
+        db.writer
+            .transaction(|tx| {
+                tx.execute("UPDATE bots SET user_id='other' WHERE id=?1", [TEST_BOT_ID])
+                    .map_err(yuuka_db::map_sqlite)?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            app.oneshot(request()).await.unwrap().status(),
+            StatusCode::NOT_FOUND
+        );
     }
 }

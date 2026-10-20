@@ -793,3 +793,96 @@ async fn personal_bot_turn_keeps_the_secretary_prompt_and_tools() {
     tools.sort();
     assert_eq!(tools, ["addTodo", "showRichContent"]);
 }
+
+struct AttachmentProbe;
+#[async_trait]
+impl Tool for AttachmentProbe {
+    fn declaration(&self) -> yuuka_core::tool::FunctionDeclaration {
+        yuuka_core::tool::FunctionDeclaration {
+            name: ToolName::checked("addTimelineRecord".to_owned()).unwrap(),
+            description: "probe".to_owned(),
+            parameters_json_schema: json!({"type":"object"}),
+            requires_confirmation: false,
+        }
+    }
+    async fn call(
+        &self,
+        ctx: &ToolContext,
+        _: serde_json::Value,
+    ) -> Result<ToolOutcome, ToolError> {
+        assert_eq!(ctx.user_id.as_str(), "u13");
+        assert_eq!(ctx.bot_id.as_str(), "media-bot");
+        let attachments = &ctx.conversation_attachments;
+        assert_eq!(attachments.len(), 2);
+        assert_eq!(attachments.first().unwrap().position, 0);
+        assert_eq!(attachments.get(1).unwrap().position, 2);
+        assert_eq!(attachments.first().unwrap().source_message_id, "discord:13");
+        assert_eq!(attachments.get(1).unwrap().mime_type, "video/mp4");
+        assert_eq!(attachments.get(1).unwrap().data_base64, "BAUG");
+        Ok(ToolOutcome::from_payload(json!({"success":true})))
+    }
+}
+struct AttachmentFactory;
+impl GeminiFactory for AttachmentFactory {
+    fn build(&self, _: &str, _: SecretString) -> Result<Arc<dyn GenerateBackend>, GeminiError> {
+        let responses=[
+            json!({"candidates":[{"content":{"role":"model","parts":[{"functionCall":{"name":"addTimelineRecord","args":{"date":"2026-10-20","type":"media","attachment_indexes":[0,2]}}}]}}]}),
+            json!({"candidates":[{"content":{"role":"model","parts":[{"text":"保存しました。"}]}}]}),
+        ].into_iter().map(|v| serde_json::from_value(v).unwrap()).collect();
+        Ok(Arc::new(FakeBackend {
+            responses: Mutex::new(responses),
+        }))
+    }
+}
+#[tokio::test]
+async fn secretary_fc_receives_trusted_attachment_catalog_in_order() {
+    let (db, path) = fresh_db();
+    let crypto =
+        Arc::new(SystemCrypto::new(SecretString::from("attachment-test".to_owned())).unwrap());
+    seed_user_with_key(&path, &crypto, "u13");
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute(
+            "INSERT INTO bots(id,user_id,name) VALUES('media-bot','u13','Media')",
+            [],
+        )
+        .unwrap();
+    let provider = NativeProvider::new()
+        .with_tool(Arc::new(AttachmentProbe))
+        .unwrap();
+    let engine = ChatEngine::new(
+        db,
+        Some(crypto),
+        ToolRegistry::new().with_provider(Arc::new(provider)),
+        Arc::new(AttachmentFactory),
+        None,
+        Arc::new(yuuka_mcp::NullMcpClient),
+        None,
+    );
+    let attachments = [(0, "image/png", "AQID"), (2, "video/mp4", "BAUG")]
+        .into_iter()
+        .map(
+            |(position, mime, bytes)| yuuka_core::tool::ConversationAttachment {
+                source_message_id: "discord:13".to_owned(),
+                attachment_id: position.to_string(),
+                position,
+                mime_type: mime.to_owned(),
+                data_base64: bytes.to_owned(),
+            },
+        )
+        .collect();
+    let reply = engine
+        .secretary_turn(
+            &BotId::new("media-bot"),
+            &UserId::new("u13"),
+            IncomingChat {
+                text: "この写真と動画を保存して".to_owned(),
+                timeline_attachments: attachments,
+                ..IncomingChat::default()
+            },
+            &null_sink(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(reply.text, "保存しました。");
+}

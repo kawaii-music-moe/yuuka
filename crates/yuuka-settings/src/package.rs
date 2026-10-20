@@ -9,7 +9,6 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::io::Write as _;
-use std::path::{Path, PathBuf};
 use yuuka_crypto::{derive_user_key, encrypt_bytes_with_key, generate_user_salt};
 use yuuka_web::{ApiError, AppState, AuthenticatedUser};
 
@@ -48,8 +47,13 @@ pub(crate) async fn download(
             .into_response());
     }
 
-    let database = yuuka_google::export_user_database(&state.db, &user.0.discord_id).await?;
-    let media = package_media(&state, &user.0.discord_id).await?;
+    let database = yuuka_google::export_user_database_with_media_dir(
+        &state.db,
+        &user.0.discord_id,
+        &state.config.media_dir,
+    )
+    .await?;
+    let media = yuuka_google::exported_timeline_media(&database)?;
     let payload =
         zip_payload(&database, &media).map_err(|_| ApiError(yuuka_core::WebError::Internal))?;
     let salt = generate_user_salt().map_err(|_| ApiError(yuuka_core::WebError::Internal))?;
@@ -83,48 +87,6 @@ pub(crate) async fn download(
     Ok((headers, bytes).into_response())
 }
 
-async fn package_media(
-    state: &AppState,
-    user_id: &str,
-) -> Result<Vec<(String, Vec<u8>)>, ApiError> {
-    let uid = user_id.to_owned();
-    let names = state
-        .db
-        .read
-        .read(move |conn| {
-            let mut stmt = conn
-                .prepare(
-                    "SELECT DISTINCT t.media_path FROM timeline_records t \
-                     LEFT JOIN bots b ON b.id = t.bot_id \
-                     WHERE t.media_path IS NOT NULL \
-                       AND (t.user_id = ?1 OR b.user_id = ?1)",
-                )
-                .map_err(yuuka_db::map_sqlite)?;
-            let rows = stmt
-                .query_map([uid], |row| row.get::<_, String>(0))
-                .map_err(yuuka_db::map_sqlite)?;
-            rows.collect::<rusqlite::Result<Vec<_>>>()
-                .map_err(yuuka_db::map_sqlite)
-        })
-        .await?;
-
-    let mut media = Vec::with_capacity(names.len());
-    for name in names {
-        let path = safe_media_path(&state.config.media_dir, &name)
-            .ok_or(ApiError(yuuka_core::WebError::Internal))?;
-        let bytes = tokio::fs::read(path)
-            .await
-            .map_err(|_| ApiError(yuuka_core::WebError::Internal))?;
-        media.push((name, bytes));
-    }
-    Ok(media)
-}
-
-fn safe_media_path(root: &Path, name: &str) -> Option<PathBuf> {
-    let path = Path::new(name);
-    (path.file_name()?.to_str()? == name).then(|| root.join(name))
-}
-
 fn zip_payload(
     database: &[u8],
     media: &[(String, Vec<u8>)],
@@ -151,7 +113,7 @@ fn valid_pin(pin: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{safe_media_path, valid_pin, zip_payload};
+    use super::{valid_pin, zip_payload};
     use std::io::Read as _;
 
     #[test]
@@ -175,13 +137,5 @@ mod tests {
             .unwrap();
         assert_eq!(db, [1, 2, 3]);
         assert!(archive.by_name("data/media/photo.jpg").is_ok());
-    }
-
-    #[test]
-    fn media_path_rejects_traversal() {
-        let root = std::path::Path::new("data/media");
-        assert!(safe_media_path(root, "photo.jpg").is_some());
-        assert!(safe_media_path(root, "../secret").is_none());
-        assert!(safe_media_path(root, "nested/photo.jpg").is_none());
     }
 }

@@ -5,7 +5,7 @@
 //! [`WriterHandle`]（BEGIN IMMEDIATE）へ送る。対象表は `timeline_records`。
 
 use rusqlite::types::Value as SqlValue;
-use rusqlite::{params, params_from_iter, Row};
+use rusqlite::{params, params_from_iter, OptionalExtension, Row};
 use yuuka_core::scope::ScopedRepo;
 use yuuka_core::{DbError, UserScope};
 use yuuka_db::{map_sqlite, ReadPool, WriterHandle};
@@ -27,6 +27,16 @@ const PLAN_COLUMNS: &str = "id, date, start_time, end_time, type, title, descrip
 pub struct TimelineRepo<'a> {
     read: &'a ReadPool,
     writer: &'a WriterHandle,
+}
+
+/// Validated bytes and trusted source identity for one media record.
+pub struct MediaInput {
+    pub bytes: Vec<u8>,
+    pub mime_type: String,
+    pub source_message_id: Option<String>,
+    pub attachment_id: Option<String>,
+    pub save_key: String,
+    pub position: usize,
 }
 
 impl ScopedRepo for TimelineRepo<'_> {}
@@ -289,20 +299,102 @@ impl<'a> TimelineRepo<'a> {
         })
     }
 
+    /// Save an entire selection atomically, in attachment order. Replays return the original rows.
+    /// Bytes live in SQLite so rollback/cascade/backup cover the complete attachment.
+    pub async fn save_media(
+        &self,
+        scope: &UserScope,
+        input: NewTimelineRecord,
+        mut media: Vec<MediaInput>,
+    ) -> Result<Vec<TimelineRecord>, DbError> {
+        let (uid, bid) = scope_keys(scope);
+        media.sort_by_key(|m| m.position);
+        self.writer.transaction(move |tx| {
+            let mut records = Vec::new();
+            for m in media {
+                let existing: Option<i64> = tx.query_row(
+                    "SELECT record_id FROM timeline_media_assets WHERE user_id=?1 AND bot_id=?2 \
+                     AND source_message_id=?3 AND source_attachment_id=?4 AND save_key=?5",
+                    params![uid, bid, m.source_message_id, m.attachment_id, m.save_key], |r| r.get(0)
+                ).optional().map_err(map_sqlite)?;
+                let id = if let Some(id) = existing { id } else {
+                    let filename = crate::media::generate_filename(&input.date, crate::media::mime_to_ext(&m.mime_type)).map_err(DbError::Operation)?;
+                    tx.execute(
+                        "INSERT INTO timeline_records (user_id,bot_id,date,recorded_at,type,title,content,media_path,media_type,location,created_at) \
+                         VALUES (?1,?2,?3,COALESCE(?4,datetime('now')),'media',?5,?6,?7,?8,?9,datetime('now','localtime'))",
+                        params![uid,bid,input.date,input.recorded_at,input.title,input.content,filename,crate::media::media_type_of(&m.mime_type),input.location]
+                    ).map_err(map_sqlite)?;
+                    let id = tx.last_insert_rowid();
+                    tx.execute(
+                        "INSERT INTO timeline_media_assets (record_id,filename,mime_type,bytes,user_id,bot_id,source_message_id,source_attachment_id,save_key,position) \
+                         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
+                        params![id,filename,m.mime_type,m.bytes,uid,bid,m.source_message_id,m.attachment_id,m.save_key,m.position as i64]
+                    ).map_err(map_sqlite)?;
+                    id
+                };
+                records.push(tx.query_row(&format!("SELECT {RECORD_COLUMNS} FROM timeline_records WHERE id=?1 AND user_id=?2 AND bot_id=?3"), params![id,uid,bid], row_to_record).map_err(map_sqlite)?);
+            }
+            Ok(records)
+        }).await
+    }
+
+    /// Return media only when a record belongs to this user and a currently accessible Bot.
+    /// Filename-only URLs remain compatible with existing image/video elements.
+    pub async fn owned_media(
+        &self,
+        user_id: &str,
+        filename: &str,
+    ) -> Result<Option<(String, Option<Vec<u8>>)>, DbError> {
+        let uid = user_id.to_owned();
+        let filename = filename.to_owned();
+        self.read.read(move |conn| conn.query_row(
+            "SELECT r.bot_id, a.bytes FROM timeline_records r LEFT JOIN timeline_media_assets a ON a.record_id=r.id \
+             WHERE r.user_id=?1 AND r.media_path=?2 LIMIT 1",
+            params![uid,filename], |r| Ok((r.get(0)?, r.get(1)?))
+        ).optional().map_err(map_sqlite)).await
+    }
+
     /// 記録を削除する（削除できたら `true`。Node `deleteTimelineRecord`）。
     ///
     /// # Errors
     /// 削除失敗時 [`DbError`]。
     pub async fn delete(&self, scope: &UserScope, id: i64) -> Result<bool, DbError> {
+        self.delete_with_media_dir(scope, id, std::path::PathBuf::from("data/media"))
+            .await
+    }
+
+    /// Delete DB bytes by cascade, and remove legacy disk bytes after the last reference.
+    pub async fn delete_with_media_dir(
+        &self,
+        scope: &UserScope,
+        id: i64,
+        media_dir: std::path::PathBuf,
+    ) -> Result<bool, DbError> {
         let (uid, bid) = scope_keys(scope);
         self.writer
             .transaction(move |tx| {
+                let path: Option<String> = tx.query_row(
+                    "SELECT media_path FROM timeline_records WHERE id=?1 AND user_id=?2 AND bot_id=?3",
+                    params![id,uid,bid], |r| r.get(0)
+                ).optional().map_err(map_sqlite)?.flatten();
                 let n = tx
                     .execute(
                         "DELETE FROM timeline_records WHERE id = ?1 AND user_id = ?2 AND bot_id = ?3",
                         params![id, uid, bid],
                     )
                     .map_err(map_sqlite)?;
+                if let Some(filename) = path {
+                    let refs: i64 = tx.query_row("SELECT count(*) FROM timeline_records WHERE media_path=?1", [&filename], |r| r.get(0)).map_err(map_sqlite)?;
+                    if refs == 0 {
+                        if let Some(full) = crate::media::resolve_media_path(&media_dir, &filename) {
+                            match std::fs::remove_file(full) {
+                                Ok(()) => {},
+                                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {},
+                                Err(_) => return Err(DbError::Operation("メディアの削除に失敗しました。".to_owned())),
+                            }
+                        }
+                    }
+                }
                 Ok(n > 0)
             })
             .await

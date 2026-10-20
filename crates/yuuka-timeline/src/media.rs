@@ -2,8 +2,7 @@
 //! `resolveMediaPath`/`mimeTypeToExt` と `timelineRoutes` の `MIME_MAP` を移植）。
 //!
 //! 保存ディレクトリは [`WebConfig::media_dir`](yuuka_web::WebConfig)（既定 `data/media`）。ファイル名は
-//! `'{YYYYMM}-{millis}-{suffix}{ext}'`（Node は `Date.now()` + `Math.random()`・ここは millis + 単調
-//! カウンタで衝突回避）。配信は path traversal 対策（`/`・`\`・`..` 拒否 + prefix 検証）付き。
+//! `'{YYYYMM}-{millis}-{suffix}{ext}'`。R13の新規アップロードはDBに保存する。配信は所有者照合とpath traversal対策付き。
 
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -16,7 +15,7 @@ const ALLOWED_EXTS: &[&str] = &[
 ];
 
 /// MIME → 拡張子（Node `mimeTypeToExt`・未知は `.bin`）。
-fn mime_to_ext(mime: &str) -> &'static str {
+pub(crate) fn mime_to_ext(mime: &str) -> &'static str {
     match mime.to_ascii_lowercase().as_str() {
         "image/jpeg" | "image/jpg" => ".jpg",
         "image/png" => ".png",
@@ -62,6 +61,23 @@ pub fn media_type_of(mime: &str) -> &'static str {
     }
 }
 
+/// Validate a bounded nonempty photo/video payload before entering the writer transaction.
+pub fn decode_media(data: &str, mime: &str) -> Result<Vec<u8>, String> {
+    if !ALLOWED_EXTS.contains(&mime_to_ext(mime)) {
+        return Err("対応していない写真・動画形式です。".to_owned());
+    }
+    if data.len() > 28 * 1024 * 1024 {
+        return Err("添付の上限は20MiBです。".to_owned());
+    }
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(data)
+        .map_err(|_| "添付を読み込めませんでした。".to_owned())?;
+    if bytes.is_empty() || bytes.len() > 20 * 1024 * 1024 {
+        return Err("添付は1バイト以上20MiB以下である必要があります。".to_owned());
+    }
+    Ok(bytes)
+}
+
 /// base64 のメディアをローカル保存し、相対ファイル名を返す（Node `saveMediaFile` の base64 経路）。
 ///
 /// # Errors
@@ -85,7 +101,7 @@ pub async fn save_media_base64(
         .decode(base64_data.as_bytes())
         .map_err(|e| format!("base64 のデコードに失敗しました: {e}"))?;
 
-    let filename = generate_filename(date, ext);
+    let filename = generate_filename(date, ext)?;
     let full = media_dir.join(&filename);
     tokio::fs::write(&full, &bytes)
         .await
@@ -111,22 +127,17 @@ pub fn resolve_media_path(media_dir: &Path, filename: &str) -> Option<PathBuf> {
 
 /// `'{YYYYMM}-{millis}-{suffix}{ext}'`（Node `${yyyymm}-${Date.now()}-${rand6}${ext}`）。
 ///
-/// suffix は **CSPRNG**（`getrandom`・4 バイト=32bit hex）。配信は所有者非照合（filename ベース・Node
-/// パリティ）なため、ファイル名の推測不能性が唯一の障壁になる。単調カウンタだと総当たり可能なため
-/// 暗号乱数にする（Node の `Math.random` 31bit 以上を確保）。乱数取得失敗時は millis の hex を fallback。
-fn generate_filename(date: &str, ext: &str) -> String {
-    let yyyymm: String = date.get(0..7).unwrap_or("000000").replace('-', "");
+/// Use 128 random bits. Entropy failures reject the save; dates cannot inject path components.
+pub(crate) fn generate_filename(date: &str, ext: &str) -> Result<String, String> {
+    let yyyymm: String = date.chars().take(7).filter(char::is_ascii_digit).collect();
     let millis = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis())
         .unwrap_or(0);
-    let mut buf = [0u8; 4];
-    let suffix = if getrandom::getrandom(&mut buf).is_ok() {
-        buf.iter().map(|b| format!("{b:02x}")).collect::<String>()
-    } else {
-        format!("{millis:08x}")
-    };
-    format!("{yyyymm}-{millis}-{suffix}{ext}")
+    let mut buf = [0u8; 16];
+    getrandom::getrandom(&mut buf).map_err(|_| "メディア名の生成に失敗しました。".to_owned())?;
+    let suffix = buf.iter().map(|b| format!("{b:02x}")).collect::<String>();
+    Ok(format!("{yyyymm}-{millis}-{suffix}{ext}"))
 }
 
 #[cfg(test)]

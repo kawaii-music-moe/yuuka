@@ -44,6 +44,8 @@ pub struct IncomingChat {
     /// その他の添付（PWA チャットの画像・音声・動画・PDF 等・複数可）。`image`/`audio` と同じく
     /// 直近のユーザー発言へ inline data として渡す。
     pub attachments: Vec<InlineMedia>,
+    /// Current speaker-owned attachments eligible for an explicit timeline save.
+    pub timeline_attachments: Vec<yuuka_core::tool::ConversationAttachment>,
     /// 受信 Discord メッセージ ID（会話ログ永続化用）。
     pub discord_msg_id: Option<String>,
     /// 返信元 Discord メッセージ ID（返信チェーン解決用）。

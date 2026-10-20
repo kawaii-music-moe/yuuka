@@ -11,11 +11,8 @@
 //!   （Node `¥{amount} を記録しました。`・amount 必須・category は `expense_category ?? "その他"`）。
 //! - `type=task_done`: `TimelineRepo::add` がトランザクション内で紐付き todos を完了（Node `completeTodo`）。
 //!
-//! 未移植（対応 repo が無い／他ドメイン依存で deferred）:
-//! - `listDayPlan` / `createDayPlanBlock` / `deleteDayPlanBlock`: 別表 `day_plan_blocks` を操作する
-//!   （route 側は移植済みだが tool 宣言は未移植）。
-//! - `type=media` の `saveMediaFile`（Discord 添付 URL 取得・保存）は media 機能（`/api/timeline/media*`）
-//!   と同時に移植（deferred）。
+//! 計画ブロック操作と、現在の本人添付だけを保存するtype=mediaにも対応する（R13）。
+//! 添付の任意URL取得は許可しない。
 
 use std::sync::Arc;
 
@@ -135,19 +132,21 @@ impl Tool for AddTimelineRecordTool {
             description: "その日の出来事・記録をタイムラインに1件追加する。\
                 type は 'memo'（テキストメモ）/'expense'（支出。家計簿にも自動記録される。amount 必須）/\
                 'task_done'（タスク完了。todo_id で対象を指すとそのタスクも同時に完了になる）/\
-                'location'（場所・チェックイン）。"
+                'location'（場所・チェックイン）/'media'（現在の発話者本人の添付写真・動画。保存を依頼された場合のみ）。"
                 .to_owned(),
             parameters_json_schema: json!({
                 "type": "object",
                 "properties": {
                     "date": { "type": "string", "description": "日付 'YYYY-MM-DD'" },
-                    "type": { "type": "string", "description": "'memo' | 'expense' | 'task_done' | 'location'" },
+                    "type": { "type": "string", "description": "'memo' | 'expense' | 'task_done' | 'location' | 'media'" },
                     "title": { "type": "string", "description": "見出し（任意）" },
                     "content": { "type": "string", "description": "本文・メモ（任意）" },
                     "recorded_at": { "type": "string", "description": "記録日時 'YYYY-MM-DD HH:MM:SS'（省略=現在時刻）（任意）" },
                     "todo_id": { "type": "number", "description": "type='task_done' の時、完了するタスクID（任意）" },
                     "amount": { "type": "number", "description": "type='expense' の時、金額（円・必須）" },
                     "expense_category": { "type": "string", "description": "type='expense' の時、カテゴリ（食費/交通費/娯楽 等・省略時は「その他」）" },
+                    "attachment_indexes": { "type": "array", "items": { "type": "integer" }, "description": "type=mediaで保存する現在の添付index。必須、1件以上。元の添付順で保存する。" },
+                    "resave_key": { "type": "string", "description": "ユーザーが明示的に再保存を依頼した場合のみ、新しい識別名を指定。同じ再保存の再試行では同じ値を使う。通常は省略。" },
                     "location": { "type": "string", "description": "場所名（任意）" }
                 },
                 "required": ["date", "type"]
@@ -196,9 +195,86 @@ impl Tool for AddTimelineRecordTool {
             )));
         }
 
+        if r#type == "media" {
+            if args.get("discord_attachment_url").is_some() || args.get("url").is_some() {
+                return Ok(fail_payload(
+                    "URLからの保存はできません。現在の添付を指定してください。",
+                ));
+            }
+            let Some(indexes) = args.get("attachment_indexes").and_then(Value::as_array) else {
+                return Ok(fail_payload("attachment_indexes が必要です。"));
+            };
+            if indexes.is_empty() || indexes.len() > 10 {
+                return Ok(fail_payload("添付は1件以上10件以下で指定してください。"));
+            }
+            let save_key = match args.get("resave_key") {
+                None | Some(Value::Null) => String::new(),
+                Some(Value::String(key)) if !key.trim().is_empty() && key.len() <= 128 => {
+                    key.trim().to_owned()
+                }
+                _ => {
+                    return Ok(fail_payload(
+                        "resave_key は128バイト以下の空でない文字列で指定してください。",
+                    ))
+                }
+            };
+            let mut media = Vec::new();
+            let mut seen = std::collections::BTreeSet::new();
+            let mut total = 0usize;
+            for index in indexes {
+                let Some(position) = index.as_u64().and_then(|n| usize::try_from(n).ok()) else {
+                    return Ok(fail_payload("添付indexが不正です。"));
+                };
+                if !seen.insert(position) {
+                    continue;
+                }
+                let Some(a) = ctx
+                    .conversation_attachments
+                    .iter()
+                    .find(|a| a.position == position)
+                else {
+                    return Ok(fail_payload("現在の発話者本人の添付だけを保存できます。"));
+                };
+                let bytes = match crate::media::decode_media(&a.data_base64, &a.mime_type) {
+                    Ok(bytes) => bytes,
+                    Err(message) => return Ok(fail_payload(message)),
+                };
+                total += bytes.len();
+                if total > 20 * 1024 * 1024 {
+                    return Ok(fail_payload("添付合計の上限は20MiBです。"));
+                }
+                media.push(crate::repo::MediaInput {
+                    bytes,
+                    mime_type: a.mime_type.clone(),
+                    source_message_id: Some(a.source_message_id.clone()),
+                    attachment_id: Some(a.attachment_id.clone()),
+                    save_key: save_key.clone(),
+                    position,
+                });
+            }
+            let input = NewTimelineRecord {
+                date,
+                r#type,
+                recorded_at: arg_str(&args, "recorded_at"),
+                title: arg_str(&args, "title"),
+                content: arg_str(&args, "content"),
+                todo_id: None,
+                amount: None,
+                category: None,
+                location: arg_str(&args, "location"),
+            };
+            let records = repo
+                .save_media(&scope, input, media)
+                .await
+                .map_err(exec_err)?;
+            return Ok(ToolOutcome::from_payload(ok_payload(
+                "写真・動画を記録しました。",
+                json!({"records": records, "record": records.first()}),
+            )));
+        }
+
         // memo/location/task_done: プレーン記録。task_done + todo_id は repo.add が todos を完了する。
         // 内部列（expense_id/expense_category/media_path/media_type）は DTO に存在せず設定不可（M-8）。
-        // media 保存（Discord 添付）は deferred。
         let new = NewTimelineRecord {
             date,
             r#type,
@@ -680,5 +756,61 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(out.payload["blocks"].as_array().unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn media_uses_only_trusted_current_attachments_and_replays() {
+        let db = seed_db();
+        yuuka_web::test_support::seed_bot(&db, "photo-bot", "userA").await;
+        let mut ctx = ToolContext::new(BotId::new("photo-bot"), UserId::new("userA"));
+        ctx.conversation_attachments = vec![yuuka_core::tool::ConversationAttachment {
+            source_message_id: "pwa:9".to_owned(),
+            attachment_id: "0".to_owned(),
+            position: 0,
+            mime_type: "image/png".to_owned(),
+            data_base64: "AQID".to_owned(),
+        }];
+        let tools = tools(db.clone()).unwrap();
+        let add = find(&tools, "addTimelineRecord");
+        let args = json!({"date":"2026-10-20","type":"media","attachment_indexes":[0,0]});
+        let first = add.call(&ctx, args.clone()).await.unwrap();
+        assert_eq!(first.payload["success"], true);
+        assert_eq!(first.payload["records"].as_array().unwrap().len(), 1);
+        let replay = add.call(&ctx, args).await.unwrap();
+        assert_eq!(
+            replay.payload["record"]["id"],
+            first.payload["record"]["id"]
+        );
+        for args in [
+            json!({"date":"2026-10-20","type":"media","attachment_indexes":[99]}),
+            json!({"date":"2026-10-20","type":"media","attachment_indexes":[]}),
+            json!({"date":"2026-10-20","type":"media","attachment_indexes":[0],"discord_attachment_url":"https://127.0.0.1/"}),
+            json!({"date":"2026-10-20","type":"media","attachment_indexes":[0,99]}),
+        ] {
+            assert_eq!(
+                add.call(&ctx, args).await.unwrap().payload["success"],
+                false
+            );
+        }
+        ctx.conversation_attachments.clear();
+        assert_eq!(
+            add.call(
+                &ctx,
+                json!({"date":"2026-10-20","type":"media","attachment_indexes":[0]})
+            )
+            .await
+            .unwrap()
+            .payload["success"],
+            false
+        );
+        let scope = scope_of(&ctx);
+        assert_eq!(
+            TimelineRepo::new(&db)
+                .list(&scope, Some("2026-10-20".to_owned()))
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
     }
 }

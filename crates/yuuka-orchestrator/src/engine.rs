@@ -456,6 +456,19 @@ impl ChatEngine {
             }
         };
         let mut contents = build_contents(&history, &msg);
+        if !msg.timeline_attachments.is_empty() {
+            let catalog: Vec<_> = msg
+                .timeline_attachments
+                .iter()
+                .map(|a| serde_json::json!({"index": a.position, "mime_type": a.mime_type}))
+                .collect();
+            let notice = Part::text(format!(
+                "現在の発話者本人の保存可能な添付（添付順）: {}。タイムラインへの保存を依頼された場合だけ、addTimelineRecord の type=media と attachment_indexes で指定する。URLを指定しない。明示的な再保存以外は resave_key を指定しない。", serde_json::json!(catalog)
+            ));
+            if let Some(last) = contents.last_mut().filter(|c| matches!(c.role, Role::User)) {
+                last.parts.push(notice);
+            }
+        }
 
         // 3. システムプロンプト。システム Bot（`system_default`）はシステムの案内役なので、ペルソナ・
         //    カレンダー・コンテキストノート・想起といった個人向けの文脈を入れず、案内用の固定プロンプトで組む。
@@ -500,6 +513,7 @@ impl ChatEngine {
         ctx.rich_reply_enabled = rich;
         ctx.capabilities = caps;
         ctx.mode = TurnMode::Secretary;
+        ctx.conversation_attachments = msg.timeline_attachments.clone();
         // MCP 動的ツール: `mcp` 能力があるときだけ Bot の許可スコープで探索し、そのターン限りの provider として
         // snapshot へ層状に足す（Node `resolveMcpModule`: `caps.has("mcp")` ガード → getMcpFunctionModuleForBot）。
         // 探索は DB + tools/list（ネットワーク）を伴うため FC ループ直前に一度だけ行う。取得失敗でも空 provider。

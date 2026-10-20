@@ -555,6 +555,8 @@ impl YuukaApp {
                         image,
                         audio,
                         reply_to_id: None,
+                        message_id: Some(crate::model::new_message_id()),
+                        attachments: Vec::new(),
                     }
                 };
                 UiEvent::Send(frame)
