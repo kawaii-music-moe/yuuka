@@ -41,4 +41,4 @@ OCR は `readReceipt` の引数を受け取るだけで、ツール registry／d
 
 回帰テストを追加：共通添付検証、明細・税込合計の独立性、PWA ドラフト変換、異常金額、空／非レシート／複数抽出結果、不正添付で上流を呼ばないこと、下書きの副作用なし、秘書への抽出結果受け渡しと非永続化、通常写真の会話維持、既存記帳ツールでの source 保存と別ユーザー／別Bot隔離。
 
-非 develop では CLAUDE.md に従って Rust テストを実行せず、`cargo check --tests` で型検査する。実行済みチェックと未実行項目は PR 本文に記録する。実キーによる Gemini 通信、Discord／ブラウザの実機操作は未検証。CI の既存ワークフローは frontend／PWA の型検査と lint であり、Rust テスト実行の代替ではない。
+非 develop では CLAUDE.md に従って Rust テストを実行せず、`cargo check --tests` で型検査する。実行済みチェックと未実行項目は PR 本文に記録する。実キーによる Gemini 通信、Discord／ブラウザの実機操作は未検証。通常 PR の CI は frontend／PWA の型検査、lint、Rust の fmt・cargo-deny を実行する。重い Rust clippy／build／test は develop→main の PR だけで実行するため、この PR の CI 成功は Rust テスト実行の代替ではない。
