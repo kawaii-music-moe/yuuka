@@ -24,7 +24,7 @@ use crate::interaction::InteractionDeps;
 use crate::message_flow::FlowDeps;
 use crate::ports::{
     ActionRow, BotDirectory, Button, ButtonStyle, DeliverTarget, MembershipService, Notifier,
-    RateLimiter, TurnProcessor, TurnReply,
+    TurnProcessor, TurnReply,
 };
 use crate::reply::{send_channel_reply, to_twilight_components};
 use crate::tenant::{run_tenant, TenantConfig, TenantStatus};
@@ -34,7 +34,6 @@ use crate::turn_gate::TurnGate;
 #[derive(Clone)]
 pub struct ManagerPorts {
     pub directory: Arc<dyn BotDirectory>,
-    pub rate_limiter: Arc<dyn RateLimiter>,
     pub processor: Arc<dyn TurnProcessor>,
     pub membership: Arc<dyn MembershipService>,
 }
@@ -143,7 +142,6 @@ impl DiscordManager {
         let flow = FlowDeps {
             http: http.clone(),
             directory: self.ports.directory.clone(),
-            rate_limiter: self.ports.rate_limiter.clone(),
             processor: self.ports.processor.clone(),
             notifier: messenger.clone(),
             dedup: self.dedup.clone(),

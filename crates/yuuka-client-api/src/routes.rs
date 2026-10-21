@@ -36,7 +36,7 @@ use axum::{Extension, Json, Router};
 use serde::Deserialize;
 use tokio::time::timeout;
 use yuuka_core::datetime::{browser_local_to_db, db_to_utc_iso};
-use yuuka_core::{BotId, GuildId, UserId, UserScope};
+use yuuka_core::{BotId, UserId, UserScope};
 use yuuka_discord::{
     rate_limit_message, IncomingChat, InlineMedia, RateLimiter, RichEmbed, StatusSink,
 };
@@ -74,15 +74,6 @@ use crate::users;
 const BOT_ID: &str = "system_default";
 /// チャット履歴取得の上限（`message_log::list_pwa_messages` が内部で `[1,200]` にクランプする）。
 const CHAT_HISTORY_LIMIT: i64 = 200;
-/// チャット送信レート制限の guildId スロット（issue #41・`yuuka-finance` の `"web"` と同型）。
-///
-/// [`InMemoryRateLimiter`](yuuka_orchestrator::InMemoryRateLimiter)（実装）のユーザー分/日単位の窓は
-/// `bot_id × user_id` のみで消費されるため、この文字列は「ギルド日次上限」バケットを他経路
-/// （Discord の実ギルド ID・finance の `"web"`）と分けるためのラベルに過ぎない。ユーザー単位の
-/// 上限（Bot 設定のレート制限）は Discord/WS と共有され、PWA 経由で迂回することはできない
-/// （main.rs で `InMemoryRateLimiter` を 1 インスタンスだけ作り Discord/PWA 双方へ渡す・
-/// issue #41 PR #75 レビュー・P1）。
-const PWA_RATE_LIMIT_GUILD: &str = "pwa";
 /// チャット送信 1 ターン（バックグラウンド実行分）のタイムアウト。[`chat_send`] のドキュメント参照。
 const CHAT_TURN_TIMEOUT: Duration = Duration::from_secs(180);
 /// バックグラウンドターンが `Err` で終わった際に保存するフォールバック応答文言。
@@ -101,6 +92,7 @@ pub fn routes_with(
     engine: Arc<ChatEngine>,
     rate_limiter: Arc<dyn RateLimiter>,
 ) -> Router<AppState> {
+    let engine = Arc::new((*engine).clone().with_rate_limiter(rate_limiter));
     Router::new()
         .route("/api/client/status", get(status))
         .route("/api/client/settings", get(settings_get).put(settings_put))
@@ -123,7 +115,6 @@ pub fn routes_with(
         )
         .route("/api/client/chat/attachments/{id}", get(chat_attachment))
         .layer(Extension(engine))
-        .layer(Extension(rate_limiter))
         .layer(Extension(InFlightTurns::default()))
 }
 
@@ -882,7 +873,6 @@ async fn finance_add(
 async fn finance_receipt(
     ClientScope(scope): ClientScope,
     Extension(engine): Extension<Arc<ChatEngine>>,
-    Extension(rate_limiter): Extension<Arc<dyn RateLimiter>>,
     Json(body): Json<ReceiptScanInput>,
 ) -> Result<Json<ReceiptDraft>, ClientApiError> {
     let image = body.image_base64.unwrap_or_default();
@@ -893,25 +883,20 @@ async fn finance_receipt(
             "Gemini APIキーが未設定です。管理画面から設定してください。",
         ));
     }
-    let decision = rate_limiter
-        .consume(
+    let permit = engine
+        .acquire_turn(
             scope.bot_id(),
-            &GuildId::new(PWA_RATE_LIMIT_GUILD),
             scope.user_id(),
+            yuuka_orchestrator::Channel::Pwa,
         )
-        .await;
-    if let Some(exceeded) = decision.exceeded {
-        return Err(ClientApiError {
+        .await
+        .map_err(|exceeded| ClientApiError {
             status: StatusCode::TOO_MANY_REQUESTS,
             message: rate_limit_message(exceeded),
-        });
-    }
+        })?;
 
     let today = chrono::Local::now().format("%Y-%m-%d").to_string();
-    match engine
-        .extract_receipt(scope.user_id(), &image, &mime, &today)
-        .await
-    {
+    match engine.extract_receipt(permit, &image, &mime, &today).await {
         Ok(draft) => Ok(Json(draft)),
         Err(ReceiptExtractError::InvalidImage(message)) => {
             Err(ClientApiError::bad_request(message))
@@ -1112,7 +1097,7 @@ fn validate_chat_attachments(
 /// 3. [`InFlightTurns::acquire`] — 同一ユーザーの前のターンがまだ進行中なら 409（二重送信/連打の
 ///    抑止・[`InFlightTurns`] の doc 参照）。レート制限を消費する**前**に弾くため、拒否されたリクエスト
 ///    はクォータを消費しない。
-/// 4. `rate_limiter.consume`（[`yuuka_discord::RateLimiter`]・Discord 汎用モード/finance receipt と
+/// 4. `engine.acquire_turn`（Discord 汎用モード/finance receipt と
 ///    同じ [`yuuka_orchestrator::InMemoryRateLimiter`] シーム）— 超過なら 429。ユーザー単位の窓は
 ///    `bot_id × user_id` のみで消費されるため、Discord/WS で使い切った分は PWA でも消費済みのまま。
 ///
@@ -1140,7 +1125,6 @@ fn validate_chat_attachments(
 async fn chat_send(
     ClientScope(scope): ClientScope,
     Extension(engine): Extension<Arc<ChatEngine>>,
-    Extension(rate_limiter): Extension<Arc<dyn RateLimiter>>,
     Extension(in_flight): Extension<InFlightTurns>,
     State(db): State<Db>,
     Json(body): Json<ChatSendInput>,
@@ -1176,17 +1160,13 @@ async fn chat_send(
     let user_id = scope.user_id().clone();
 
     // 事前チェック 3/3: レート制限。
-    let decision = rate_limiter
-        .consume(&bot_id, &GuildId::new(PWA_RATE_LIMIT_GUILD), &user_id)
-        .await;
-    if let Some(exceeded) = decision.exceeded {
-        // `guard` はここで drop され即座に解放される（拒否されたリクエストが in-flight を占有し
-        // 続けない）。
-        return Err(ClientApiError {
+    let permit = engine
+        .acquire_turn(&bot_id, &user_id, yuuka_orchestrator::Channel::Pwa)
+        .await
+        .map_err(|exceeded| ClientApiError {
             status: StatusCode::TOO_MANY_REQUESTS,
             message: rate_limit_message(exceeded),
-        });
-    }
+        })?;
 
     // 受理の永続化（issue #77）: `202` を返す**前**にユーザー発言を保存する。以後にプロセスが落ちても
     // 受理済みの送信は履歴に残り、起動時の回復スイープ（[`crate::recovery`]）が終端の通知行を書ける
@@ -1241,6 +1221,7 @@ async fn chat_send(
         ..IncomingChat::default()
     };
     tokio::spawn(run_pwa_turn_in_background(PwaTurnJob {
+        permit,
         guard,
         engine,
         db,
@@ -1263,6 +1244,7 @@ async fn chat_send(
 /// [`run_pwa_turn_in_background`] の引数束（clippy `too_many_arguments` 回避・フィールドは全て
 /// 呼び出しに必要な情報でグルーピングの意味も持つ）。
 struct PwaTurnJob {
+    permit: yuuka_orchestrator::TurnPermit,
     /// [`InFlightGuard`] をこのジョブの生存期間ずっと保持する（drop で in-flight から自動解放）。
     guard: InFlightGuard,
     engine: Arc<ChatEngine>,
@@ -1297,6 +1279,7 @@ struct PwaTurnJob {
 /// `timeout()` がキャンセルした future が、キャンセル直前にぎりぎり保存を終えていた場合の二重保存を避ける）。
 async fn run_pwa_turn_in_background(job: PwaTurnJob) {
     let PwaTurnJob {
+        permit,
         guard,
         engine,
         db,
@@ -1311,7 +1294,7 @@ async fn run_pwa_turn_in_background(job: PwaTurnJob) {
     let status: StatusSink = Arc::new(|_| {});
     let outcome = timeout(
         turn_timeout,
-        engine.secretary_turn_pwa(&bot_id, &user_id, incoming, &status),
+        engine.secretary_turn_pwa(permit, incoming, &status),
     )
     .await;
 
@@ -1549,6 +1532,10 @@ mod tests {
         // 実 CHAT_TURN_TIMEOUT（180 秒）は現実的な時間で HTTP 経由で再現できないため、この
         // ユニットテストだけ短いタイムアウトを直接注入する。
         run_pwa_turn_in_background(PwaTurnJob {
+            permit: engine
+                .acquire_turn(&bot_id, &user_id, yuuka_orchestrator::Channel::Pwa)
+                .await
+                .expect("permit"),
             guard,
             engine,
             db: db.clone(),
