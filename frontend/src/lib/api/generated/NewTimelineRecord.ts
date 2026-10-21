@@ -13,17 +13,14 @@
  * キーは `category` であって `expenseCategory` ではない）。入力 DTO から除去し、直接指定を
  * 素通し INSERT しない。
  *
- * 参照スコープ = プレーン記録（memo/task_done/location 等）。`amount` は Node が body から読む
- * （`Number(b.amount)`）ため残置する。**`type=expense` の expenses 二重登録・`amount` 必須検証・
- * `category` キー処理は deferred（Batch 6 / M-8）**。`type=task_done` の todos.complete 連携も deferred。
+ * 参照スコープ = プレーン記録（memo/location 等）に加え、cross-domain 副作用:
+ * **`type=expense`** は `expenses` へ二次登録し `expense_id` を連結（route/tool とも `amount` 必須・
+ * `category` は Node `b.category ?? "その他"`）、**`type=task_done`** は `todo_id` 指定時に
+ * 紐付き todos を `done` に更新する（Node `completeTodo`）。内部列 `expense_id`/`expense_category`/
+ * `media_path`/`media_type` は依然どのエンドポイントでも body から読まない（M-8・サーバ内部が設定）。
  */
-export type NewTimelineRecord = {
-	date: string;
-	type: string;
-	recordedAt: string | null;
-	title: string | null;
-	content: string | null;
-	todoId: bigint | null;
-	amount: number | null;
-	location: string | null;
-};
+export type NewTimelineRecord = { date: string, type: string, recordedAt: string | null, title: string | null, content: string | null, todoId: bigint | null, amount: number | null,
+/**
+ * `type=expense` の家計簿カテゴリ（Node route は `b.category`・未指定は `"その他"`）。
+ */
+category: string | null, location: string | null, };

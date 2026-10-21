@@ -1,8 +1,8 @@
 // リマインダー タブの純関数群（DOM 非依存）。旧 app.js fetchRemindersList の表示ロジックを移植。
-import type { ReminderRecord, ReminderStatus } from "$lib/api/types";
+import type { ReminderRecord } from "$lib/api/types";
 
 /** ステータス → 日本語ラベル（旧: pending=待機中 / sent=送信済み / cancelled=キャンセル）。 */
-export function reminderStatusLabel(status: ReminderStatus): string {
+export function reminderStatusLabel(status: string): string {
 	switch (status) {
 		case "pending":
 			return "待機中";

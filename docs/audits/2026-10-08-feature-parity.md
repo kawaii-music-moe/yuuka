@@ -73,13 +73,13 @@
 
 | ID | 重複箇所 | 現状・影響 | 整理の方向 |
 |---|---|---|---|
-| D01 | Svelte管理画面とVue PWAのタスク・予定・家計・ノート・設定 | 同じ業務データを別の画面で操作する。両方とも稼働する用途があり、PWAは機能を絞った個人画面。`frontend/src/routes/BotShell.svelte:36` と `client/pwa/src/router.ts`。 | UIを残すなら業務ルールを共有し、機能差を明示する。画面が2つあるだけで不要とはしない。 |
+| D01 | Svelte管理画面とVue PWAのタスク・予定・家計・ノート・設定 | **対応済み（#125）**。両UIを残し、領域ごとの役割・機能差と業務ルールの置き場所を[フロント契約監査](2026-10-20-frontend-contracts.md)に記録した。同じ業務データを別の画面で操作する。両方とも稼働する用途があり、PWAは機能を絞った個人画面。`frontend/src/routes/BotShell.svelte:36` と `client/pwa/src/router.ts`。 | UIを残すなら業務ルールを共有し、機能差を明示する。画面が2つあるだけで不要とはしない。 |
 | D02 | ドメインHTTP API、`/api/client/*`、LLMツール | 同じToDo・家計・ノートに3つの入口がある。repoは共有するものが多いが、入力検証・既定値・レスポンスが別実装。例：`yuuka-todo/src/routes.rs`、`yuuka-client-api/src/routes.rs` の `todos_add`、`yuuka-todo/src/tools.rs`。 | repoだけでなく、登録・更新・取消の業務処理を共通サービスに集約する。 |
 | D03 | 予定登録・削除の経路 | PWA登録は `addSchedule` ツールを呼ぶ一方、管理APIは `ScheduleRepo::add/delete` を直接呼ぶ。作業中のGoogle同期はツール側にあるため、管理画面経由では同じ外部反映を行わない。旧NodeでもHTTPとツールの経路差があったため、新たな移植欠落とは数えない。**修正済み（#127）**：予定の登録・削除（Google同期込み）を `yuuka-schedule/src/service.rs` の `ScheduleService` にまとめ、ツール・管理API（`routes_with_calendar` で同期先を配線）・PWA の `calendar_add` をすべてそこへ通した。管理APIからの登録・削除が Google に反映される回帰テストを追加。 | Google同期を含む予定サービスを全入口から呼ぶ。根拠：`yuuka-client-api/src/routes.rs` の `calendar_add`、`yuuka-schedule/src/routes.rs:76`、`yuuka-schedule/src/tools.rs`。 |
 | D04 | cron式の検証 | `todo/finance/reminder/briefing` に簡易検証が重複し、実行時だけ `yuuka-services/src/cron_util.rs` が本物のパーサを使う。R19の原因。 | 循環依存を作らない共通層に検証・次回時刻計算を移し、登録時と実行時を揃える。 |
 | D05 | 日時の解釈・保存形式変換 | `yuuka-reminder/src/datetime.rs`、`yuuka-schedule/src/datetime.rs`、`yuuka-client-api` 内の日時変換、`yuuka-services/src/cron_util.rs` が並存。入力ISO、DBローカル時刻、PWA向けUTCという用途差もある。 | 用途差を保った名前付き関数として共通化し、受理形式・オフセットの差を管理する。 |
 | D06 | 外向きURL/IPのSSRF検査 | browser、MCP、briefingが個別実装。briefingの検査だけDNS確認がない（R25）。`yuuka-browser/src/ssrf.rs`、`yuuka-mcp/src/http_client.rs`、`yuuka-briefing/src/tools.rs`。 | 通信直前の検査を共有する。URL登録時の簡易検査と通信時検査を区別する。 |
-| D07 | API型・契約 | Rust DTO＋ts-rs生成型、管理画面の手書き `frontend/src/lib/api/types.ts`、PWAの `api/contracts.ts` / `api/models.ts` が並存。管理画面では生成型からのimportが見つからず、生成だけではUIとの型ずれを検出できない。PWAは別wire契約なので単純に同一型にできない。 | 同じwire契約の型は生成物を利用し、PWA用viewは明示的な変換と契約管理を行う。`xtask/src/main.rs` に生成・差分比較処理あり。 |
+| D07 | API型・契約 | **対応済み（#131）**。管理画面の `types.ts` は Rust DTO がある契約を生成型から作り、i64 の表現差だけを `wire.ts` の `JsonWire<T>` で変換する。PWA は別契約として契約テストで固定した。Rust DTO＋ts-rs生成型、管理画面の手書き `frontend/src/lib/api/types.ts`、PWAの `api/contracts.ts` / `api/models.ts` が並存。管理画面では生成型からのimportが見つからず、生成だけではUIとの型ずれを検出できない。PWAは別wire契約なので単純に同一型にできない。 | 同じwire契約の型は生成物を利用し、PWA用viewは明示的な変換と契約管理を行う。`xtask/src/main.rs` に生成・差分比較処理あり。 |
 | D08 | レシート読み取りの2つのワークフロー | 管理画面の `/api/expenses/upload-receipt` は秘書ターンに渡す経路、PWAの `/api/client/finance/receipt` は登録前の下書き抽出。目的と保存のタイミングが違う。`yuuka-finance/src/routes.rs`、`yuuka-client-api/src/routes.rs` の `finance_receipt`、`yuuka-supervisor/src/main.rs` の `ReceiptParserAdapter`。 | OCR抽出の共通化は可能だが、下書きと実行の違いは維持し、同じ「読み取り」表示で副作用を混同させない。 |
 
 ## 設計上の変更・縮小（復旧要否を判断する項目）
@@ -149,6 +149,8 @@
 | X01 | 仕様として受容（#133） | 操作履歴はメモリ保持のまま。理由は「設計上の変更・縮小」表を参照。 |
 | X02 | 仕様として受容（#134）＋一部修正 | 複数プロセス・再起動を跨ぐカウンタ共有は持たない。レシート読み取り（`/api/expenses/upload-receipt`）が別インスタンスのレート制限を使っていたため、Discord/PWA と同じ共有インスタンスへ揃えた。 |
 | X03 | 仕様として受容（#135） | 会話履歴は SQLite 直読みのまま。理由は「設計上の変更・縮小」表を参照。 |
+| D01 | 対応済み（#125） | Svelte 管理画面と Vue PWA はどちらも残し、タスク・予定・家計・ノート・設定・チャットの役割と機能差、業務ルールを Rust の業務サービスに置く方針を [フロント契約監査](2026-10-20-frontend-contracts.md) に記録した。PWA 用 view への変換はサーバー（`yuuka-client-api`）で行い、PWA の `httpAdapter.contract.test.ts` が完了の PATCH・選択中 Bot・string ID・レシート下書きの契約を固定する。 |
+| D07 | 対応済み（#131） | `frontend/src/lib/api/types.ts` の Todo・予定・家計・リマインド・タイムライン・個人データ・ペルソナ・Playbook・認証情報・`/api/me` の型と一覧レスポンスを ts-rs 生成型から作り、i64 の `bigint` → `number` の変換だけを `wire.ts` の `JsonWire<T>` で行う。古かった生成型を develop の DTO に合わせて更新し、xtask で行末空白を除去、生成ディレクトリを biome の対象から外した。生成型に揃えて見つかったタスクのタグ・ペルソナの公開状態・タスク詳細 / 追加の応答・予定の Google 同期表示・認証情報一覧の型ずれを直した。#161 のフロント側（`botApi.ts` への endpoint 定義の集約と `decide` の `{ decision }` 統一）も同時に対応。Playbook のスケジュール一覧は生成型の同名衝突のため手書きで残す。 |
 | X05 | 対応済み（#137） | services の通知 payload に Embed を通し、朝報・日報・週報と同じ経路を使うテスト配信を旧 Node 相当のカード表示へ戻した。LLM 要約など別の監査差分には変更を加えていない。 |
 
 ## システムBotの暗黙帰属（SD07 / #145）

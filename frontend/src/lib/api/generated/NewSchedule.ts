@@ -3,10 +3,4 @@
 /**
  * 予定作成リクエスト（`POST /api/schedules/add` の body）。
  */
-export type NewSchedule = {
-	title: string;
-	startAt: string;
-	endAt: string | null;
-	remindBeforeMinutes: bigint | null;
-	description: string | null;
-};
+export type NewSchedule = { title: string, startAt: string, endAt: string | null, remindBeforeMinutes: bigint | null, description: string | null, };

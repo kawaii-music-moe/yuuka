@@ -57,10 +57,10 @@ export const botApi = {
 			query: { botId },
 		}),
 	/** POST /api/bots/shares/invite */
-	inviteShare: (body: { botId: string; granteeUsername: string }) =>
+	inviteShare: (body: { botId: string; targetUserId: string }) =>
 		api.post<ApiResponse>("/api/bots/shares/invite", body, USER),
 	/** POST /api/bots/shares/revoke */
-	revokeShare: (body: { botId: string; granteeId: string }) =>
+	revokeShare: (body: { botId: string; targetUserId: string }) =>
 		api.post<ApiResponse>("/api/bots/shares/revoke", body, USER),
 
 	// ── メンバーリクエスト（memberRequestRoutes: /api/bots/member-requests 配下） ──
@@ -71,12 +71,16 @@ export const botApi = {
 	myMemberRequests: () =>
 		api.get<ApiResponse>("/api/bots/member-requests/mine", USER),
 	/** GET /api/bots/member-requests?botId= — 受信した申請一覧（オーナー向け） */
-	memberRequests: (botId: string) =>
+	memberRequests: (botId: string, status = "pending") =>
 		api.get<ApiResponse>("/api/bots/member-requests", {
 			...USER,
-			query: { botId },
+			query: { botId, status },
 		}),
 	/** POST /api/bots/member-requests/:id/decide */
-	decideMemberRequest: (id: number, body: { approve: boolean }) =>
-		api.post<ApiResponse>(`/api/bots/member-requests/${id}/decide`, body, USER),
+	decideMemberRequest: (id: number, decision: "approved" | "rejected") =>
+		api.post<ApiResponse>(
+			`/api/bots/member-requests/${id}/decide`,
+			{ decision },
+			USER,
+		),
 };

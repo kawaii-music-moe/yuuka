@@ -4,6 +4,7 @@ import type {
 	ApiResponse,
 	TaskDetailResponse,
 	TaskGanttResponse,
+	TaskResponse,
 	TasksResponse,
 } from "../types";
 
@@ -36,7 +37,7 @@ export const taskApi = {
 		repeatRule?: string;
 		repeatUntil?: string;
 		repeatCount?: number;
-	}) => api.post<TaskDetailResponse>("/api/tasks/add", body, BOT),
+	}) => api.post<TaskResponse>("/api/tasks/add", body, BOT),
 
 	/** POST /api/tasks/update */
 	update: (body: {
@@ -47,7 +48,7 @@ export const taskApi = {
 		startDate?: string;
 		priority?: "high" | "medium" | "low" | null;
 		status?: "open" | "done";
-	}) => api.post<TaskDetailResponse>("/api/tasks/update", body, BOT),
+	}) => api.post<TaskResponse>("/api/tasks/update", body, BOT),
 
 	/** POST /api/tasks/progress — 手動進捗報告（0-100 + note） */
 	progress: (body: { id: number; progress: number; note?: string }) =>

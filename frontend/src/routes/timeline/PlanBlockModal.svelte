@@ -43,7 +43,9 @@ const isEdit = $derived(editingBlock != null);
 $effect(() => {
 	if (!open) return;
 	const b = editingBlock;
-	type = b?.type ?? "event";
+	type = ["task", "transit", "event", "free"].includes(b?.type ?? "")
+		? (b?.type as PlanBlockType)
+		: "event";
 	title = b?.title ?? "";
 	startTime = b?.start_time ?? "";
 	endTime = b?.end_time ?? "";

@@ -1,35 +1,61 @@
+import type { BudgetLimit as WireBudgetLimit } from "./generated/BudgetLimit";
+import type { BudgetLimitListData } from "./generated/BudgetLimitListData";
+import type { CategoryTotal as WireCategoryTotal } from "./generated/CategoryTotal";
+import type { ClipboardEntry as WireClipboardEntry } from "./generated/ClipboardEntry";
+import type { ClipboardListData } from "./generated/ClipboardListData";
+import type { Contact as WireContactView } from "./generated/Contact";
+import type { ContactListData } from "./generated/ContactListData";
+import type { ContextNoteData } from "./generated/ContextNoteData";
+import type { Credential as WireCredentialView } from "./generated/Credential";
+import type { CredentialListData } from "./generated/CredentialListData";
+import type { DayPlanBlock as WireDayPlanBlock } from "./generated/DayPlanBlock";
+import type { Envelope } from "./generated/Envelope";
+import type { Expense as WireExpenseRecord } from "./generated/Expense";
+import type { ExpenseListData } from "./generated/ExpenseListData";
+import type { MeData } from "./generated/MeData";
+import type { MonthlyTrendPoint as WireMonthlyTrendPoint } from "./generated/MonthlyTrendPoint";
+import type { Persona as WirePersonaRecord } from "./generated/Persona";
+import type { PersonaListData } from "./generated/PersonaListData";
+import type { PlannedPayment as WirePlannedPayment } from "./generated/PlannedPayment";
+import type { PlannedPaymentListData } from "./generated/PlannedPaymentListData";
+import type { Playbook as WirePlaybookRecord } from "./generated/Playbook";
+import type { PlaybookListData } from "./generated/PlaybookListData";
+import type { PlaybookRun as WirePlaybookRunRecord } from "./generated/PlaybookRun";
+import type { PlaybookSchedule as WirePlaybookScheduleRecord } from "./generated/PlaybookSchedule";
+import type { Reminder as WireReminderRecord } from "./generated/Reminder";
+import type { ReminderListData } from "./generated/ReminderListData";
+import type { RunListData } from "./generated/RunListData";
+import type { Schedule as WireScheduleRecord } from "./generated/Schedule";
+import type { ScheduleListData } from "./generated/ScheduleListData";
+import type { SessionUser as WireSessionUser } from "./generated/SessionUser";
+import type { TaskData } from "./generated/TaskData";
+import type { TaskDetailData } from "./generated/TaskDetailData";
+import type { TaskListData } from "./generated/TaskListData";
+import type { TaskProgressLog as WireTaskProgressLogRecord } from "./generated/TaskProgressLog";
+import type { TimelineDayData } from "./generated/TimelineDayData";
+import type { TimelineRecord as WireTimelineRecord } from "./generated/TimelineRecord";
+import type { Todo as WireTodoRecord } from "./generated/Todo";
+import type { TodoWithSubtasks as WireTodoWithSubtasks } from "./generated/TodoWithSubtasks";
+import type { JsonWire } from "./wire";
+
 // ─────────────────────────────────────────────────────────────────────────────
 // 共通 API 型定義（型付き API クライアント層）
 //
 // - サーバの大半のレスポンスは { success: boolean; message?: string } & payload
 //   の「トップレベル直置き」形状（`data` ラッパは無い）。→ ApiResponse<T> で表現。
-// - 機密列（*_encrypted / *_iv / *_tag・salt 等）は zod ビュー
-//   スキーマ（src/types/apiViews.ts）で strip 済みのため、ここでも露出フィールド
-//   のみを型化する。全網羅ではなく、フロントが参照する主要フィールドを厚めに定義。
-// - 参照元: src/server/routes/*.ts, src/db/*Repo.ts, src/types/apiViews.ts
+// - Rust wire DTO（ts-rs 生成型・generated/）がある同一契約は生成型を使う。i64 の
+//   bigint → number の変換だけを JsonWire<T>（wire.ts）で行う。Rust DTO が未生成の
+//   管理用契約は手書きで維持する。
+// - PWA の camelCase / string ID 契約は別 wire 契約。client/pwa/src/api/contracts.ts
+//   で独立管理し、管理画面の生成型を PWA から直接 import しない（wire.ts 参照）。
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** 共通エンベロープ。ペイロードはトップレベル直置き（`data` ラッパ不在）。 */
-export type ApiResponse<T = unknown> = {
-	success: boolean;
-	message?: string;
-} & T;
+/** 共通エンベロープ（Rust `Envelope<T>` の生成型）。ペイロードはトップレベル直置き。 */
+export type ApiResponse<T = unknown> = Envelope<T>;
+export type SessionUser = WireSessionUser;
 
-// ─── auth / session ──────────────────────────────────────────────────────────
-
-export interface SessionUser {
-	discordId: string;
-	username: string;
-	role: "user" | "admin";
-}
-
-/** GET /api/me */
-export type MeResponse = ApiResponse<{
-	user: SessionUser;
-	termsUrl?: string;
-	privacyUrl?: string;
-	usageUrl?: string;
-}>;
+/** GET /api/me。法的 URL は未設定でも空文字で常に返る。 */
+export type MeResponse = ApiResponse<MeData>;
 
 // ─── bots ────────────────────────────────────────────────────────────────────
 
@@ -68,8 +94,9 @@ export type PresetsResponse = ApiResponse<{ presets: PresetOption[] }>;
 
 export interface BotShareView {
 	bot_id: string;
-	grantee_id: string;
-	grantee_username?: string;
+	shared_user_id: string;
+	shared_username?: string | null;
+	status: string;
 	created_at?: string;
 }
 export type BotSharesResponse = ApiResponse<{ shares: BotShareView[] }>;
@@ -83,158 +110,53 @@ export type BotUsageResponse = ApiResponse<{
 
 export type TodoPriority = "high" | "medium" | "low";
 
-export interface TodoRecord {
-	id: number;
-	user_id: string;
-	bot_id: string;
-	title: string;
-	description: string | null;
-	due_date: string | null;
-	start_date: string | null;
-	priority: TodoPriority | null;
-	tags: string;
-	status: "open" | "done";
-	progress: number;
-	parent_id: number | null;
-	linked_payment_id: number | null;
-	due_reminded: number;
-	repeat_rule: string | null;
-	repeat_until: string | null;
-	repeat_count: number | null;
-	created_at: string;
-	updated_at: string;
-}
+export type TodoRecord = JsonWire<WireTodoRecord>;
 
-export interface TodoWithSubtasks extends TodoRecord {
-	subtasks: TodoWithSubtasks[];
-	effective_progress: number;
-}
+export type TodoWithSubtasks = JsonWire<WireTodoWithSubtasks>;
 
-export interface TaskProgressLogRecord {
-	id: number;
-	user_id: string;
-	bot_id: string;
-	todo_id: number;
-	progress: number;
-	note: string | null;
-	created_at: string;
-}
+export type TaskProgressLogRecord = JsonWire<WireTaskProgressLogRecord>;
 
-export interface TagCount {
-	tag: string;
-	count: number;
-}
-
-export type TasksResponse = ApiResponse<{
-	tasks: TodoWithSubtasks[];
-	tags?: TagCount[];
-}>;
-export type TaskDetailResponse = ApiResponse<{
-	task: TodoWithSubtasks;
-	progressLogs?: TaskProgressLogRecord[];
-}>;
-export type TaskGanttResponse = ApiResponse<{ tasks: TodoWithSubtasks[] }>;
+/** GET /api/tasks・/api/tasks/someday（親タスクのみ・subtasks ネスト付き）。 */
+export type TasksResponse = ApiResponse<JsonWire<TaskListData>>;
+export type TaskDetailResponse = ApiResponse<JsonWire<TaskDetailData>>;
+export type TaskResponse = ApiResponse<JsonWire<TaskData>>;
+export type TaskGanttResponse = ApiResponse<JsonWire<TaskListData>>;
 
 // ─── expenses（expenseRepo / plannedPaymentRepo） ─────────────────────────────
 
 export type ExpenseType = "income" | "expense";
 
-export interface ExpenseRecord {
-	id: number;
-	user_id: string;
-	bot_id: string;
-	type: ExpenseType;
-	amount: number;
-	category: string;
-	memo: string | null;
-	date: string;
-	time: string | null;
-	source: string;
-	created_at: string;
-}
+export type ExpenseRecord = JsonWire<WireExpenseRecord>;
 
-export interface CategoryTotal {
-	category: string;
-	total: number;
-	count: number;
-}
+export type CategoryTotal = JsonWire<WireCategoryTotal>;
 
-export interface MonthlyTrendPoint {
-	month: string;
-	income: number;
-	expense: number;
-}
+export type MonthlyTrendPoint = JsonWire<WireMonthlyTrendPoint>;
 
-export interface BudgetLimit {
-	id?: number;
-	category: string;
-	/** 月間上限（budget_limits.limit_amount 列） */
-	limit_amount: number;
-}
+export type BudgetLimit = JsonWire<WireBudgetLimit>;
 
 export type PlannedPaymentStatus = "pending" | "settled" | "cancelled";
 
-export interface PlannedPayment {
-	id: number;
-	title: string;
-	amount: number;
-	category: string;
-	memo?: string | null;
-	due_date: string;
-	repeat_rule?: string | null;
-	status: PlannedPaymentStatus;
-}
+export type PlannedPayment = JsonWire<WirePlannedPayment>;
 
-export type ExpensesResponse = ApiResponse<{
-	expenses: ExpenseRecord[];
-	/** 当月支出合計 */
-	total: number;
-	/** 当月収入合計 */
-	incomeTotal: number;
-	breakdown?: CategoryTotal[];
-	trend?: MonthlyTrendPoint[];
-}>;
-export type BudgetLimitsResponse = ApiResponse<{ limits: BudgetLimit[] }>;
-export type PlannedPaymentsResponse = ApiResponse<{ plans: PlannedPayment[] }>;
+/** GET /api/expenses（一覧＋指定月の支出合計 total・収入合計 incomeTotal・内訳・6 ヶ月推移）。 */
+export type ExpensesResponse = ApiResponse<JsonWire<ExpenseListData>>;
+export type BudgetLimitsResponse = ApiResponse<JsonWire<BudgetLimitListData>>;
+export type PlannedPaymentsResponse = ApiResponse<
+	JsonWire<PlannedPaymentListData>
+>;
 
 // ─── schedules（scheduleRepo） ───────────────────────────────────────────────
 
-export interface ScheduleRecord {
-	id: number;
-	user_id: string;
-	bot_id: string;
-	title: string;
-	description: string | null;
-	start_at: string;
-	end_at: string | null;
-	remind_before_minutes: number;
-	reminded: number;
-	google_event_id: string | null;
-	google_calendar_id: string | null;
-	created_at: string;
-}
-export type SchedulesResponse = ApiResponse<{ schedules: ScheduleRecord[] }>;
+export type ScheduleRecord = JsonWire<WireScheduleRecord>;
+export type SchedulesResponse = ApiResponse<JsonWire<ScheduleListData>>;
 
 // ─── reminders（reminderRepo） ───────────────────────────────────────────────
 
 export type ReminderTargetType = "dm" | "channel";
 export type ReminderStatus = "pending" | "sent" | "cancelled";
 
-export interface ReminderRecord {
-	id: number;
-	user_id: string;
-	bot_id: string;
-	message: string;
-	trigger_at: string;
-	repeat_rule: string | null;
-	target_type: ReminderTargetType;
-	target_id: string | null;
-	status: ReminderStatus;
-	source: string;
-	source_id: string | null;
-	created_at: string;
-}
-export type RemindersResponse = ApiResponse<{ reminders: ReminderRecord[] }>;
+export type ReminderRecord = JsonWire<WireReminderRecord>;
+export type RemindersResponse = ApiResponse<JsonWire<ReminderListData>>;
 
 // ─── timeline（timelineRepo） ────────────────────────────────────────────────
 
@@ -246,91 +168,27 @@ export type RecordType =
 	| "media"
 	| "location";
 
-export interface DayPlanBlock {
-	id: number;
-	user_id: string;
-	bot_id: string;
-	date: string;
-	start_time: string | null;
-	end_time: string | null;
-	type: PlanBlockType;
-	title: string;
-	description: string | null;
-	todo_id: number | null;
-	transit_from: string | null;
-	transit_to: string | null;
-	transit_line: string | null;
-	position: number;
-	created_at: string;
-	updated_at: string;
-}
+export type DayPlanBlock = JsonWire<WireDayPlanBlock>;
 
-export interface TimelineRecord {
-	id: number;
-	user_id: string;
-	bot_id: string;
-	date: string;
-	recorded_at: string;
-	type: RecordType;
-	title: string | null;
-	content: string | null;
-	todo_id: number | null;
-	expense_id: number | null;
-	amount: number | null;
-	expense_category: string | null;
-	media_path: string | null;
-	media_type: string | null;
-	location: string | null;
-	created_at: string;
-}
+export type TimelineRecord = JsonWire<WireTimelineRecord>;
 
-// 注: サーバ（timelineRoutes.ts /api/timeline/day）は `blocks` キーで返す（`plan` ではない）。
-export type TimelineDayResponse = ApiResponse<{
-	blocks: DayPlanBlock[];
-	records: TimelineRecord[];
-}>;
+// 注: サーバ（GET /api/timeline/day）は `blocks` キーで返す（`plan` ではない）。
+export type TimelineDayResponse = ApiResponse<JsonWire<TimelineDayData>>;
 
 // ─── personal（contextNote / clipboard / contacts） ──────────────────────────
 
-export interface ContactView {
-	id: number;
-	name: string;
-	birthday: string | null;
-	relationship: string | null;
-	contact_info: string | null;
-	notes: string | null;
-	tags: string[];
-	created_at: string;
-	updated_at: string;
-}
-export type ContactsResponse = ApiResponse<{ contacts: ContactView[] }>;
+export type ContactView = JsonWire<WireContactView>;
+export type ContactsResponse = ApiResponse<JsonWire<ContactListData>>;
 
-export interface ClipboardEntry {
-	id: number;
-	content: string;
-	expires_at: string | null;
-	created_at: string;
-}
-export type ClipboardResponse = ApiResponse<{ entries: ClipboardEntry[] }>;
+export type ClipboardEntry = JsonWire<WireClipboardEntry>;
+export type ClipboardResponse = ApiResponse<JsonWire<ClipboardListData>>;
 
-/** GET /api/context-note（content + max_length を返す。updated_at も同梱） */
-export type ContextNoteResponse = ApiResponse<{
-	content: string;
-	max_length: number;
-	updated_at?: string | null;
-}>;
+/** GET /api/context-note（content + max_length を返す。未登録時 updated_at は null） */
+export type ContextNoteResponse = ApiResponse<JsonWire<ContextNoteData>>;
 
 // ─── personas（personaRepo） ─────────────────────────────────────────────────
 
-export interface PersonaRecord {
-	id: number;
-	owner_id: string;
-	name: string;
-	prompt: string;
-	is_public: number;
-	created_at: string;
-	updated_at: string;
-}
+export type PersonaRecord = JsonWire<WirePersonaRecord>;
 
 export interface PublicPersonaView {
 	id: number;
@@ -342,11 +200,7 @@ export interface PublicPersonaView {
 }
 
 /** GET /api/personas — personas + 適用中ID + 最大文字数。 */
-export type PersonasResponse = ApiResponse<{
-	personas: PersonaRecord[];
-	active_persona_id: number | null;
-	max_length: number;
-}>;
+export type PersonasResponse = ApiResponse<JsonWire<PersonaListData>>;
 export type PersonaMarketplaceResponse = ApiResponse<{
 	personas: PublicPersonaView[];
 }>;
@@ -358,36 +212,20 @@ export type PersonaMarketplaceDetailResponse = ApiResponse<{
 // ─── playbooks（playbookRepo） ───────────────────────────────────────────────
 
 /** playbookService.Playbook（name が識別子。id 列は持たない）。 */
-export interface PlaybookRecord {
-	name: string;
-	title: string;
-	keywords: string[];
-	description: string;
-	steps: string;
-}
+export type PlaybookRecord = JsonWire<WirePlaybookRecord>;
 /** playbookScheduleService.PlaybookSchedule。 */
-export interface PlaybookScheduleRecord {
-	id: number;
-	playbook_name: string;
-	cron_expression: string;
-	description?: string;
-	enabled: boolean;
-	last_run_at: string | null;
-}
+export type PlaybookScheduleRecord = JsonWire<WirePlaybookScheduleRecord>;
 /** playbookScheduleService.PlaybookRun。 */
-export interface PlaybookRunRecord {
-	id: number;
-	playbook_name: string;
-	status: "running" | "success" | "failed";
-	output: string;
-	started_at: string;
-	finished_at: string | null;
-}
-export type PlaybooksResponse = ApiResponse<{ playbooks: PlaybookRecord[] }>;
+export type PlaybookRunRecord = JsonWire<WirePlaybookRunRecord>;
+export type PlaybooksResponse = ApiResponse<JsonWire<PlaybookListData>>;
+/**
+ * GET /api/playbooks/schedules。Rust 側の `ScheduleListData` は予定ドメインと同名で、
+ * 生成時に予定側が先に書き出されるため playbook 版は生成されない。手書きで維持する。
+ */
 export type PlaybookSchedulesResponse = ApiResponse<{
 	schedules: PlaybookScheduleRecord[];
 }>;
-export type PlaybookRunsResponse = ApiResponse<{ runs: PlaybookRunRecord[] }>;
+export type PlaybookRunsResponse = ApiResponse<JsonWire<RunListData>>;
 
 // ─── webhooks（webhookRepo） ─────────────────────────────────────────────────
 
@@ -454,15 +292,8 @@ export type McpServersResponse = ApiResponse<{ servers: McpServerView[] }>;
 
 // ─── credentials（credentialRepo） ───────────────────────────────────────────
 
-export interface CredentialView {
-	id: number;
-	name: string;
-	type?: string;
-	created_at: string;
-}
-export type CredentialsResponse = ApiResponse<{
-	credentials: CredentialView[];
-}>;
+export type CredentialView = JsonWire<WireCredentialView>;
+export type CredentialsResponse = ApiResponse<JsonWire<CredentialListData>>;
 
 // ─── delivery（briefingConfig / reportConfig） ───────────────────────────────
 
