@@ -15,6 +15,7 @@ use std::sync::{Arc, RwLock};
 use async_trait::async_trait;
 use secrecy::SecretString;
 use twilight_http::Client;
+use twilight_model::channel::message::AllowedMentions;
 use twilight_model::id::marker::{ChannelMarker, MessageMarker, UserMarker};
 use twilight_model::id::Id;
 use yuuka_core::{BotId, DiscordError, UserId};
@@ -558,7 +559,22 @@ pub(crate) fn share_invite_components(share_id: i64) -> Vec<ActionRow> {
 /// テナント別 http クライアントを作る（トークン別・レート bucket 別・§8.1.3 案 (a)）。
 fn new_client(token: &SecretString) -> Client {
     use secrecy::ExposeSecret as _;
-    Client::new(token.expose_secret().to_owned())
+    Client::builder()
+        .token(token.expose_secret().to_owned())
+        .default_allowed_mentions(default_allowed_mentions())
+        .build()
+}
+
+/// 全送信の既定 `allowed_mentions`。`parse` を空にして、本文中の `@everyone`・`@here`・
+/// ロール・ユーザーのメンションを通知させない（LLM 返答経由のメンション注入対策）。
+/// 返信先ユーザーへの通知（`replied_user`）だけは残す。
+fn default_allowed_mentions() -> AllowedMentions {
+    AllowedMentions {
+        parse: Vec::new(),
+        replied_user: true,
+        roles: Vec::new(),
+        users: Vec::new(),
+    }
 }
 
 #[cfg(test)]
@@ -575,6 +591,18 @@ mod tests {
             clients: RwLock::new(map),
             directory: Arc::new(NoopDirectory),
         }
+    }
+
+    // 送信は `create_message` 等が `default_allowed_mentions` を継承する。クライアントに既定が
+    // 付いていること（parse が空）を確かめる。
+    #[tokio::test]
+    async fn new_client_denies_all_mentions_by_default() {
+        let client = new_client(&SecretString::from("token".to_owned()));
+        let am = client
+            .default_allowed_mentions()
+            .expect("既定の allowed_mentions が必要");
+        assert!(am.parse.is_empty());
+        assert!(am.roles.is_empty() && am.users.is_empty());
     }
 
     // twilight `Client::new` は ratelimiter で Tokio ランタイムを要求するため tokio::test で回す。
