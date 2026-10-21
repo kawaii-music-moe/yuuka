@@ -26,9 +26,10 @@ use yuuka_orchestrator::{
 };
 use yuuka_services::{MetricsRegistry, NotifierDeliveryRunner, ServiceContext};
 use yuuka_supervisor::{
-    build_app, build_supervised_services, build_tool_registry, ws_routes, GeminiAuxText,
-    MessengerWebhookNotifier, RegistryBotRuntime, RegistryBotViewRuntime, RegistryDiscordLive,
-    RegistryLifecycle, ServiceError, ShutdownToken, SupervisedService, Supervisor, TenantRegistry,
+    build_app, build_supervised_services, build_tool_registry, ws_routes_with_interactions,
+    GeminiAuxText, MessengerWebhookNotifier, RegistryBotRuntime, RegistryBotViewRuntime,
+    RegistryDiscordLive, RegistryLifecycle, ServiceError, ShutdownToken, SupervisedService,
+    Supervisor, TenantRegistry,
 };
 use yuuka_web::{AppState, Db, WebConfig};
 
@@ -218,7 +219,6 @@ async fn run() -> Result<(), String> {
         )))
         .with_metrics(metrics.clone()),
     );
-    let chat_ws_routes = ws_routes(chat_engine.clone(), cfg.desktop_max_upload_mb);
 
     // レート制限（issue #41 レビュー・P1）: PWA と Discord/WS で **同一の** `InMemoryRateLimiter`
     // インスタンス（＝同一の `counters` マップ）を共有する。この実装のユーザー単位窓
@@ -251,6 +251,16 @@ async fn run() -> Result<(), String> {
         membership: Arc::new(DbMembership::new(db.clone())),
     }));
     let Prepared { runners, messenger } = discord_manager.prepare().await;
+    let chat_ws_routes = ws_routes_with_interactions(
+        chat_engine.clone(),
+        cfg.desktop_max_upload_mb,
+        yuuka_discord::interaction::ComponentInteractionDeps {
+            membership: Arc::new(DbMembership::new(db.clone())),
+            directory: Arc::new(DbBotDirectory::new(db.clone(), crypto.clone())),
+            dm: messenger.clone(),
+        },
+        cfg.desktop_demo_components,
+    );
 
     // Discord テナントの live ライフサイクルレジストリ（web ⇄ gateway 配線）。gateway を Rust が
     // 所有する時のみ作る（Node 所有時に web から起動すると二重 gateway＝二重応答になるため、

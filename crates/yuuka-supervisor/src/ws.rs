@@ -5,12 +5,16 @@
 //! WS upgrade の CSWSH を構造的に封じる・B5）、`?botId=`（未指定は primary・システム Bot は不可）は
 //! 接続時に 1 Bot へ束縛し [`has_bot_access`] で検証する。フレームは全て JSON テキスト。
 //!
-//! **実装範囲（P1-2 増分）**: 接続時 `ready` → 受信 `msg` を [`ChatEngine::secretary_turn`] で処理し
+//! **実装範囲**: 接続時 `ready` → 受信 `msg` を [`TurnProcessor::process_secretary`] で処理し
 //! `status`（thinking/writing）→ `done` を返す。`reset` はコンテキストクリア、`ping` は no-op。keepalive は
-//! WS-native ping/pong（30 秒無応答でクローズ）。**縮退（後続）**: `interaction`（コンポーネント配信）・
-//! `interim`/`push`（非同期 deferred）・`update` は未実装（オーケストレーションが同期のみのため）。
+//! WS-native ping/pong（30 秒無応答でクローズ）。interaction は Discord と同じ判定処理を使い、
+//! interim/push で途中応答・後続配信、update でボタンの消去と本文更新を行う。interim/push は
+//! [`TurnDelivery`] 経由で送るため、エンジンが配信ハンドルを使うまで（R07）は `done` だけが流れる。
 
-use std::sync::Arc;
+use std::collections::VecDeque;
+use std::sync::{Arc, Mutex};
+
+use async_trait::async_trait;
 use std::time::Duration;
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
@@ -24,8 +28,12 @@ use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use yuuka_core::BotId;
+use yuuka_discord::interaction::{
+    decide_component, parse_custom_id, ComponentInteractionDeps, InteractionPlan,
+};
 use yuuka_discord::{
-    BotStatus, FileAttachment, IncomingChat, InlineMedia, RichEmbed, StatusSink, TurnReply,
+    ActionRow, BotStatus, Button, ButtonStyle, FileAttachment, IncomingChat, InlineMedia,
+    RichEmbed, StatusSink, TurnDelivery, TurnProcessor, TurnReply,
 };
 use yuuka_orchestrator::ChatEngine;
 use yuuka_types::SessionUser;
@@ -41,10 +49,39 @@ struct MaxUploadMb(u32);
 /// `/ws/chat` ルータ（`ChatEngine` と添付上限を `Extension` で注入・`AppState` 上でマージ）。
 /// `max_upload_mb` は config の `DESKTOP_MAX_UPLOAD_MB`（Node `config.desktopMaxUploadMb`・既定 20）。
 pub fn ws_routes(engine: Arc<ChatEngine>, max_upload_mb: u32) -> Router<AppState> {
+    ws_routes_configured(engine, max_upload_mb, None, false)
+}
+
+/// Discord と同じ業務ポート・通知経路を注入する本番用ルータ。
+pub fn ws_routes_with_interactions(
+    engine: Arc<ChatEngine>,
+    max_upload_mb: u32,
+    interactions: ComponentInteractionDeps,
+    demo_components: bool,
+) -> Router<AppState> {
+    ws_routes_configured(engine, max_upload_mb, Some(interactions), demo_components)
+}
+
+#[derive(Clone)]
+struct WsOptions {
+    interactions: Option<ComponentInteractionDeps>,
+    demo_components: bool,
+}
+
+fn ws_routes_configured(
+    engine: Arc<ChatEngine>,
+    max_upload_mb: u32,
+    interactions: Option<ComponentInteractionDeps>,
+    demo_components: bool,
+) -> Router<AppState> {
     Router::new()
         .route("/ws/chat", get(ws_upgrade))
         .layer(Extension(engine))
         .layer(Extension(MaxUploadMb(max_upload_mb)))
+        .layer(Extension(WsOptions {
+            interactions,
+            demo_components,
+        }))
 }
 
 #[derive(Debug, Deserialize)]
@@ -59,6 +96,7 @@ async fn ws_upgrade(
     State(state): State<AppState>,
     Extension(engine): Extension<Arc<ChatEngine>>,
     Extension(max_upload): Extension<MaxUploadMb>,
+    Extension(options): Extension<WsOptions>,
     Query(q): Query<BotQuery>,
     ws: WebSocketUpgrade,
 ) -> Response {
@@ -84,7 +122,15 @@ async fn ws_upgrade(
         Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, "internal").into_response(),
     }
     ws.on_upgrade(move |socket| {
-        handle_socket(socket, user.0, bot_id, state.db.clone(), engine, max_upload)
+        handle_socket(
+            socket,
+            user.0,
+            bot_id,
+            state.db.clone(),
+            engine,
+            max_upload,
+            options,
+        )
     })
 }
 
@@ -111,6 +157,23 @@ enum ServerFrame<'a> {
         files: Vec<FilePayload>,
         components: Vec<serde_json::Value>,
         deferred: bool,
+    },
+    Interim {
+        text: String,
+    },
+    Push {
+        #[serde(rename = "messageId")]
+        message_id: String,
+        text: String,
+        embeds: Vec<serde_json::Value>,
+        files: Vec<FilePayload>,
+        components: Vec<serde_json::Value>,
+    },
+    Update {
+        #[serde(rename = "messageId")]
+        message_id: String,
+        text: String,
+        components: Vec<serde_json::Value>,
     },
     Error {
         code: &'static str,
@@ -155,8 +218,12 @@ enum ClientFrame {
     },
     Reset,
     Ping,
-    /// ボタン押下。コンポーネント配信は未実装のため現状は無視する（フィールドは受理して捨てる）。
-    Interaction,
+    Interaction {
+        #[serde(rename = "messageId")]
+        message_id: String,
+        #[serde(rename = "customId")]
+        custom_id: String,
+    },
     /// 未知の `type` は無視する（Node の `default: return`）。
     #[serde(other)]
     Unknown,
@@ -176,6 +243,7 @@ async fn handle_socket(
     db: Db,
     engine: Arc<ChatEngine>,
     max_upload: MaxUploadMb,
+    options: WsOptions,
 ) {
     let (mut sink, mut stream) = socket.split();
     // 送信は writer タスクへ集約（ステータスコールバックとメインループの並行送信を安全にする）。
@@ -202,6 +270,17 @@ async fn handle_socket(
     };
     let _ = tx.send(json_msg(&ready));
 
+    let output = Arc::new(WsOutput {
+        tx: tx.clone(),
+        buttons: Mutex::new(VecDeque::new()),
+    });
+    let interactions = options
+        .interactions
+        .unwrap_or_else(|| ComponentInteractionDeps {
+            membership: Arc::new(yuuka_orchestrator::DbMembership::new(db.clone())),
+            directory: Arc::new(yuuka_orchestrator::DbBotDirectory::new(db.clone(), None)),
+            dm: Arc::new(yuuka_orchestrator::NullMemberDmSender),
+        });
     let mut ticker = tokio::time::interval(PING_INTERVAL);
     ticker.tick().await; // 直近の即時 tick を消費。
     let mut is_alive = true;
@@ -211,7 +290,17 @@ async fn handle_socket(
             incoming = stream.next() => {
                 match incoming {
                     Some(Ok(Message::Text(t))) => {
-                        handle_text(t.as_str(), &user, &bot_id, &engine, &tx, max_upload).await;
+                        handle_text(
+                            t.as_str(),
+                            &user,
+                            &bot_id,
+                            &engine,
+                            &output,
+                            max_upload,
+                            &interactions,
+                            options.demo_components,
+                        )
+                        .await;
                     }
                     Some(Ok(Message::Pong(_))) => is_alive = true,
                     Some(Ok(Message::Ping(p))) => {
@@ -232,18 +321,24 @@ async fn handle_socket(
     }
 
     drop(tx);
+    // deferred ターンが配信ハンドルを保持していても切断時に writer を残さない。
+    writer.abort();
     let _ = writer.await;
 }
 
 /// テキストフレームを処理する（Node の受信スイッチ）。
+#[allow(clippy::too_many_arguments)]
 async fn handle_text(
     text: &str,
     user: &SessionUser,
     bot_id: &str,
     engine: &Arc<ChatEngine>,
-    tx: &mpsc::UnboundedSender<Message>,
+    output: &Arc<WsOutput>,
     max_upload: MaxUploadMb,
+    interactions: &ComponentInteractionDeps,
+    demo_components: bool,
 ) {
+    let tx = &output.tx;
     // 上限超過（base64 込みのフレーム長で概算）。Node は raw バイト長で判定する。
     if text.len() > (max_upload.0 as usize) * 1024 * 1024 {
         let _ = tx.send(json_msg(&err_frame(
@@ -276,27 +371,57 @@ async fn handle_text(
             message_id,
             reply_to_id,
         } => {
-            process_msg(
-                user,
-                bot_id,
-                engine,
-                tx,
-                text,
-                image,
-                audio,
-                attachments,
-                message_id,
-                reply_to_id,
-            )
-            .await;
+            if demo_components && text == "/__demo_buttons" {
+                output.send_reply(
+                    TurnReply {
+                        text: "ボタンの動作確認".to_owned(),
+                        components: vec![ActionRow {
+                            buttons: vec![Button {
+                                custom_id: format!("demo_echo:{}", random_message_id()),
+                                label: "確認".to_owned(),
+                                style: ButtonStyle::Primary,
+                            }],
+                        }],
+                        ..TurnReply::default()
+                    },
+                    false,
+                );
+            } else {
+                process_msg(
+                    user,
+                    bot_id,
+                    engine,
+                    output,
+                    text,
+                    image,
+                    audio,
+                    attachments,
+                    message_id,
+                    reply_to_id,
+                )
+                .await;
+            }
         }
         ClientFrame::Reset => {
             if let Err(e) = engine.reset_context(user.discord_id.as_str(), bot_id).await {
                 tracing::warn!(error = %e, "ws reset のコンテキストクリアに失敗");
             }
         }
-        // ping はアプリ層 no-op（keepalive は WS-native）。interaction は未実装（コンポーネント配信は後続）。
-        ClientFrame::Ping | ClientFrame::Interaction | ClientFrame::Unknown => {}
+        ClientFrame::Interaction {
+            message_id,
+            custom_id,
+        } => {
+            process_interaction(
+                user,
+                output,
+                interactions,
+                message_id,
+                custom_id,
+                demo_components,
+            )
+            .await;
+        }
+        ClientFrame::Ping | ClientFrame::Unknown => {}
     }
 }
 
@@ -306,7 +431,7 @@ async fn process_msg(
     user: &SessionUser,
     bot_id: &str,
     engine: &Arc<ChatEngine>,
-    tx: &mpsc::UnboundedSender<Message>,
+    output: &Arc<WsOutput>,
     text: String,
     image: Option<WsAttachment>,
     audio: Option<WsAttachment>,
@@ -314,6 +439,7 @@ async fn process_msg(
     message_id: Option<String>,
     reply_to_id: Option<String>,
 ) {
+    let tx = &output.tx;
     // Gemini キー事前チェック（Node は processMessage 前に error/no_gemini_key を返す）。
     if !engine.user_has_gemini_key(user.discord_id.as_str()).await {
         let _ = tx.send(json_msg(&err_frame(
@@ -335,9 +461,16 @@ async fn process_msg(
     let bot = yuuka_core::BotId::new(bot_id.to_owned());
     let uid = yuuka_core::UserId::new(user.discord_id.clone());
 
-    match engine.secretary_turn(&bot, &uid, incoming, &status).await {
+    let delivery = Arc::new(WsDelivery {
+        output: output.clone(),
+        state: Mutex::new(DeliveryState::default()),
+    });
+    match engine
+        .process_secretary(&bot, &uid, incoming, status, delivery.clone())
+        .await
+    {
         Ok(reply) => {
-            let _ = tx.send(json_msg(&done_frame(reply)));
+            delivery.finish(reply);
         }
         Err(e) => {
             tracing::warn!(error = %e, "ws turn 処理に失敗");
@@ -421,18 +554,203 @@ fn status_sink(tx: mpsc::UnboundedSender<Message>) -> StatusSink {
 }
 
 /// [`TurnReply`] を `done` フレームへ写像する（files を base64 化・embeds は APIEmbed JSON へ・
-/// components は現状空）。
+/// components は Discord API JSON へ写像する）。
 fn done_frame(reply: TurnReply) -> ServerFrame<'static> {
     let embeds = reply.embeds.iter().map(rich_embed_to_json).collect();
     let files = reply.files.into_iter().map(to_file_payload).collect();
     ServerFrame::Done {
-        message_id: random_message_id(),
+        message_id: reply.message_id.unwrap_or_else(random_message_id),
         text: reply.text,
         embeds,
         files,
-        components: Vec::new(),
-        deferred: false,
+        components: components_to_json(&reply.components),
+        deferred: reply.deferred,
     }
+}
+
+/// 接続内に実際に配信したボタンだけを受け付ける。履歴は最大128件。
+struct WsOutput {
+    tx: mpsc::UnboundedSender<Message>,
+    buttons: Mutex<VecDeque<(String, Vec<String>)>>,
+}
+
+impl WsOutput {
+    fn remember(&self, message_id: &str, rows: &[ActionRow]) {
+        if rows.is_empty() {
+            return;
+        }
+        let ids = rows
+            .iter()
+            .flat_map(|row| row.buttons.iter().map(|b| b.custom_id.clone()))
+            .collect();
+        let mut buttons = self.buttons.lock().unwrap_or_else(|p| p.into_inner());
+        buttons.push_back((message_id.to_owned(), ids));
+        while buttons.len() > 128 {
+            buttons.pop_front();
+        }
+    }
+
+    fn has_button(&self, message_id: &str, custom_id: &str) -> bool {
+        self.buttons
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .iter()
+            .any(|(id, buttons)| id == message_id && buttons.iter().any(|b| b == custom_id))
+    }
+
+    fn send_reply(&self, mut reply: TurnReply, push: bool) {
+        let message_id = reply.message_id.clone().unwrap_or_else(random_message_id);
+        self.remember(&message_id, &reply.components);
+        reply.message_id = Some(message_id.clone());
+        let frame = if push {
+            ServerFrame::Push {
+                message_id,
+                text: reply.text,
+                embeds: reply.embeds.iter().map(rich_embed_to_json).collect(),
+                files: reply.files.into_iter().map(to_file_payload).collect(),
+                components: components_to_json(&reply.components),
+            }
+        } else {
+            done_frame(reply)
+        };
+        let _ = self.tx.send(json_msg(&frame));
+    }
+
+    fn update(&self, message_id: String, text: String) {
+        self.buttons
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .retain(|(id, _)| id != &message_id);
+        let _ = self.tx.send(json_msg(&ServerFrame::Update {
+            message_id,
+            text,
+            components: vec![],
+        }));
+    }
+}
+
+#[derive(Default)]
+struct DeliveryState {
+    done_sent: bool,
+    pending: Vec<TurnReply>,
+}
+
+/// 即時完了したバックグラウンド処理でも、done → push の順序を保証する。
+struct WsDelivery {
+    output: Arc<WsOutput>,
+    state: Mutex<DeliveryState>,
+}
+
+impl WsDelivery {
+    fn finish(&self, reply: TurnReply) {
+        let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        self.output.send_reply(reply, false);
+        state.done_sent = true;
+        for reply in state.pending.drain(..) {
+            self.output.send_reply(reply, true);
+        }
+    }
+}
+
+#[async_trait]
+impl TurnDelivery for WsDelivery {
+    async fn on_interim(&self, text: String) {
+        let _ = self
+            .output
+            .tx
+            .send(json_msg(&ServerFrame::Interim { text }));
+    }
+
+    async fn deliver_final(&self, reply: TurnReply) {
+        let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        if state.done_sent {
+            self.output.send_reply(reply, true);
+        } else {
+            state.pending.push(reply);
+        }
+    }
+}
+
+async fn process_interaction(
+    user: &SessionUser,
+    output: &WsOutput,
+    deps: &ComponentInteractionDeps,
+    message_id: String,
+    custom_id: String,
+    demo_components: bool,
+) {
+    if !output.has_button(&message_id, &custom_id) {
+        let _ = output.tx.send(json_msg(&err_frame(
+            "internal",
+            "このボタンは無効か、既に処理済みです。",
+        )));
+        return;
+    }
+    let (action, id, extra) = parse_custom_id(&custom_id);
+    let plan = if action == "demo_echo" && demo_components {
+        InteractionPlan::Update {
+            content: format!("ボタンを受け取りました: {id}"),
+            followup: None,
+        }
+    } else {
+        decide_component(
+            deps,
+            action,
+            id,
+            extra,
+            &yuuka_core::UserId::new(user.discord_id.clone()),
+            Some(user.username.clone()),
+            None,
+        )
+        .await
+    };
+    apply_interaction_plan(output, message_id, plan);
+}
+
+fn apply_interaction_plan(output: &WsOutput, message_id: String, plan: InteractionPlan) {
+    match plan {
+        InteractionPlan::Reply(text) => output.send_reply(TurnReply::text(text), true),
+        InteractionPlan::Update { content, followup } => {
+            output.update(message_id, content);
+            if let Some(followup) = followup {
+                output.send_reply(
+                    TurnReply {
+                        text: followup.content,
+                        components: followup.components,
+                        ..TurnReply::default()
+                    },
+                    true,
+                );
+            }
+        }
+        InteractionPlan::Ignore => {}
+    }
+}
+
+fn components_to_json(rows: &[ActionRow]) -> Vec<serde_json::Value> {
+    rows.iter()
+        .map(|row| {
+            let buttons: Vec<_> = row
+                .buttons
+                .iter()
+                .map(|button| {
+                    let style = match button.style {
+                        ButtonStyle::Primary => 1,
+                        ButtonStyle::Secondary => 2,
+                        ButtonStyle::Success => 3,
+                        ButtonStyle::Danger => 4,
+                    };
+                    serde_json::json!({
+                        "type": 2,
+                        "style": style,
+                        "label": button.label,
+                        "custom_id": button.custom_id,
+                    })
+                })
+                .collect();
+            serde_json::json!({ "type": 1, "components": buttons })
+        })
+        .collect()
 }
 
 /// provider 中立 [`RichEmbed`] を discord.js `EmbedBuilder.toJSON()`（APIEmbed）形の JSON へ写像する。
@@ -766,5 +1084,124 @@ mod tests {
             None
         )
         .is_err());
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
+mod interaction_tests {
+    use super::*;
+
+    fn output() -> (Arc<WsOutput>, mpsc::UnboundedReceiver<Message>) {
+        let (tx, rx) = mpsc::unbounded_channel();
+        (
+            Arc::new(WsOutput {
+                tx,
+                buttons: Mutex::new(VecDeque::new()),
+            }),
+            rx,
+        )
+    }
+
+    fn next(rx: &mut mpsc::UnboundedReceiver<Message>) -> serde_json::Value {
+        let Message::Text(text) = rx.try_recv().unwrap() else {
+            return serde_json::Value::Null;
+        };
+        serde_json::from_str(text.as_str()).unwrap()
+    }
+
+    fn rows() -> Vec<ActionRow> {
+        vec![ActionRow {
+            buttons: vec![Button {
+                custom_id: "demo_echo:nonce".to_owned(),
+                label: "確認".to_owned(),
+                style: ButtonStyle::Primary,
+            }],
+        }]
+    }
+
+    #[test]
+    fn component_reply_and_update_use_desktop_wire_contract() {
+        let (output, mut rx) = output();
+        output.send_reply(
+            TurnReply {
+                message_id: Some("log:42".to_owned()),
+                components: rows(),
+                ..TurnReply::text("確認してください")
+            },
+            false,
+        );
+        let done = next(&mut rx);
+        assert_eq!(done["messageId"], "log:42");
+        assert_eq!(done["components"][0]["type"], 1);
+        assert_eq!(
+            done["components"][0]["components"][0]["custom_id"],
+            "demo_echo:nonce"
+        );
+        assert!(output.has_button("log:42", "demo_echo:nonce"));
+        assert!(!output.has_button("other", "demo_echo:nonce"));
+        assert!(!output.has_button("log:42", "persona_import:999"));
+        apply_interaction_plan(
+            &output,
+            "log:42".to_owned(),
+            InteractionPlan::Update {
+                content: "完了".to_owned(),
+                followup: Some(yuuka_discord::interaction::Followup {
+                    content: "次の確認".to_owned(),
+                    components: rows(),
+                }),
+            },
+        );
+        let update = next(&mut rx);
+        assert_eq!(update["type"], "update");
+        assert_eq!(update["messageId"], "log:42");
+        assert_eq!(update["components"], serde_json::json!([]));
+        assert!(!output.has_button("log:42", "demo_echo:nonce"));
+        let push = next(&mut rx);
+        assert_eq!(push["type"], "push");
+        assert!(output.has_button(push["messageId"].as_str().unwrap(), "demo_echo:nonce"));
+    }
+
+    #[tokio::test]
+    async fn final_delivery_waits_for_deferred_done_and_preserves_components() {
+        let (output, mut rx) = output();
+        let delivery = WsDelivery {
+            output,
+            state: Mutex::new(DeliveryState::default()),
+        };
+        delivery.on_interim("処理中".to_owned()).await;
+        assert_eq!(next(&mut rx)["type"], "interim");
+        delivery
+            .deliver_final(TurnReply {
+                components: rows(),
+                ..TurnReply::text("完了")
+            })
+            .await;
+        assert!(rx.try_recv().is_err());
+        delivery.finish(TurnReply {
+            deferred: true,
+            ..TurnReply::default()
+        });
+        let done = next(&mut rx);
+        assert_eq!(done["type"], "done");
+        assert_eq!(done["deferred"], true);
+        let push = next(&mut rx);
+        assert_eq!(push["type"], "push");
+        assert_eq!(push["text"], "完了");
+        assert_eq!(push["components"][0]["components"][0]["style"], 1);
+    }
+
+    #[test]
+    fn interaction_requires_message_and_custom_ids() {
+        assert!(serde_json::from_str::<ClientFrame>(r#"{"type":"interaction"}"#).is_err());
+        let frame = serde_json::from_str::<ClientFrame>(
+            r#"{"type":"interaction","messageId":"m","customId":"demo_echo:n"}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            frame,
+            ClientFrame::Interaction { message_id, custom_id }
+                if message_id == "m" && custom_id == "demo_echo:n"
+        ));
     }
 }
