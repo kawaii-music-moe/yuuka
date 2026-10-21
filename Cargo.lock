@@ -3932,6 +3932,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tower",
+ "tracing",
  "ts-rs",
  "yuuka-core",
  "yuuka-db",
