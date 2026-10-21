@@ -143,6 +143,9 @@ export interface AssistantRateLimits {
 	guildPerDay: number;
 }
 export interface AssistantConfigResp {
+	llm?: { provider: string; model: string };
+	llm_defaults?: { provider: string; model: string };
+	llm_models?: string[];
 	success: boolean;
 	message?: string;
 	has_gemini_key?: boolean;

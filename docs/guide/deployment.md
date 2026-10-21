@@ -157,3 +157,24 @@ pnpm run deploy:rollback        # = deploy/instance.sh prod rollback
 deploy/instance.sh prod down
 sudo systemctl enable --now yuuka
 ```
+
+### AIプロバイダとモデル
+
+プロセスの作業ディレクトリにある `.env` に次の既定値を指定できます。
+現在対応するプロバイダは `gemini` のみです。
+
+```dotenv
+LLM_PROVIDER=gemini
+LLM_MODEL=gemini-3.5-flash-lite
+```
+
+この2項目だけは起動時に自動読込され、同名の環境変数がある場合は環境変数を優先します。
+不正なプロバイダ・モデルは起動時に拒否します。Dockerでは `instance.env` から環境変数として渡せます。
+既定値の変更には再起動が必要です。
+
+「Bot設定」→「汎用モード設定」のAPIキー付近で、Botごとのプロバイダ・モデルを保存できます。
+画面で保存した値を優先し、「既定値に戻す」で環境の既定値を再び使います。
+画面での変更は次のメッセージから有効になり、APIキーは変更・削除されません。
+秘書モードは「アカウント管理」のAPIキー設定画面で指定した個人モデルを使います。
+既存の個人モデルは維持し、NULL/空の場合だけ環境の既定値へフォールバックします。
+モデルの無料枠・利用上限はGoogle AI Studioで確認してください。

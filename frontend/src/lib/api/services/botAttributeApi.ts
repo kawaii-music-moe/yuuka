@@ -34,6 +34,13 @@ export const botAttributeApi = {
 			query: { botId },
 		}),
 
+	setLlm: (body: {
+		botId: string;
+		provider?: string;
+		model?: string;
+		inheritDefaults?: boolean;
+	}) => api.post<ApiResponse>("/api/bots/assistant/llm", body, USER),
+
 	// ── assistant/* サブ設定 ──
 	/** POST /api/bots/assistant/gemini-key */
 	setGeminiKey: (body: { botId: string; apiKey: string }) =>

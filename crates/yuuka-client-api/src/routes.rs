@@ -378,7 +378,7 @@ async fn settings_view(
         .as_ref()
         .and_then(|c| c.model.clone())
         .filter(|m| !m.is_empty())
-        .unwrap_or_else(|| yuuka_gemini::DEFAULT_MODEL.to_owned());
+        .unwrap_or_else(|| yuuka_gemini::LlmSettings::default().model);
     let google_connected = current.map(|c| c.google_connected).unwrap_or(false);
     let persona = active_persona_prompt(db, scope).await?;
     Ok(SettingsView {

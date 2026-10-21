@@ -10,7 +10,9 @@
 pub mod breaker;
 pub mod client;
 pub mod fc_loop;
+pub mod settings;
 pub mod wire;
+pub use settings::{init_llm_defaults, LlmSettings};
 
 pub use breaker::CircuitBreaker;
 pub use client::{ClientOptions, GeminiClient, GenerateBackend, ALLOWED_MODELS, DEFAULT_MODEL};

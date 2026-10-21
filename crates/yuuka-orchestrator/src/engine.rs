@@ -1050,9 +1050,12 @@ impl ChatEngine {
         let plaintext = crypto
             .decrypt_text(&triplet.encrypted, &triplet.iv, &triplet.tag)
             .map_err(|e| llm_fail(format!("bot gemini key decrypt: {e}")))?;
+        let llm = crate::llm_settings::get(&self.db, bid)
+            .await
+            .map_err(db_fail)?;
         let backend = self
             .factory
-            .build(bot_repo::BOT_DEFAULT_MODEL, SecretString::from(plaintext))
+            .build(&llm.model, SecretString::from(plaintext))
             .map_err(|e| llm_fail(e.to_string()))?;
 
         // 5. FC ループ（ギルドは ctx.guild_id を通す・リッチ返信は常時有効・汎用モードのツールカタログ）。
@@ -1260,7 +1263,10 @@ impl ChatEngine {
                 };
                 (
                     persona,
-                    bot_repo::BOT_DEFAULT_MODEL.to_owned(),
+                    crate::llm_settings::get(&self.db, bot_id.as_str())
+                        .await
+                        .ok()?
+                        .model,
                     t.encrypted,
                     t.iv,
                     t.tag,

@@ -79,7 +79,7 @@ pub(crate) async fn status(
     let gemini_model = snap
         .gemini_model
         .filter(|m| !m.is_empty())
-        .unwrap_or_else(|| "gemini-3.1-flash-lite".to_owned());
+        .unwrap_or_else(|| yuuka_gemini::LlmSettings::default().model);
     let gemini_api_key = mask(snap.gemini_key_present.then_some("configured"));
 
     Ok(Json(json!({
