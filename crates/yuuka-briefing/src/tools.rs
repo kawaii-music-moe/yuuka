@@ -72,12 +72,9 @@ pub fn tools_with_aux_text(
     ])
 }
 
-/// briefing 登録時の互換ポリシー。通信時は別途 DNS を含む厳密検査を行う。
+/// briefing 登録時の公開 URL ポリシー。通信時は別途 DNS を含む厳密検査を行う。
 pub(crate) fn is_likely_public_http_url(raw: &str) -> bool {
-    yuuka_outbound::is_likely_public_http_url(
-        raw,
-        yuuka_outbound::RegistrationPolicy::BriefingLegacy,
-    )
+    yuuka_outbound::is_likely_public_http_url(raw, yuuka_outbound::RegistrationPolicy::PublicHttp)
 }
 
 fn fail(message: impl Into<String>) -> ToolOutcome {
@@ -611,15 +608,22 @@ mod tests {
                 .payload["success"],
             false
         );
-        // 内部フィード → SSRF で fail。
-        assert_eq!(
-            configure
-                .call(&ctx(), json!({"add_news_feed": "http://10.0.0.1/rss"}))
+        // 省略形・IPv4 射影・予約レンジも保存する前に拒否する。
+        for feed in [
+            "http://10.0.0.1/rss",
+            "http://127.1/rss",
+            "http://2130706433/rss",
+            "http://[::ffff:127.0.0.1]/rss",
+            "http://100.64.0.1/rss",
+            "http://198.18.0.1/rss",
+            "http://[2001:db8::1]/rss",
+        ] {
+            let out = configure
+                .call(&ctx(), json!({"add_news_feed": feed}))
                 .await
-                .unwrap()
-                .payload["success"],
-            false
-        );
+                .unwrap();
+            assert_eq!(out.payload["success"], false, "{feed}");
+        }
 
         // 有効化 + 地名 + 公開フィード追加。
         let out = configure

@@ -621,6 +621,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn briefing_post_rejects_reserved_and_normalized_ip_feeds() {
+        let app = app().await;
+        for feed in [
+            "http://127.1/rss",
+            "http://2130706433/rss",
+            "http://[::ffff:127.0.0.1]/rss",
+            "http://100.64.0.1/rss",
+            "http://198.18.0.1/rss",
+            "http://224.0.0.1/rss",
+            "http://[2001:db8::1]/rss",
+            "http://[fec0::1]/rss",
+            "http://[ff02::1]/rss",
+        ] {
+            let body = serde_json::json!({"news_feeds": [feed]}).to_string();
+            let (status, result) = send(&app, "POST", "/api/briefing-config", &body).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{feed}");
+            assert!(result["message"]
+                .as_str()
+                .unwrap()
+                .contains("不正なフィードURL"));
+        }
+        let (status, result) = send(&app, "GET", "/api/briefing-config", "").await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(result["config"].is_null());
+    }
+
+    #[tokio::test]
     async fn briefing_test_requires_config_then_null_runner_reports_failure() {
         let app = app().await;
         // 未設定 → 400。
