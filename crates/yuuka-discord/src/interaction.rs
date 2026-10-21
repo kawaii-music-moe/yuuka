@@ -28,6 +28,24 @@ pub struct InteractionDeps {
     pub dm: Arc<dyn MemberDmSender>,
 }
 
+/// チャネル中立のボタン処理ポート。Discord REST クライアントを要求しない。
+#[derive(Clone)]
+pub struct ComponentInteractionDeps {
+    pub membership: Arc<dyn MembershipService>,
+    pub directory: Arc<dyn BotDirectory>,
+    pub dm: Arc<dyn MemberDmSender>,
+}
+
+impl From<&InteractionDeps> for ComponentInteractionDeps {
+    fn from(deps: &InteractionDeps) -> Self {
+        Self {
+            membership: deps.membership.clone(),
+            directory: deps.directory.clone(),
+            dm: deps.dm.clone(),
+        }
+    }
+}
+
 /// フォローアップ送信の記述（共有承認後の推奨ペルソナ導入確認）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Followup {
@@ -76,10 +94,32 @@ pub fn button_custom_id(interaction: &Interaction) -> Option<&str> {
 /// 呼び出し側が best-effort 解決した表示名（現行 `interaction.guild.members.fetch(...).displayName`）。
 ///
 /// **利用申請の受付/結果 DM（Node `sendMemberRequestDM`/`sendMemberDecisionDM`）は本関数から送る**
-/// （Discord ボタン経路）。将来 `/ws/chat` がコンポーネント dispatch を持つ場合、Node が「全経路で DM を
-/// 送る」挙動（`componentInteractionService`）に合わせて DM 送信を再配線する必要がある。
+/// （Discord ボタン経路）。WebSocket も同じ通知ポートを注入して利用する。
 pub async fn decide(
     deps: &InteractionDeps,
+    action: &str,
+    id_str: &str,
+    extra: &str,
+    invoker: &UserId,
+    applicant_label: Option<String>,
+    guild_label: Option<String>,
+) -> InteractionPlan {
+    decide_component(
+        &ComponentInteractionDeps::from(deps),
+        action,
+        id_str,
+        extra,
+        invoker,
+        applicant_label,
+        guild_label,
+    )
+    .await
+}
+
+/// Discord と WebSocket が共有する業務処理。
+#[allow(clippy::too_many_arguments)]
+pub async fn decide_component(
+    deps: &ComponentInteractionDeps,
     action: &str,
     id_str: &str,
     extra: &str,
@@ -246,7 +286,7 @@ pub async fn decide(
 
 /// 推奨ペルソナが公開なら、インポート確認ボタン付きフォローアップを組み立てる。
 async fn build_persona_followup(
-    deps: &InteractionDeps,
+    deps: &ComponentInteractionDeps,
     recommended_persona_id: Option<i64>,
 ) -> Option<Followup> {
     let persona_id = recommended_persona_id?;

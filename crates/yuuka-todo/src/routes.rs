@@ -5,6 +5,9 @@
 //! 未指定・system_default は 403、未アクセスは 404）で束ねて repo に渡す。
 //! 本ルータは supervisor 側で共通レイヤ（CSRF/body 上限）配下にマージされる。
 //!
+//! 書き込み（add/update/progress/complete/delete）は PWA・ツールと共通の [`TodoService`] を通す
+//! （D02 #126）。ここに残すのは JSON の解釈（`id` 欠落の 400 など）と応答形式への変換だけ。
+//!
 //! 方針（M-12・全ドメイン共通）: mutation の該当無応答は Node パリティ。complete/delete は
 //! **200 `{success:<bool>}`** を返す（該当無でも 404 にしない・delete は `deletedId` を返さない）。
 
@@ -13,12 +16,13 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Deserialize;
-use yuuka_core::{cron_util, WebError};
+use yuuka_core::WebError;
 use yuuka_types::{EmptyData, Envelope};
 use yuuka_web::{resolve_scope, ApiError, AppState, AuthenticatedUser, Db, ScopedJson};
 
 use crate::dto::{NewTodo, TaskData, TaskDetailData, TaskListData, TodoProgress, TodoUpdate};
 use crate::repo::TodoRepo;
+use crate::service::{ProgressUpdate, TodoService};
 
 #[derive(Debug, Deserialize)]
 struct ListQuery {
@@ -161,28 +165,12 @@ async fn add(
     State(db): State<Db>,
     ScopedJson {
         bot_id,
-        value: mut input,
+        value: input,
     }: ScopedJson<NewTodo>,
 ) -> Result<Json<Envelope<TaskData>>, ApiError> {
-    if input.title.trim().is_empty() {
-        return Err(ApiError(WebError::Validation(
-            "title is required".to_owned(),
-        )));
-    }
-    // R19: ルーチンの cron 式はツールと同じく実行時の parser で検証する（空は単発扱い）。
-    input.repeat_rule = input
-        .repeat_rule
-        .map(|rule| rule.trim().to_owned())
-        .filter(|rule| !rule.is_empty());
-    if let Some(rule) = &input.repeat_rule {
-        if !cron_util::is_valid(rule) {
-            return Err(ApiError(WebError::Validation(
-                "repeatRule must be a valid cron expression".to_owned(),
-            )));
-        }
-    }
+    // タイトル必須・繰り返し規則（R19）の検証は PWA・ツールと共通のサービスで行う。
     let scope = resolve_scope(&user.0, &db, bot_id.as_deref()).await?;
-    let task = TodoRepo::new(&db).add(&scope, input).await?;
+    let task = TodoService::new(&db).add(&scope, input).await?;
     Ok(Json(Envelope::ok(TaskData { task })))
 }
 
@@ -204,7 +192,7 @@ async fn update(
     }
     let id = input.id;
     let scope = resolve_scope(&user.0, &db, bot_id.as_deref()).await?;
-    match TodoRepo::new(&db).update(&scope, id, input).await? {
+    match TodoService::new(&db).update(&scope, id, input).await? {
         Some(task) => Ok(Json(Envelope::ok(TaskData { task }))),
         None => Err(ApiError(WebError::NotFound)),
     }
@@ -230,17 +218,14 @@ async fn progress(
         )));
     }
     let scope = resolve_scope(&user.0, &db, bot_id.as_deref()).await?;
-    let repo = TodoRepo::new(&db);
-    // Node: サブタスクを持つ親は進捗が子から算出されるため手動更新不可（409）。
-    if !repo.list_subtasks_tree(&scope, input.id).await?.is_empty() {
-        return Err(ApiError(WebError::Conflict));
-    }
-    match repo
+    match TodoService::new(&db)
         .update_progress(&scope, input.id, input.progress, input.note)
         .await?
     {
-        Some(task) => Ok(Json(Envelope::ok(TaskData { task }))),
-        None => Err(ApiError(WebError::NotFound)),
+        ProgressUpdate::Updated(task) => Ok(Json(Envelope::ok(TaskData { task }))),
+        // Node: サブタスクを持つ親は進捗が子から算出されるため手動更新不可（409）。
+        ProgressUpdate::HasSubtasks { .. } => Err(ApiError(WebError::Conflict)),
+        ProgressUpdate::NotFound => Err(ApiError(WebError::NotFound)),
     }
 }
 
@@ -254,10 +239,12 @@ async fn complete(
 ) -> Result<Response, ApiError> {
     let scope = resolve_scope(&user.0, &db, bot_id.as_deref()).await?;
     // Node parity: 完了できれば `{success:true, task}`、該当無は 404 ではなく `200 {success:false}`。
-    Ok(match TodoRepo::new(&db).complete(&scope, input.id).await? {
-        Some(task) => Json(Envelope::ok(TaskData { task })).into_response(),
-        None => Json(Envelope::<EmptyData>::bare(false)).into_response(),
-    })
+    Ok(
+        match TodoService::new(&db).complete(&scope, input.id).await? {
+            Some(task) => Json(Envelope::ok(TaskData { task })).into_response(),
+            None => Json(Envelope::<EmptyData>::bare(false)).into_response(),
+        },
+    )
 }
 
 async fn delete(
@@ -270,6 +257,6 @@ async fn delete(
 ) -> Result<Json<Envelope<EmptyData>>, ApiError> {
     let scope = resolve_scope(&user.0, &db, bot_id.as_deref()).await?;
     // Node parity: `{success: <削除できたか>}`（`deletedId` は返さない・該当無も 200）。
-    let ok = TodoRepo::new(&db).delete(&scope, input.id).await?;
+    let ok = TodoService::new(&db).delete(&scope, input.id).await?;
     Ok(Json(Envelope::bare(ok)))
 }

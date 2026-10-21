@@ -69,10 +69,21 @@ pub struct ContactData {
 
 /// コンテキストノートの上限文字数（Node `CONTEXT_NOTE_MAX_LENGTH`・§3.7.2）。
 ///
-/// **文字数の定義**: Node は `content.length`（UTF-16 code unit 数）で判定する。
-/// Rust では `chars().count()`（Unicode scalar 値数）で近似する。BMP 内文字（日本語含む）は
-/// 両者一致し、実運用の上限判定に差は生じない（サロゲートペア＝絵文字等でのみ理論差）。
+/// **文字数の定義**: Node の `content.length` と同じ UTF-16 code unit 数で数える
+/// （[`crate::service::content_length`]）。管理 API・PWA・ツールのすべてで同じ数え方にする
+/// （D02 #126。以前は PWA だけ UTF-16、他は `chars()` で、絵文字の多い本文で上限が食い違っていた）。
 pub const CONTEXT_NOTE_MAX_LENGTH: usize = 10_000;
+
+/// コンテキストノートの 1 行（PWA の共有ノート表示用・issue #33/#47）。
+///
+/// 管理画面とツールは本文だけを扱い、タイトルは PWA だけが表示・編集する。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContextNote {
+    pub title: String,
+    pub body: String,
+    /// `'YYYY-MM-DD HH:MM:SS'`（SQLite localtime）。
+    pub updated_at: String,
+}
 
 /// クライアントへ返すクリップボードエントリ（クリーンビュー・snake_case）。
 ///

@@ -29,7 +29,7 @@ pub use tenants::{
 };
 pub use tool_registry::{build_native_provider, build_tool_registry};
 pub use webhook::{GeminiAuxText, MessengerWebhookNotifier};
-pub use ws::ws_routes;
+pub use ws::{ws_routes, ws_routes_with_interactions};
 
 /// 完成アプリのルータを組み立てる（フレームワーク + 認証発行 + 会話 WS + 全ドメイン + 任意の静的配信 + 共通レイヤ）。
 ///
