@@ -4,13 +4,13 @@
 //! 「user_id/bot_id 無しクエリ」を型で不能化する。読みは [`ReadPool`]、書きは
 //! [`WriterHandle`]（BEGIN IMMEDIATE）へ送る。
 
-use rusqlite::{params, Row};
+use rusqlite::{params, OptionalExtension, Row};
 use yuuka_core::scope::ScopedRepo;
 use yuuka_core::{DbError, UserScope};
 use yuuka_db::{map_sqlite, ReadPool, WriterHandle};
 use yuuka_web::Db;
 
-use crate::dto::{ClipboardEntry, Contact, NewContact};
+use crate::dto::{ClipboardEntry, Contact, ContextNote, NewContact};
 
 /// 返却列（クリーンビュー・内部列 user_id/bot_id/birthday_reminded_year 等は含めない）。
 const CONTACT_COLUMNS: &str = "id, name, birthday, relationship, contact_info, notes, tags, \
@@ -409,10 +409,36 @@ impl<'a> ContextNoteRepo<'a> {
             .await
     }
 
-    /// 全文を置換する（upsert）。Node `setContextNote`（`INSERT ... ON CONFLICT DO UPDATE`）。
+    /// タイトル・本文・更新時刻を返す（PWA の共有ノート用・未登録なら `None`）。
     ///
-    /// 文字数上限の検証は route 側で行う（Node は route と repo の双方で確認するが、Rust では
-    /// route で 400 を返すため repo 到達時は上限内が保証される）。
+    /// # Errors
+    /// クエリ失敗時 [`DbError`]。
+    pub async fn get_note(&self, scope: &UserScope) -> Result<Option<ContextNote>, DbError> {
+        let (uid, bid) = scope_keys(scope);
+        self.read
+            .read(move |conn| {
+                conn.query_row(
+                    "SELECT title, content, updated_at FROM context_notes \
+                     WHERE user_id = ?1 AND bot_id = ?2",
+                    params![uid, bid],
+                    |r| {
+                        Ok(ContextNote {
+                            title: r.get(0)?,
+                            body: r.get(1)?,
+                            updated_at: r.get(2)?,
+                        })
+                    },
+                )
+                .optional()
+                .map_err(map_sqlite)
+            })
+            .await
+    }
+
+    /// 本文だけを置換する（upsert・タイトルは据え置き、新規は列の既定 `Shared note`）。
+    /// Node `setContextNote`（`INSERT ... ON CONFLICT DO UPDATE`）。
+    ///
+    /// 文字数上限は [`crate::service::ContextNoteService`] が検証する（全入口共通）。
     ///
     /// # Errors
     /// 書き込み失敗時 [`DbError`]。
@@ -426,6 +452,35 @@ impl<'a> ContextNoteRepo<'a> {
                      ON CONFLICT(user_id, bot_id) DO UPDATE SET \
                        content = excluded.content, updated_at = datetime('now', 'localtime')",
                     params![uid, bid, content],
+                )
+                .map_err(map_sqlite)?;
+                Ok(())
+            })
+            .await
+    }
+
+    /// タイトルと本文をまとめて置換する（upsert・PWA の共有ノート保存）。
+    ///
+    /// issue #47: Node の `PUT /api/client/shared-note` はタイトルを受け取っても保存しなかった。
+    ///
+    /// # Errors
+    /// 書き込み失敗時 [`DbError`]。
+    pub async fn set_with_title(
+        &self,
+        scope: &UserScope,
+        title: String,
+        content: String,
+    ) -> Result<(), DbError> {
+        let (uid, bid) = scope_keys(scope);
+        self.writer
+            .execute(move |conn| {
+                conn.execute(
+                    "INSERT INTO context_notes (user_id, bot_id, title, content, updated_at) \
+                     VALUES (?1, ?2, ?3, ?4, datetime('now', 'localtime')) \
+                     ON CONFLICT(user_id, bot_id) DO UPDATE SET \
+                       title = excluded.title, content = excluded.content, \
+                       updated_at = datetime('now', 'localtime')",
+                    params![uid, bid, title, content],
                 )
                 .map_err(map_sqlite)?;
                 Ok(())

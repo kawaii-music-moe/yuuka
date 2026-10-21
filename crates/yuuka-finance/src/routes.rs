@@ -9,6 +9,9 @@
 //! （planned_payments・消込含む）・月次集計（`GET /api/expenses` の total/incomeTotal/
 //! breakdown/trend）・receipt OCR（upload-receipt・`ReceiptParser` シーム経由・supervisor が実
 //! `ChatEngine` へ配線）。
+//!
+//! 収支の記帳（add）は PWA・ツールと共通の [`FinanceService`] を通す（D02 #126）。予算上限・
+//! 支払い予定は D02 の対象外で、まだ入口ごとに repo を呼ぶ。
 
 use std::sync::Arc;
 
@@ -30,6 +33,7 @@ use crate::dto::{
 };
 use crate::receipt::{ReceiptError, ReceiptParser};
 use crate::repo::ExpenseRepo;
+use crate::service::FinanceService;
 
 #[derive(Debug, Deserialize)]
 struct BotQuery {
@@ -188,14 +192,10 @@ async fn add(
         value: input,
     }: ScopedJson<NewExpense>,
 ) -> Result<Json<Envelope<ExpenseData>>, ApiError> {
-    // Node parity: amount と category は必須（amount は 0 も金額として不正扱い＝truthy 判定）。
-    if input.amount == 0 || input.category.trim().is_empty() {
-        return Err(ApiError(WebError::Validation(
-            "amount and category are required".to_owned(),
-        )));
-    }
+    // Node parity: amount（0 は不正・負の調整は可）と category は必須。判定は PWA・ツールと共通の
+    // サービスで行う（D02 #126）。
     let scope = resolve_scope(&user.0, &db, bot_id.as_deref()).await?;
-    let expense = ExpenseRepo::new(&db).add(&scope, input).await?;
+    let expense = FinanceService::new(&db).add_entry(&scope, input).await?;
     Ok(Json(Envelope::ok(ExpenseData { expense })))
 }
 

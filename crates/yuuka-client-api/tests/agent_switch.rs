@@ -97,7 +97,26 @@ fn app(db: Db) -> Router {
     ));
     let rate_limiter: Arc<dyn RateLimiter> = Arc::new(InMemoryRateLimiter::new(db.clone()));
     let state = AppState::new(Arc::new(FakeAuth), WebConfig::default(), db);
-    yuuka_client_api::routes_with(engine, rate_limiter).with_state(state)
+    // 管理画面のドメイン API も同じルータに載せ、入口をまたいだ保存・検証を確かめる（D02 #126）。
+    yuuka_client_api::routes_with(engine, rate_limiter)
+        .merge(yuuka_todo::routes())
+        .merge(yuuka_finance::routes())
+        .merge(yuuka_schedule::routes())
+        .merge(yuuka_personal::routes())
+        .with_state(state)
+}
+
+/// エージェント（ツール）として `mybot` で呼ぶ文脈。
+fn tool_ctx() -> yuuka_core::ToolContext {
+    yuuka_core::ToolContext::new(yuuka_core::BotId::new("mybot"), yuuka_core::UserId::new(ME))
+}
+
+fn find_tool(tools: &[Arc<dyn yuuka_core::Tool>], name: &str) -> Arc<dyn yuuka_core::Tool> {
+    tools
+        .iter()
+        .find(|t| t.declaration().name.as_str() == name)
+        .cloned()
+        .unwrap()
 }
 
 async fn call(app: &Router, method: &str, uri: &str, body: Option<Value>) -> (StatusCode, Value) {
@@ -358,4 +377,299 @@ async fn receipt_scan_validates_input_before_calling_the_llm() {
         body["message"].as_str().unwrap().contains("Gemini APIキー"),
         "{body}"
     );
+}
+
+// ─── D02 #126: 管理 API・PWA・ツールの 3 入口が同じ業務サービスを通る ─────────────────
+
+#[tokio::test]
+async fn todo_entrances_share_storage_and_validation_but_keep_their_wire_contracts() {
+    let (db, _path) = fresh_db();
+    let tools = yuuka_todo::tools(db.clone()).unwrap();
+    let app = app(db);
+
+    let out = find_tool(&tools, "addTodo")
+        .call(&tool_ctx(), json!({ "title": "tool task" }))
+        .await
+        .unwrap();
+    assert_eq!(out.payload["success"], true);
+
+    // 管理画面: `{success, task}`・数値 ID。
+    let (status, admin) = call(
+        &app,
+        "POST",
+        "/api/tasks/add",
+        Some(json!({ "botId": "mybot", "title": "admin task", "dueDate": "2026-10-20" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{admin}");
+    assert_eq!(admin["success"], true);
+    let admin_id = admin["task"]["id"].as_i64().unwrap();
+
+    // PWA: 201・素の JSON・文字列 ID・`completed`。
+    let (status, pwa) = call(
+        &app,
+        "POST",
+        "/api/client/todos?botId=mybot",
+        Some(json!({ "title": "pwa task", "list": "仕事" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{pwa}");
+    assert!(pwa["id"].is_string());
+    assert_eq!(pwa["completed"], false);
+    assert_eq!(pwa["list"], "仕事");
+    assert!(pwa.get("success").is_none());
+
+    assert_eq!(
+        todo_titles(&app, "?botId=mybot").await.len(),
+        3,
+        "3 入口の ToDo は同じ一覧に載る"
+    );
+
+    // PWA の完了は管理画面の完了と同じ状態になる。戻すと open。
+    let patch = format!("/api/client/todos/{admin_id}?botId=mybot");
+    let (_, done) = call(&app, "PATCH", &patch, Some(json!({ "completed": true }))).await;
+    assert_eq!(done["completed"], true);
+    let (_, admin_done) = call(&app, "GET", "/api/tasks?botId=mybot&status=done", None).await;
+    assert_eq!(admin_done["tasks"][0]["title"], "admin task");
+    let (_, reopened) = call(&app, "PATCH", &patch, Some(json!({ "completed": false }))).await;
+    assert_eq!(reopened["completed"], false);
+
+    // 同じ検証が両方の HTTP 入口で行を書く前に効く（文言も同じ）。
+    for (uri, input) in [
+        ("/api/tasks/add", json!({ "botId": "mybot", "title": " " })),
+        ("/api/client/todos?botId=mybot", json!({ "title": " " })),
+    ] {
+        let (status, error) = call(&app, "POST", uri, Some(input)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{uri}: {error}");
+        assert_eq!(error["message"], "title is required");
+    }
+    let (status, error) = call(
+        &app,
+        "POST",
+        "/api/tasks/add",
+        Some(json!({ "botId": "mybot", "title": "routine", "repeatRule": "0 0 30 2 *" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{error}");
+    assert_eq!(todo_titles(&app, "?botId=mybot").await.len(), 3);
+}
+
+#[tokio::test]
+async fn expense_entrances_share_totals_and_keep_signed_admin_adjustments() {
+    let (db, _path) = fresh_db();
+    let tools = yuuka_finance::tools(db.clone()).unwrap();
+    let app = app(db);
+    let add = find_tool(&tools, "addExpense");
+
+    let out = add
+        .call(
+            &tool_ctx(),
+            json!({ "amount": 100, "category": "食費", "date": "2026-10-20" }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(out.payload["success"], true);
+
+    // 管理画面は従来どおり負の調整を受け付ける（0 は不可）。
+    let (status, admin) = call(
+        &app,
+        "POST",
+        "/api/expenses/add",
+        Some(json!({ "botId": "mybot", "amount": -20, "category": "食費", "date": "2026-10-20" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{admin}");
+    assert!(admin["expense"]["id"].is_number());
+
+    let (status, pwa) = call(
+        &app,
+        "POST",
+        "/api/client/finance/transactions?botId=mybot",
+        Some(json!({ "amount": 500, "category": "給与", "kind": "income", "date": "2026-10-20" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{pwa}");
+    assert!(pwa["id"].is_string());
+    assert_eq!(pwa["kind"], "income");
+
+    let (_, totals) = call(
+        &app,
+        "GET",
+        "/api/client/finance/summary?botId=mybot&month=2026-10",
+        None,
+    )
+    .await;
+    assert_eq!(totals["expense"], 80);
+    assert_eq!(totals["income"], 500);
+    assert_eq!(totals["balance"], 420);
+
+    // 利用者の取引登録（PWA・ツール）は 1 円以上だけ。どちらも何も書かない。
+    for amount in [json!(-20), json!(0), json!(0.5)] {
+        let (status, error) = call(
+            &app,
+            "POST",
+            "/api/client/finance/transactions?botId=mybot",
+            Some(json!({ "amount": amount, "category": "食費" })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{amount}: {error}");
+        assert_eq!(error["message"], "amount and category are required");
+    }
+    let out = add
+        .call(&tool_ctx(), json!({ "amount": -20, "category": "食費" }))
+        .await
+        .unwrap();
+    assert_eq!(out.payload["success"], false);
+    for (uri, input) in [
+        (
+            "/api/expenses/add",
+            json!({ "botId": "mybot", "amount": 0, "category": "食費" }),
+        ),
+        (
+            "/api/client/finance/transactions?botId=mybot",
+            json!({ "amount": 100, "category": " " }),
+        ),
+    ] {
+        let (status, error) = call(&app, "POST", uri, Some(input)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{uri}: {error}");
+        assert_eq!(error["message"], "amount and category are required");
+    }
+    let (_, rows) = call(
+        &app,
+        "GET",
+        "/api/client/finance/transactions?botId=mybot&month=2026-10",
+        None,
+    )
+    .await;
+    assert_eq!(rows.as_array().unwrap().len(), 3);
+}
+
+#[tokio::test]
+async fn note_entrances_keep_the_pwa_title_and_share_the_utf16_limit() {
+    let (db, _path) = fresh_db();
+    let tools = yuuka_personal::tools(db.clone()).unwrap();
+    let app = app(db);
+    let set = find_tool(&tools, "setContextNote");
+
+    let (status, pwa) = call(
+        &app,
+        "PUT",
+        "/api/client/shared-note?botId=mybot",
+        Some(json!({ "title": "私のノート", "body": "PWA body" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{pwa}");
+    assert_eq!(pwa["title"], "私のノート");
+
+    let (_, admin) = call(&app, "GET", "/api/context-note?botId=mybot", None).await;
+    assert_eq!(admin["success"], true);
+    assert_eq!(admin["content"], "PWA body");
+
+    // 管理画面・ツールの保存は本文だけを書き換え、PWA のタイトルは残る。
+    let out = set
+        .call(&tool_ctx(), json!({ "content": "tool body" }))
+        .await
+        .unwrap();
+    assert_eq!(out.payload["success"], true);
+    let (_, note) = call(&app, "GET", "/api/client/shared-note?botId=mybot", None).await;
+    assert_eq!(note["title"], "私のノート");
+    assert_eq!(note["body"], "tool body");
+
+    // 上限は全入口で UTF-16 の長さ（絵文字 5,001 個 = 10,002）。どの入口でも保存しない。
+    let over_limit = "😀".repeat(5_001);
+    let out = set
+        .call(&tool_ctx(), json!({ "content": over_limit }))
+        .await
+        .unwrap();
+    assert_eq!(out.payload["success"], false);
+    assert_eq!(
+        out.payload["message"],
+        "コンテキストノートは10,000文字以内です（現在: 10,002文字）"
+    );
+    let (status, error) = call(
+        &app,
+        "POST",
+        "/api/context-note",
+        Some(json!({ "botId": "mybot", "content": over_limit })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{error}");
+    assert_eq!(
+        error["message"],
+        "コンテキストノートは10,000文字以内です（現在: 10,002文字）"
+    );
+    let (status, error) = call(
+        &app,
+        "PUT",
+        "/api/client/shared-note?botId=mybot",
+        Some(json!({ "title": "x", "body": over_limit })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{error}");
+    assert_eq!(error["message"], "shared note exceeds 10000 chars");
+
+    let (_, note) = call(&app, "GET", "/api/client/shared-note?botId=mybot", None).await;
+    assert_eq!(note["title"], "私のノート");
+    assert_eq!(note["body"], "tool body", "拒否した保存はノートを変えない");
+}
+
+#[tokio::test]
+async fn schedule_entrances_share_validation_and_reminder_defaults() {
+    let (db, _path) = fresh_db();
+    let tools = yuuka_schedule::tools(db.clone()).unwrap();
+    let app = app(db);
+
+    let out = find_tool(&tools, "addSchedule")
+        .call(
+            &tool_ctx(),
+            json!({ "title": "tool schedule", "start_at": "2026-10-20T10:00:00" }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(out.payload["success"], true);
+
+    let (status, admin) = call(
+        &app,
+        "POST",
+        "/api/schedules/add",
+        Some(json!({ "botId": "mybot", "title": "admin schedule", "startAt": "2026-10-20 11:00:00" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{admin}");
+    assert_eq!(admin["schedule"]["remind_before_minutes"], 10);
+
+    let (status, pwa) = call(
+        &app,
+        "POST",
+        "/api/client/calendar/events?botId=mybot",
+        Some(json!({ "title": "pwa schedule", "startsAt": "2026-10-20T12:00" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{pwa}");
+    assert!(pwa["id"].is_string());
+
+    for (uri, input) in [
+        (
+            "/api/schedules/add",
+            json!({ "botId": "mybot", "title": " ", "startAt": "2026-10-20 13:00:00" }),
+        ),
+        (
+            "/api/client/calendar/events?botId=mybot",
+            json!({ "title": " ", "startsAt": "2026-10-20T13:00" }),
+        ),
+    ] {
+        let (status, error) = call(&app, "POST", uri, Some(input)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{uri}: {error}");
+        assert_eq!(error["message"], "title is required");
+    }
+
+    let (status, all) = call(
+        &app,
+        "GET",
+        "/api/client/calendar/events?botId=mybot&from=2026-10-20&to=2026-10-20",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{all}");
+    assert_eq!(all.as_array().unwrap().len(), 3);
 }

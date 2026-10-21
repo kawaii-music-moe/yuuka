@@ -127,7 +127,7 @@ async function activate(id: number | null) {
 }
 
 async function togglePublish(p: PersonaRecord) {
-	const willPublish = p.is_public !== 1;
+	const willPublish = !p.is_public;
 	const ok = await confirmDialog({
 		message: willPublish
 			? `ペルソナ「${p.name}」をマーケットプレイスに公開しますか？\n全ユーザーが内容を閲覧・インポートできるようになります。`
@@ -212,7 +212,7 @@ async function importPersona(id: number) {
 								{#if p.id === activePersonaId}
 									<Badge tone="status-sent">適用中</Badge>
 								{/if}
-								{#if p.is_public === 1}
+								{#if p.is_public}
 									<Badge tone="status-pending">公開中</Badge>
 								{/if}
 							</div>
@@ -233,8 +233,8 @@ async function importPersona(id: number) {
 								<Icon name="edit" />編集
 							</button>
 							<button type="button" class="btn-mini" onclick={() => togglePublish(p)}>
-								<Icon name={p.is_public === 1 ? "lock" : "public"} />
-								{p.is_public === 1 ? "非公開にする" : "公開する"}
+								<Icon name={p.is_public ? "lock" : "public"} />
+								{p.is_public ? "非公開にする" : "公開する"}
 							</button>
 							<button
 								type="button"

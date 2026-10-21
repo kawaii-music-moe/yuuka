@@ -19,7 +19,10 @@ export function priorityLabel(priority: string | null | undefined): string {
 }
 
 /** tags（JSON文字列）を配列へ（旧 parseTaskTags）。不正な JSON は空配列。 */
-export function parseTaskTags(raw: string | null | undefined): string[] {
+export function parseTaskTags(
+	raw: string[] | string | null | undefined,
+): string[] {
+	if (Array.isArray(raw)) return raw;
 	try {
 		const t = JSON.parse(raw || "[]");
 		return Array.isArray(t) ? (t as string[]) : [];

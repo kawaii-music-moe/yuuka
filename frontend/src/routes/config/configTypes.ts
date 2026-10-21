@@ -64,7 +64,6 @@ export interface BotAttrView {
 	discord_username?: string | null;
 	discord_application_id?: string | null;
 	recommended_persona_id?: number | null;
-	[k: string]: unknown;
 }
 export interface BotListResp {
 	success: boolean;

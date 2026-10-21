@@ -106,6 +106,22 @@ fn export_all_domains(base: &Path) -> Result<(), String> {
     yuuka_credential::export_bindings(base).map_err(|e| e.to_string())?;
     yuuka_playbook::export_bindings(base).map_err(|e| e.to_string())?;
     yuuka_persona::export_bindings(base).map_err(|e| e.to_string())?;
+    // ts-rs はフィールドと doc コメントの区切りに行末空白を出力する。
+    // 再生成後も `git diff --check` を通すため、ここで行末空白を除去する。
+    for entry in std::fs::read_dir(base.join("generated")).map_err(|e| e.to_string())? {
+        let path = entry.map_err(|e| e.to_string())?.path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("ts") {
+            continue;
+        }
+        let source = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+        let normalized = source
+            .lines()
+            .map(str::trim_end)
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n";
+        std::fs::write(&path, normalized).map_err(|e| e.to_string())?;
+    }
     Ok(())
 }
 

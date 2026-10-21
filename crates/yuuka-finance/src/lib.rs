@@ -10,6 +10,7 @@ pub mod dto;
 pub mod receipt;
 pub mod repo;
 pub mod routes;
+pub mod service;
 pub mod tools;
 
 pub use receipt::{NullReceiptParser, ReceiptError, ReceiptParser};

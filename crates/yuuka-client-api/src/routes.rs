@@ -16,6 +16,11 @@
 //! リッチ返信（embeds/files）は [`chat_history`] の応答へ含め、ファイル本体は
 //! `GET /api/client/chat/attachments/:id`（[`chat_attachment`]・所有者スコープ）で配信する
 //! （issue #41 PR #75 レビュー・P2）。
+//!
+//! ToDo・予定・取引・共有ノートの書き込みは、管理画面の `/api/*` やエージェントのツールと共通の
+//! 業務サービス（`TodoService`・`ScheduleService`・`FinanceService`・`ContextNoteService`）を通す
+//! （D02 #126・#161）。ここは PWA の入力（文字列 ID・`datetime-local`・`completed` など）の解釈と、
+//! PWA 向けの簡略ビュー（camelCase・文字列 ID・`Envelope` なし）への変換だけを持つ。
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex as StdMutex, PoisonError};
@@ -37,18 +42,20 @@ use yuuka_discord::{
 };
 use yuuka_finance::dto::{Expense, NewExpense};
 use yuuka_finance::repo::ExpenseRepo;
+use yuuka_finance::service::FinanceService;
 use yuuka_gemini::ALLOWED_MODELS;
-use yuuka_orchestrator::{
-    context_note, message_log, ChatEngine, ReceiptDraft, ReceiptExtractError,
-};
+use yuuka_orchestrator::{message_log, ChatEngine, ReceiptDraft, ReceiptExtractError};
 use yuuka_persona::dto::{SavePersona, PERSONA_MAX_LENGTH};
 use yuuka_persona::repo::PersonaRepo;
+use yuuka_personal::dto::ContextNote;
+use yuuka_personal::service::{ContextNoteService, CONTEXT_NOTE_MAX_LENGTH, DEFAULT_NOTE_TITLE};
 use yuuka_schedule::dto::NewSchedule;
 use yuuka_schedule::repo::ScheduleRepo;
 use yuuka_schedule::service::{AddOptions, ScheduleService};
-use yuuka_todo::dto::{NewTodo, Todo, TodoUpdate};
+use yuuka_todo::dto::{NewTodo, Todo};
 use yuuka_todo::repo::TodoRepo;
-use yuuka_web::{resolve_scope, AppState, AuthenticatedUser, Db, ScopeError};
+use yuuka_todo::service::TodoService;
+use yuuka_web::{resolve_scope, AppState, AuthenticatedUser, Db, DomainError, ScopeError};
 
 use crate::date_util::{day_start, next_day_start, parse_local_date, parse_local_month};
 use crate::dto::{
@@ -518,21 +525,24 @@ async fn save_active_persona_prompt(
 
 // ─── shared-note ─────────────────────────────────────────────────────────────
 
+fn map_note(note: ContextNote) -> SharedNoteView {
+    SharedNoteView {
+        id: "shared-note",
+        title: note.title,
+        body: note.body,
+        updated_at: db_to_utc_iso(&note.updated_at).unwrap_or(note.updated_at),
+    }
+}
+
 async fn note_get(
     ClientScope(scope): ClientScope,
     State(db): State<Db>,
 ) -> Result<Json<SharedNoteView>, ClientApiError> {
-    let (uid, bid) = (scope.user_id().as_str(), scope.bot_id().as_str());
-    match context_note::get_note(&db, uid, bid).await? {
-        Some(note) => Ok(Json(SharedNoteView {
-            id: "shared-note",
-            title: note.title,
-            body: note.body,
-            updated_at: db_to_utc_iso(&note.updated_at).unwrap_or(note.updated_at),
-        })),
+    match ContextNoteService::new(&db).get_note(&scope).await? {
+        Some(note) => Ok(Json(map_note(note))),
         None => Ok(Json(SharedNoteView {
             id: "shared-note",
-            title: "Shared note".to_owned(),
+            title: DEFAULT_NOTE_TITLE.to_owned(),
             body: String::new(),
             updated_at: now_iso(),
         })),
@@ -544,29 +554,19 @@ async fn note_put(
     State(db): State<Db>,
     Json(body): Json<SharedNoteUpdate>,
 ) -> Result<Json<SharedNoteView>, ClientApiError> {
-    let (uid, bid) = (scope.user_id().as_str(), scope.bot_id().as_str());
-    let body_text = body.body.unwrap_or_default();
-    if body_text.encode_utf16().count() > context_note::CONTEXT_NOTE_MAX_LENGTH {
-        return Err(ClientApiError::bad_request(format!(
-            "shared note exceeds {} chars",
-            context_note::CONTEXT_NOTE_MAX_LENGTH
-        )));
-    }
     let title = body.title.unwrap_or_default();
     // issue #47: Node は body.title を受け取りながら永続化せずエコーするだけだった。
-    context_note::set_note(&db, uid, bid, &title, &body_text).await?;
-    let note = context_note::get_note(&db, uid, bid)
-        .await?
-        .ok_or_else(|| ClientApiError {
-            status: StatusCode::INTERNAL_SERVER_ERROR,
-            message: "internal".to_owned(),
+    let note = ContextNoteService::new(&db)
+        .set_note(&scope, &title, body.body.unwrap_or_default())
+        .await
+        .map_err(|e| match e {
+            // 上限（UTF-16 で数える）の判定はサービス。PWA には従来の文言で返す。
+            DomainError::Invalid(_) => ClientApiError::bad_request(format!(
+                "shared note exceeds {CONTEXT_NOTE_MAX_LENGTH} chars"
+            )),
+            e => e.into(),
         })?;
-    Ok(Json(SharedNoteView {
-        id: "shared-note",
-        title: note.title,
-        body: note.body,
-        updated_at: db_to_utc_iso(&note.updated_at).unwrap_or(note.updated_at),
-    }))
+    Ok(Json(map_note(note)))
 }
 
 // ─── todos ───────────────────────────────────────────────────────────────────
@@ -595,18 +595,15 @@ async fn todos_add(
     State(db): State<Db>,
     Json(body): Json<NewTodoInput>,
 ) -> Result<(StatusCode, Json<TodoView>), ClientApiError> {
-    let title = body.title.as_deref().unwrap_or_default().trim().to_owned();
-    if title.is_empty() {
-        return Err(ClientApiError::bad_request("title is required"));
-    }
+    // タイトル必須の検証は管理画面・ツールと共通のサービス（空なら 400 "title is required"）。
     let new = NewTodo {
-        title,
+        title: body.title.as_deref().unwrap_or_default().trim().to_owned(),
         due_date: body.due_date.filter(|s| !s.is_empty()),
         // issue #47: PWA が送った list をそのまま使う（Node は保存せず常に "Personal" 固定だった）。
         list: body.list,
         ..Default::default()
     };
-    let created = TodoRepo::new(&db).add(&scope, new).await?;
+    let created = TodoService::new(&db).add(&scope, new).await?;
     Ok((StatusCode::CREATED, Json(map_todo(created))))
 }
 
@@ -619,17 +616,12 @@ async fn todos_patch(
     let Ok(id) = id.parse::<i64>() else {
         return Err(ClientApiError::not_found("Not found"));
     };
-    let status = if body.completed == Some(true) {
-        "done"
-    } else {
-        "open"
-    };
-    let update = TodoUpdate {
-        id,
-        status: Some(status.to_owned()),
-        ..Default::default()
-    };
-    match TodoRepo::new(&db).update(&scope, id, update).await? {
+    // 完了は管理画面の `POST /api/tasks/complete`・ツールの `completeTodo` と同じ処理。
+    let completed = body.completed == Some(true);
+    match TodoService::new(&db)
+        .set_completed(&scope, id, completed)
+        .await?
+    {
         Some(t) => Ok(Json(map_todo(t))),
         None => Err(ClientApiError::not_found("Not found")),
     }
@@ -725,10 +717,8 @@ async fn calendar_add(
     State(db): State<Db>,
     Json(body): Json<NewCalendarEventInput>,
 ) -> Result<(StatusCode, Json<CalendarEventView>), ClientApiError> {
+    // タイトル必須はサービスで検証する。ここは PWA の日時形式（`datetime-local`）の解釈だけ。
     let title = body.title.as_deref().unwrap_or_default().trim().to_owned();
-    if title.is_empty() {
-        return Err(ClientApiError::bad_request("title is required"));
-    }
     let start_at = body
         .starts_at
         .as_deref()
@@ -835,13 +825,14 @@ async fn finance_transactions(
     Ok(Json(rows.into_iter().map(map_transaction).collect()))
 }
 
-fn json_positive_i64(value: Option<&serde_json::Value>) -> Option<i64> {
+/// PWA が送る金額（数値または数値文字列）を整数円へ（小数は切り捨て）。解釈できなければ `None`。
+fn json_amount(value: Option<&serde_json::Value>) -> Option<i64> {
     let n = match value {
         Some(serde_json::Value::Number(n)) => n.as_f64(),
         Some(serde_json::Value::String(s)) => s.trim().parse::<f64>().ok(),
         _ => None,
     }?;
-    if !n.is_finite() || n <= 0.0 {
+    if !n.is_finite() {
         return None;
     }
     #[allow(clippy::cast_possible_truncation)]
@@ -853,13 +844,7 @@ async fn finance_add(
     State(db): State<Db>,
     Json(body): Json<NewTransactionInput>,
 ) -> Result<(StatusCode, Json<TransactionView>), ClientApiError> {
-    let amount = json_positive_i64(body.amount.as_ref());
-    let category = body
-        .category
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty());
-    let (Some(amount), Some(category)) = (amount, category) else {
+    let Some(amount) = json_amount(body.amount.as_ref()) else {
         return Err(ClientApiError::bad_request(
             "amount and category are required",
         ));
@@ -871,13 +856,21 @@ async fn finance_add(
     };
     let new = NewExpense {
         amount,
-        category: category.to_owned(),
+        category: body
+            .category
+            .as_deref()
+            .unwrap_or_default()
+            .trim()
+            .to_owned(),
         description: body.description.filter(|s| !s.is_empty()),
         date: body.date.filter(|s| !s.is_empty()),
         time: None,
         r#type: Some(kind.to_owned()),
     };
-    let created = ExpenseRepo::new(&db).add(&scope, new).await?;
+    // 1 円以上・カテゴリ必須の判定はツールの addExpense と共通（不正は 400 と同じ文言）。
+    let created = FinanceService::new(&db)
+        .add_transaction(&scope, new, "manual")
+        .await?;
     Ok((StatusCode::CREATED, Json(map_transaction(created))))
 }
 

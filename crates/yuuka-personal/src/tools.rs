@@ -11,17 +11,21 @@
 //! add/list/get+update/delete に素直に対応）＋ クリップボード（一時メモ）の
 //! addClipboardEntry / listClipboardEntries / deleteClipboardEntry（Node `clipboardFunctions.ts`）。
 //! 未移植（deferred・repo 拡張要）: searchContacts（`ContactRepo` に部分一致検索メソッドが無い）。
+//!
+//! コンテキストノート（get/set/appendContextNote）は管理画面・PWA と共通の [`ContextNoteService`]
+//! を通す（D02 #126・上限判定も共通）。
 
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use yuuka_core::tool::FunctionDeclaration;
-use yuuka_core::{DbError, Tool, ToolContext, ToolError, ToolName, ToolOutcome, UserScope};
-use yuuka_web::Db;
+use yuuka_core::{Tool, ToolContext, ToolError, ToolName, ToolOutcome, UserScope};
+use yuuka_web::{Db, DomainError};
 
 use crate::dto::{NewContact, CONTEXT_NOTE_MAX_LENGTH};
-use crate::repo::{ClipboardRepo, ContactRepo, ContextNoteRepo};
+use crate::repo::{ClipboardRepo, ContactRepo};
+use crate::service::{content_length, format_thousands, ContextNoteService};
 
 /// このドメインが公開する Native ツール一式を作る。
 ///
@@ -135,8 +139,8 @@ fn arg_str_vec(args: &Value, key: &str) -> Option<Vec<String>> {
     })
 }
 
-/// DbError をツール実行エラーへ（握り潰さず Gemini へ `{success:false}` として返る・§8.4）。
-fn exec_err(e: DbError) -> ToolError {
+/// DB・サービスの失敗をツール実行エラーへ（握り潰さず Gemini へ `{success:false}` として返る・§8.4）。
+fn exec_err(e: impl std::fmt::Display) -> ToolError {
     ToolError::Execution(e.to_string())
 }
 
@@ -581,20 +585,6 @@ impl Tool for SearchContactsTool {
     }
 }
 
-/// 整数を 3 桁区切りにする（Node `Number.toLocaleString()` の桁区切り・上限メッセージ用）。
-fn format_thousands(n: usize) -> String {
-    let digits = n.to_string();
-    let len = digits.len();
-    let mut out = String::with_capacity(len + len / 3);
-    for (i, ch) in digits.chars().enumerate() {
-        if i != 0 && (len - i).is_multiple_of(3) {
-            out.push(',');
-        }
-        out.push(ch);
-    }
-    out
-}
-
 // ─── getContextNote ──────────────────────────────────────────────────────────
 
 struct GetContextNoteTool {
@@ -617,11 +607,11 @@ impl Tool for GetContextNoteTool {
     }
 
     async fn call(&self, ctx: &ToolContext, _args: Value) -> Result<ToolOutcome, ToolError> {
-        let (content, _updated) = ContextNoteRepo::new(&self.db)
+        let (content, _updated) = ContextNoteService::new(&self.db)
             .get(&scope_of(ctx))
             .await
             .map_err(exec_err)?;
-        let length = content.chars().count();
+        let length = content_length(&content);
         Ok(ToolOutcome::from_payload(json!({
             "success": true,
             "content": content,
@@ -662,18 +652,15 @@ impl Tool for SetContextNoteTool {
     async fn call(&self, ctx: &ToolContext, args: Value) -> Result<ToolOutcome, ToolError> {
         // Node: `String(args.content ?? "")`（trim せず・空許容）。
         let content = args.get("content").and_then(Value::as_str).unwrap_or("");
-        let length = content.chars().count();
-        if length > CONTEXT_NOTE_MAX_LENGTH {
-            return Ok(fail_payload(format!(
-                "コンテキストノートは{}文字以内です（現在: {}文字）",
-                format_thousands(CONTEXT_NOTE_MAX_LENGTH),
-                format_thousands(length),
-            )));
-        }
-        ContextNoteRepo::new(&self.db)
-            .set(&scope_of(ctx), content.to_owned())
+        let length = match ContextNoteService::new(&self.db)
+            .set_content(&scope_of(ctx), content.to_owned())
             .await
-            .map_err(exec_err)?;
+        {
+            Ok(length) => length,
+            // 上限超過は管理画面と同じ案内文で返す。
+            Err(DomainError::Invalid(message)) => return Ok(fail_payload(message)),
+            Err(e) => return Err(exec_err(e)),
+        };
         Ok(ToolOutcome::from_payload(json!({
             "success": true,
             "message": "コンテキストノートを更新しました📝",
@@ -719,23 +706,26 @@ impl Tool for AppendContextNoteTool {
             return Ok(fail_payload("記憶する内容が空です。"));
         }
         let scope = scope_of(ctx);
-        let repo = ContextNoteRepo::new(&self.db);
-        let (current, _updated) = repo.get(&scope).await.map_err(exec_err)?;
+        let service = ContextNoteService::new(&self.db);
+        let (current, _updated) = service.get(&scope).await.map_err(exec_err)?;
         // Node parity: 現在が空でなければ改行で連結。
         let next = if current.is_empty() {
             trimmed
         } else {
             format!("{current}\n{trimmed}")
         };
-        let next_len = next.chars().count();
-        if next_len > CONTEXT_NOTE_MAX_LENGTH {
-            return Ok(fail_payload(format!(
-                "コンテキストノートの上限（{}文字）を超えるため追記できません。不要な項目を整理してから追記してください（現在: {}文字）",
-                format_thousands(CONTEXT_NOTE_MAX_LENGTH),
-                format_thousands(current.chars().count()),
-            )));
-        }
-        repo.set(&scope, next).await.map_err(exec_err)?;
+        let next_len = match service.set_content(&scope, next).await {
+            Ok(length) => length,
+            // 上限判定はサービス。追記できない理由は整理を促す追記専用の案内文で返す。
+            Err(DomainError::Invalid(_)) => {
+                return Ok(fail_payload(format!(
+                    "コンテキストノートの上限（{}文字）を超えるため追記できません。不要な項目を整理してから追記してください（現在: {}文字）",
+                    format_thousands(CONTEXT_NOTE_MAX_LENGTH),
+                    format_thousands(content_length(&current)),
+                )));
+            }
+            Err(e) => return Err(exec_err(e)),
+        };
         Ok(ToolOutcome::from_payload(json!({
             "success": true,
             "message": "コンテキストノートに追記しました📝",

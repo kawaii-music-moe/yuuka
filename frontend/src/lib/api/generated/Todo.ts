@@ -3,29 +3,21 @@
 /**
  * クライアントへ返す todo（クリーンビュー・snake_case）。
  */
-export type Todo = {
-	id: bigint;
-	title: string;
-	description: string | null;
-	due_date: string | null;
-	start_date: string | null;
-	/**
-	 * `"high" | "medium" | "low"` または未設定。
-	 */
-	priority: string | null;
-	/**
-	 * パース済みタグ（DB は JSON 文字列 `tags` で保持）。
-	 */
-	tags: Array<string>;
-	/**
-	 * `"open" | "done"` 等。
-	 */
-	status: string;
-	progress: bigint;
-	parent_id: bigint | null;
-	repeat_rule: string | null;
-	repeat_until: string | null;
-	repeat_count: bigint | null;
-	created_at: string;
-	updated_at: string;
-};
+export type Todo = { id: bigint, title: string, description: string | null, due_date: string | null, start_date: string | null,
+/**
+ * `"high" | "medium" | "low"` または未設定。
+ */
+priority: string | null,
+/**
+ * パース済みタグ（DB は JSON 文字列 `tags` で保持）。
+ */
+tags: Array<string>,
+/**
+ * `"open" | "done"` 等。
+ */
+status: string, progress: bigint, parent_id: bigint | null, repeat_rule: string | null, repeat_until: string | null, repeat_count: bigint | null, created_at: string, updated_at: string,
+/**
+ * リスト分け（PWA の「個人 / 仕事」・issue #47・既定 `"個人"`）。既存フロントは未使用のため
+ * 無視して構わないが、破壊的変更を避けるため必須フィールドとして追加する。
+ */
+list: string, };

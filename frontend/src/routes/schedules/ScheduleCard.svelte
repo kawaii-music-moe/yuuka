@@ -27,9 +27,6 @@ let { schedule, onDelete }: Props = $props();
 					icon="schedule"
 					text={formatScheduleRange(schedule.start_at, schedule.end_at)}
 				/>
-				{#if schedule.google_calendar_id}
-					<MetaItem icon="sync" text="Google同期済み" />
-				{/if}
 			</div>
 		</div>
 	</div>

@@ -8,6 +8,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use yuuka_core::DbError;
+use yuuka_web::DomainError;
 
 use crate::dto::MessageBody;
 
@@ -62,6 +63,17 @@ impl ClientApiError {
 impl IntoResponse for ClientApiError {
     fn into_response(self) -> Response {
         (self.status, Json(MessageBody::new(self.message))).into_response()
+    }
+}
+
+impl From<DomainError> for ClientApiError {
+    /// 業務サービス（D02）の失敗。入力不正は 400 でメッセージをそのまま返し、DB 失敗は
+    /// [`From<DbError>`] と同じく詳細を隠す。
+    fn from(e: DomainError) -> Self {
+        match e {
+            DomainError::Invalid(message) => Self::bad_request(message),
+            DomainError::Db(e) => e.into(),
+        }
     }
 }
 
