@@ -50,10 +50,10 @@ use crate::{bot_repo, persona, system_prompt, user};
 const FALLBACK_TEXT: &str = "処理が完了しました。";
 /// Gemini キー未設定時の応答（Node `processMessage` の catch が返す ⚠️ 文言）。
 const NO_KEY_MESSAGE: &str =
-    "⚠️ Gemini API Keyが設定されていません。管理画面からあなた専用のAPIキーを設定してください。";
+    "⚠️ Gemini API Keyが設定されていません。管理画面の「あなたの設定」→「AI モデル」から、あなた専用のAPIキーを設定してください。";
 /// 汎用モードで Bot 専用キー未設定時の owner DM 応答（Node `processBotDmMessage` の ⚠️ 文言）。
 const BOT_NO_KEY_MESSAGE: &str =
-    "⚠️ このBotにはBot専用のGemini APIキーが設定されていません。管理画面の「Bot設定」→「汎用モード設定」から設定してください。";
+    "⚠️ このBotにはBot専用のGemini APIキーが設定されていません。管理画面の「Bot設定」→「機能と AI」から設定してください。";
 /// レート制限応答（秘書経路・Node `processMessage` catch・gemini.ts:1111・「（トークン枯渇など）」付き）。
 const SECRETARY_RATE_LIMIT_MESSAGE: &str =
     "⚠️ 現在APIの利用制限（トークン枯渇など）に達しています。しばらく待ってからもう一度お試しください。";

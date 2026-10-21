@@ -1,24 +1,29 @@
 <script lang="ts">
 // ─────────────────────────────────────────────────────────────────────────
-// AccountOverlay — アカウント管理（Bot 非依存のアカウント共通設定）。
+// AccountOverlay — あなたの設定（Bot 非依存の、あなた全体に効く設定）。
 // 旧 index.html #account-overlay #tab-account + app.js の各 config フォーム
 // （profile / gemini / password / delete-account）と fetchAccountSettings を移植。
+// 再構成（docs/design/settings-restructure.md）で、旧 Bot基本設定にあった user スコープの
+// 「時刻と通知」「バックアップ」と、旧 Bot設定の「接続端末」もここへ移した。
 //
 // - 表示名の初期値は currentUser ストア（旧: /api/status → data.user.username）。
-// - テーマは theme ストア（3ボタン。旧 .theme-option）。
+// - テーマは theme ストア（3ボタン。旧 .theme-option）。端末ごとの保存なのでカードに「この端末」を出す。
 // - 保存は settingsApi（scope:'user'）。確認は confirmDialog、通知は pushToast。
 // ─────────────────────────────────────────────────────────────────────────
 
 import { onMount } from "svelte";
 import { ApiError } from "$lib/api/client";
 import { settingsApi } from "$lib/api/services";
-import { confirmDialog, Icon } from "$lib/components/ui";
+import { confirmDialog, Icon, ScopeBadge } from "$lib/components/ui";
 import { ACCOUNT_SECTIONS } from "$lib/managementSections";
 import { navigateTo } from "$lib/router";
 import { selectBot } from "$lib/stores/activeBot";
 import { currentUser } from "$lib/stores/session";
 import { setTheme, type Theme, theme } from "$lib/stores/theme";
 import { pushToast } from "$lib/stores/toast";
+import BackupCard from "../routes/config/BackupCard.svelte";
+import UserSettingsCard from "../routes/config/UserSettingsCard.svelte";
+import AccountDevices from "./account/AccountDevices.svelte";
 import ManagementOverlayShell from "./ManagementOverlayShell.svelte";
 
 // ── Gemini 設定 ──
@@ -146,106 +151,134 @@ async function downloadPackage(e: SubmitEvent): Promise<void> {
 }
 </script>
 
+
 <ManagementOverlayShell
 	id="account-overlay"
-	title="アカウント管理"
+	title="あなたの設定"
 	base="/account"
 	sections={ACCOUNT_SECTIONS}
 >
 	{#snippet children(section)}
 <section id="tab-account">
-				{#if section === "gemini"}
-					<p class="description-text" style="margin-top:12px;">
-						あなた個人（アカウント共通）の Gemini API Key とモデルです。秘書モードで使用します。
-					</p>
-					<form onsubmit={saveGemini} style="display: flex; flex-direction: column; gap: 12px; margin-top: 16px;">
-						<div class="form-group">
-							<label for="account-llm-provider">AIプロバイダ</label>
-							<select id="account-llm-provider" bind:value={llmProvider}><option value="gemini">Google Gemini</option></select>
-						</div>
-						<div class="form-group" style="margin-bottom: 12px;">
-							<label for="gemini-api-key">Gemini API Key</label>
-							<input
-								type="password"
-								id="gemini-api-key"
-								placeholder="APIキーを変更する場合は入力してください (マスク表示中)"
-								autocomplete="new-password"
-								bind:value={geminiApiKey}
-							/>
-						</div>
-						<div class="form-group" style="margin-bottom: 12px;">
-							<label for="gemini-model-select">Gemini モデル</label>
-							<select id="gemini-model-select" required bind:value={geminiModel}>
-								{#each llmModels as name (name)}<option value={name}>{name}</option>{/each}
-							</select>
-						</div>
-						<button type="submit" disabled={!llmLoaded} class="btn btn-primary">AI 設定を保存</button>
-					</form>
-				{/if}
-
-				<!-- 表示名（プロフィール） -->
+				<!-- 表示名とテーマ（表示名はアカウント、テーマは端末ごと） -->
 				{#if section === "profile"}
-					<p class="description-text" style="margin-top:12px;">ご自身の表示名を設定できます。</p>
-					<form onsubmit={saveProfile} style="display: flex; gap: 12px; margin-top: 16px;">
-						<input
-							type="text"
-							id="config-profile-username"
-							required
-							placeholder="表示名 (例: ユーザー名)"
-							style="flex-grow: 1;"
-							bind:value={username}
-						/>
-						<button type="submit" class="btn btn-primary" style="white-space: nowrap;">保存</button>
-					</form>
-				{/if}
-
-				<!-- テーマ設定 -->
-				{#if section === "theme"}
-					<p class="description-text" style="margin-top:12px;">
-						管理画面の外観テーマを選択します。設定はブラウザに保存されます。
-					</p>
-					<div class="theme-options">
-						{#each THEMES as t (t.value)}
-							<button
-								type="button"
-								class="theme-option"
-								class:active={$theme === t.value}
-								data-theme={t.value}
-								onclick={() => setTheme(t.value)}
-							>
-								<div class="theme-preview {t.preview}">
-									<div class="preview-sidebar"></div>
-									<div class="preview-content">
-										<div class="preview-card"></div>
-										<div class="preview-card"></div>
+					<div class="config-card card account-card">
+						<div class="column-header badge-right">
+							<h3>表示名</h3>
+							<ScopeBadge scope="user" />
+						</div>
+						<form onsubmit={saveProfile} style="display: flex; gap: 12px; margin-top: 12px;">
+							<input
+								type="text"
+								id="config-profile-username"
+								required
+								placeholder="表示名 (例: ユーザー名)"
+								style="flex-grow: 1;"
+								bind:value={username}
+							/>
+							<button type="submit" class="btn btn-primary" style="white-space: nowrap;">保存</button>
+						</form>
+					</div>
+					<div class="config-card card account-card">
+						<div class="column-header badge-right">
+							<h3>外観テーマ</h3>
+							<ScopeBadge scope="client" />
+						</div>
+						<p class="description-text">管理画面の外観テーマです。このブラウザに保存されます。</p>
+						<div class="theme-options">
+							{#each THEMES as t (t.value)}
+								<button
+									type="button"
+									class="theme-option"
+									class:active={$theme === t.value}
+									data-theme={t.value}
+									onclick={() => setTheme(t.value)}
+								>
+									<div class="theme-preview {t.preview}">
+										<div class="preview-sidebar"></div>
+										<div class="preview-content">
+											<div class="preview-card"></div>
+											<div class="preview-card"></div>
+										</div>
 									</div>
-								</div>
-								<span>{t.label}</span>
-							</button>
-						{/each}
+									<span>{t.label}</span>
+								</button>
+							{/each}
+						</div>
 					</div>
 				{/if}
 
-				{#if section === "package"}
-					<p class="description-text" style="margin-top:12px;">
-						所有するすべてのBotと関連データを、PINコードで暗号化した移行用ファイルとしてダウンロードします。
-						復元にはファイルとPINコードの両方が必要です。
-					</p>
-					<form onsubmit={downloadPackage} class="package-form">
-						<div class="form-group">
-							<label for="package-pin">PINコード（6〜12桁）</label>
-							<input id="package-pin" type="password" inputmode="numeric" minlength="6" maxlength="12" autocomplete="new-password" required bind:value={packagePin} />
+				<!-- 時刻と通知（旧 Bot基本設定 > アシスタント設定） -->
+				{#if section === "notifications"}
+					<UserSettingsCard />
+				{/if}
+
+				<!-- AI モデル（個人の API キーとモデル。PWA の「使用モデル」と同じ値） -->
+				{#if section === "ai"}
+					<div class="config-card card account-card">
+						<p class="description-text">
+							秘書属性のBotは、話しかけた人のこの API キーとモデルで応答します（共有されたBotでも、各自のキーが使われます）。
+							汎用属性のBotはこの設定を使わず、Bot設定の「機能と AI」にある Bot 専用のキーとモデルで応答します。
+						</p>
+						<p class="description-text">Web アプリ（PWA）の設定にある「使用モデル」も、この設定と同じです。</p>
+						<form onsubmit={saveGemini} style="display: flex; flex-direction: column; gap: 12px; margin-top: 16px;">
+							<div class="form-group">
+								<label for="account-llm-provider">AIプロバイダ</label>
+								<select id="account-llm-provider" bind:value={llmProvider}><option value="gemini">Google Gemini</option></select>
+							</div>
+							<div class="form-group" style="margin-bottom: 12px;">
+								<label for="gemini-api-key">Gemini API Key</label>
+								<input
+									type="password"
+									id="gemini-api-key"
+									placeholder="APIキーを変更する場合は入力してください (マスク表示中)"
+									autocomplete="new-password"
+									bind:value={geminiApiKey}
+								/>
+							</div>
+							<div class="form-group" style="margin-bottom: 12px;">
+								<label for="gemini-model-select">Gemini モデル</label>
+								<select id="gemini-model-select" required bind:value={geminiModel}>
+									{#each llmModels as name (name)}<option value={name}>{name}</option>{/each}
+								</select>
+							</div>
+							<button type="submit" disabled={!llmLoaded} class="btn btn-primary">AI 設定を保存</button>
+						</form>
+					</div>
+				{/if}
+
+				<!-- バックアップと移行（旧 Bot基本設定 > バックアップ + アカウント管理 > 移行パッケージ） -->
+				{#if section === "data"}
+					<BackupCard />
+					<div class="config-card card account-card">
+						<div class="column-header">
+							<h3><Icon name="inventory_2" class="header-icon-symbol" />Bot移行パッケージ</h3>
 						</div>
-						<div class="form-group">
-							<label for="package-pin-confirm">PINコード（確認）</label>
-							<input id="package-pin-confirm" type="password" inputmode="numeric" minlength="6" maxlength="12" autocomplete="new-password" required bind:value={packagePinConfirm} />
-						</div>
-						<button type="submit" class="btn btn-primary" disabled={packaging}>
-							<Icon name="download" class="icon-button-left" />
-							{packaging ? "パッケージ作成中…" : "暗号化してダウンロード"}
-						</button>
-					</form>
-					<p class="field-sub">PINコードはサーバーに保存されません。紛失した場合、パッケージを復元できません。</p>
+						<p class="description-text">
+							所有するすべてのBotと関連データを、PINコードで暗号化した移行用ファイルとしてダウンロードします。
+							復元にはファイルとPINコードの両方が必要です。
+						</p>
+						<form onsubmit={downloadPackage} class="package-form">
+							<div class="form-group">
+								<label for="package-pin">PINコード（6〜12桁）</label>
+								<input id="package-pin" type="password" inputmode="numeric" minlength="6" maxlength="12" autocomplete="new-password" required bind:value={packagePin} />
+							</div>
+							<div class="form-group">
+								<label for="package-pin-confirm">PINコード（確認）</label>
+								<input id="package-pin-confirm" type="password" inputmode="numeric" minlength="6" maxlength="12" autocomplete="new-password" required bind:value={packagePinConfirm} />
+							</div>
+							<button type="submit" class="btn btn-primary" disabled={packaging}>
+								<Icon name="download" class="icon-button-left" />
+								{packaging ? "パッケージ作成中…" : "暗号化してダウンロード"}
+							</button>
+						</form>
+						<p class="field-sub">PINコードはサーバーに保存されません。紛失した場合、パッケージを復元できません。</p>
+					</div>
+				{/if}
+
+				<!-- ログイン中の端末（旧 Bot設定 > 接続端末） -->
+				{#if section === "devices"}
+					<AccountDevices />
 				{/if}
 
 				<!-- アカウント削除 -->
@@ -261,7 +294,6 @@ async function downloadPackage(e: SubmitEvent): Promise<void> {
 						</button>
 					</form>
 				{/if}
-	
 </section>
 	{/snippet}
 </ManagementOverlayShell>
@@ -270,6 +302,9 @@ async function downloadPackage(e: SubmitEvent): Promise<void> {
 	.theme-option {
 		cursor: pointer;
 		font: inherit;
+	}
+	.account-card {
+		margin-top: 16px;
 	}
 	.package-form {
 		display: flex;

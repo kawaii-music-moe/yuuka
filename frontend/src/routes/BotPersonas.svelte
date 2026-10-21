@@ -1,17 +1,18 @@
 <script lang="ts">
 // ─────────────────────────────────────────────────────────────────────────
-// ペルソナ タブ（旧 app.js persona 系 + index.html #tab-personas を移植）。
+// 人格（Bot設定 › このBot。旧 app.js persona 系 + index.html #tab-personas を移植）。
 //   - マイペルソナ一覧（適用中ID をハイライト）: GET /api/personas
 //   - マーケットプレイス一覧: GET /api/personas/marketplace
 //   - 全文プレビュー: GET /api/personas/marketplace/:id → プレビューモーダル
 //   - 作成/編集/削除/適用/公開/インポート
+//   - 危険な操作: 会話履歴のクリア（再構成で旧 統合管理 › Bot ヘルスから移した）
 // personaApi 使用。list/activate は scope:'bot'（適用は Bot 単位）、他は scope:'user'。
 // （旧タブにある「汎用モード Bot単位ペルソナ」「共有時の推奨ペルソナ」カードは
 //   botAttribute/bot API 依存で本グループ範囲外のため含めない。）
 // ─────────────────────────────────────────────────────────────────────────
 
 import { ApiError } from "$lib/api/client";
-import { personaApi } from "$lib/api/services";
+import { integratedApi, personaApi } from "$lib/api/services";
 import type { PersonaRecord, PublicPersonaView } from "$lib/api/types";
 import {
 	Badge,
@@ -19,6 +20,7 @@ import {
 	confirmDialog,
 	EmptyState,
 	Icon,
+	ScopeBadge,
 } from "$lib/components/ui";
 import { activeBot } from "$lib/stores/activeBot";
 import { pushToast } from "$lib/stores/toast";
@@ -181,6 +183,25 @@ async function importPersona(id: number) {
 		reportError(e);
 	}
 }
+
+// ── 会話履歴クリア（旧 IntegratedOverlay の intClearHistory） ──
+async function clearHistory() {
+	const botId = $activeBot?.id;
+	if (!botId) return;
+	const ok = await confirmDialog({
+		message:
+			"このBotとの会話履歴をクリアしますか？\n次のメッセージから新しい会話になります（永続ログは保持され、検索・監査では引き続き利用できます）。",
+		danger: true,
+		confirmLabel: "クリア",
+	});
+	if (!ok) return;
+	try {
+		await integratedApi.clearHistory(botId);
+		pushToast("会話履歴をクリアしました。", "success");
+	} catch (e) {
+		reportError(e);
+	}
+}
 </script>
 
 <section class="tab-view">
@@ -295,6 +316,22 @@ async function importPersona(id: number) {
 			{/if}
 		</div>
 	</div>
+
+	<!-- 危険な操作: 会話履歴のクリア（旧 統合管理 › Bot ヘルスの ⋮ メニュー） -->
+	{#if $activeBot}
+		<div class="card personas-card-spacer">
+			<div class="column-header badge-right">
+				<h3><Icon name="history" class="header-icon-symbol" />会話履歴のクリア</h3>
+				<ScopeBadge scope="user_bot" />
+			</div>
+			<p class="description-text">
+				このBotとのあなたの会話履歴をクリアし、次のメッセージから新しい会話にします。ペルソナを切り替えたあと、前の口調を引きずるときに使います。永続ログは保持され、検索・監査では引き続き利用できます。
+			</p>
+			<div class="personas-danger-actions">
+				<Button variant="danger" onclick={clearHistory}>会話履歴をクリア</Button>
+			</div>
+		</div>
+	{/if}
 </section>
 
 <PersonaEditModal
@@ -318,6 +355,9 @@ async function importPersona(id: number) {
 	}
 	.personas-card-spacer {
 		margin-top: 20px;
+	}
+	.personas-danger-actions {
+		margin-top: 12px;
 	}
 	.personas-list {
 		margin-top: 12px;

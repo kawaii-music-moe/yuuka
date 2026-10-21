@@ -195,10 +195,20 @@ describe("with BASE_PATH=/admin (frontend/vite.config.ts の base と一致)", (
 
 		it("resolves bot tabs and falls back to the default tab for unknown ones", () => {
 			expect(resolveRoute(toUrl("/admin/bot/tasks")).tab).toBe("tasks");
+			expect(resolveRoute(toUrl("/admin/bot/features")).tab).toBe("features");
 			expect(resolveRoute(toUrl("/admin/bot/does-not-exist")).tab).toBe(
-				"config",
+				"dashboard",
 			);
-			expect(resolveRoute(toUrl("/admin/bot")).tab).toBe("config");
+			expect(resolveRoute(toUrl("/admin/bot")).tab).toBe("dashboard");
+		});
+
+		it("does not redirect tabs removed by the settings restructure", () => {
+			// 旧 URL は転送せず、未知タブとして既定タブを開く。
+			for (const old of ["config", "devices", "mcp"]) {
+				expect(resolveRoute(toUrl(`/admin/bot/${old}`)).tab, old).toBe(
+					"dashboard",
+				);
+			}
 		});
 
 		it("falls back to notfound for unknown paths under the admin prefix", () => {

@@ -17,6 +17,7 @@ import { onDestroy, onMount } from "svelte";
 // meta[theme-color] 同期）が走る設計。
 import "$lib/stores/theme";
 import {
+	DEFAULT_BOT_TAB,
 	initRouter,
 	page,
 	type ResolvedRoute,
@@ -130,7 +131,7 @@ onDestroy(() => {
 {:else if effectiveView === "bots"}
 	<BotSelection />
 {:else if effectiveView === "bot"}
-	<BotShell tab={resolved.tab ?? "config"} />
+	<BotShell tab={resolved.tab ?? DEFAULT_BOT_TAB} />
 {:else if effectiveView === "integrated"}
 	<LazyView loader={loadIntegrated} />
 {:else if effectiveView === "admin"}

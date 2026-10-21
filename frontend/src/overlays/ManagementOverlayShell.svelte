@@ -1,19 +1,20 @@
 <script lang="ts">
 // ─────────────────────────────────────────────────────────────────────────
 // ManagementOverlayShell — 全体管理ページ共通シェル。
-// アカウント管理 / Bot統合管理 / 管理者設定の3画面の骨格を集約する。
+// あなたの設定 / 連携サービス / 管理者設定の3画面の骨格を集約する。
 // 本文幅はホーム（BotSelection）と同じ .home-dashboard に揃え、
 // 左サイドバーは共通の HomeSidebar（ホームへの導線もここ）。
 //
-// - ハブ（/<base>）: hubHeader（導入文など）+ セクションの縦並びリスト（罫線区切り）。
-// - 個別（/<base>/<key>）: パンくず（<title> › <セクション名>）+ children(key)。
+// - ハブ（/<base>）: hubHeader（導入文など）+ カテゴリ見出し付きの縦並びリスト（罫線区切り）。
+// - 個別（/<base>/<key>）: パンくず（<title> › <セクション名>）+ 適用範囲バッジ + children(key)。
 // 見出しは BotShell と同じ .top-header / .header-title / .breadcrumb-link で揃える。
 // セクション定義は $lib/managementSections が単一情報源。
 // styles.css の #id 別規則（#integrated-overlay / #admin-overlay）が効くよう id は props で受ける。
 // ─────────────────────────────────────────────────────────────────────────
 import type { Snippet } from "svelte";
-import { Icon } from "$lib/components/ui";
+import { Icon, ScopeBadge } from "$lib/components/ui";
 import {
+	groupSections,
 	type ManagementSection,
 	sectionFromRoute,
 } from "$lib/managementSections";
@@ -35,6 +36,7 @@ interface Props {
 let { id, title, base, sections, hubHeader, children }: Props = $props();
 
 const current = $derived(sectionFromRoute($currentRoute, base, sections));
+const groups = $derived(groupSections(sections));
 
 // スマホ用ドロワー開閉（PC はサイドバー常設）。
 let sidebarOpen = $state(false);
@@ -70,6 +72,9 @@ let sidebarOpen = $state(false);
 							{title}
 						{/if}
 					</h2>
+					{#if current?.scope}
+						<div class="header-scope"><ScopeBadge scope={current.scope} /></div>
+					{/if}
 				</div>
 			</header>
 
@@ -80,20 +85,25 @@ let sidebarOpen = $state(false);
 				</div>
 			{:else}
 				{@render hubHeader?.()}
-				<!-- セクション一覧（設定ハブと同じ縦並びリスト。アイコン無し） -->
+				<!-- セクション一覧（設定ハブと同じ縦並びリスト。アイコン無し・カテゴリ見出し付き） -->
 				<nav class="mgmt-list" aria-label={title}>
-					{#each sections as s (s.key)}
-						<button
-							type="button"
-							class="mgmt-item"
-							onclick={() => navigateTo(`${base}/${s.key}`)}
-						>
-							<span class="mgmt-text">
-								<span class="mgmt-label">{s.label}</span>
-								<span class="mgmt-desc">{s.desc}</span>
-							</span>
-							<Icon name="chevron_right" class="mgmt-chevron" />
-						</button>
+					{#each groups as group, gi (`${group.category ?? ""}-${gi}`)}
+						{#if group.category}
+							<h3 class="mgmt-category">{group.category}</h3>
+						{/if}
+						{#each group.sections as s (s.key)}
+							<button
+								type="button"
+								class="mgmt-item"
+								onclick={() => navigateTo(`${base}/${s.key}`)}
+							>
+								<span class="mgmt-text">
+									<span class="mgmt-label">{s.label}</span>
+									<span class="mgmt-desc">{s.desc}</span>
+								</span>
+								<Icon name="chevron_right" class="mgmt-chevron" />
+							</button>
+						{/each}
 					{/each}
 				</nav>
 			{/if}
@@ -135,6 +145,9 @@ let sidebarOpen = $state(false);
 	.mgmt-list {
 		display: flex;
 		flex-direction: column;
+	}
+	/* 見出しの無いリスト（連携サービス）は先頭行の上にも罫線を引く */
+	.mgmt-list > .mgmt-item:first-child {
 		border-top: 1px solid var(--border-divider);
 	}
 	.mgmt-item {
@@ -155,6 +168,15 @@ let sidebarOpen = $state(false);
 	.mgmt-item:hover,
 	.mgmt-item:focus-visible {
 		background-color: var(--surface-1dp);
+	}
+	.header-scope {
+		margin-top: 6px;
+	}
+	.mgmt-category {
+		margin: 18px 12px 4px;
+		font-size: 0.9rem;
+		font-weight: 700;
+		color: var(--text-secondary);
 	}
 	.mgmt-item :global(.mgmt-chevron) {
 		flex-shrink: 0;

@@ -5,15 +5,17 @@
 // selectBot / createBotForm / btn-open-* 配線を移植。
 //
 // - 一覧取得は botApi.list()（scope:'user'）。統計カードは connected/running で集計。
-// - Bot 選択は activeBot ストア（selectBot）へ委譲 → /bot/config へ遷移。
+// - Bot 選択は activeBot ストア（selectBot）へ委譲 → /bot/dashboard へ遷移。
 // - 作成は共通 Modal。プリセット表示名は botApi.presets() で上書き。
-// - Discord 同期 / プロフィール編集 / 削除（デフォルト Bot 以外）。
-// - 統合管理 / アカウント管理 / 管理者設定（admin のみ）への遷移は HomeSidebar（共通）。
+// - 起動・停止（オーナー本人の Bot のみ。旧 統合管理 › Bot ヘルスから移した）/ Discord 同期 /
+//   プロフィール編集 / 削除（デフォルト Bot 以外）。
+// - あなたの設定 / 連携サービス / 管理者設定（admin のみ）への遷移は HomeSidebar（共通）。
 // ─────────────────────────────────────────────────────────────────────────
 import { onMount } from "svelte";
 import { ApiError } from "$lib/api/client";
 import { botApi } from "$lib/api/services";
 import type { BotView, PresetOption } from "$lib/api/types";
+import { canControlRuntime, controlRuntime } from "$lib/botRuntime";
 import { confirmDialog, Icon, Modal } from "$lib/components/ui";
 import { navigateTo } from "$lib/router";
 import { selectBot } from "$lib/stores/activeBot";
@@ -115,6 +117,16 @@ function choose(bot: BotView): void {
 	});
 	// 2階層化後の入口は一般情報（設定系はサイドバー「Bot設定」ハブ配下へ移動）。
 	navigateTo("/bot/dashboard");
+}
+
+// ── 起動・停止（旧 統合管理 › Bot ヘルス） ──
+async function toggleRuntime(bot: BotView): Promise<void> {
+	try {
+		const wait = await controlRuntime(bot.running ? "stop" : "start", bot.id);
+		setTimeout(() => void loadBots(), wait);
+	} catch (e) {
+		reportError(e);
+	}
 }
 
 // ── Discord 同期（旧 syncBtn） ──
@@ -294,6 +306,20 @@ let sidebarOpen = $state(false);
 								<span class="bot-run-dot {st.dot}"></span>{st.label}
 							</div>
 							<div class="bot-item-actions">
+								{#if canControlRuntime(bot, $currentUser?.discordId)}
+									<button
+										type="button"
+										class="btn-sync-discord"
+										title={bot.running ? "Botを停止" : "Botを起動"}
+										aria-label={bot.running ? "Botを停止" : "Botを起動"}
+										onclick={(e) => {
+											e.stopPropagation();
+											void toggleRuntime(bot);
+										}}
+									>
+										<Icon name={bot.running ? "stop_circle" : "play_circle"} size={15} />
+									</button>
+								{/if}
 								<button
 									type="button"
 									class="btn-sync-discord"

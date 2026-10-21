@@ -16,7 +16,12 @@ export { default as Icon } from "./Icon.svelte";
 export { default as LazyView } from "./LazyView.svelte";
 export { default as MetaItem } from "./MetaItem.svelte";
 export { default as Modal } from "./Modal.svelte";
+export { default as PageTabs } from "./PageTabs.svelte";
 export { default as ProgressBar } from "./ProgressBar.svelte";
+export {
+	default as ScopeBadge,
+	type SettingsScope,
+} from "./ScopeBadge.svelte";
 export { type ChipStatus, default as StatusChip } from "./StatusChip.svelte";
 export { default as TagChip } from "./TagChip.svelte";
 export { default as Toast } from "./Toast.svelte";

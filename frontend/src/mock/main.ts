@@ -1,5 +1,6 @@
 // UIモック entry（/mock.html）。fetch を mockApi に差し替えた上で、
-// 実物の BotDiscord（Discord連携タブ）をそのままマウントする。
+// 実物の BotDiscord（Bot設定 › Discord）をそのままマウントする。汎用モードの各セクションは
+// ページ内タブ（応答する場所／応答する相手／ギルドノート）の中にある。
 import { mount } from "svelte";
 import { activeBot } from "$lib/stores/activeBot";
 import BotDiscord from "../routes/BotDiscord.svelte";

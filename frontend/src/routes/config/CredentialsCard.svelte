@@ -1,7 +1,8 @@
 <script lang="ts">
-// 利用可能なAI認証情報カード（読み取り専用。旧 fetchCredentialsSettings）。
-// 登録・管理は「Bot統合管理」ページ（他グループ）へ誘導するのみ。
+// このBotが使える認証情報カード（読み取り専用。旧 fetchCredentialsSettings）。
+// 登録・Bot別の許可は「連携サービス › 認証情報」（IntegratedOverlay）へ誘導するのみ。
 import { credentialApi } from "$lib/api/services";
+import { ScopeBadge } from "$lib/components/ui";
 import { withBasePath } from "$lib/router";
 import type { CredentialRow, CredentialsResp } from "./configTypes";
 
@@ -37,11 +38,12 @@ function updatedOf(c: CredentialRow): string {
 
 <section class="config-card card">
 	<div class="column-header badge-right">
-		<h3><span class="material-symbols-outlined header-icon-symbol">lock</span>利用可能なAI認証情報</h3>
+		<h3><span class="material-symbols-outlined header-icon-symbol">lock</span>認証情報</h3>
+		<ScopeBadge scope="user_bot" />
 		<span class="badge badge-accent">読み取り専用</span>
 	</div>
 	<p class="description-text">
-		このBotがAIエージェントの自動ブラウジング等で利用できる認証情報の一覧です。パスワードはAES-256-GCMで暗号化保存され、ここには表示されません。認証情報の登録・管理は「Bot統合管理」で行います。
+		このBotがAIエージェントの自動ブラウジング等で利用できる認証情報の一覧です。パスワードはAES-256-GCMで暗号化保存され、ここには表示されません。
 	</p>
 
 	<div class="table-responsive">
@@ -76,8 +78,8 @@ function updatedOf(c: CredentialRow): string {
 	</div>
 
 	<div class="cred-footer">
-		<span class="field-sub">認証情報の登録・管理は「Bot統合管理」で行います。</span>
-		<a href={withBasePath("/integrated")} class="btn btn-secondary btn-sm">Bot統合管理へ</a>
+		<span class="field-sub">登録と、使わせるBotの切り替えは「連携サービス › 認証情報」で行います。</span>
+		<a href={withBasePath("/integrated/credentials")} class="btn btn-secondary btn-sm">連携サービスへ</a>
 	</div>
 </section>
 

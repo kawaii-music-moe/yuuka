@@ -206,8 +206,8 @@ pnpm check              # typecheck:front + lint をまとめて実行
 |---|---|
 | `frontend/src/App.svelte` / `main.ts` | ルートコンポーネント（ルーター初期化・認証ゲート・admin ガード）とエントリ |
 | `frontend/src/lib/` | `router.ts`（History ルーター。`/admin` 配下）、`api/`（API クライアントと `generated/` の ts-rs 生成型）、`stores/`（session・activeBot・theme・toast）、`components/ui/` |
-| `frontend/src/routes/` | Bot ごとのタブ画面（`BotTasks`/`BotExpenses`/`BotSchedules`/`BotReminders`/`BotMcp`/`BotConfig` 等）とそのサブコンポーネント |
-| `frontend/src/overlays/` | ログイン・アカウント・管理者・統合管理・デバイス・規約類のオーバーレイ画面 |
+| `frontend/src/routes/` | Bot ごとのタブ画面（`BotTasks`/`BotExpenses`/`BotSchedules`/`BotReminders` 等）、設定ハブ（`BotSettingsHub`）とその配下（`BotProfile`/`BotFeatures`/`BotAccess`/`BotDiscord` 等。構成は [settings-restructure.md](design/settings-restructure.md)）、サブコンポーネント |
+| `frontend/src/overlays/` | ログイン・あなたの設定（`AccountOverlay`）・管理者設定・連携サービス（`IntegratedOverlay`）・デバイス・規約類のオーバーレイ画面 |
 | `frontend/src/mock/`・`frontend/mock.html` | モック API（バックエンド無しの UI 開発用） |
 | `client/pwa/src/` | PWA（Vue 3 + vue-router）。`api/`（`gateway.ts` の `AgentGateway` 契約と `httpAdapter.ts`）、`pages/`（Chat/Todo/Calendar/Finance/Notes/Dashboard/Settings）、`components/`、`composables/` |
 | `client/pwa/mock/server.ts` | PWA 開発用のモック API（`npm run mock`。`pnpm dev:client:mock` が起動） |

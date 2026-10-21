@@ -24,6 +24,16 @@ export const settingsApi = {
 	deleteAccount: () =>
 		api.post<ApiResponse>("/api/settings/delete-account", {}, USER),
 
+	/** GET /api/settings/user — 現在のユーザー設定（Bot を選ばずに読める。/api/status は bot-scoped） */
+	getUserSettings: () =>
+		api.get<
+			ApiResponse & {
+				richReplyEnabled: boolean;
+				remindDefaultMinutes: number;
+				notifyTarget: { type: string; id: string | null };
+				timezone: string;
+			}
+		>("/api/settings/user", USER),
 	/** POST /api/settings/user — ユーザー設定（リマインド既定・通知先等） */
 	updateUserSettings: (body: Record<string, unknown>) =>
 		api.post<ApiResponse>("/api/settings/user", body, USER),
@@ -62,6 +72,17 @@ export const settingsApi = {
 		api.post<ApiResponse>("/api/settings/calendars", body, USER),
 
 	// ── バックアップ ──
+	/** GET /api/settings/backup — 現在のバックアップ設定（フォルダ ID はマスクしない） */
+	getBackup: () =>
+		api.get<
+			ApiResponse & {
+				enabled: boolean;
+				folderId: string | null;
+				intervalHours: number;
+				generations: number;
+				lastRunAt: string | null;
+			}
+		>("/api/settings/backup", USER),
 	/** POST /api/settings/backup — バックアップ設定 */
 	updateBackup: (body: Record<string, unknown>) =>
 		api.post<ApiResponse>("/api/settings/backup", body, USER),

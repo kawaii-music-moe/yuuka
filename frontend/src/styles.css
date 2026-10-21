@@ -413,6 +413,21 @@ textarea {
 	animation: tab-fade-in 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
+/* Bot設定の各ページ（設定ハブ配下）。カードの縦間隔は gap に集約する。 */
+.settings-page {
+	display: flex;
+	flex-direction: column;
+	gap: 16px;
+}
+.settings-page .config-card {
+	margin-top: 0 !important;
+}
+/* 読み込み中・権限が無いときの 1 行の案内 */
+.settings-page-note {
+	padding: 24px 0;
+	color: var(--text-secondary);
+}
+
 /* ==============================================================================
    OVERLAY & LOGIN WINDOW (Sleek Matte HUD)
    ============================================================================== */
@@ -3138,8 +3153,13 @@ details.admin-section[open] > summary > .admin-section-title::before {
 	gap: 8px;
 	flex-wrap: wrap;
 }
-.column-header.badge-right > .badge {
+.column-header.badge-right > .badge,
+.column-header.badge-right > .scope-badge {
 	margin-left: auto;
+}
+/* 適用範囲バッジの後ろに続くバッジは、右端で隣に並べる */
+.column-header.badge-right > .scope-badge ~ .badge {
+	margin-left: 0;
 }
 .column-header.badge-right > h3 {
 	margin: 0;
