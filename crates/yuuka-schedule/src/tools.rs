@@ -27,7 +27,7 @@ use async_trait::async_trait;
 use serde_json::{json, Value};
 use yuuka_core::datetime::input_to_db_jst;
 use yuuka_core::tool::FunctionDeclaration;
-use yuuka_core::{DbError, Tool, ToolContext, ToolError, ToolName, ToolOutcome, UserScope};
+use yuuka_core::{Tool, ToolContext, ToolError, ToolName, ToolOutcome, UserScope};
 use yuuka_web::Db;
 
 use yuuka_google::CalendarEventsPort;
@@ -115,8 +115,8 @@ fn arg_i64(args: &Value, key: &str) -> Option<i64> {
         .or_else(|| v.as_str().and_then(|s| s.trim().parse::<i64>().ok()))
 }
 
-/// DbError をツール実行エラーへ（握り潰さず Gemini へ `{success:false}` として返る・§8.4）。
-fn exec_err(e: DbError) -> ToolError {
+/// DB・サービスの失敗をツール実行エラーへ（握り潰さず Gemini へ `{success:false}` として返る・§8.4）。
+fn exec_err(e: impl std::fmt::Display) -> ToolError {
     ToolError::Execution(e.to_string())
 }
 

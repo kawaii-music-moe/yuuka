@@ -3802,6 +3802,7 @@ dependencies = [
  "yuuka-mcp",
  "yuuka-orchestrator",
  "yuuka-persona",
+ "yuuka-personal",
  "yuuka-schedule",
  "yuuka-timeline",
  "yuuka-todo",

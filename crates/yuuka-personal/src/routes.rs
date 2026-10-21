@@ -9,6 +9,8 @@
 //! （GET 参照／POST 全体置換）＋クリップボード（GET 一覧／POST delete）。誕生日リマインド cron・
 //! 連絡先の部分一致検索・クリップボード追加は deferred（lib.rs 参照）。
 //!
+//! コンテキストノートの読み書きは PWA・ツールと共通の [`ContextNoteService`] を通す（D02 #126）。
+//!
 //! 方針（M-12・全ドメイン共通）: delete の該当無は Node パリティで **200 `{success:false}`**
 //! を返す（404 にしない・`deletedId` は返さない）。save の該当無更新は Node 同様 404。
 
@@ -24,7 +26,8 @@ use crate::dto::{
     ClipboardListData, ContactData, ContactListData, ContextNoteData, NewContact, SetContextNote,
     CONTEXT_NOTE_MAX_LENGTH,
 };
-use crate::repo::{ClipboardRepo, ContactRepo, ContextNoteRepo};
+use crate::repo::{ClipboardRepo, ContactRepo};
+use crate::service::ContextNoteService;
 
 #[derive(Debug, Deserialize)]
 struct BotQuery {
@@ -128,7 +131,7 @@ async fn context_note_get(
     Query(q): Query<BotQuery>,
 ) -> Result<Json<Envelope<ContextNoteData>>, ApiError> {
     let scope = resolve_scope(&user.0, &db, q.bot_id.as_deref()).await?;
-    let (content, updated_at) = ContextNoteRepo::new(&db).get(&scope).await?;
+    let (content, updated_at) = ContextNoteService::new(&db).get(&scope).await?;
     Ok(Json(Envelope::ok(ContextNoteData {
         content,
         updated_at,
@@ -139,8 +142,8 @@ async fn context_note_get(
 /// コンテキストノートを全文置換する（Node `POST /api/context-note`）。
 ///
 /// 上限超過（[`CONTEXT_NOTE_MAX_LENGTH`] 文字）は 400 で弾き、Node と同一の日本語メッセージを
-/// 返す。文字数は Node の `content.length`（UTF-16 code unit）に対し Rust は `chars().count()`
-/// で数える（BMP 内は一致・dto 参照）。保存後は Node 同様メッセージのみ返す。
+/// 返す。判定（Node の `content.length` と同じ UTF-16 単位）は PWA・ツールと共通の
+/// [`ContextNoteService`] が行う。タイトルは変えない。保存後は Node 同様メッセージのみ返す。
 async fn context_note_set(
     user: AuthenticatedUser,
     State(db): State<Db>,
@@ -149,16 +152,10 @@ async fn context_note_set(
         value: input,
     }: ScopedJson<SetContextNote>,
 ) -> Result<Json<Envelope<EmptyData>>, ApiError> {
-    let len = input.content.chars().count();
-    if len > CONTEXT_NOTE_MAX_LENGTH {
-        return Err(ApiError(WebError::Validation(format!(
-            "コンテキストノートは{}文字以内です（現在: {}文字）",
-            format_thousands(CONTEXT_NOTE_MAX_LENGTH),
-            format_thousands(len),
-        ))));
-    }
     let scope = resolve_scope(&user.0, &db, bot_id.as_deref()).await?;
-    ContextNoteRepo::new(&db).set(&scope, input.content).await?;
+    ContextNoteService::new(&db)
+        .set_content(&scope, input.content)
+        .await?;
     Ok(Json(Envelope::ok_with_message(
         EmptyData {},
         "コンテキストノートを保存しました。",
@@ -199,25 +196,6 @@ async fn clipboard_delete(
     } else {
         Envelope::err(EmptyData {}, message)
     }))
-}
-
-/// 整数を 3 桁区切りにする（Node `Number.prototype.toLocaleString()` の桁区切り相当）。
-///
-/// コンテキストノート上限メッセージの `10,000` 等を Node と一致させるため。末尾から 3 桁ごとに
-/// カンマを差し込む（左端の余り桁は先頭グループとして残す・underflow を避ける実装）。
-fn format_thousands(n: usize) -> String {
-    let digits = n.to_string();
-    let len = digits.len();
-    let mut out = String::with_capacity(len + len / 3);
-    for (i, ch) in digits.chars().enumerate() {
-        // 残り桁数が 3 の倍数になる境界（先頭を除く）でカンマを置く。
-        let remaining = len - i;
-        if i != 0 && remaining.is_multiple_of(3) {
-            out.push(',');
-        }
-        out.push(ch);
-    }
-    out
 }
 
 /// 空／空白のみの文字列を `None` に、それ以外は trim して `Some` にする（Node の
