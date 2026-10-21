@@ -78,6 +78,8 @@ pub type StatusSink = Arc<dyn Fn(BotStatus) + Send + Sync>;
 /// ターン処理の結果（現行 `ProcessResult`）。provider 中立。
 #[derive(Debug, Clone, Default)]
 pub struct TurnReply {
+    /// Persisted reply ID, usable as a later reply target (e.g. `log:123`).
+    pub message_id: Option<String>,
     /// 最終テキスト（空かつ embeds/files 無しなら「応答なし＝黙殺」）。
     pub text: String,
     /// リッチ埋め込み（現行 `embeds`）。

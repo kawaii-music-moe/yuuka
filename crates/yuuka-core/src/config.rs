@@ -63,6 +63,8 @@ pub struct Config {
     /// デスクトップ `/ws/chat` の 1 メッセージ添付上限（MB・`DESKTOP_MAX_UPLOAD_MB`・既定 20・
     /// Node `config.desktopMaxUploadMb`）。
     pub desktop_max_upload_mb: u32,
+    /// デスクトップのボタン往復確認。既定無効。
+    pub desktop_demo_components: bool,
     /// リマインダーのポーリング cron 式（`REMINDER_CRON`・既定 `* * * * *`・Node `config.reminderCron`）。
     /// リマインドエンジンの実行周期に使い、`/api/status` の設定表示にも返す。不正な式は既定へ戻す。
     pub reminder_cron: String,
@@ -140,6 +142,10 @@ impl Config {
             desktop_max_upload_mb: parse_field(
                 "DESKTOP_MAX_UPLOAD_MB",
                 &get("DESKTOP_MAX_UPLOAD_MB").unwrap_or_else(|| "20".to_owned()),
+            )?,
+            desktop_demo_components: parse_field(
+                "DESKTOP_DEMO_COMPONENTS",
+                &get("DESKTOP_DEMO_COMPONENTS").unwrap_or_else(|| "false".to_owned()),
             )?,
             reminder_cron: tuning_or_default(
                 "REMINDER_CRON",
@@ -387,6 +393,7 @@ mod tests {
         let cfg = Config::load_and_validate(std::path::Path::new("/no/such/yuuka-config.yaml"))
             .expect("defaults");
         assert_eq!(cfg.port, 3000);
+        assert!(!cfg.desktop_demo_components);
         assert_eq!(cfg.host.to_string(), "127.0.0.1");
         assert_eq!(cfg.session_ttl_days, 7);
         assert_eq!(cfg.redis_url, "redis://127.0.0.1:6379");
@@ -464,6 +471,13 @@ mod tests {
         );
         let cfg = Config::load_and_validate(f.path()).expect("invalid tuning is not fatal");
         assert_tuning_defaults(&cfg);
+    }
+
+    #[test]
+    fn desktop_demo_components_is_explicitly_enabled() {
+        let f = write_yaml("DESKTOP_DEMO_COMPONENTS: true\n");
+        let cfg = Config::load_and_validate(f.path()).expect("load");
+        assert!(cfg.desktop_demo_components);
     }
 
     #[test]

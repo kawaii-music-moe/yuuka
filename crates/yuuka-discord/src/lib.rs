@@ -19,7 +19,7 @@
 pub mod ports;
 
 mod idempotent;
-mod interaction;
+pub mod interaction;
 mod live;
 mod manager;
 mod message_flow;

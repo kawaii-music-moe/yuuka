@@ -335,3 +335,82 @@ async fn read_until(ws: &mut WsStream, want_type: &str) -> Value {
 
 type WsStream =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+
+/// 実ソケットで done(components) → interaction → update を往復し、再押下を拒否する。
+#[tokio::test]
+async fn ws_buttons_round_trip_and_reject_forged_or_replayed_actions() {
+    let (db, crypto) = seeded_db();
+    let engine = Arc::new(ChatEngine::new(
+        db.clone(),
+        Some(crypto.clone()),
+        ToolRegistry::new(),
+        Arc::new(FakeFactory {
+            text: "通常の応答".to_owned(),
+        }),
+        None,
+        Arc::new(yuuka_mcp::NullMcpClient),
+        None,
+    ));
+    let deps = yuuka_discord::interaction::ComponentInteractionDeps {
+        membership: Arc::new(yuuka_orchestrator::DbMembership::new(db.clone())),
+        directory: Arc::new(yuuka_orchestrator::DbBotDirectory::new(
+            db.clone(),
+            Some(crypto),
+        )),
+        dm: Arc::new(yuuka_orchestrator::NullMemberDmSender),
+    };
+    let state = AppState::new(Arc::new(FakeAuth), WebConfig::default(), db);
+    let app =
+        yuuka_supervisor::ws_routes_with_interactions(engine, 20, deps, true).with_state(state);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    let mut req = format!("ws://{addr}/ws/chat")
+        .into_client_request()
+        .unwrap();
+    req.headers_mut()
+        .insert("authorization", "Bearer good".parse().unwrap());
+    let (mut ws, _) = tokio_tungstenite::connect_async(req).await.unwrap();
+    assert_eq!(next_json(&mut ws).await["type"], "ready");
+    ws.send(WsMessage::Text(
+        json!({"type":"msg","text":"/__demo_buttons"})
+            .to_string()
+            .into(),
+    ))
+    .await
+    .unwrap();
+    let done = read_until(&mut ws, "done").await;
+    let message_id = done["messageId"].as_str().unwrap();
+    let custom_id = done["components"][0]["components"][0]["custom_id"]
+        .as_str()
+        .unwrap();
+    assert!(custom_id.starts_with("demo_echo:"));
+    // 送信されていない action は、正しい messageId を付けても実行しない。
+    ws.send(WsMessage::Text(
+        json!({"type":"interaction","messageId":message_id,"customId":"persona_import:1"})
+            .to_string()
+            .into(),
+    ))
+    .await
+    .unwrap();
+    assert_eq!(next_json(&mut ws).await["type"], "error");
+    let interaction =
+        json!({"type":"interaction","messageId":message_id,"customId":custom_id}).to_string();
+    ws.send(WsMessage::Text(interaction.clone().into()))
+        .await
+        .unwrap();
+    let update = next_json(&mut ws).await;
+    assert_eq!(update["type"], "update");
+    assert_eq!(update["messageId"], message_id);
+    assert!(update["text"]
+        .as_str()
+        .unwrap()
+        .starts_with("ボタンを受け取りました:"));
+    assert_eq!(update["components"], json!([]));
+    ws.send(WsMessage::Text(interaction.into())).await.unwrap();
+    assert_eq!(next_json(&mut ws).await["type"], "error");
+    ws.close(None).await.ok();
+    server.abort();
+}
