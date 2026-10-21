@@ -88,14 +88,14 @@ impl GeminiFactory for ScriptedFactory {
     }
 }
 
-/// 常に成功する秘書ツール。
-struct OkTool;
+/// 常に成功する秘書ツール（事前計画はツールが 2 つ以上のときだけ走るので 2 つ登録する）。
+struct OkTool(&'static str);
 
 #[async_trait]
 impl Tool for OkTool {
     fn declaration(&self) -> yuuka_core::tool::FunctionDeclaration {
         yuuka_core::tool::FunctionDeclaration {
-            name: ToolName::checked("addTodo".to_owned()).expect("valid name"),
+            name: ToolName::checked(self.0.to_owned()).expect("valid name"),
             description: String::new(),
             parameters_json_schema: json!({ "type": "object", "properties": {} }),
             requires_confirmation: false,
@@ -152,7 +152,8 @@ async fn secretary_turn_feeds_the_shared_metrics_registry() {
 
     let registry = ToolRegistry::new().with_provider(Arc::new(
         NativeProvider::new()
-            .with_tool(Arc::new(OkTool))
+            .with_tool(Arc::new(OkTool("addTodo")))
+            .and_then(|p| p.with_tool(Arc::new(OkTool("getTodos"))))
             .expect("register"),
     ));
     let metrics = Arc::new(MetricsRegistry::new());

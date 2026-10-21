@@ -24,8 +24,8 @@ use yuuka_core::{BotId, DiscordError, GuildId, UserId};
 use crate::idempotent::MessageDedup;
 use crate::ports::{
     rate_limit_message, BotDirectory, BotRecord, BotStatus, DeliverTarget, IncomingChat,
-    InlineMedia, Notifier, RateLimiter, Speaker, StatusSink, TurnDelivery, TurnError,
-    TurnProcessor, TurnReply,
+    InlineMedia, Notifier, RateLimiter, ReplyAncestor, Speaker, StatusSink, TurnDelivery,
+    TurnError, TurnProcessor, TurnReply,
 };
 use crate::presence::build_presence;
 use crate::reply::{send_channel_reply, send_channel_text};
@@ -585,19 +585,29 @@ async fn secretary_flow(deps: &FlowDeps, rt: &RuntimeBot, bot: &BotRecord, messa
         };
         match media {
             Ok(media) => {
-                // レシート OCR は秘書専用。caption は現メッセージ本文（空なら None）。
-                let caption = if text.is_empty() {
-                    None
-                } else {
-                    Some(text.clone())
+                // レシート OCR は秘書専用。キャプションは現メッセージ本文（空なら指示なし）。会話ログの
+                // 紐づけ（R08）のため、メッセージ ID・返信先・チャンネル・返信元チェーンも渡す。
+                let chat = IncomingChat {
+                    text: text.clone(),
+                    timeline_attachments,
+                    discord_msg_id,
+                    reply_to_msg_id,
+                    reply_chain: resolve_reply_chain(
+                        deps,
+                        &message,
+                        reference.as_ref(),
+                        rt.bot_user_id,
+                    )
+                    .await,
+                    channel_id,
+                    ..IncomingChat::default()
                 };
                 deps.processor
                     .parse_receipt(
                         &rt.bot_id,
                         &author,
                         media,
-                        caption,
-                        timeline_attachments,
+                        chat,
                         status.clone(),
                         delivery.clone(),
                     )
@@ -865,17 +875,18 @@ const REPLY_CHAIN_FETCH_TIMEOUT: Duration = Duration::from_secs(3);
 /// 返信先（[`resolve_reference`] で解決済み）から、さらにその返信先を受信チャンネル内だけで REST 取得して
 /// 遡る（Discord は返信先を 1 段しか埋め込まないため）。返信のたびに REST を叩かないよう、応答すると
 /// 決めた後のターン組み立てでだけ呼ぶ。循環・取得失敗・[`REPLY_CHAIN_FETCH_TIMEOUT`] 超過で打ち切り、
-/// 本文のない発言（添付のみ等）は飛ばす。会話ログにある発言は engine 側でも復元して合わせる。
+/// 本文のない発言（添付のみ等）は飛ばす。各件は Discord のメッセージ ID を持ち、engine が会話ログから
+/// 復元した分（取得が途中で切れたときの補完）と ID で重複を除いて合わせる。
 async fn resolve_reply_chain(
     deps: &FlowDeps,
     message: &Message,
     reference: Option<&RefInfo>,
     bot_user_id: Id<UserMarker>,
-) -> Vec<String> {
+) -> Vec<ReplyAncestor> {
     let Some(reference) = reference else {
         return Vec::new();
     };
-    let mut chain: Vec<String> = reply_chain_entry(reference, bot_user_id)
+    let mut chain: Vec<ReplyAncestor> = reply_chain_entry(reference, bot_user_id)
         .into_iter()
         .collect();
     let mut seen = std::collections::HashSet::from([reference.id]);
@@ -920,7 +931,7 @@ async fn resolve_reply_chain(
 }
 
 /// 返信元チェーンの 1 件（本文が空なら `None`）。
-fn reply_chain_entry(info: &RefInfo, bot_user_id: Id<UserMarker>) -> Option<String> {
+fn reply_chain_entry(info: &RefInfo, bot_user_id: Id<UserMarker>) -> Option<ReplyAncestor> {
     let content = info.content.trim();
     if content.is_empty() {
         return None;
@@ -931,7 +942,10 @@ fn reply_chain_entry(info: &RefInfo, bot_user_id: Id<UserMarker>) -> Option<Stri
         info.author_name.as_str()
     };
     let content: String = content.chars().take(REPLY_CHAIN_ITEM_CHARS).collect();
-    Some(format!("[{name}] {content}"))
+    Some(ReplyAncestor {
+        message_id: info.id.get().to_string(),
+        text: format!("[{name}] {content}"),
+    })
 }
 
 /// 返信先コンテキストプレフィックスを組み立てる（現行 contextPrefix）。`strip_self` は自 Bot

@@ -414,3 +414,153 @@ async fn ws_buttons_round_trip_and_reject_forged_or_replayed_actions() {
     ws.close(None).await.ok();
     server.abort();
 }
+
+/// 能力を問わず秘書経路で見える、宣言だけのツール（事前計画の対象にするため 2 つ登録する）。
+struct PlainTool(&'static str);
+
+#[async_trait]
+impl yuuka_core::Tool for PlainTool {
+    fn declaration(&self) -> yuuka_core::tool::FunctionDeclaration {
+        yuuka_core::tool::FunctionDeclaration {
+            name: yuuka_core::ToolName::checked(self.0.to_owned()).unwrap(),
+            description: String::new(),
+            parameters_json_schema: json!({ "type": "object", "properties": {} }),
+            requires_confirmation: false,
+        }
+    }
+
+    fn exposure(&self) -> yuuka_core::ToolExposure {
+        yuuka_core::ToolExposure {
+            capability: None,
+            secretary: true,
+            guild_assistant: false,
+            requires_guild: false,
+        }
+    }
+
+    async fn call(
+        &self,
+        _ctx: &yuuka_core::ToolContext,
+        _args: Value,
+    ) -> Result<yuuka_core::ToolOutcome, yuuka_core::ToolError> {
+        Ok(yuuka_core::ToolOutcome::from_payload(
+            json!({ "success": true }),
+        ))
+    }
+}
+
+/// 事前計画（R06）には重い計画を返し、本編は `gate` が開くまで待ってから固定テキストを返す backend。
+struct HeavyPlanBackend {
+    gate: Arc<tokio::sync::Semaphore>,
+}
+
+#[async_trait]
+impl GenerateBackend for HeavyPlanBackend {
+    async fn generate(
+        &self,
+        system_instruction: Option<&str>,
+        _d: &[FunctionDeclaration],
+        _c: &[Content],
+        _tc: Option<ToolConfig>,
+    ) -> Result<GenerateContentResponse, GeminiError> {
+        let text = if system_instruction
+            .is_some_and(|s| s.starts_with(yuuka_orchestrator::turn_plan::PLANNER_INSTRUCTION))
+        {
+            r#"{"steps":["調べる"],"tools":["lookupA"],"weightMs":20000,"interim":"調べています。"}"#
+        } else {
+            self.gate.acquire().await.unwrap().forget();
+            "調べた結果です。"
+        };
+        Ok(serde_json::from_value(json!({
+            "candidates": [ { "content": { "role": "model", "parts": [ { "text": text } ] } } ]
+        }))
+        .unwrap())
+    }
+}
+
+struct HeavyPlanFactory(Arc<HeavyPlanBackend>);
+
+impl GeminiFactory for HeavyPlanFactory {
+    fn build(&self, _m: &str, _k: SecretString) -> Result<Arc<dyn GenerateBackend>, GeminiError> {
+        Ok(self.0.clone())
+    }
+}
+
+/// R07 × R09: 重い計画のターンは WS でも interim → done(deferred:true) → push の順に届く。
+#[tokio::test]
+async fn ws_heavy_plan_sends_interim_then_deferred_done_then_push() {
+    let (db, crypto) = seeded_db();
+    let gate = Arc::new(tokio::sync::Semaphore::new(0));
+    let provider = yuuka_tools::NativeProvider::new()
+        .with_tool(Arc::new(PlainTool("lookupA")))
+        .and_then(|p| p.with_tool(Arc::new(PlainTool("lookupB"))))
+        .unwrap();
+    let engine = Arc::new(ChatEngine::new(
+        db.clone(),
+        Some(crypto.clone()),
+        ToolRegistry::new().with_provider(Arc::new(provider)),
+        Arc::new(HeavyPlanFactory(Arc::new(HeavyPlanBackend {
+            gate: gate.clone(),
+        }))),
+        None,
+        Arc::new(yuuka_mcp::NullMcpClient),
+        None,
+    ));
+    let deps = yuuka_discord::interaction::ComponentInteractionDeps {
+        membership: Arc::new(yuuka_orchestrator::DbMembership::new(db.clone())),
+        directory: Arc::new(yuuka_orchestrator::DbBotDirectory::new(
+            db.clone(),
+            Some(crypto),
+        )),
+        dm: Arc::new(yuuka_orchestrator::NullMemberDmSender),
+    };
+    let state = AppState::new(Arc::new(FakeAuth), WebConfig::default(), db);
+    let app =
+        yuuka_supervisor::ws_routes_with_interactions(engine, 20, deps, false).with_state(state);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    let mut req = format!("ws://{addr}/ws/chat")
+        .into_client_request()
+        .unwrap();
+    req.headers_mut()
+        .insert("authorization", "Bearer good".parse().unwrap());
+    let (mut ws, _) = tokio_tungstenite::connect_async(req).await.unwrap();
+    assert_eq!(next_json(&mut ws).await["type"], "ready");
+    ws.send(WsMessage::Text(
+        json!({"type":"msg","text":"最新のニュースを調べて"})
+            .to_string()
+            .into(),
+    ))
+    .await
+    .unwrap();
+
+    // status を読み飛ばし、interim → done の順を確かめる（本編は gate で止まっている）。
+    let mut order = Vec::new();
+    let done = loop {
+        let frame = next_json(&mut ws).await;
+        match frame["type"].as_str() {
+            Some("interim") => {
+                assert_eq!(frame["text"], "調べています。");
+                order.push("interim");
+            }
+            Some("done") => {
+                order.push("done");
+                break frame;
+            }
+            _ => {}
+        }
+    };
+    assert_eq!(order, ["interim", "done"]);
+    assert_eq!(done["deferred"], true);
+    assert_eq!(done["text"], "");
+
+    gate.add_permits(1);
+    let push = read_until(&mut ws, "push").await;
+    assert_eq!(push["text"], "調べた結果です。");
+    assert!(push["messageId"].as_str().unwrap().starts_with("log:"));
+    ws.close(None).await.ok();
+    server.abort();
+}

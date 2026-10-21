@@ -7,6 +7,7 @@
 use rusqlite::{params, OptionalExtension};
 use yuuka_core::DbError;
 use yuuka_db::map_sqlite;
+use yuuka_discord::ReplyAncestor;
 use yuuka_web::Db;
 
 /// 直近コンテキストの既定件数（Node `CONTEXT_LIMIT = 15`）。
@@ -1005,7 +1006,8 @@ pub async fn add_linked_assistant_reply(
 /// 秘書/owner DM（`guild_id = None`）は同じ利用者の `guild_id IS NULL` 行でリセット境界（floor）より後、
 /// ギルドは同じギルド（`channel_id` があれば同じチャンネル）の行。`bot_dm` は owner DM の floor を使う。
 /// 見つからない ID・循環で打ち切る。`log:<id>` は会話ログの行 ID、それ以外は Discord のメッセージ ID
-/// として引く。各件は `[role] 本文` を [`REPLY_CHAIN_ITEM_CHARS`] 文字までに切る。
+/// として引く。各件は `[role] 本文` を [`REPLY_CHAIN_ITEM_CHARS`] 文字までに切り、行の Discord メッセージ ID
+/// （無ければ `log:<id>`）を付ける（Discord から取得したチェーンとの重複除去・並べ替え用）。
 ///
 /// # Errors
 /// 読み取り失敗時 [`DbError`]。
@@ -1017,7 +1019,7 @@ pub async fn reply_chain(
     channel_id: Option<&str>,
     bot_dm: bool,
     reply_to: Option<&str>,
-) -> Result<Vec<String>, DbError> {
+) -> Result<Vec<ReplyAncestor>, DbError> {
     let Some(reply_to) = reply_to else {
         return Ok(Vec::new());
     };
@@ -1047,7 +1049,7 @@ pub async fn reply_chain(
             };
             let mut stmt = conn
                 .prepare(
-                    "SELECT role, content, reply_to_msg_id FROM message_logs \
+                    "SELECT id, discord_msg_id, role, content, reply_to_msg_id FROM message_logs \
                      WHERE bot_id = ?1 AND source = 'discord' AND is_notice = 0 AND id > ?2 \
                        AND ((?3 IS NULL AND guild_id IS NULL AND user_id = ?4) \
                          OR (guild_id = ?3 AND (?5 IS NULL OR channel_id = ?5))) \
@@ -1072,19 +1074,24 @@ pub async fn reply_chain(
                         params![bot_id, floor, guild_id, user_id, channel_id, target, row_id],
                         |r| {
                             Ok((
-                                r.get::<_, String>(0)?,
-                                r.get::<_, String>(1)?,
-                                r.get::<_, Option<String>>(2)?,
+                                r.get::<_, i64>(0)?,
+                                r.get::<_, Option<String>>(1)?,
+                                r.get::<_, String>(2)?,
+                                r.get::<_, String>(3)?,
+                                r.get::<_, Option<String>>(4)?,
                             ))
                         },
                     )
                     .optional()
                     .map_err(map_sqlite)?;
-                let Some((role, content, parent)) = row else {
+                let Some((id, discord_msg_id, role, content, parent)) = row else {
                     break;
                 };
                 let content: String = content.chars().take(REPLY_CHAIN_ITEM_CHARS).collect();
-                chain.push(format!("[{role}] {content}"));
+                chain.push(ReplyAncestor {
+                    message_id: discord_msg_id.unwrap_or_else(|| format!("log:{id}")),
+                    text: format!("[{role}] {content}"),
+                });
                 next = parent;
             }
             chain.reverse();
@@ -1703,6 +1710,10 @@ mod tests {
         REPLY_CHAIN_MAX,
     };
 
+    fn texts(chain: &[yuuka_discord::ReplyAncestor]) -> Vec<&str> {
+        chain.iter().map(|e| e.text.as_str()).collect()
+    }
+
     /// 応答から入力へ、入力から `log:<id>` の応答へと遡り、古い順で返す。別の利用者・循環は辿らない。
     #[tokio::test]
     async fn reply_chain_follows_linked_replies_oldest_first_within_the_user_scope() {
@@ -1727,7 +1738,16 @@ mod tests {
         let chain = reply_chain(&db, "u", "b1", None, None, false, Some("d2"))
             .await
             .unwrap();
-        assert_eq!(chain, ["[user] 質問1", "[assistant] 回答1", "[user] 質問2"]);
+        assert_eq!(
+            texts(&chain),
+            ["[user] 質問1", "[assistant] 回答1", "[user] 質問2"]
+        );
+        let ids: Vec<&str> = chain.iter().map(|e| e.message_id.as_str()).collect();
+        assert_eq!(
+            ids,
+            ["d1", log_ref.as_str(), "d2"],
+            "Discord の ID が無い行は log:<id>"
+        );
         let none = reply_chain(&db, "u", "b1", None, None, false, Some("d9"))
             .await
             .unwrap();
@@ -1743,7 +1763,7 @@ mod tests {
         let cyclic = reply_chain(&db, "u", "b1", None, None, false, Some("c1"))
             .await
             .unwrap();
-        assert_eq!(cyclic, ["[user] B", "[user] A"]);
+        assert_eq!(texts(&cyclic), ["[user] B", "[user] A"]);
 
         // リセット境界より前の発言は復元しない（直近コンテキストと同じ floor）。
         clear_context(&db, "u", "b1").await.unwrap();
@@ -1787,7 +1807,7 @@ mod tests {
         let chain = reply_chain(&db, "u", "b1", Some("g1"), Some("c1"), false, Some("x2"))
             .await
             .unwrap();
-        assert_eq!(chain, ["[user] 同じチャンネル"]);
+        assert_eq!(texts(&chain), ["[user] 同じチャンネル"]);
 
         let long = "あ".repeat(REPLY_CHAIN_ITEM_CHARS + 10);
         let mut parent: Option<String> = None;
@@ -1822,6 +1842,6 @@ mod tests {
         assert_eq!(chain.len(), REPLY_CHAIN_MAX, "新しい側から上限件数まで");
         assert!(chain
             .iter()
-            .all(|t| t.chars().count() == "[user] ".chars().count() + REPLY_CHAIN_ITEM_CHARS));
+            .all(|t| t.text.chars().count() == "[user] ".chars().count() + REPLY_CHAIN_ITEM_CHARS));
     }
 }

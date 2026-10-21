@@ -4,10 +4,11 @@
 //! システムプロンプト組立 → ユーザーの Gemini キー復号 → **FC ループ実行**（tools 往復は
 //! [`yuuka_gemini::run_function_calling_loop`] が担う）→ アシスタント応答を永続化 → [`TurnReply`]。
 //!
-//! FC ループの前に、能力で絞ったツールから事前計画を立て、ツールを計画の範囲へ絞る（R06・
-//! [`crate::turn_plan`]）。Discord の経路は重い処理を途中応答と後続配信に分ける（R07・
-//! [`run_delivered_turn`]）。返信元チェーンは Discord と会話ログから同じスコープで復元し、
-//! systemInstruction とシナプス想起へ渡す（R08）。会話履歴は Redis を使わず SQLite を読む。
+//! FC ループの前に、能力で絞ったツールから事前計画を立て、参考情報と完了是正の許可リストに使う（R06・
+//! [`crate::turn_plan`]・ツールの宣言は絞らない）。`TurnProcessor` の経路（Discord・WS）は重い処理を
+//! 途中応答と後続配信に分ける（R07・[`run_delivered_turn`]）。返信元チェーンは Discord と会話ログから
+//! 同じスコープで復元してメッセージ ID で合わせ、systemInstruction とシナプス想起へ渡す（R08）。
+//! 会話履歴は Redis を使わず SQLite を読む。
 
 use std::sync::Arc;
 
@@ -20,8 +21,8 @@ use yuuka_core::{
 };
 use yuuka_crypto::SystemCrypto;
 use yuuka_discord::{
-    BotStatus, EmbedField, FileAttachment, IncomingChat, InlineMedia, RichEmbed, Speaker,
-    StatusSink, TurnDelivery, TurnError, TurnProcessor, TurnReply,
+    BotStatus, EmbedField, FileAttachment, IncomingChat, InlineMedia, ReplyAncestor, RichEmbed,
+    Speaker, StatusSink, TurnDelivery, TurnError, TurnProcessor, TurnReply,
 };
 use yuuka_gemini::{
     run_function_calling_loop, Content, GeminiClient, GenerateBackend, LoopOptions, LoopResult,
@@ -41,7 +42,7 @@ use crate::message_log::{self, ContextEntry};
 use crate::receipt_extract::{ReceiptDraft, ReceiptExtractError, ReceiptOcr};
 use crate::synapse_extract::{self, ExtractScope};
 use crate::synapse_recall::{self, RecallSettings};
-use crate::turn_plan::{self, PlannedTools, TurnPlan};
+use crate::turn_plan::{self, TurnPlan};
 use crate::{bot_repo, persona, system_prompt, user};
 
 /// 空応答時の既定文（Node `runPlannedTurn` の `fallbackText` 既定）。
@@ -244,7 +245,8 @@ impl ChatEngine {
     }
 
     /// 本編ターンの事前計画（R06・Node `runPlannedTurn` の `planTurn`）。計画できたら計画節を
-    /// `sys` へ足し、Node と同じく `plan_attempts` を数える。計画が重い処理と判定し、かつ配信経路
+    /// `sys` へ足し、Node と同じく `plan_attempts` を数える。計画のツールは呼び出し側が完了是正の
+    /// 許可リスト（[`TurnPlan::correction_tools`]）にだけ使う。計画が重い処理と判定し、かつ配信経路
     /// （`heavy`）があれば途中応答へ回して `async_predicted` を数える（R07）。計画の失敗（時間切れ・
     /// 形式不正・カタログ外のツール名）は `None` で、能力で絞ったツールをそのまま使う。
     async fn plan_turn(
@@ -375,28 +377,25 @@ impl ChatEngine {
         timeline_attachments: Vec<yuuka_core::tool::ConversationAttachment>,
         status: &StatusSink,
     ) -> Result<TurnReply, TurnError> {
-        self.receipt_turn_with(
-            bot_id,
-            user_id,
-            image,
-            caption,
+        let msg = IncomingChat {
+            text: caption.unwrap_or_default(),
             timeline_attachments,
-            status,
-            None,
-        )
-        .await
+            ..IncomingChat::default()
+        };
+        self.receipt_turn_with(bot_id, user_id, image, msg, status, None)
+            .await
     }
 
-    /// [`Self::receipt_turn`] の本体。`heavy` は Discord の配信経路（[`TurnProcessor::parse_receipt`]）
-    /// だけが渡し、重い処理を途中応答と後続配信に分ける（管理画面は同期のまま `None`）。
-    #[allow(clippy::too_many_arguments)]
+    /// [`Self::receipt_turn`] の本体。`msg` はキャプション（`text`・空なら指示なし）・保存候補と、Discord では
+    /// 会話ログの紐づけ（メッセージ ID・返信先・チャンネル・返信元チェーン）を持つ（`msg.image` は使わない）。
+    /// `heavy` は Discord の配信経路（[`TurnProcessor::parse_receipt`]）だけが渡し、重い処理を途中応答と
+    /// 後続配信に分ける（管理画面は同期のまま `None`）。
     async fn receipt_turn_with(
         &self,
         bot_id: &BotId,
         user_id: &UserId,
         image: InlineMedia,
-        caption: Option<String>,
-        timeline_attachments: Vec<yuuka_core::tool::ConversationAttachment>,
+        msg: IncomingChat,
         status: &StatusSink,
         heavy: Option<Arc<PlanningSignal>>,
     ) -> Result<TurnReply, TurnError> {
@@ -416,10 +415,8 @@ impl ChatEngine {
                         bot_id,
                         user_id,
                         IncomingChat {
-                            text: caption.unwrap_or_default(),
                             image: Some(image),
-                            timeline_attachments,
-                            ..IncomingChat::default()
+                            ..msg
                         },
                         status,
                         MessageSource::Discord,
@@ -449,7 +446,11 @@ impl ChatEngine {
              記帳には addExpense の source: receipt_ocr を使ってください。\
              summary.amount は税込合計、lines は商品明細です。合計と明細を両方記帳しないでください。\
              金額不明の行を推測して記帳せず、明細合計と税込合計が異なる場合は合計1件を使ってください。",
-            caption.as_deref().unwrap_or("家計簿に記録してください。"), data
+            match msg.text.trim() {
+                "" => "家計簿に記録してください。",
+                caption => caption,
+            },
+            data
         );
         // OCR はこのターンの LLM 入力だけに加える。会話ログ・記憶抽出には従来の
         // キャプションと画像プレースホルダを渡し、抽出した明細を新たに永続化しない。
@@ -457,10 +458,8 @@ impl ChatEngine {
             bot_id,
             user_id,
             IncomingChat {
-                text: caption.unwrap_or_default(),
                 image: Some(image),
-                timeline_attachments,
-                ..IncomingChat::default()
+                ..msg
             },
             status,
             MessageSource::Discord,
@@ -708,7 +707,8 @@ impl ChatEngine {
             None
         };
         let snapshot = self.registry.snapshot_with(&ctx, mcp_provider.as_ref());
-        // R06/R07: 能力で絞ったツールから事前計画を立て、FC ループのツールを計画の範囲へ絞る。
+        // R06/R07: 能力で絞ったツールから事前計画を立てる。計画は参考情報と完了是正の許可リストに
+        // だけ使い、FC ループの宣言・実行は能力で絞ったカタログ全体のまま（Node と同じ）。
         let plan = self
             .plan_turn(
                 backend.as_ref(),
@@ -718,10 +718,10 @@ impl ChatEngine {
                 heavy.as_deref(),
             )
             .await;
-        let planned_tools = PlannedTools::new(&snapshot, plan.as_ref());
         // 秘書経路のみ操作履歴を記録する（Node `processMessage` は recordActions:true・guild/DM は false）。
         // 実行実績（tool_outcomes）は汎用モードと同じく常に記録する。
         let opts = LoopOptions {
+            allowed_tool_names: plan.as_ref().and_then(TurnPlan::correction_tools),
             on_status: Some(status_bridge(status)),
             action_recorder: self.recorder.clone(),
             outcome_sink: self.tool_outcomes.clone(),
@@ -731,7 +731,7 @@ impl ChatEngine {
         let result = match self
             .run_turn_loop(
                 backend.as_ref(),
-                &planned_tools,
+                &snapshot,
                 &sys,
                 &mut contents,
                 &ctx,
@@ -1065,7 +1065,7 @@ impl ChatEngine {
             ctx.guild_id = Some(gid.clone());
         }
         let snapshot = self.registry.snapshot(&ctx);
-        // R06/R07: 秘書経路と同じく、能力で絞ったツールから事前計画を立てて FC ループを絞る。
+        // R06/R07: 秘書経路と同じく事前計画を立て、参考情報と完了是正の許可リストにだけ使う。
         let plan = self
             .plan_turn(
                 backend.as_ref(),
@@ -1075,8 +1075,8 @@ impl ChatEngine {
                 heavy.as_deref(),
             )
             .await;
-        let planned_tools = PlannedTools::new(&snapshot, plan.as_ref());
         let opts = LoopOptions {
+            allowed_tool_names: plan.as_ref().and_then(TurnPlan::correction_tools),
             on_status: Some(status_bridge(status)),
             outcome_sink: self.tool_outcomes.clone(),
             metrics: self.metrics.clone(),
@@ -1085,7 +1085,7 @@ impl ChatEngine {
         let result = match self
             .run_turn_loop(
                 backend.as_ref(),
-                &planned_tools,
+                &snapshot,
                 &sys,
                 &mut contents,
                 &ctx,
@@ -1340,29 +1340,21 @@ impl TurnProcessor for ChatEngine {
         bot_id: &BotId,
         user_id: &UserId,
         image: InlineMedia,
-        caption: Option<String>,
-        timeline_attachments: Vec<yuuka_core::tool::ConversationAttachment>,
+        msg: IncomingChat,
         status: StatusSink,
         delivery: Arc<dyn TurnDelivery>,
     ) -> Result<TurnReply, TurnError> {
         // 写真をタイムラインへ保存する依頼にも応えられるよう、本人添付の保存候補も OCR 経路へ渡す。
-        // OCR と秘書ターンの合計が長引けば、秘書経路と同じく途中応答と後続配信に分ける。
-        let progress = ProgressLog::new(&self.db, user_id, bot_id, None, &IncomingChat::default());
+        // OCR と秘書ターンの合計が長引けば、秘書経路と同じく途中応答と後続配信に分ける。途中応答も
+        // 入力メッセージへ紐づける（R08）。
+        let progress = ProgressLog::new(&self.db, user_id, bot_id, None, &msg);
         let engine = self.clone();
         let (bot_id, user_id) = (bot_id.clone(), user_id.clone());
         let worker_status = status.clone();
         run_delivered_turn(
             move |heavy| async move {
                 engine
-                    .receipt_turn_with(
-                        &bot_id,
-                        &user_id,
-                        image,
-                        caption,
-                        timeline_attachments,
-                        &worker_status,
-                        Some(heavy),
-                    )
+                    .receipt_turn_with(&bot_id, &user_id, image, msg, &worker_status, Some(heavy))
                     .await
             },
             delivery,
@@ -1661,6 +1653,12 @@ const RUNTIME_INTERIM_TEXT: &str =
 /// 後続配信へ回したターンが失敗したときの最終配信文。内部のエラー内容は利用者へ出さない。
 const DEFERRED_ERROR_TEXT: &str =
     "処理を完了できませんでした。少し時間をおいてもう一度お試しください。";
+/// 後続配信へ回したターン全体の上限（開始から数える・PWA のターン上限 `CHAT_TURN_TIMEOUT` と同じ）。
+/// 超えたら本体を止めて定型文を配信する（上流が応答しないままタスクが残り続けないように）。
+const DEFERRED_TURN_LIMIT: std::time::Duration = std::time::Duration::from_secs(180);
+/// [`DEFERRED_TURN_LIMIT`] を超えたときの最終配信文。
+const DEFERRED_TIMEOUT_TEXT: &str =
+    "時間内に処理を完了できませんでした。少し時間をおいてもう一度お試しください。";
 
 /// 計画が重い処理と判定したことを、実行中のターンから [`run_delivered_turn`] へ伝える合図。
 #[derive(Default)]
@@ -1700,8 +1698,9 @@ impl PlanningSignal {
 /// ターン本体は 1 度だけ起動し、途中応答へ切り替えても中断しない。切り替えるのは、計画が重いと
 /// 予測したとき（[`PlanningSignal`]）か、[`HEAVY_RUNTIME`] を過ぎたとき。切り替えたら途中応答を会話
 /// ログへ残して `on_interim` で送り、`deferred` の空応答を返す（呼び出し側は返信しない）。最終結果は
-/// 通常の経路で会話ログへ保存したうえで `deliver_final` で 1 回だけ配信し、失敗時も定型文を 1 回
-/// 配信する。切り替えずに終わったターンは結果をそのまま返す。
+/// 通常の経路で会話ログへ保存したうえで `deliver_final` で 1 回だけ配信し、失敗時と
+/// [`DEFERRED_TURN_LIMIT`] 超過時（本体を止める）も定型文を 1 回配信する。切り替えずに終わったターンは
+/// 結果をそのまま返す。
 async fn run_delivered_turn<F, Fut>(
     work: F,
     delivery: Arc<dyn TurnDelivery>,
@@ -1712,14 +1711,23 @@ where
     F: FnOnce(Arc<PlanningSignal>) -> Fut,
     Fut: std::future::Future<Output = Result<TurnReply, TurnError>> + Send + 'static,
 {
-    run_delivered_turn_after(work, delivery, HEAVY_RUNTIME, Some(progress), Some(status)).await
+    run_delivered_turn_after(
+        work,
+        delivery,
+        HEAVY_RUNTIME,
+        DEFERRED_TURN_LIMIT,
+        Some(progress),
+        Some(status),
+    )
+    .await
 }
 
-/// [`run_delivered_turn`] の本体（テストは切り替え時間を差し替え、会話ログと状態表示を省く）。
+/// [`run_delivered_turn`] の本体（テストは切り替え時間と全体の上限を差し替え、会話ログと状態表示を省く）。
 async fn run_delivered_turn_after<F, Fut>(
     work: F,
     delivery: Arc<dyn TurnDelivery>,
     runtime_limit: std::time::Duration,
+    total_limit: std::time::Duration,
     progress: Option<ProgressLog>,
     status: Option<StatusSink>,
 ) -> Result<TurnReply, TurnError>
@@ -1727,6 +1735,7 @@ where
     F: FnOnce(Arc<PlanningSignal>) -> Fut,
     Fut: std::future::Future<Output = Result<TurnReply, TurnError>> + Send + 'static,
 {
+    let deadline = tokio::time::Instant::now() + total_limit;
     let signal = Arc::new(PlanningSignal::default());
     let mut worker = tokio::spawn(work(Arc::clone(&signal)));
     let interim = tokio::select! {
@@ -1742,15 +1751,23 @@ where
     }
     delivery.on_interim(interim).await;
     tokio::spawn(async move {
-        let reply = match worker.await {
-            Ok(Ok(reply)) => reply,
-            Ok(Err(error)) => {
+        let reply = match tokio::time::timeout_at(deadline, &mut worker).await {
+            Ok(Ok(Ok(reply))) => reply,
+            Ok(Ok(Err(error))) => {
                 tracing::warn!(%error, "後続配信へ回したターンが失敗しました");
                 TurnReply::text(DEFERRED_ERROR_TEXT)
             }
-            Err(error) => {
+            Ok(Err(error)) => {
                 tracing::error!(%error, "後続配信へ回したターンのタスクが異常終了しました");
                 TurnReply::text(DEFERRED_ERROR_TEXT)
+            }
+            Err(_) => {
+                worker.abort();
+                tracing::warn!(
+                    limit = ?total_limit,
+                    "後続配信へ回したターンが全体の上限を超えたため止めました"
+                );
+                TurnReply::text(DEFERRED_TIMEOUT_TEXT)
             }
         };
         if !reply.is_silent() {
@@ -1822,10 +1839,11 @@ const REPLY_CHAIN_MAX: usize = message_log::REPLY_CHAIN_MAX;
 /// 返信元チェーン 1 件の最大文字数。
 const REPLY_CHAIN_ITEM_CHARS: usize = message_log::REPLY_CHAIN_ITEM_CHARS;
 
-/// 返信元チェーンをまとめる。Discord から取得した分（`msg.reply_chain`）に、会話ログから復元した分
-/// （[`message_log::reply_chain`]）を足して [`normalize_reply_chain`] する。`guild_id` が無ければ
-/// 秘書/owner DM のスコープ（`bot_dm` で owner DM のリセット境界）。復元の失敗は warn のみで、
-/// チェーンなしで続行する（Node も返信チェーンの解決失敗を握ってターンを続けた）。
+/// 返信元チェーンをまとめる。Discord から取得した分（`msg.reply_chain`）と会話ログから復元した分
+/// （[`message_log::reply_chain`]）を [`merge_reply_chain`] で合わせる。会話ログは主に Discord の取得が
+/// 途中で切れたとき（REST の失敗・時間切れ）の補完と、Discord の ID を持たない経路（WS の `log:<id>`）
+/// のため。`guild_id` が無ければ秘書/owner DM のスコープ（`bot_dm` で owner DM のリセット境界）。
+/// 復元の失敗は warn のみで、Discord の分だけで続ける（Node も返信チェーンの解決失敗を握って続行した）。
 async fn collect_reply_chain(
     db: &Db,
     msg: &IncomingChat,
@@ -1834,8 +1852,7 @@ async fn collect_reply_chain(
     guild_id: Option<&str>,
     bot_dm: bool,
 ) -> Vec<String> {
-    let mut chain = msg.reply_chain.clone();
-    match message_log::reply_chain(
+    let stored = match message_log::reply_chain(
         db,
         user_id,
         bot_id,
@@ -1846,25 +1863,37 @@ async fn collect_reply_chain(
     )
     .await
     {
-        Ok(stored) => chain.extend(stored),
+        Ok(stored) => stored,
         Err(e) => {
-            tracing::warn!(error = %e, "返信元チェーンを会話ログから復元できませんでした（チェーンなしで続行）");
+            tracing::warn!(error = %e, "返信元チェーンを会話ログから復元できませんでした（Discord の分だけで続行）");
+            Vec::new()
         }
-    }
-    normalize_reply_chain(&mut chain);
-    chain
+    };
+    merge_reply_chain(msg.reply_chain.clone(), stored)
 }
 
-/// Discord から取得したチェーンと会話ログから復元したチェーンをまとめる。空・重複を除き、新しい側から
-/// [`REPLY_CHAIN_MAX`] 件を古い順のまま残し、各件を [`REPLY_CHAIN_ITEM_CHARS`] 文字で切る。
-fn normalize_reply_chain(chain: &mut Vec<String>) {
+/// 2 つの取得元の返信元チェーンを合わせる。メッセージ ID で重複を除き（同じ発言は先に来た Discord 側の
+/// 表記を残す）、本文が空の件を除いて時系列に並べ、新しい側から [`REPLY_CHAIN_MAX`] 件を古い順のまま
+/// 残す。各件は [`REPLY_CHAIN_ITEM_CHARS`] 文字で切る。
+///
+/// Discord のメッセージ ID は時刻順の snowflake なので数値順に並べる。Discord の ID を持たない会話ログの
+/// 行（`log:<id>`）が混じるのは会話ログだけの経路（WS）なので、そのときは取得元の順（古い順）のまま。
+fn merge_reply_chain(discord: Vec<ReplyAncestor>, stored: Vec<ReplyAncestor>) -> Vec<String> {
     let mut seen = std::collections::HashSet::new();
-    chain.retain(|text| !text.trim().is_empty() && seen.insert(text.clone()));
-    let skip = chain.len().saturating_sub(REPLY_CHAIN_MAX);
-    chain.drain(..skip);
-    for text in chain.iter_mut() {
-        *text = text.chars().take(REPLY_CHAIN_ITEM_CHARS).collect();
+    let mut merged: Vec<ReplyAncestor> = discord
+        .into_iter()
+        .chain(stored)
+        .filter(|e| !e.text.trim().is_empty() && seen.insert(e.message_id.clone()))
+        .collect();
+    if merged.iter().all(|e| e.message_id.parse::<u64>().is_ok()) {
+        merged.sort_by_cached_key(|e| e.message_id.parse::<u64>().ok());
     }
+    let skip = merged.len().saturating_sub(REPLY_CHAIN_MAX);
+    merged
+        .into_iter()
+        .skip(skip)
+        .map(|e| e.text.chars().take(REPLY_CHAIN_ITEM_CHARS).collect())
+        .collect()
 }
 
 /// 返信元チェーンを systemInstruction の末尾へ参考データとして足す（空なら何もしない）。過去の発言は
@@ -2098,6 +2127,7 @@ mod tests {
             |_| async { Ok(TurnReply::text("done")) },
             delivery.clone(),
             Duration::from_secs(10),
+            Duration::from_secs(10),
             None,
             None,
         )
@@ -2121,6 +2151,7 @@ mod tests {
                 Ok(TurnReply::text("done"))
             },
             delivery.clone(),
+            Duration::from_secs(10),
             Duration::from_secs(10),
             None,
             None,
@@ -2156,6 +2187,7 @@ mod tests {
             },
             delivery.clone(),
             Duration::from_secs(10),
+            Duration::from_secs(10),
             None,
             None,
         )
@@ -2181,6 +2213,7 @@ mod tests {
             },
             delivery.clone(),
             Duration::ZERO,
+            Duration::from_secs(10),
             None,
             None,
         )
@@ -2202,22 +2235,89 @@ mod tests {
         assert!(!events.iter().any(|e| e.contains("private diagnostic")));
     }
 
-    // ─── R08: 返信元チェーンの正規化 ───
-
-    #[test]
-    fn normalize_reply_chain_dedups_keeps_newest_and_truncates() {
-        let mut chain = vec![String::new(), "a".to_owned(), "a".to_owned()];
-        chain.extend((0..REPLY_CHAIN_MAX).map(|i| format!("m{i}")));
-        chain.push("x".repeat(REPLY_CHAIN_ITEM_CHARS + 5));
-        normalize_reply_chain(&mut chain);
-        assert_eq!(chain.len(), REPLY_CHAIN_MAX);
+    /// 全体の上限を超えた本体は止め、内部の内容を含まない定型文を 1 回配信する。
+    #[tokio::test]
+    async fn deferred_turn_is_stopped_at_the_overall_limit() {
+        let delivery = Arc::new(RecordingDelivery::default());
+        let reply = run_delivered_turn_after(
+            |_| std::future::pending::<Result<TurnReply, TurnError>>(),
+            delivery.clone(),
+            Duration::ZERO,
+            Duration::from_millis(50),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        assert!(reply.deferred);
+        tokio::time::timeout(Duration::from_secs(5), delivery.final_sent.notified())
+            .await
+            .unwrap();
         assert_eq!(
-            chain.first().map(String::as_str),
-            Some("m1"),
+            *delivery.events.lock().unwrap(),
+            [
+                format!("interim:{RUNTIME_INTERIM_TEXT}"),
+                format!("final:{DEFERRED_TIMEOUT_TEXT}")
+            ]
+        );
+    }
+
+    // ─── R08: 返信元チェーンのマージ ───
+
+    fn ancestor(message_id: &str, text: &str) -> ReplyAncestor {
+        ReplyAncestor {
+            message_id: message_id.to_owned(),
+            text: text.to_owned(),
+        }
+    }
+
+    /// 両方の取得元が同じ発言を返しても 1 回だけ入れ（Discord 側の表記を残す）、時系列に並べる。
+    #[test]
+    fn merge_reply_chain_dedups_by_message_id_in_time_order() {
+        // Discord の取得は直近 2 件で切れた（時間切れ）。会話ログは同じ 300 と、さらに古い 100 を持つ。
+        let discord = vec![
+            ancestor("300", "[ゆう] 旅行の件"),
+            ancestor("500", "[あなた] 来月です"),
+        ];
+        let stored = vec![
+            ancestor("100", "[user] 最初の話"),
+            ancestor("300", "[user] 旅行の件"),
+        ];
+        assert_eq!(
+            merge_reply_chain(discord, stored),
+            ["[user] 最初の話", "[ゆう] 旅行の件", "[あなた] 来月です"]
+        );
+    }
+
+    /// Discord の ID を持たない会話ログだけの経路（WS）は取得元の順のまま。
+    #[test]
+    fn merge_reply_chain_keeps_log_order_without_discord_ids() {
+        let stored = vec![
+            ancestor("log:7", "[user] 質問"),
+            ancestor("log:8", "[assistant] 回答"),
+        ];
+        assert_eq!(
+            merge_reply_chain(Vec::new(), stored),
+            ["[user] 質問", "[assistant] 回答"]
+        );
+    }
+
+    /// 空の件を除き、新しい側から上限件数を残し、各件を上限文字数で切る。
+    #[test]
+    fn merge_reply_chain_keeps_newest_and_truncates() {
+        let mut discord = vec![ancestor("1", " ")];
+        discord
+            .extend((2..REPLY_CHAIN_MAX + 3).map(|i| ancestor(&i.to_string(), &format!("m{i}"))));
+        discord.push(ancestor("99", &"x".repeat(REPLY_CHAIN_ITEM_CHARS + 5)));
+        let merged = merge_reply_chain(discord, Vec::new());
+        assert_eq!(merged.len(), REPLY_CHAIN_MAX);
+        assert_eq!(
+            merged.first().map(String::as_str),
+            Some("m4"),
             "古い側を落とす"
         );
         assert_eq!(
-            chain.last().map(|s| s.chars().count()),
+            merged.last().map(|s| s.chars().count()),
             Some(REPLY_CHAIN_ITEM_CHARS)
         );
     }

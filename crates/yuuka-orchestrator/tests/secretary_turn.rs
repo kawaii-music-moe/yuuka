@@ -1177,8 +1177,11 @@ async fn receipt_path_keeps_timeline_attachment_catalog() {
                     data_base64: "AQID".to_owned(),
                     mime_type: mime.to_owned(),
                 },
-                Some("このレシートと動画を保存して".to_owned()),
-                attachments,
+                IncomingChat {
+                    text: "このレシートと動画を保存して".to_owned(),
+                    timeline_attachments: attachments,
+                    ..IncomingChat::default()
+                },
                 null_sink(),
                 Arc::new(NoopDelivery),
             )

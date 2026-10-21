@@ -50,11 +50,21 @@ pub struct IncomingChat {
     pub discord_msg_id: Option<String>,
     /// 返信元 Discord メッセージ ID（返信チェーン解決用）。
     pub reply_to_msg_id: Option<String>,
-    /// Discord から取得した返信元チェーン（R08・古い順・各件 `[発言者] 本文`・受信チャンネル内・上限 8 件）。
-    /// engine は会話ログから復元したチェーンと合わせて systemInstruction と想起クエリへ使う。
-    pub reply_chain: Vec<String>,
+    /// Discord から取得した返信元チェーン（R08・古い順・受信チャンネル内・上限 8 件）。engine は会話ログ
+    /// から復元したチェーンとメッセージ ID で重複を除いて合わせ、systemInstruction と想起クエリへ使う。
+    pub reply_chain: Vec<ReplyAncestor>,
     /// 受信チャンネル ID（ギルドコンテキストのチャンネル分離用・V19）。
     pub channel_id: Option<String>,
+}
+
+/// 返信元チェーンの 1 件（R08）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReplyAncestor {
+    /// 元メッセージの ID。Discord のメッセージ ID（時刻順の snowflake）か、Discord の ID を持たない
+    /// 会話ログの行は `log:<id>`。取得元をまたいだ重複除去と時系列の並べ替えに使う。
+    pub message_id: String,
+    /// `[発言者] 本文`（1200 文字まで）。
+    pub text: String,
 }
 
 /// 発話者（現行 `speaker { userId, displayName }`）。
@@ -238,16 +248,15 @@ pub trait TurnProcessor: Send + Sync {
         delivery: Arc<dyn TurnDelivery>,
     ) -> Result<TurnReply, TurnError>;
 
-    /// 秘書のレシート画像経路（現行 `parseReceipt`）。`timeline_attachments` は現メッセージの
-    /// 本人添付（タイムライン保存の候補・[`IncomingChat::timeline_attachments`] と同じ）。
-    #[allow(clippy::too_many_arguments)]
+    /// 秘書のレシート画像経路（現行 `parseReceipt`）。`image` はレシート候補の画像、`msg` は同じ
+    /// メッセージのキャプション（`text`・空なら指示なし）・本人添付の保存候補（`timeline_attachments`）・
+    /// 会話ログの紐づけ（`discord_msg_id`/`reply_to_msg_id`/`channel_id`/`reply_chain`）。`msg.image` は使わない。
     async fn parse_receipt(
         &self,
         bot_id: &BotId,
         user_id: &UserId,
         image: InlineMedia,
-        caption: Option<String>,
-        timeline_attachments: Vec<yuuka_core::tool::ConversationAttachment>,
+        msg: IncomingChat,
         status: StatusSink,
         delivery: Arc<dyn TurnDelivery>,
     ) -> Result<TurnReply, TurnError>;
