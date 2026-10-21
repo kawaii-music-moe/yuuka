@@ -16,8 +16,14 @@ use async_trait::async_trait;
 use secrecy::SecretString;
 use twilight_http::Client;
 use twilight_model::channel::message::AllowedMentions;
-use twilight_model::id::marker::{ChannelMarker, MessageMarker, UserMarker};
+use twilight_model::channel::permission_overwrite::PermissionOverwrite;
+use twilight_model::channel::{Channel, ChannelType};
+use twilight_model::guild::{Permissions, Role};
+use twilight_model::id::marker::{
+    ChannelMarker, GuildMarker, MessageMarker, RoleMarker, UserMarker,
+};
 use twilight_model::id::Id;
+use twilight_util::permission_calculator::PermissionCalculator;
 use yuuka_core::{BotId, DiscordError, UserId};
 
 use crate::idempotent::{MessageDedup, GUIDANCE_TTL};
@@ -302,12 +308,12 @@ impl DiscordMessenger {
         }
     }
 
-    /// 対象ユーザーがこのチャンネルを閲覧してよいか（現行 notifier.ts の membership + ViewChannel）。
+    /// 対象ユーザーがこのチャンネルに投稿してよいか（`VIEW_CHANNEL` + 送信権限）。
     ///
-    /// チャンネルを引いて guild を判定し、ギルドチャンネルなら対象ユーザーがそのギルドのメンバーで
-    /// あることを REST で確認する（在籍＝第一次ガード）。厳密な per-channel ViewChannel overwrite 判定は
-    /// twilight-util の権限計算で精緻化予定（services が任意チャンネル宛を注入する Phase 4）。ギルド外
-    /// （DM/グループ）チャンネルはガード対象外。検証失敗は安全側（不可）に倒し DM フォールバックさせる。
+    /// ギルドチャンネルなら、ギルド所有者・ロール・チャンネル上書きから twilight-util の権限計算で
+    /// 判定する（在籍だけでは非公開チャンネルに投稿できてしまうため）。スレッドは親チャンネルの
+    /// 上書きを使う。ギルド外（DM/グループ）チャンネルはガード対象外。取得・判定に失敗したら
+    /// 安全側（不可）に倒し DM フォールバックさせる。
     async fn user_can_view_channel(
         client: &Client,
         channel_id: Id<ChannelMarker>,
@@ -316,19 +322,56 @@ impl DiscordMessenger {
         let Ok(uid) = user_id.as_str().parse::<Id<UserMarker>>() else {
             return false;
         };
-        let channel = match client.channel(channel_id).await {
-            Ok(resp) => resp.model().await.ok(),
-            Err(_) => None,
-        };
-        let Some(channel) = channel else {
+        let Some(channel) = Self::fetch_channel(client, channel_id).await else {
             return false;
         };
-        match channel.guild_id {
-            // ギルド外チャンネル（DM 等）は露出ガードの対象外。
-            None => true,
-            // ギルドチャンネル: 対象ユーザーが在籍していれば許可（member fetch 成功＝在籍）。
-            Some(guild_id) => client.guild_member(guild_id, uid).await.is_ok(),
-        }
+        // ギルド外チャンネル（DM 等）は露出ガードの対象外。
+        let Some(guild_id) = channel.guild_id else {
+            return true;
+        };
+        let channel_type = channel.kind;
+        let overwrites = if channel_type.is_thread() {
+            let Some(parent_id) = channel.parent_id else {
+                return false;
+            };
+            let Some(parent) = Self::fetch_channel(client, parent_id).await else {
+                return false;
+            };
+            parent.permission_overwrites.unwrap_or_default()
+        } else {
+            channel.permission_overwrites.unwrap_or_default()
+        };
+        let Ok(member) = client.guild_member(guild_id, uid).await else {
+            return false;
+        };
+        let Ok(member) = member.model().await else {
+            return false;
+        };
+        let Ok(guild) = client.guild(guild_id).await else {
+            return false;
+        };
+        let Ok(guild) = guild.model().await else {
+            return false;
+        };
+        let Ok(roles) = client.roles(guild_id).await else {
+            return false;
+        };
+        let Ok(roles) = roles.models().await else {
+            return false;
+        };
+        can_post_in_channel(
+            guild_id,
+            guild.owner_id,
+            uid,
+            &member.roles,
+            &roles,
+            channel_type,
+            &overwrites,
+        )
+    }
+
+    async fn fetch_channel(client: &Client, id: Id<ChannelMarker>) -> Option<Channel> {
+        client.channel(id).await.ok()?.model().await.ok()
     }
 
     /// オーナー宛の DM を、デフォルト（共有）クライアントからボタン付きで送る（DM 招待系の共通）。
@@ -556,6 +599,37 @@ pub(crate) fn share_invite_components(share_id: i64) -> Vec<ActionRow> {
     }]
 }
 
+/// ギルドチャンネルでユーザーが閲覧・送信できるか（権限計算のみ・I/O なし）。
+fn can_post_in_channel(
+    guild_id: Id<GuildMarker>,
+    owner_id: Id<UserMarker>,
+    user_id: Id<UserMarker>,
+    member_role_ids: &[Id<RoleMarker>],
+    guild_roles: &[Role],
+    channel_type: ChannelType,
+    overwrites: &[PermissionOverwrite],
+) -> bool {
+    // @everyone ロールの ID はギルド ID と同じ。
+    let everyone = guild_roles
+        .iter()
+        .find(|r| r.id.get() == guild_id.get())
+        .map_or(Permissions::empty(), |r| r.permissions);
+    let member_roles: Vec<(Id<RoleMarker>, Permissions)> = guild_roles
+        .iter()
+        .filter(|r| member_role_ids.contains(&r.id))
+        .map(|r| (r.id, r.permissions))
+        .collect();
+    let perms = PermissionCalculator::new(guild_id, user_id, everyone, &member_roles)
+        .owner_id(owner_id)
+        .in_channel(channel_type, overwrites);
+    let send = if channel_type.is_thread() {
+        Permissions::SEND_MESSAGES_IN_THREADS
+    } else {
+        Permissions::SEND_MESSAGES
+    };
+    perms.contains(Permissions::VIEW_CHANNEL | send)
+}
+
 /// テナント別 http クライアントを作る（トークン別・レート bucket 別・§8.1.3 案 (a)）。
 fn new_client(token: &SecretString) -> Client {
     use secrecy::ExposeSecret as _;
@@ -583,6 +657,7 @@ pub(crate) fn default_allowed_mentions() -> AllowedMentions {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use twilight_model::channel::permission_overwrite::PermissionOverwriteType;
 
     fn messenger_with(clients: &[&str], default: Option<&str>) -> DiscordMessenger {
         let map: HashMap<BotId, Arc<Client>> = clients
@@ -607,6 +682,90 @@ mod tests {
         assert!(am.parse.is_empty());
         assert!(am.roles.is_empty() && am.users.is_empty());
         assert!(am.replied_user, "返信先ユーザーへの通知は維持する");
+    }
+
+    fn role(id: u64, perms: Permissions) -> Role {
+        #[allow(deprecated)]
+        Role {
+            colors: twilight_model::guild::RoleColors {
+                primary_color: 0,
+                secondary_color: None,
+                tertiary_color: None,
+            },
+            color: 0,
+            hoist: false,
+            icon: None,
+            id: Id::new(id),
+            managed: false,
+            mentionable: false,
+            name: String::new(),
+            permissions: perms,
+            position: 0,
+            flags: twilight_model::guild::RoleFlags::empty(),
+            tags: None,
+            unicode_emoji: None,
+        }
+    }
+
+    fn overwrite(id: u64, allow: Permissions, deny: Permissions) -> PermissionOverwrite {
+        PermissionOverwrite {
+            allow,
+            deny,
+            id: Id::new(id),
+            kind: PermissionOverwriteType::Role,
+        }
+    }
+
+    #[test]
+    fn can_post_requires_view_and_send_per_channel() {
+        let base = Permissions::VIEW_CHANNEL | Permissions::SEND_MESSAGES;
+        let roles = [role(1, base), role(7, Permissions::empty())];
+        let (g, owner, user) = (Id::new(1), Id::new(99), Id::new(5));
+        let text = ChannelType::GuildText;
+        assert!(can_post_in_channel(g, owner, user, &[], &roles, text, &[]));
+        // @everyone の閲覧拒否（非公開チャンネル）→ 不可（DM フォールバック対象）。
+        let private = overwrite(1, Permissions::empty(), Permissions::VIEW_CHANNEL);
+        assert!(!can_post_in_channel(
+            g,
+            owner,
+            user,
+            &[],
+            &roles,
+            text,
+            std::slice::from_ref(&private)
+        ));
+        // ロールの許可上書きで閲覧可能になる。
+        let allow = overwrite(7, Permissions::VIEW_CHANNEL, Permissions::empty());
+        assert!(can_post_in_channel(
+            g,
+            owner,
+            user,
+            &[Id::new(7)],
+            &roles,
+            text,
+            &[private, allow]
+        ));
+        // 送信拒否も不可。
+        let no_send = overwrite(1, Permissions::empty(), Permissions::SEND_MESSAGES);
+        assert!(!can_post_in_channel(
+            g,
+            owner,
+            user,
+            &[],
+            &roles,
+            text,
+            &[no_send]
+        ));
+        // 所有者は常に許可。
+        assert!(can_post_in_channel(
+            g,
+            user,
+            user,
+            &[],
+            &roles,
+            text,
+            &[private]
+        ));
     }
 
     // twilight `Client::new` は ratelimiter で Tokio ランタイムを要求するため tokio::test で回す。
