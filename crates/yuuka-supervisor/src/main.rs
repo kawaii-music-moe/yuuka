@@ -202,6 +202,7 @@ async fn run() -> Result<(), String> {
     // 実利用メトリクス（Node `services/metrics.ts`）。会話エンジンが書き込み、cron の定期ログ
     // （`MetricsLogService`）が同じインスタンスの snapshot を 5 分毎に出す（R23・#120）。
     let metrics = Arc::new(MetricsRegistry::new());
+    let rate_limiter: Arc<dyn RateLimiter> = Arc::new(InMemoryRateLimiter::new(db.clone()));
     let chat_engine = Arc::new(
         ChatEngine::with_real_gemini(
             db.clone(),
@@ -218,19 +219,9 @@ async fn run() -> Result<(), String> {
         .with_tool_outcomes(Arc::new(yuuka_orchestrator::DbToolOutcomeSink::new(
             db.clone(),
         )))
-        .with_metrics(metrics.clone()),
+        .with_metrics(metrics.clone())
+        .with_rate_limiter(rate_limiter.clone()),
     );
-
-    // レート制限（issue #41 レビュー・P1）: PWA と Discord/WS で **同一の** `InMemoryRateLimiter`
-    // インスタンス（＝同一の `counters` マップ）を共有する。この実装のユーザー単位窓
-    // （分/日）は `bot_id × user_id` のみで消費され guildId を含まないため、Discord 側の
-    // guild スロット（実ギルド ID）と PWA 側のスロット（"pwa"・finance receipt の "web" と同型）
-    // が違っても、インスタンスさえ同じなら同一ユーザーの利用回数は経路を跨いで正しく合算される。
-    // 別インスタンス（旧実装）だと `counters` マップが分かれ、Discord で分/日上限まで使った
-    // 直後に PWA でも再び上限まで使えてしまう（Bot のレート制限をチャネル切替で迂回できる）。
-    // guild 単位（ギルド日次上限）は `guild_id` を含むキーのままなので、この共有によって
-    // Discord ギルド同士の上限が PWA と混ざることはない（guild スロットは経路ごとに別キー）。
-    let rate_limiter: Arc<dyn RateLimiter> = Arc::new(InMemoryRateLimiter::new(db.clone()));
 
     // PWA チャット送信（issue #41）。上の共有 `rate_limiter` を Discord と同一インスタンスで消費する
     // （guildId スロット="pwa"・finance の ReceiptParserAdapter の "web" と同型）。
@@ -247,7 +238,6 @@ async fn run() -> Result<(), String> {
     //      起動は後述の YUUKA_RUST_DISCORD ゲートで制御する（二重 gateway ＝二重応答の回避）。
     let discord_manager = Arc::new(DiscordManager::new(ManagerPorts {
         directory: Arc::new(DbBotDirectory::new(db.clone(), crypto.clone())),
-        rate_limiter: rate_limiter.clone(),
         processor: chat_engine.clone(),
         membership: Arc::new(DbMembership::new(db.clone())),
     }));
@@ -363,7 +353,6 @@ async fn run() -> Result<(), String> {
     // ユーザー単位の上限を迂回できてしまう（X02 #134）。
     let finance_routes = yuuka_finance::routes_with(Arc::new(ReceiptParserAdapter {
         engine: chat_engine.clone(),
-        rate_limiter: rate_limiter.clone(),
     }));
 
     // schedule ルータ: 管理画面からの登録・削除もエージェントと同じく Google カレンダーへ反映する（#127）。
@@ -662,7 +651,14 @@ impl yuuka_services::PlaybookRunner for PlaybookRunnerAdapter {
         let status: yuuka_discord::StatusSink = Arc::new(|_| {});
         match self
             .engine
-            .secretary_turn(bot_id, user_id, msg, &status)
+            .secretary_turn(
+                self.engine
+                    .acquire_turn(bot_id, user_id, yuuka_orchestrator::Channel::Automation)
+                    .await
+                    .map_err(|e| format!("{e:?}"))?,
+                msg,
+                &status,
+            )
             .await
         {
             Ok(reply) => Ok(reply.text),
@@ -699,7 +695,6 @@ impl yuuka_services::BackupRunner for BackupRunnerAdapter {
 /// のテキストを返す（記帳自体は system prompt の OCR ルール + ツール呼び出しでサーバ側実行）。
 struct ReceiptParserAdapter {
     engine: Arc<ChatEngine>,
-    rate_limiter: Arc<dyn RateLimiter>,
 }
 
 #[async_trait]
@@ -714,16 +709,13 @@ impl yuuka_finance::ReceiptParser for ReceiptParserAdapter {
     ) -> Result<serde_json::Value, yuuka_finance::ReceiptError> {
         let bid = yuuka_core::BotId::new(bot_id);
         let uid = yuuka_core::UserId::new(user_id);
-        // LLM 呼び出し前にレート制限を消費（超過は 429・Node `rateLimitMessage`）。
-        let decision = self
-            .rate_limiter
-            .consume(&bid, &yuuka_core::GuildId::new("web"), &uid)
-            .await;
-        if let Some(exceeded) = decision.exceeded {
-            return Err(yuuka_finance::ReceiptError::RateLimited(
-                rate_limit_message(exceeded),
-            ));
-        }
+        let permit = self
+            .engine
+            .acquire_turn(&bid, &uid, yuuka_orchestrator::Channel::Web)
+            .await
+            .map_err(|exceeded| {
+                yuuka_finance::ReceiptError::RateLimited(rate_limit_message(exceeded))
+            })?;
         // 入口で共通検証・正規化済み。OCR 自体も同じ検証を使う。
         let image = yuuka_discord::InlineMedia {
             data_base64: image_base64.to_owned(),
@@ -733,8 +725,7 @@ impl yuuka_finance::ReceiptParser for ReceiptParserAdapter {
         match self
             .engine
             .receipt_turn(
-                &bid,
-                &uid,
+                permit,
                 image,
                 additional_text.map(str::to_owned),
                 // 管理画面のレシート読み取りは会話添付を持たない（タイムライン保存候補なし）。

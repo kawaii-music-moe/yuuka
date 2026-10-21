@@ -226,6 +226,9 @@ pub trait Notifier: Send + Sync {
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum TurnError {
+    /// quota 超過（LLM を呼ばず、チャネル固有の応答へ変換する）。
+    #[error("{0:?}")]
+    RateLimited(RateExceeded),
     /// 上流（Gemini/synapse 等）障害。
     #[error("turn processing failed: {0}")]
     Failed(String),

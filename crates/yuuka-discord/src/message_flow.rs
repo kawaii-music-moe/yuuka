@@ -6,7 +6,7 @@
 //!   [`src/bot.ts:958-1263`]。登録ユーザー・共有アクセス・メンション/返信を通す。
 //!
 //! ルーティングは [`handle_message`]（`author.bot` 無視 → 冪等ガード → Bot 種別で分岐）。防衛線の
-//! 判定は注入ポート（[`BotDirectory`]/[`RateLimiter`]/[`TurnProcessor`]）越し。twilight 送信は
+//! 判定は注入ポート（[`BotDirectory`]/[`TurnProcessor`]）越し。twilight 送信は
 //! [`crate::reply`] に隔離する。純ヘルパ（表示名解決・添付選別・返信プレフィックス）はユニットテスト。
 
 use std::sync::Arc;
@@ -24,8 +24,8 @@ use yuuka_core::{BotId, DiscordError, GuildId, UserId};
 use crate::idempotent::MessageDedup;
 use crate::ports::{
     rate_limit_message, BotDirectory, BotRecord, BotStatus, DeliverTarget, IncomingChat,
-    InlineMedia, Notifier, RateLimiter, ReplyAncestor, Speaker, StatusSink, TurnDelivery,
-    TurnError, TurnProcessor, TurnReply,
+    InlineMedia, Notifier, ReplyAncestor, Speaker, StatusSink, TurnDelivery, TurnError,
+    TurnProcessor, TurnReply,
 };
 use crate::presence::build_presence;
 use crate::reply::{send_channel_reply, send_channel_text};
@@ -55,7 +55,6 @@ const GENERIC_ERROR: &str =
 pub struct FlowDeps {
     pub http: Arc<Client>,
     pub directory: Arc<dyn BotDirectory>,
-    pub rate_limiter: Arc<dyn RateLimiter>,
     pub processor: Arc<dyn TurnProcessor>,
     pub notifier: Arc<dyn Notifier>,
     /// 二重応答冪等ガード（`(bot_user_id, message_id)`・TTL 60s）。
@@ -304,21 +303,6 @@ async fn assistant_flow(deps: &FlowDeps, rt: &RuntimeBot, bot: &BotRecord, messa
         // Bot 専用キー必須（未設定なら応答しない・§4.3.3）。
         if !bot.has_gemini_key {
             tracing::warn!(bot_id = %rt.bot_id, "Gemini APIキー未設定のため応答しません");
-            return;
-        }
-        // レート制限（超過時は LLM を呼ばず定型応答・§6）。
-        let rate = deps.rate_limiter.consume(&rt.bot_id, gid, &author).await;
-        if !rate.allowed {
-            if let Some(exceeded) = rate.exceeded {
-                send_channel_text(
-                    &deps.http,
-                    message.channel_id,
-                    Some(message.id),
-                    &rate_limit_message(exceeded),
-                    &[],
-                )
-                .await;
-            }
             return;
         }
     }
@@ -657,6 +641,16 @@ async fn finish_reply(
                 return;
             }
             send_channel_reply(&deps.http, message.channel_id, Some(message.id), &reply).await;
+        }
+        Err(TurnError::RateLimited(exceeded)) => {
+            send_channel_text(
+                &deps.http,
+                message.channel_id,
+                Some(message.id),
+                &rate_limit_message(exceeded),
+                &[],
+            )
+            .await;
         }
         Err(e) => {
             tracing::error!(error = %e, "ターン処理に失敗（定型エラーへ縮退）");

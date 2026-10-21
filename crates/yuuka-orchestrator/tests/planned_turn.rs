@@ -290,8 +290,14 @@ fn null_sink() -> StatusSink {
 async fn secretary(h: &Harness, text: &str) -> TurnReply {
     h.engine
         .secretary_turn(
-            &BotId::new(BOT),
-            &UserId::new(USER),
+            h.engine
+                .acquire_turn(
+                    &BotId::new(BOT),
+                    &UserId::new(USER),
+                    yuuka_orchestrator::Channel::Web,
+                )
+                .await
+                .expect("permit"),
             IncomingChat {
                 text: text.to_owned(),
                 ..IncomingChat::default()
@@ -479,8 +485,14 @@ async fn reply_chain_reaches_the_prompt_once_in_order_and_reply_is_linked() {
     let reply = h
         .engine
         .secretary_turn(
-            &BotId::new(BOT),
-            &UserId::new(USER),
+            h.engine
+                .acquire_turn(
+                    &BotId::new(BOT),
+                    &UserId::new(USER),
+                    yuuka_orchestrator::Channel::Web,
+                )
+                .await
+                .expect("permit"),
             IncomingChat {
                 text: "あれどうなった？".to_owned(),
                 discord_msg_id: Some("300".to_owned()),

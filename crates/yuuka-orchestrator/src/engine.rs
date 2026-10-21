@@ -21,8 +21,9 @@ use yuuka_core::{
 };
 use yuuka_crypto::SystemCrypto;
 use yuuka_discord::{
-    BotStatus, EmbedField, FileAttachment, IncomingChat, InlineMedia, ReplyAncestor, RichEmbed,
-    Speaker, StatusSink, TurnDelivery, TurnError, TurnProcessor, TurnReply,
+    BotStatus, EmbedField, FileAttachment, IncomingChat, InlineMedia, RateExceeded, RateLimiter,
+    ReplyAncestor, RichEmbed, Speaker, StatusSink, TurnDelivery, TurnError, TurnProcessor,
+    TurnReply,
 };
 use yuuka_gemini::{
     run_function_calling_loop, Content, GeminiClient, GenerateBackend, LoopOptions, LoopResult,
@@ -139,10 +140,28 @@ impl GeminiFactory for RealGeminiFactory {
     }
 }
 
+/// レート制限の guild スロット。Discord の実ギルドと HTTP 経路を区別する。
+#[derive(Debug)]
+pub enum Channel {
+    Discord(GuildId),
+    Pwa,
+    Web,
+    /// 定期マクロは従来どおり対話用 quota の対象外。
+    Automation,
+}
+
+/// 1 回の実行権。複製できず、判定した Bot とユーザーを実行まで保持する。
+#[derive(Debug)]
+pub struct TurnPermit {
+    bot_id: BotId,
+    user_id: UserId,
+}
+
 /// 会話オーケストレーションエンジン。`/ws/chat`（デスクトップ）と Discord の [`TurnProcessor`] が共有する。
 #[derive(Clone)]
 pub struct ChatEngine {
     db: Db,
+    rate_limiter: Arc<dyn RateLimiter>,
     /// 保存済み Gemini キーの復号に使う（`YUUKA_ENCRYPTION_SECRET` 未設定なら `None`）。
     crypto: Option<Arc<SystemCrypto>>,
     /// ドメインツールのレジストリ（毎ターン snapshot する）。
@@ -177,6 +196,44 @@ pub struct ChatEngine {
 }
 
 impl ChatEngine {
+    /// テスト用などの制限実装を注入する。全入口がこのインスタンスを共有する。
+    #[must_use]
+    pub fn with_rate_limiter(mut self, limiter: Arc<dyn RateLimiter>) -> Self {
+        self.rate_limiter = limiter;
+        self
+    }
+
+    /// 実行前に quota を消費する。PWA は保存・202 応答の前に取得し、permit をジョブへ渡す。
+    ///
+    /// # Errors
+    /// 上限を超えた場合、その窓を返す（LLM は呼ばない）。
+    pub async fn acquire_turn(
+        &self,
+        bot_id: &BotId,
+        user_id: &UserId,
+        channel: Channel,
+    ) -> Result<TurnPermit, RateExceeded> {
+        let guild = match channel {
+            Channel::Discord(guild) => guild,
+            Channel::Pwa => GuildId::new("pwa"),
+            Channel::Web => GuildId::new("web"),
+            Channel::Automation => {
+                return Ok(TurnPermit {
+                    bot_id: bot_id.clone(),
+                    user_id: user_id.clone(),
+                })
+            }
+        };
+        let decision = self.rate_limiter.consume(bot_id, &guild, user_id).await;
+        if !decision.allowed {
+            return Err(decision.exceeded.unwrap_or(RateExceeded::UserMinute));
+        }
+        Ok(TurnPermit {
+            bot_id: bot_id.clone(),
+            user_id: user_id.clone(),
+        })
+    }
+
     /// 依存を注入して構築する。`mcp_client` は MCP 動的ツール探索に使う（未配線は
     /// [`yuuka_mcp::NullMcpClient`] を渡す）。
     #[must_use]
@@ -190,6 +247,7 @@ impl ChatEngine {
         synapse: Option<Arc<tokio::sync::Mutex<SynapseEngine>>>,
     ) -> Self {
         Self {
+            rate_limiter: Arc::new(crate::InMemoryRateLimiter::new(db.clone())),
             db,
             crypto,
             registry,
@@ -326,12 +384,12 @@ impl ChatEngine {
     /// 暗号シークレット未設定・復号失敗は [`ReceiptExtractError::Unavailable`]。
     pub async fn extract_receipt(
         &self,
-        user_id: &UserId,
+        permit: TurnPermit,
         image_base64: &str,
         mime_type: &str,
         today: &str,
     ) -> Result<ReceiptDraft, ReceiptExtractError> {
-        self.receipt_ocr(user_id, image_base64, mime_type, today)
+        self.receipt_ocr(&permit.user_id, image_base64, mime_type, today)
             .await
             .map(ReceiptOcr::into_draft)
     }
@@ -370,13 +428,14 @@ impl ChatEngine {
     /// 抽出・秘書ターン失敗時 [`TurnError`]。
     pub async fn receipt_turn(
         &self,
-        bot_id: &BotId,
-        user_id: &UserId,
+        permit: TurnPermit,
         image: InlineMedia,
         caption: Option<String>,
         timeline_attachments: Vec<yuuka_core::tool::ConversationAttachment>,
         status: &StatusSink,
     ) -> Result<TurnReply, TurnError> {
+        let TurnPermit { bot_id, user_id } = permit;
+        let (bot_id, user_id) = (&bot_id, &user_id);
         let msg = IncomingChat {
             text: caption.unwrap_or_default(),
             timeline_attachments,
@@ -488,11 +547,12 @@ impl ChatEngine {
     /// キー未設定は ⚠️ テキスト応答（Node `processMessage` の catch と同じく `Ok` で返す）。
     pub async fn secretary_turn(
         &self,
-        bot_id: &BotId,
-        user_id: &UserId,
+        permit: TurnPermit,
         msg: IncomingChat,
         status: &StatusSink,
     ) -> Result<TurnReply, TurnError> {
+        let TurnPermit { bot_id, user_id } = permit;
+        let (bot_id, user_id) = (&bot_id, &user_id);
         self.secretary_turn_for_source(
             bot_id,
             user_id,
@@ -510,8 +570,7 @@ impl ChatEngine {
     /// [`message_log::recent_pwa_context`]）を経由し、Discord/WS の文脈と混ざらない（#38 のキー不一致
     /// バグと同種の再発を構造的に防ぐ設計を踏襲・[`MessageSource`] 参照）。
     ///
-    /// レート制限・Gemini キー事前チェックは呼び出し側（`yuuka-client-api`）が WS/Discord と同じ
-    /// [`yuuka_discord::RateLimiter`]/[`Self::user_has_gemini_key`] で行う（本メソッドはターン本体のみ）。
+    /// 呼び出し側は [`Self::acquire_turn`] で取得した permit と、Gemini キー事前チェックを使う。
     ///
     /// **前提（issue #77）**: `msg` のユーザー発言は、呼び出し側が本メソッドの**前**に
     /// [`message_log::accept_pwa_user_message`] で `source='pwa'` として永続化済みであること。
@@ -524,11 +583,12 @@ impl ChatEngine {
     /// [`Self::secretary_turn`] と同じ。
     pub async fn secretary_turn_pwa(
         &self,
-        bot_id: &BotId,
-        user_id: &UserId,
+        permit: TurnPermit,
         msg: IncomingChat,
         status: &StatusSink,
     ) -> Result<TurnReply, TurnError> {
+        let TurnPermit { bot_id, user_id } = permit;
+        let (bot_id, user_id) = (&bot_id, &user_id);
         self.secretary_turn_for_source(bot_id, user_id, msg, status, MessageSource::Pwa, None, None)
             .await
     }
@@ -1379,6 +1439,9 @@ impl TurnProcessor for ChatEngine {
         status: StatusSink,
         delivery: Arc<dyn TurnDelivery>,
     ) -> Result<TurnReply, TurnError> {
+        self.acquire_turn(bot_id, &speaker.user_id, Channel::Discord(guild_id.clone()))
+            .await
+            .map_err(TurnError::RateLimited)?;
         let progress = ProgressLog::new(&self.db, &speaker.user_id, bot_id, Some(guild_id), &msg);
         let engine = self.clone();
         let (bot_id, guild_id) = (bot_id.clone(), guild_id.clone());
