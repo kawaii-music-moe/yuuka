@@ -524,7 +524,7 @@ impl Tool for BrowserFillCredentialTool {
                 },
                 "required": ["service_name"]
             }),
-            requires_confirmation: false,
+            requires_confirmation: true,
         }
     }
 
@@ -554,12 +554,8 @@ impl Tool for BrowserFillCredentialTool {
             )));
         }
 
-        // 復号（username は平文列・password のみ暗号化）。crypto/ salt 無しは縮退。
-        let Some(crypto) = &self.crypto else {
-            return Ok(fail_payload("暗号化が未設定のため復号できません。"));
-        };
         let repo = CredentialRepo::new(&self.db);
-        let Some((username, _url, enc, iv, tag)) = repo
+        let Some((username, url, enc, iv, tag)) = repo
             .get_full(&scope_of(ctx), &service_name)
             .await
             .map_err(|e| ToolError::Execution(e.to_string()))?
@@ -567,6 +563,17 @@ impl Tool for BrowserFillCredentialTool {
             return Ok(fail_payload(format!(
                 "サービス「{service_name}」の認証情報が見つかりません。listCredentialServices で登録済みサービス名を確認してください。"
             )));
+        };
+        // 登録 URL が無い認証情報は、どのサイトへ入れてよいか決められないので拒否する（#205）。
+        let Some(registered_url) = url.filter(|u| !u.trim().is_empty()) else {
+            return Ok(fail_payload(format!(
+                "認証情報「{clean}」にはログインページの URL が登録されていないため、自動入力できません。管理画面の「連携サービス」→「認証情報」で URL を登録してください。"
+            )));
+        };
+
+        // 復号（username は平文列・password のみ暗号化）。crypto/ salt 無しは縮退。
+        let Some(crypto) = &self.crypto else {
+            return Ok(fail_payload("暗号化が未設定のため復号できません。"));
         };
         let salt = repo
             .user_salt(uid)
@@ -584,25 +591,30 @@ impl Tool for BrowserFillCredentialTool {
         };
 
         // 復号値をブラウザへ直接入力（LLM 応答・ログに含めない・§6.3.2）。失敗文言は秘匿値を除去。
+        // 現在ページの照合と入力は BrowserManager 側の同一セッションロック内で行う（#205）。
         let secrets = [password.as_str(), username.as_str()];
+        let mut fields: Vec<(&str, &str)> = Vec::new();
         let mut filled: Vec<&str> = Vec::new();
         if let Some(sel) = &username_selector {
-            if let Err(e) = browser.type_text(uid, sel, &username).await {
-                return Ok(fail_payload(fill_error(
-                    &filled,
-                    &sanitize_error(&e, &secrets),
-                )));
-            }
+            fields.push((sel, &username));
             filled.push("ユーザー名");
         }
         if let Some(sel) = &password_selector {
-            if let Err(e) = browser.type_text(uid, sel, &password).await {
-                return Ok(fail_payload(fill_error(
-                    &filled,
-                    &sanitize_error(&e, &secrets),
-                )));
-            }
+            fields.push((sel, &password));
             filled.push("パスワード");
+        }
+        if let Err((done, e)) = browser
+            .fill_fields_for_site(uid, &registered_url, &fields)
+            .await
+        {
+            let msg = sanitize_error(&e, &secrets);
+            return Ok(fail_payload(
+                if done == 0 && msg.contains("入力を拒否しました") {
+                    msg
+                } else {
+                    fill_error(filled.get(..done).unwrap_or_default(), &msg)
+                },
+            ));
         }
 
         Ok(ToolOutcome::from_payload(json!({
@@ -979,5 +991,36 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("利用を許可されていません"));
+    }
+
+    #[tokio::test]
+    async fn browser_fill_requires_confirmation() {
+        let (db, _p) = seed_db_at();
+        let tools = tools(db, None, None).unwrap();
+        let fill = find(&tools, "browserFillCredential");
+        assert!(fill.declaration().requires_confirmation);
+    }
+
+    #[tokio::test]
+    async fn browser_fill_refuses_credential_without_registered_url() {
+        for url in ["", "   "] {
+            let (db, path) = seed_db_at();
+            insert_at(&path, "userA", "github", "alice", url);
+            grant_at(&path, "system_default", "userA", "github");
+            let tools = tools(db, None, None).unwrap();
+            let fill = find(&tools, "browserFillCredential");
+            let out = fill
+                .call(
+                    &ctx("userA"),
+                    json!({"service_name": "github", "username_selector": "2"}),
+                )
+                .await
+                .unwrap();
+            assert_eq!(out.payload["success"], false);
+            assert!(out.payload["message"]
+                .as_str()
+                .unwrap()
+                .contains("URL が登録されていない"));
+        }
     }
 }
