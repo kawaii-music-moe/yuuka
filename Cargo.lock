@@ -3950,6 +3950,7 @@ dependencies = [
  "secrecy",
  "serde",
  "serde_json",
+ "sha2",
  "tokio",
  "tracing",
  "yuuka-core",

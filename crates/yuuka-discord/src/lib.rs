@@ -26,6 +26,7 @@ mod message_flow;
 mod notify_bridge;
 mod presence;
 mod reply;
+mod streaming;
 mod tenant;
 mod text;
 mod turn_gate;
