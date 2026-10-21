@@ -7,8 +7,8 @@
 `yuuka-outbound` は std / tokio / url だけに依存する下位クレートとし、browser / MCP / briefing が直接利用する。core の契約層へネットワーク依存を持ち込まず、briefing → browser（Chromium 等）の依存も取り除く。browser の公開済み `assert_safe_outbound_url` は互換 re-export を残す。
 
 - `assert_safe_outbound_url(&str) -> Result<(), String>`: 通信時の厳密検査。既存と同じ URL パーサーで正規化し、http(s)・userinfo・localhost・全 DNS 解決先・IPv4/IPv6 を検査する。エラー文言と検査順を維持する。成功結果をキャッシュせず、呼び出しごとに再解決する。allowlist やガードを迂回する引数は設けない。
-- `is_likely_public_http_url(&str, RegistrationPolicy::BriefingLegacy) -> bool`: 登録時の既存簡易検査。DNS を引かず、文字列パーサー・大文字 scheme の拒否・IP 拒否範囲を維持する。標準 URL パーサーへ差し替えると登録可能な入力が変わるため、その変更は含めない。例えば `127.1`、整数 IPv4、IPv4-mapped IPv6、TEST-NET、CGNAT は登録時に通る場合があるが、通信時の厳密検査では拒否される。
-- HTTP の生成・接続・認証・タイムアウト・再試行・リダイレクト・エラーの利用者向け変換は呼び出し元が引き続き担当する。IP 判定実装は共通クレートだけに置き、登録時の互換範囲は内部の用途引数で区別する。
+- `is_likely_public_http_url(&str, RegistrationPolicy::PublicHttp) -> bool`: 登録時は DNS を引かず、`url::Url` で正規化して通信時と同じ内部/予約 IP 範囲を拒否する。#130 では互換用の `BriefingLegacy` を残したが、#184 対応で差し替えた。`127.1`、整数 IPv4、IPv4-mapped IPv6、TEST-NET、CGNAT も登録時に拒否する。公開 IP・ドメイン名は許可し、URL パーサーの扱いに従って大文字 scheme は許可、不正ポートは拒否する。
+- HTTP の生成・接続・認証・タイムアウト・再試行・リダイレクト・エラーの利用者向け変換は呼び出し元が引き続き担当する。IP 判定実装は共通クレートだけに置き、登録時・通信時で同じ関数を使う。
 
 ## 通信・リダイレクト経路の棚卸し
 
@@ -39,7 +39,13 @@ IPv4 の private / loopback / link-local / TEST-NET / benchmark / CGNAT / multic
 
 DNS 検査と実接続は別々に解決するため、TOCTOU は既存コード・旧 Node ともに残る（#156 のレビューでも指摘済み）。この API は「検査した IP への接続」を保証しない。解決結果のキャッシュや検査位置の前倒しをせず、RSS 各ホップ再検査も維持することで保護を弱めない。接続 IP の固定、browser / MCP の各 redirect、CDP ナビゲーションやサブリソース、プロキシ経由の接続を含めた完全な接続制御は、既存動作の維持を求める今回の共通化には含めない。
 
-## 回帰確認
+## #184 の追加対応（2026-10-22）
+
+登録時の弱い IP 判定と独自パーサーを削除した。共通クレートで CGNAT・benchmark・TEST-NET・multicast/reserved・IPv4 射影・IPv6 site-local/documentation と特殊 IPv4 表記を拒否するテストを追加し、朝報設定 API は 400、configureBriefing ツールは success:false を返して設定を保存しないことを検証する回帰コードも追加した。取得時の DNS 解決先・リダイレクト検査は継続する。
+
+`cargo fmt --all -- --check`、`cargo clippy -p yuuka-outbound -p yuuka-briefing --all-targets -j 2 -- -D warnings`、`pnpm --config.verifyDepsBeforeRun=false check` は成功（svelte-check 0 errors/warnings、Biome に既存警告あり）。pnpm は既存依存を利用し、インストール済み版とリポジトリ設定の差による実行前の依存検証だけを無効化した。CLAUDE.md の develop 以外での実ビルド禁止に従い、Rust テストは追加と型検査までで実行していない。
+
+## #130 実装時の回帰確認
 
 共通クレートに既存の IPv4/IPv6 レンジテストを移し、特殊表記・日本語エラー全文・公開 IP の受理、DNS の公開/内部混在（両順序）・IPv4-mapped 混在・空回答・解決失敗・呼び出しごとの再検査・IP リテラルでは DNS 不要、登録時と通信時の差を追加した。DNS の差し替えは非公開関数に限定し、本番 API に迂回口を公開しない。
 
