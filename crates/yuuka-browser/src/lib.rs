@@ -10,6 +10,7 @@
 mod chromium;
 mod interactive;
 mod markdown;
+mod proxy;
 mod search;
 mod tools;
 
