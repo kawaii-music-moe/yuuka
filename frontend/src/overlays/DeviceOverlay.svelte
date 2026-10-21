@@ -12,7 +12,7 @@ import { ApiError } from "$lib/api/client";
 import { deviceApi } from "$lib/api/services";
 import { goto, page } from "$lib/router";
 import { currentUser } from "$lib/stores/session";
-import { formatDeviceCode } from "./deviceUtils";
+import { formatDeviceCode, formatElapsed } from "./deviceUtils";
 
 let code = $state("");
 let errorMsg = $state("");
@@ -22,14 +22,34 @@ let successText = $state<string | null>(null);
 
 const userDisplay = $derived($currentUser?.username ?? "—");
 
-// URL の ?code= を初期プリフィル（旧 sessionStorage 退避は router の URL 真実に集約）。
-$effect(() => {
-	const c = $page.searchParams.get("code") ?? "";
-	if (c) code = formatDeviceCode(c);
-});
+// フィッシング対策（RFC 8628 §5.4）: リンクの ?code= では入力済みにしない。利用者がアプリ画面の
+// コードを手で入力し、端末名を確認してから承認する。リンク経由で来たかどうかだけ注意表示に使う。
+const fromLink = $derived($page.searchParams.has("code"));
 
-function onInput() {
+// 照会結果（入力中のコードに対応するものだけ有効）。
+let info = $state<{ code: string; name: string; ageSecs: number } | null>(null);
+let lookupSeq = 0;
+
+async function onInput() {
 	code = formatDeviceCode(code);
+	errorMsg = "";
+	if (info?.code !== code) info = null;
+	if (code.length !== 9) return;
+	const seq = ++lookupSeq;
+	const target = code;
+	try {
+		const res = await deviceApi.lookup(target);
+		if (seq !== lookupSeq || code !== target) return;
+		if (res.success) {
+			info = { code: target, name: res.device_name || "（端末名なし）", ageSecs: res.age_secs ?? 0 };
+		} else {
+			errorMsg = res.message ?? "コードが無効か、有効期限が切れています。";
+		}
+	} catch (err) {
+		if (seq !== lookupSeq) return;
+		errorMsg =
+			err instanceof ApiError ? err.message : "サーバー接続に失敗しました。";
+	}
 }
 
 async function approve() {
@@ -37,6 +57,10 @@ async function approve() {
 	const userCode = formatDeviceCode(code);
 	if (userCode.length !== 9) {
 		errorMsg = "コードは XXXX-XXXX 形式で入力してください。";
+		return;
+	}
+	if (info?.code !== userCode) {
+		errorMsg = "端末名を確認できるまで承認できません。コードを入力し直してください。";
 		return;
 	}
 	approving = true;
@@ -98,11 +122,26 @@ async function approve() {
 						oninput={onInput}
 					/>
 				</div>
+				{#if fromLink}
+					<p class="field-sub device-warn">
+						リンクからアクセスされました。コードは自動入力されません。ご自身で起動したアプリに表示されているコードを手で入力してください。
+					</p>
+				{/if}
+				{#if info}
+					<div class="card device-info">
+						<p class="field-sub">許可する端末</p>
+						<p class="device-info-name"><strong>{info.name}</strong></p>
+						<p class="field-sub">コード発行: {formatElapsed(info.ageSecs)}</p>
+						<p class="field-sub device-warn">
+							ご自身で起動したアプリにこのコードが表示されている場合のみ許可してください。心当たりがなければ許可しないでください。
+						</p>
+					</div>
+				{/if}
 				{#if errorMsg}
 					<div class="error-msg device-error">{errorMsg}</div>
 				{/if}
 				<div class="device-actions">
-					<button type="button" class="btn btn-primary device-btn" onclick={approve} disabled={approving}>
+					<button type="button" class="btn btn-primary device-btn" onclick={approve} disabled={approving || !info || info.code !== code}>
 						この端末を許可
 					</button>
 					<button type="button" class="btn btn-secondary device-btn" onclick={() => goto("/")}>
@@ -175,6 +214,14 @@ async function approve() {
 	}
 	.device-btn {
 		flex: 1;
+	}
+	.device-info {
+		padding: 12px 16px;
+		margin-top: 12px;
+	}
+	.device-info-name {
+		margin: 4px 0;
+		word-break: break-all;
 	}
 	.device-warn {
 		margin-top: 16px;
