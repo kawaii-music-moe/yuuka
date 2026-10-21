@@ -2,7 +2,7 @@
 import { withBasePath } from "$lib/router";
 
 function login(): void {
-	window.location.assign(withBasePath("/api/auth/sk/start"));
+	window.location.assign("/api/auth/sk/start");
 }
 </script>
 
