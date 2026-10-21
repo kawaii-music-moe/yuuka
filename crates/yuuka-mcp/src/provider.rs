@@ -15,7 +15,7 @@
 //! [`ToolExposure`] を `mcp` 能力 + 秘書経路で構成し、`list` で `is_visible(ctx)` を通す。
 //!
 //! **live 検証は実環境へ延期**: 実 MCP サーバーへの `tools/list`/`tools/call` HTTP はネットワークを要する
-//! ためユニットテスト対象外（[`crate::HttpMcpClient`] 同様）。ユニットテストは純ロジック（動的ツール名の
+//! ためユニットテスト対象外（[`crate::RmcpClient`] 同様）。ユニットテストは純ロジック（動的ツール名の
 //! 生成/衝突退避、fake `McpClient` からの `list` 組み立て、`invoke` の dispatch 経路と `tools/call` 形状、
 //! キャッシュ TTL、露出ゲート）に限定する。
 
@@ -275,7 +275,7 @@ impl McpProvider {
 
 /// `refresh_tools` の結果を tools_cache 用 JSON（`{name, description?, inputSchema?}[]`）へ整形する。
 /// routes.rs の `tools_to_cache_json` と同形（Node `updateToolsCache` パリティ）。
-fn tools_to_cache_json(tools: &[McpTool]) -> String {
+pub(crate) fn tools_to_cache_json(tools: &[McpTool]) -> String {
     let arr: Vec<Value> = tools
         .iter()
         .map(|t| {
@@ -365,7 +365,7 @@ fn build_description(server: &McpServerRecord, tool_description: Option<&str>) -
 ///
 /// **Node との差分（意図的）**: Node は `jsonSchemaToGeminiSchema` で旧 `Schema` 型へ変換し、空プロパティの
 /// object は `parameters` 自体を省く。Rust コアの [`FunctionDeclaration::parameters_json_schema`] は「フル
-/// JSON Schema を `parametersJsonSchema` へ直送」する契約（[`crate::HttpMcpClient`] 同様に生スキーマを尊重）
+/// JSON Schema を `parametersJsonSchema` へ直送」する契約（[`crate::RmcpClient`] 同様に生スキーマを尊重）
 /// なので、MCP の `inputSchema` をそのまま載せる（Gemini は JSON Schema を直接受け付ける）。schema 欠落は
 /// 空 object（`{"type":"object"}`）へフォールバックする。
 fn normalize_schema(input_schema: Option<Value>) -> Value {

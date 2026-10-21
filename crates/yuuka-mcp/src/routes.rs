@@ -314,6 +314,9 @@ pub(crate) async fn toggle(
         ));
     };
     repo::set_enabled(&state.db, id, enabled).await?;
+    if !enabled {
+        rt.client.forget(id).await;
+    }
     // 無効化したら発行済みプロキシトークンを即時失効させる。
     if !enabled {
         rt.tokens.revoke_for_server(id);
@@ -347,6 +350,7 @@ pub(crate) async fn delete(
     let ok = repo::delete_server(&state.db, id, &user.0.discord_id, admin).await?;
     if ok {
         rt.tokens.revoke_for_server(id);
+        rt.client.forget(id).await;
         if let Some(s) = &server {
             if s.user_id.is_none() {
                 yuuka_auth::audit::add_audit_log(

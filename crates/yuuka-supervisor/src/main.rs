@@ -138,7 +138,7 @@ async fn run() -> Result<(), String> {
     let action_recorder = Arc::new(yuuka_core::ActionRecorder::new());
     // Google/MCP の実 HTTP に使う共有 reqwest クライアント（接続プール共有・30s タイムアウト）。MCP 実 HTTP
     // クライアントは ChatEngine（動的ツール探索）と MCP ルート（tools/list・dashboard・proxy）で同一
-    // インスタンスを共有し、`Mcp-Session-Id` のプロセス内キャッシュを 1 つに統一する（A4・SSRF ガード付き）。
+    // インスタンスを共有し、MCP 接続キャッシュを 1 つに統一する（A4・SSRF ガード付き）。
     let http_client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
         .build()
@@ -178,10 +178,10 @@ async fn run() -> Result<(), String> {
         Some(briefing_delivery.clone()),
     )
     .map_err(|e| format!("build tool registry: {e}"))?;
-    let mcp_client = Arc::new(yuuka_mcp::HttpMcpClient::new(
-        crypto.clone(),
-        http_client.clone(),
-    ));
+    let mcp_client = Arc::new(
+        yuuka_mcp::RmcpClient::new(crypto.clone(), http_client.clone(), db.clone())
+            .map_err(|e| format!("build mcp client: {e}"))?,
+    );
     // 4.6.5) シナプス認知エンジン（in-process・旧 rust_synapse daemon をライブラリ吸収）。起動時に DB を
     //        read-only で読み RAM ベクトル索引を 1 度だけ構築する（Node「DB から N 件のシナプスを RAM
     //        索引へロード」相当）。DB が読めなくても空索引で起動を継続する（想起は "" へデグレード・
@@ -271,7 +271,7 @@ async fn run() -> Result<(), String> {
         Some(reg) => Arc::new(RegistryBotRuntime(reg.clone())),
         None => Arc::new(yuuka_admin::NullBotRuntime),
     };
-    // `http_client`（共有 reqwest）・`mcp_client`（共有 HttpMcpClient）は上（ChatEngine 構築前）で 1 度だけ
+    // `http_client`（共有 reqwest）・`mcp_client`（共有 RmcpClient）は上（ChatEngine 構築前）で 1 度だけ
     // 生成済み。以降の Google クライアント・MCP ルートはそれを再利用する（接続プール/セッションキャッシュ統一）。
     let admin_runtime = Arc::new(yuuka_admin::AdminRuntime::new(
         sessions.clone(),
@@ -327,11 +327,11 @@ async fn run() -> Result<(), String> {
 
     // MCP ルータ（サーバー管理 + ダッシュボードプロキシ）。auth_credential 暗号化に crypto を注入し、
     // proxy token は in-memory（web 再起動を跨ぐよう main で 1 度生成）。MCP サーバーへの実 HTTP
-    // （tools/list・dashboard・proxy）は HttpMcpClient（A4・SSRF ガード + JSON-RPC/SSE）で処理する。
+    // （tools/list・dashboard・proxy）は RmcpClient（rmcp + SSRF ガード付き HTTP）で処理する。
     let mcp_routes = yuuka_mcp::routes(Arc::new(yuuka_mcp::McpRuntime::new(
         crypto.clone(),
-        // ChatEngine と同一の HttpMcpClient を共有（tools/list・dashboard・proxy と動的ツール探索で
-        // `Mcp-Session-Id` キャッシュを 1 つに統一する）。
+        // ChatEngine と同一の RmcpClient を共有（tools/list・dashboard・proxy と動的ツール探索で
+        // MCP 接続キャッシュを 1 つに統一する）。
         mcp_client.clone(),
         Arc::new(yuuka_mcp::ProxyTokenManager::new()),
     )));

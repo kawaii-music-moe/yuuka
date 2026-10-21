@@ -24,6 +24,10 @@ hex.workspace = true
 sha1 = "0.10"                       # 動的ツール名の衝突退避に使う決定的短ハッシュ（Node createHash("sha1") パリティ・lockfile 既存版）
 # 実 MCP HTTP クライアント（HttpMcpClient）: tools/list JSON-RPC + SSE + ダッシュボード取得 + プロキシ中継。
 reqwest.workspace = true            # 外部 MCP サーバーへの HTTP（json/stream/rustls・workspace 固定）
+# rmcp 2.0 は reqwest 0.13 を要求する（workspace は 0.12）。rmcp transport に差し込む SSRF ガード付き Client 専用で、
+# ダッシュボード/プロキシ用の素の HTTP は従来どおり workspace の reqwest 0.12 を使う。
+reqwest13 = { package = "reqwest", version = "0.13.2", default-features = false, features = ["rustls", "stream"] }
+rmcp = { workspace = true, features = ["transport-streamable-http-client-reqwest"] }
 url = "2"                           # endpoint_url の origin 抽出
 tokio.workspace = true              # async HTTP とテスト（workspace は features=full）
 tracing.workspace = true            # 復号失敗等の縮退ログ（Node console.error パリティ）

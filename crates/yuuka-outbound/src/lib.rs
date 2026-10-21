@@ -88,8 +88,8 @@ where
     }
 }
 
-/// IP が内部/予約レンジかを判定する（`true` = ブロック）。
-fn is_blocked_ip(ip: IpAddr) -> bool {
+/// IP が内部/予約レンジかを判定する（`true` = ブロック）。接続時の DNS 解決結果検査にも使う。
+pub fn is_blocked_ip(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => is_blocked_ipv4(v4),
         IpAddr::V6(v6) => is_blocked_ipv6(v6),

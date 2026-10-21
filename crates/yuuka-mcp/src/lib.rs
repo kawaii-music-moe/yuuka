@@ -9,8 +9,7 @@
 //! **外部 MCP サーバー HTTP シーム**: `tools/list` 取得・ダッシュボード判定/取得・エンドポイント中継は
 //! 外部サードパーティ MCP サーバーへの HTTP に触れる。これは [`McpClient`] ポート越しに委譲し、未配線時は
 //! [`NullMcpClient`]（正直な縮退＝probe false・取得/中継は失敗）へ落とす。**DB 効果（登録・削除・
-//! 有効/無効・監査）と proxyToken の発行/失効は常に完全に働く**。実クライアント（`reqwest` 背後で
-//! Node `mcpClient.ts` の JSON-RPC/SSE + SSRF ガードを移植）を注入すれば live 化する。
+//! 有効/無効・監査）と proxyToken の発行/失効は常に完全に働く**。実クライアント（公式 SDK `rmcp` + SSRF ガード付き `reqwest`）を注入すれば live 化する。
 
 use std::sync::Arc;
 
@@ -25,12 +24,13 @@ use yuuka_web::AppState;
 mod http_client;
 pub mod provider;
 pub mod repo;
+mod rmcp_client;
 mod routes;
 mod tokens;
 
-pub use http_client::HttpMcpClient;
 pub use provider::{mcp_function_name, McpProvider, TOOLS_CACHE_TTL};
 pub use repo::McpServerRecord;
+pub use rmcp_client::RmcpClient;
 pub use tokens::ProxyTokenManager;
 
 // ─── 外部 MCP サーバー HTTP シーム ───────────────────────────────────────────
@@ -108,6 +108,9 @@ pub trait McpClient: Send + Sync {
         body: Bytes,
         accept: Option<&str>,
     ) -> Result<ProxyResponse, String>;
+
+    /// サーバーの無効化・削除時に、保持している接続/セッションを破棄する（既定は何もしない）。
+    async fn forget(&self, _server_id: i64) {}
 
     /// akizakura.css（ダッシュボードの design system）を取得する。取得不能は `None`（`<link>` を残す縮退）。
     async fn fetch_akizakura_css(&self) -> Option<String> {
