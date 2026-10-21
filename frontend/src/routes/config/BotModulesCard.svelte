@@ -4,7 +4,7 @@
 
 import { ApiError } from "$lib/api/client";
 import { botAttributeApi } from "$lib/api/services";
-import { Button, Checkbox } from "$lib/components/ui";
+import { Button, Checkbox, ScopeBadge } from "$lib/components/ui";
 import { pushToast } from "$lib/stores/toast";
 import type { ModuleItem, ModulesResp } from "./configTypes";
 
@@ -70,7 +70,8 @@ function saveSelected() {
 {#if visible}
 	<section class="config-card card">
 		<div class="column-header badge-right">
-			<h3><span class="material-symbols-outlined header-icon-symbol">tune</span>有効な機能（あなた専用）</h3>
+			<h3><span class="material-symbols-outlined header-icon-symbol">tune</span>有効な機能</h3>
+			<ScopeBadge scope="user_bot" />
 			<span class="badge badge-accent">{onCount} / {modules.length}</span>
 		</div>
 		<div class="modules-grid">

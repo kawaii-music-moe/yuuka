@@ -96,7 +96,22 @@ pub(crate) async fn delete_account(
     ))
 }
 
-// ─── ユーザー設定更新（リッチ返信・リマインド既定・通知先） ────────────────────
+// ─── ユーザー設定の取得・更新（リッチ返信・リマインド既定・通知先・タイムゾーン） ─
+
+/// 現在値の取得（Bot スコープの `/api/status` を通さずに読む・「あなたの設定」用）。
+pub(crate) async fn user_settings_get(
+    user: AuthenticatedUser,
+    State(state): State<AppState>,
+) -> Result<Response, ApiError> {
+    let p = repo::user_preferences(&state.db, &user.0.discord_id).await?;
+    Ok(json_ok(json!({
+        "success": true,
+        "richReplyEnabled": p.rich_reply_enabled,
+        "remindDefaultMinutes": p.remind_default_minutes,
+        "notifyTarget": { "type": p.notify_target_type, "id": p.notify_target_id },
+        "timezone": p.timezone,
+    })))
+}
 
 pub(crate) async fn user_settings(
     user: AuthenticatedUser,
@@ -213,7 +228,24 @@ pub(crate) async fn gemini(
     Ok(ok_message("Gemini 設定を更新しました。"))
 }
 
-// ─── バックアップ設定更新 ─────────────────────────────────────────────────────
+// ─── バックアップ設定の取得・更新 ─────────────────────────────────────────────
+
+/// 現在値の取得。フォルダ ID は本人の Drive フォルダの識別子で秘密情報ではないため、編集できるよう
+/// マスクせずに返す（`/api/status` はマスク済みの値を返す）。
+pub(crate) async fn backup_get(
+    user: AuthenticatedUser,
+    State(state): State<AppState>,
+) -> Result<Response, ApiError> {
+    let p = repo::user_preferences(&state.db, &user.0.discord_id).await?;
+    Ok(json_ok(json!({
+        "success": true,
+        "enabled": p.backup_enabled,
+        "folderId": p.backup_folder_id,
+        "intervalHours": p.backup_interval_hours,
+        "generations": p.backup_generations,
+        "lastRunAt": p.backup_last_run_at,
+    })))
+}
 
 pub(crate) async fn backup(
     user: AuthenticatedUser,

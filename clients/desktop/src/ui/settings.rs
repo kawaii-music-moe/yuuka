@@ -10,7 +10,10 @@ use crate::app::AppState;
 pub fn view(state: &mut AppState, ui: &mut egui::Ui) -> bool {
     let mut changed = false;
 
-    ui.heading("設定");
+    // 管理画面・PWA の設定と混同しないよう、端末ローカルの設定であることを見出しで示す
+    // （docs/design/settings-restructure.md「PWA・デスクトップ」）。
+    ui.heading("この端末の設定");
+    ui.label("この PC だけに保存されます。アカウントや Bot の設定は管理画面で変更します。");
     ui.separator();
 
     egui::Grid::new("settings-grid")

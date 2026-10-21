@@ -35,6 +35,7 @@ import {
 	secretaryBubble,
 	todayIso,
 } from "./dashboard/dashboardUtils";
+import RuntimeCard from "./dashboard/RuntimeCard.svelte";
 import SecretaryDashboard from "./dashboard/SecretaryDashboard.svelte";
 import UsageDashboard from "./dashboard/UsageDashboard.svelte";
 
@@ -155,6 +156,9 @@ $effect(() => {
 			</div>
 		</div>
 	</div>
+
+	<!-- 稼働状態と起動・停止（旧 統合管理 › Bot ヘルス） -->
+	<RuntimeCard />
 
 	{#if isAssistant}
 		{#if usage}

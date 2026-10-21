@@ -1,13 +1,14 @@
 <script lang="ts">
 // ─────────────────────────────────────────────────────────────────────────
-// Bot 統合管理オーバービュー（旧 app.js: fetchIntegratedOverview / wireIntegratedForms /
-// renderIntBots / renderIntCredentials / renderIntMcp / renderIntGoogle / closeIntMenus）。
+// 連携サービス（旧 Bot 統合管理。旧 app.js: fetchIntegratedOverview / wireIntegratedForms /
+// renderIntCredentials / renderIntMcp / renderIntGoogle）。
+// 外部サービス（Google / MCP / 認証情報）の登録と、各登録を使えるBotの切り替えを扱う。
+// 再構成（docs/design/settings-restructure.md）で、Bot の起動・停止は Bot一覧とダッシュボードへ、
+// 会話履歴のクリアは Bot設定 › 人格へ移した。
 //
 // 全面書換方針（§11.4 XSS）:
 //   - 旧 innerHTML テンプレートリテラル + data-int-* 属性 + 後付けリスナー →
 //     {#each} + onclick=/onchange= 直結。手動 intEsc() は撤去（Svelte 自動エスケープ）。
-//   - ⋮ メニューは openMenuId を単一 state で保持し、window クリックで閉じる（旧 closeIntMenus）。
-//   - 起動/停止/再起動後は少し待って overview を再取得（Discord 接続確立待ち）。
 //   - 許可トグルは overview を即時再取得せず楽観更新（旧 wireIntGrantChips の局所再描画）せず、
 //     ここではシンプルに toggle 成功後 overview を再取得する（正確性優先・少データ）。
 // ─────────────────────────────────────────────────────────────────────────
@@ -25,8 +26,7 @@ import type {
 	IntegratedGoogleAccountView,
 	IntegratedMcpServerView,
 } from "$lib/api/types";
-import type { ChipStatus } from "$lib/components/ui";
-import { Button, confirmDialog, Icon, StatusChip } from "$lib/components/ui";
+import { Button, confirmDialog, Icon } from "$lib/components/ui";
 import { INTEGRATED_SECTIONS } from "$lib/managementSections";
 import { isAdmin } from "$lib/stores/session";
 import { pushToast } from "$lib/stores/toast";
@@ -43,9 +43,6 @@ let loading = $state(false);
 
 // dashboard 提供有無キャッシュ（serverId → available）
 let dashAvailable = $state<Record<number, boolean>>({});
-
-// ⋮ メニュー開閉（単一のみ開く）
-let openMenuId = $state<string | null>(null);
 
 // カレンダーモーダル
 let calOpen = $state(false);
@@ -113,51 +110,6 @@ async function probeDashboards() {
 $effect(() => {
 	void loadOverview();
 });
-
-// ── Bot 起動/停止/再起動（旧 intBotAction） ──
-async function botAction(action: "start" | "stop" | "restart", botId: string) {
-	openMenuId = null;
-	try {
-		if (action === "start") await integratedApi.startBot(botId);
-		else if (action === "stop") await integratedApi.stopBot(botId);
-		else await integratedApi.restartBot(botId);
-	} catch (e) {
-		reportError(e);
-	}
-	// stop は即時反映、start/restart は接続確立を待って少し遅らせて再取得。
-	setTimeout(loadOverview, action === "stop" ? 300 : 1500);
-}
-
-// ── 会話履歴クリア（旧 intClearHistory） ──
-async function clearHistory(botId: string) {
-	openMenuId = null;
-	const ok = await confirmDialog({
-		message:
-			"このBotとの会話履歴をクリアしますか？\n次のメッセージから新しい会話になります（永続ログは保持され、検索・監査では引き続き利用できます）。",
-		danger: true,
-		confirmLabel: "クリア",
-	});
-	if (!ok) return;
-	try {
-		await integratedApi.clearHistory(botId);
-		pushToast("会話履歴をクリアしました。", "success");
-	} catch (e) {
-		reportError(e);
-	}
-}
-
-function toggleMenu(botId: string) {
-	openMenuId = openMenuId === botId ? null : botId;
-}
-
-// ── Bot の状態チップ（旧 renderIntBots のバッジ分岐） ──
-function botChip(b: IntegratedBotView): { status: ChipStatus; label: string } {
-	if (b.suspended) return { status: "stopped", label: "停止中(管理者)" };
-	if (b.connected) return { status: "running", label: "稼働中" };
-	if (b.running) return { status: "pending", label: "接続中…" };
-	if (!b.has_token) return { status: "unset", label: "トークン未設定" };
-	return { status: "unset", label: "停止" };
-}
 
 // ── 許可トグル（credential / mcp） ──
 async function toggleCred(
@@ -238,7 +190,17 @@ async function submitCredential(e: SubmitEvent) {
 	}
 }
 
-// ── MCP 操作（toggle/delete/dashboard） ──
+// ── MCP 操作（Tool 再取得/toggle/delete/dashboard） ──
+// Tool 再取得は旧 Bot設定 › MCPサーバータブから移した（登録済みサーバーの操作はここに集約）。
+async function refreshMcpTools(server: IntegratedMcpServerView) {
+	try {
+		const res = await mcpApi.refresh(server.id);
+		pushToast(res.message || "Tool一覧を更新しました。", "success");
+		await loadOverview();
+	} catch (e) {
+		reportError(e);
+	}
+}
 async function toggleMcpServer(server: IntegratedMcpServerView) {
 	try {
 		await mcpApi.toggle({ id: server.id, enabled: !server.enabled });
@@ -363,90 +325,14 @@ async function connectGoogle() {
 }
 </script>
 
-<svelte:window onclick={() => (openMenuId = null)} />
-
 <ManagementOverlayShell
 	id="integrated-overlay"
-	title="Bot統合管理"
+	title="連携サービス"
 	base="/integrated"
 	sections={INTEGRATED_SECTIONS}
 >
 	{#snippet children(section)}
 <section id="tab-integrated" class="tab-view">
-	{#if section === "health"}
-		<div class="int-refresh-row">
-			<Button variant="secondary" small onclick={loadOverview}>
-				<Icon name="refresh" size={16} /> 更新
-			</Button>
-		</div>
-		<div class="int-bots-list">
-			{#each bots as b (b.id)}
-				{@const chip = botChip(b)}
-				<div class="glass int-bot-row">
-					<div class="int-bot-info">
-						<Icon name="smart_toy" class="int-bot-icon" />
-						<div class="int-bot-meta">
-							<div class="int-bot-name">{b.name}</div>
-							<div class="int-bot-detail">
-								{b.preset}・{b.discord_username || b.id}
-							</div>
-						</div>
-					</div>
-					<div class="int-bot-actions">
-						<StatusChip status={chip.status} label={chip.label} />
-						{#if b.suspended || !b.has_token}
-							<Button variant="secondary" small disabled
-								>{b.running ? "停止" : "起動"}</Button
-							>
-						{:else if b.running}
-							<Button variant="secondary" small onclick={() => botAction("stop", b.id)}
-								>停止</Button
-							>
-						{:else}
-							<Button variant="secondary" small onclick={() => botAction("start", b.id)}
-								>起動</Button
-							>
-						{/if}
-						<div class="int-menu-wrap">
-							<button
-								type="button"
-								class="int-menu-toggle"
-								title="その他の操作"
-								aria-label="その他の操作"
-								onclick={(e) => {
-									e.stopPropagation();
-									toggleMenu(b.id);
-								}}>⋮</button
-							>
-							{#if openMenuId === b.id}
-								<div class="int-action-menu open" role="menu">
-									<button
-										type="button"
-										class="int-menu-item"
-										disabled={b.suspended || !b.has_token}
-										onclick={(e) => {
-											e.stopPropagation();
-											botAction("restart", b.id);
-										}}>再起動</button
-									>
-									<button
-										type="button"
-										class="int-menu-item int-menu-danger"
-										title="このBotとの自分の会話履歴をクリア（Redisキャッシュ削除＋境界記録。永続ログは保持）"
-										onclick={(e) => {
-											e.stopPropagation();
-											clearHistory(b.id);
-										}}>会話履歴をクリア</button
-									>
-								</div>
-							{/if}
-						</div>
-					</div>
-				</div>
-			{/each}
-		</div>
-	{/if}
-
 	<!-- Credentials -->
 	{#if section === "credentials"}
 		<div class="expense-actions-columns int-cols">
@@ -499,7 +385,7 @@ async function connectGoogle() {
 				</form>
 			</div>
 			<div class="action-column">
-				<p class="description-text int-col-note">登録済み（Bot別の利用許可）</p>
+				<p class="description-text int-col-note">登録済み（チップで、使えるBotを切り替えます）</p>
 				<div class="int-list">
 					{#if credentials.length === 0}
 						<p class="description-text">未登録です。</p>
@@ -583,7 +469,7 @@ async function connectGoogle() {
 				</form>
 			</div>
 			<div class="action-column">
-				<p class="description-text int-col-note">登録済み（Bot別の利用許可）</p>
+				<p class="description-text int-col-note">登録済み（チップで、使えるBotを切り替えます）</p>
 				<div class="int-list">
 					{#if mcpServers.length === 0}
 						<p class="description-text">未登録です。</p>
@@ -604,6 +490,9 @@ async function connectGoogle() {
 												>管理ページ</Button
 											>
 										{/if}
+										<Button variant="secondary" small onclick={() => refreshMcpTools(s)}
+											>Tool再取得</Button
+										>
 										<Button variant="secondary" small onclick={() => toggleMcpServer(s)}
 											>{s.enabled ? "無効化" : "有効化"}</Button
 										>
@@ -663,7 +552,7 @@ async function connectGoogle() {
 				{/if}
 			</div>
 
-			<p class="description-text int-assign-heading"><strong>Bot別 使用アカウント</strong></p>
+			<p class="description-text int-assign-heading"><strong>各Botで使うアカウント</strong></p>
 			<div class="int-assign-list">
 				{#if ownedBots.length === 0}
 					<p class="description-text">所有Botがありません。</p>
@@ -697,93 +586,6 @@ async function connectGoogle() {
 <McpDashboardModal bind:open={dashOpen} server={dashServer} />
 
 <style>
-	.int-refresh-row {
-		display: flex;
-		justify-content: flex-end;
-		margin-top: 12px;
-	}
-	.int-bots-list {
-		display: flex;
-		flex-direction: column;
-		gap: 10px;
-		margin-top: 12px;
-	}
-	.int-bot-row {
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		gap: 12px;
-		padding: 12px 14px;
-		border-radius: 8px;
-	}
-	.int-bot-info {
-		display: flex;
-		align-items: center;
-		gap: 10px;
-		min-width: 0;
-	}
-	.int-bot-meta {
-		min-width: 0;
-	}
-	.int-bot-name {
-		font-weight: 600;
-	}
-	.int-bot-detail {
-		font-size: 0.75rem;
-		color: var(--color-zinc-muted, #a1a1aa);
-	}
-	.int-bot-actions {
-		display: flex;
-		align-items: center;
-		gap: 8px;
-		flex-shrink: 0;
-	}
-	.int-menu-wrap {
-		position: relative;
-	}
-	.int-menu-toggle {
-		background: none;
-		border: 0;
-		color: var(--text-secondary, #a1a1aa);
-		cursor: pointer;
-		font-size: 1.1rem;
-		line-height: 1;
-		padding: 2px 6px;
-	}
-	.int-action-menu {
-		position: absolute;
-		right: 0;
-		top: 100%;
-		z-index: 20;
-		display: flex;
-		flex-direction: column;
-		min-width: 160px;
-		background: var(--surface-2dp, #27272a);
-		border: 1px solid var(--border-matte, #333);
-		border-radius: 8px;
-		padding: 4px;
-		box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
-	}
-	.int-menu-item {
-		background: none;
-		border: 0;
-		color: var(--text-high, #fff);
-		text-align: left;
-		padding: 8px 10px;
-		border-radius: 6px;
-		cursor: pointer;
-		font-size: 0.85rem;
-	}
-	.int-menu-item:hover:not(:disabled) {
-		background: var(--surface-1dp, rgba(255, 255, 255, 0.06));
-	}
-	.int-menu-item:disabled {
-		opacity: 0.4;
-		cursor: not-allowed;
-	}
-	.int-menu-danger {
-		color: #ef4444;
-	}
 	.int-cols {
 		margin-top: 12px;
 	}

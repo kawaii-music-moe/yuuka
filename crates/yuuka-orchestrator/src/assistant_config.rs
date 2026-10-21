@@ -1,6 +1,6 @@
 //! `GET /api/bots/assistant-config` の集計リポジトリ（Node `personaRepo`/`mcpRepo` の読み取り系パリティ）。
 //!
-//! 汎用モード設定タブの一括取得で使うペルソナ一覧（own/public）と Bot へ許可された MCP サーバー一覧を引く。
+//! 汎用モード設定（Bot設定の「機能と AI」「Discord」）の一括取得で使うペルソナ一覧（own/public）と Bot へ許可された MCP サーバー一覧を引く。
 //! いずれも読み取り専用。ハンドラ本体（認可 + 応答組立）は [`crate::bot_attr_routes`] にある。
 
 use rusqlite::params;

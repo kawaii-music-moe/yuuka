@@ -1,8 +1,9 @@
 <script lang="ts">
 // ─────────────────────────────────────────────────────────────────────────
 // Playbook タブ（旧 app.js playbook 系 + index.html #tab-playbooks を移植）。
-//   - Playbook 登録/編集（name が識別子。クリックで編集フォームへ読込）+ 検索
-//   - 定期実行スケジュール（cron プリセット→式）+ 一覧（有効/無効・削除）
+// 一度に出す量を減らすため、次の 3 つをページ内タブで切り替える:
+//   - 手順書: Playbook 登録/編集（name が識別子。クリックで編集フォームへ読込）+ 検索
+//   - 定期実行: スケジュール（cron プリセット→式）+ 一覧（有効/無効・削除）
 //   - 実行履歴
 // activeBot 変更で3本 fetch（list / schedules / runs）。playbookApi 使用（scope:'bot'）。
 // ─────────────────────────────────────────────────────────────────────────
@@ -20,6 +21,7 @@ import {
 	confirmDialog,
 	EmptyState,
 	Icon,
+	PageTabs,
 } from "$lib/components/ui";
 import { activeBot } from "$lib/stores/activeBot";
 import { pushToast } from "$lib/stores/toast";
@@ -28,6 +30,13 @@ import {
 	runStatusIcon,
 	runStatusLabel,
 } from "./playbooks/playbookUtils";
+
+const VIEWS = [
+	{ id: "playbooks", label: "手順書" },
+	{ id: "schedules", label: "定期実行" },
+	{ id: "runs", label: "実行履歴" },
+];
+let view = $state("playbooks");
 
 let playbooks = $state<PlaybookRecord[]>([]);
 let schedules = $state<PlaybookScheduleRecord[]>([]);
@@ -226,6 +235,9 @@ async function deleteSchedule(s: PlaybookScheduleRecord) {
 </script>
 
 <section class="tab-view">
+	<PageTabs tabs={VIEWS} bind:active={view} label="Playbook の設定" />
+
+	{#if view === "playbooks"}
 	<div class="expense-actions-columns">
 		<!-- Playbook フォーム -->
 		<div class="action-column card">
@@ -346,8 +358,11 @@ async function deleteSchedule(s: PlaybookScheduleRecord) {
 		</div>
 	</div>
 
+	{/if}
+
 	<!-- スケジュール -->
-	<div class="expense-actions-columns pb-section-spacer">
+	{#if view === "schedules"}
+	<div class="expense-actions-columns">
 		<!-- スケジュール フォーム -->
 		<div class="action-column card">
 			<div class="column-header">
@@ -459,8 +474,11 @@ async function deleteSchedule(s: PlaybookScheduleRecord) {
 		</div>
 	</div>
 
+	{/if}
+
 	<!-- 実行履歴 -->
-	<div class="card pb-section-spacer">
+	{#if view === "runs"}
+	<div class="card">
 		<div class="column-header">
 			<h3><Icon name="history" class="header-icon-symbol" />実行履歴</h3>
 		</div>
@@ -492,6 +510,7 @@ async function deleteSchedule(s: PlaybookScheduleRecord) {
 			{/if}
 		</div>
 	</div>
+	{/if}
 </section>
 
 <style>
@@ -582,9 +601,6 @@ async function deleteSchedule(s: PlaybookScheduleRecord) {
 		align-items: center;
 		gap: 10px;
 		font-size: 0.85rem;
-	}
-	.pb-section-spacer {
-		margin-top: 24px;
 	}
 	.pb-runs {
 		display: flex;

@@ -201,7 +201,7 @@ impl Tool for ListCredentialServicesTool {
 
         if services.is_empty() {
             return Ok(ToolOutcome::from_payload(ok_payload(
-                "このBotが利用を許可された認証情報はありません。addCredential で登録すると自動的にこのBotへ許可されます。既存の認証情報は統合管理ページ（Bot統合管理）でこのBotへ利用を許可してください。",
+                "このBotが利用を許可された認証情報はありません。addCredential で登録すると自動的にこのBotへ許可されます。既存の認証情報は、管理画面の「連携サービス」→「認証情報」でこのBotへ利用を許可してください。",
                 json!({ "services": [] }),
             )));
         }
@@ -354,7 +354,7 @@ impl Tool for AddCredentialTool {
             .await
             .map_err(exec_err)?;
         // v5: 会話から登録した認証情報は、いま応対している（秘書）Bot 自身へ即時に利用許可する（UX 維持・
-        // Node addCredential）。他 Bot への共有は統合管理ページで行う。grant は正規化・冪等。
+        // Node addCredential）。他 Bot への共有は連携サービス（旧 統合管理）ページで行う。grant は正規化・冪等。
         CredentialAccessRepo::new(&self.db)
             .grant(ctx.bot_id.as_str(), ctx.user_id.as_str(), &service)
             .await
@@ -550,7 +550,7 @@ impl Tool for BrowserFillCredentialTool {
             .map_err(|e| ToolError::Execution(e.to_string()))?;
         if !granted {
             return Ok(fail_payload(format!(
-                "このBotは認証情報「{clean}」の利用を許可されていません。統合管理ページ（Bot統合管理）で当該Botへ利用を許可してください。"
+                "このBotは認証情報「{clean}」の利用を許可されていません。管理画面の「連携サービス」→「認証情報」で当該Botへ利用を許可してください。"
             )));
         }
 

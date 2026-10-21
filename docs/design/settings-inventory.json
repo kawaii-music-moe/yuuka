@@ -1,0 +1,420 @@
+{
+  "document": {
+    "id": "settings-inventory",
+    "title": "設定項目インベントリ",
+    "purpose": "設定画面の情報設計、再分類、統合、移動を検討するための現状一覧",
+    "status": "snapshot-before-restructure",
+    "supersededBy": "docs/design/settings-restructure.md",
+    "locale": "ja-JP",
+    "createdAt": "2026-10-19",
+    "scopeLegend": {
+      "bot": "選択中のBotに適用",
+      "user": "ログインユーザー全体に適用",
+      "user_bot": "ユーザーとBotの組み合わせに適用",
+      "system": "システム全体に適用",
+      "client": "特定クライアントまたは端末に適用"
+    },
+    "sensitivityLegend": {
+      "public": "公開または非機密情報",
+      "internal": "通常の設定情報",
+      "secret": "再表示を避けるべき認証情報",
+      "destructive": "削除や失効など取り消し困難な操作"
+    }
+  },
+  "surfaces": [
+    {
+      "id": "admin-bot-settings",
+      "label": "Bot設定",
+      "client": "admin-web",
+      "route": "/bot/settings",
+      "source": "frontend/src/routes/BotSettingsHub.svelte",
+      "itemDefinitionSource": "frontend/src/lib/botTabs.ts",
+      "sections": [
+        {
+          "id": "bot-config",
+          "label": "Bot 基本設定",
+          "route": "/bot/config",
+          "source": "frontend/src/routes/BotConfig.svelte",
+          "availability": ["secretary", "mcp_assistant"],
+          "groups": [
+            {
+              "id": "bot-profile",
+              "label": "Bot登録名・属性",
+              "scope": "bot",
+              "visibility": "非デフォルトBotのownerまたはadmin",
+              "items": [
+                { "id": "bot-name", "label": "Bot登録名", "type": "text", "sensitivity": "internal" },
+                { "id": "bot-preset", "label": "Bot属性（プリセット）", "type": "select", "sensitivity": "internal" }
+              ]
+            },
+            {
+              "id": "bot-invite",
+              "label": "招待リンク・プロフィール",
+              "scope": "bot",
+              "visibility": "非デフォルトBotのownerまたはadmin",
+              "items": [
+                { "id": "discord-invite-url", "label": "Discord招待リンク", "type": "generated_value", "sensitivity": "public" },
+                { "id": "discord-profile-sync", "label": "Discordプロフィール同期", "type": "action", "sensitivity": "internal" }
+              ]
+            },
+            {
+              "id": "discord-token",
+              "label": "Discord 独自Bot",
+              "scope": "bot",
+              "visibility": "システムデフォルトBotを閲覧する非admin以外",
+              "items": [
+                { "id": "discord-bot-token", "label": "Discord Bot Token", "type": "password", "sensitivity": "secret" }
+              ]
+            },
+            {
+              "id": "bot-modules",
+              "label": "有効な機能",
+              "scope": "user_bot",
+              "visibility": "Bot選択時",
+              "items": [
+                { "id": "enabled-modules", "label": "このBotで利用する機能", "type": "multi_toggle", "sensitivity": "internal" }
+              ]
+            },
+            {
+              "id": "assistant-mode",
+              "label": "汎用モード設定",
+              "scope": "bot",
+              "visibility": "mcp_assistantかつ非デフォルトBotのownerまたはadmin",
+              "items": [
+                { "id": "bot-gemini-api-key", "label": "Bot専用Gemini API Key", "type": "password", "sensitivity": "secret" },
+                { "id": "assistant-mcp-guidance", "label": "MCP利用案内", "type": "guidance", "sensitivity": "public" }
+              ]
+            },
+            {
+              "id": "assistant-settings",
+              "label": "アシスタント設定",
+              "scope": "user",
+              "visibility": "常時",
+              "items": [
+                { "id": "rich-reply", "label": "リッチ返信（Embed表示）", "type": "boolean", "sensitivity": "internal" },
+                { "id": "reminder-default-minutes", "label": "リマインド既定（分前）", "type": "number", "sensitivity": "internal" },
+                { "id": "timezone", "label": "タイムゾーン", "type": "timezone", "sensitivity": "internal" },
+                { "id": "notification-target-type", "label": "通知先タイプ", "type": "select", "options": ["dm", "channel"], "sensitivity": "internal" },
+                { "id": "notification-channel-id", "label": "通知先チャンネルID", "type": "text", "sensitivity": "internal", "condition": "notification-target-type=channel" }
+              ]
+            },
+            {
+              "id": "bot-sharing",
+              "label": "Bot共有管理",
+              "scope": "bot",
+              "visibility": "非デフォルトBotのownerまたはadmin",
+              "items": [
+                { "id": "shared-users", "label": "Botを利用できるメンバー", "type": "entity_list", "sensitivity": "internal" },
+                { "id": "invite-user-discord-id", "label": "招待するユーザーのDiscord ID", "type": "text", "sensitivity": "internal" }
+              ]
+            },
+            {
+              "id": "backup",
+              "label": "Google Drive バックアップ",
+              "scope": "user",
+              "visibility": "システムデフォルトBotを閲覧する非admin以外",
+              "items": [
+                { "id": "backup-enabled", "label": "自動バックアップ", "type": "boolean", "sensitivity": "internal" },
+                { "id": "backup-folder", "label": "保存先フォルダIDまたはURL", "type": "text", "sensitivity": "internal" },
+                { "id": "backup-interval-hours", "label": "実行間隔（時間）", "type": "number", "min": 1, "max": 720, "sensitivity": "internal" },
+                { "id": "backup-generations", "label": "保持する世代数", "type": "number", "min": 1, "sensitivity": "internal" }
+              ]
+            },
+            {
+              "id": "ai-credentials-summary",
+              "label": "AI認証情報",
+              "scope": "user_bot",
+              "visibility": "常時",
+              "items": [
+                { "id": "available-ai-credentials", "label": "Botが利用できる認証情報", "type": "read_only_list", "sensitivity": "secret" }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "personas",
+          "label": "ペルソナ",
+          "route": "/bot/personas",
+          "source": "frontend/src/routes/BotPersonas.svelte",
+          "availability": ["secretary", "mcp_assistant"],
+          "scope": "bot",
+          "items": [
+            { "id": "active-persona", "label": "使用するペルソナ", "type": "entity_select", "sensitivity": "internal" },
+            { "id": "persona-name", "label": "ペルソナ名", "type": "text", "sensitivity": "public" },
+            { "id": "persona-prompt", "label": "ペルソナ定義（システムプロンプト）", "type": "textarea", "sensitivity": "internal" },
+            { "id": "marketplace-persona", "label": "公開ペルソナの閲覧・適用", "type": "entity_list", "sensitivity": "public" }
+          ]
+        },
+        {
+          "id": "playbooks",
+          "label": "Playbook 管理",
+          "route": "/bot/playbooks",
+          "source": "frontend/src/routes/BotPlaybooks.svelte",
+          "availability": ["secretary"],
+          "scope": "bot",
+          "items": [
+            { "id": "playbook-name", "label": "Playbook名", "type": "text", "sensitivity": "internal" },
+            { "id": "playbook-title", "label": "表示タイトル", "type": "text", "sensitivity": "internal" },
+            { "id": "playbook-keywords", "label": "キーワード", "type": "string_list", "sensitivity": "internal" },
+            { "id": "playbook-description", "label": "概要", "type": "textarea", "sensitivity": "internal" },
+            { "id": "playbook-steps", "label": "操作手順", "type": "markdown", "sensitivity": "internal" },
+            { "id": "schedule-playbook", "label": "定期実行対象", "type": "entity_select", "sensitivity": "internal" },
+            { "id": "schedule-cron", "label": "実行頻度／Cron式", "type": "cron", "sensitivity": "internal" },
+            { "id": "schedule-enabled", "label": "スケジュール有効状態", "type": "boolean", "sensitivity": "internal" },
+            { "id": "schedule-description", "label": "スケジュールメモ", "type": "text", "sensitivity": "internal" },
+            { "id": "execution-history", "label": "実行履歴", "type": "read_only_list", "sensitivity": "internal" }
+          ]
+        },
+        {
+          "id": "bot-mcp",
+          "label": "MCPサーバー",
+          "route": "/bot/mcp",
+          "source": "frontend/src/routes/BotMcp.svelte",
+          "availability": ["secretary", "mcp_assistant"],
+          "scope": "user_bot",
+          "items": [
+            { "id": "mcp-permission", "label": "Bot別のMCP利用許可", "type": "entity_toggle_list", "sensitivity": "internal" },
+            { "id": "mcp-tools", "label": "提供ツールの確認", "type": "read_only_list", "sensitivity": "internal" },
+            { "id": "mcp-dashboard", "label": "MCPダッシュボード", "type": "action", "sensitivity": "internal" }
+          ]
+        },
+        {
+          "id": "delivery",
+          "label": "配信設定",
+          "route": "/bot/delivery",
+          "source": "frontend/src/routes/BotDelivery.svelte",
+          "availability": ["secretary"],
+          "scope": "user",
+          "items": [
+            { "id": "briefing-cron", "label": "朝報の配信スケジュール", "type": "cron", "sensitivity": "internal" },
+            { "id": "briefing-target-type", "label": "朝報の配信先", "type": "select", "options": ["dm", "channel"], "sensitivity": "internal" },
+            { "id": "briefing-target-id", "label": "朝報のチャンネルID", "type": "text", "sensitivity": "internal" },
+            { "id": "weather-location", "label": "天気の地点名・緯度・経度", "type": "location", "sensitivity": "internal" },
+            { "id": "rss-feeds", "label": "ニュースRSSフィード", "type": "url_list", "sensitivity": "internal" },
+            { "id": "news-keywords", "label": "ニュース絞り込みキーワード", "type": "string_list", "sensitivity": "internal" },
+            { "id": "activity-summary-schedules", "label": "タスク・支出サマリーの配信スケジュール", "type": "cron_list", "sensitivity": "internal" }
+          ]
+        },
+        {
+          "id": "discord-integration",
+          "label": "Discord連携",
+          "route": "/bot/discord",
+          "source": "frontend/src/routes/BotDiscord.svelte",
+          "availability": ["mcp_assistant"],
+          "scope": "bot",
+          "items": [
+            { "id": "allowed-guilds", "label": "許可ギルド", "type": "id_list", "sensitivity": "internal" },
+            { "id": "allowed-channels", "label": "許可チャンネル", "type": "id_list", "sensitivity": "internal" },
+            { "id": "muted-channels", "label": "ミュートチャンネル", "type": "id_list", "sensitivity": "internal" },
+            { "id": "allowed-members", "label": "許可メンバー", "type": "entity_list", "sensitivity": "internal" },
+            { "id": "allowed-roles", "label": "許可ロール", "type": "entity_list", "sensitivity": "internal" },
+            { "id": "guild-note", "label": "ギルド共有ノート", "type": "textarea", "maxLength": 10000, "sensitivity": "internal" },
+            { "id": "access-requests", "label": "利用申請", "type": "approval_list", "sensitivity": "internal" }
+          ]
+        },
+        {
+          "id": "webhooks",
+          "label": "Webhook連携",
+          "route": "/bot/webhooks",
+          "source": "frontend/src/routes/BotWebhooks.svelte",
+          "availability": ["secretary"],
+          "scope": "bot",
+          "items": [
+            { "id": "webhook-name", "label": "エンドポイント名", "type": "text", "sensitivity": "internal" },
+            { "id": "webhook-secret", "label": "署名シークレット", "type": "password", "sensitivity": "secret" },
+            { "id": "webhook-notification-target", "label": "通知先", "type": "notification_target", "sensitivity": "internal" },
+            { "id": "webhook-template", "label": "通知テンプレート", "type": "textarea", "sensitivity": "internal" },
+            { "id": "webhook-filter", "label": "フィルタキーワード", "type": "text", "sensitivity": "internal" },
+            { "id": "webhook-create-todo", "label": "Todo自動作成", "type": "boolean", "sensitivity": "internal" },
+            { "id": "webhook-create-reminder", "label": "リマインダー自動作成", "type": "boolean", "sensitivity": "internal" },
+            { "id": "webhook-history", "label": "直近50件の受信履歴", "type": "read_only_list", "sensitivity": "internal" }
+          ]
+        },
+        {
+          "id": "devices",
+          "label": "接続端末",
+          "route": "/bot/devices",
+          "source": "frontend/src/routes/BotDevices.svelte",
+          "availability": ["secretary", "mcp_assistant"],
+          "scope": "client",
+          "items": [
+            { "id": "desktop-login", "label": "デスクトップアプリのログイン", "type": "action", "sensitivity": "internal" },
+            { "id": "connected-devices", "label": "ログイン中の端末", "type": "entity_list", "sensitivity": "internal" },
+            { "id": "revoke-device", "label": "端末セッションの失効", "type": "destructive_action", "sensitivity": "destructive" }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "account-settings",
+      "label": "アカウント管理",
+      "client": "admin-web",
+      "route": "/account",
+      "source": "frontend/src/overlays/AccountOverlay.svelte",
+      "scope": "user",
+      "sections": [
+        {
+          "id": "gemini",
+          "label": "Gemini AI 個別設定",
+          "items": [
+            { "id": "user-gemini-api-key", "label": "個人Gemini API Key", "type": "password", "sensitivity": "secret" },
+            { "id": "user-gemini-model", "label": "使用モデル", "type": "select", "sensitivity": "internal" }
+          ]
+        },
+        { "id": "profile", "label": "表示名", "items": [{ "id": "username", "label": "表示名", "type": "text", "sensitivity": "public" }] },
+        { "id": "theme", "label": "テーマ", "items": [{ "id": "theme", "label": "外観テーマ", "type": "select", "options": ["dark", "light", "blue-archive"], "storage": "browser", "sensitivity": "internal" }] },
+        { "id": "password", "label": "パスワード変更", "items": [{ "id": "account-password", "label": "ログインパスワード", "type": "password_change", "sensitivity": "secret" }] },
+        { "id": "delete", "label": "アカウント削除", "items": [{ "id": "delete-account", "label": "アカウントと関連データを削除", "type": "destructive_action", "sensitivity": "destructive" }] }
+      ]
+    },
+    {
+      "id": "integrated-settings",
+      "label": "統合管理",
+      "client": "admin-web",
+      "route": "/integrated",
+      "source": "frontend/src/overlays/IntegratedOverlay.svelte",
+      "sections": [
+        {
+          "id": "health",
+          "label": "Botヘルス／起動・停止",
+          "scope": "bot",
+          "items": [
+            { "id": "bot-runtime-state", "label": "Botの起動・停止", "type": "action", "sensitivity": "internal" },
+            { "id": "clear-conversation", "label": "自分の会話履歴をクリア", "type": "destructive_action", "sensitivity": "destructive" }
+          ]
+        },
+        {
+          "id": "credentials",
+          "label": "認証情報",
+          "scope": "user",
+          "items": [
+            { "id": "credential-service", "label": "サービス名", "type": "text", "sensitivity": "internal" },
+            { "id": "credential-username", "label": "ユーザー名／メール", "type": "text", "sensitivity": "secret" },
+            { "id": "credential-password", "label": "パスワード", "type": "password", "sensitivity": "secret" },
+            { "id": "credential-url", "label": "ログインURL", "type": "url", "sensitivity": "internal" },
+            { "id": "credential-bot-access", "label": "Bot別利用許可", "type": "entity_toggle_list", "sensitivity": "internal" }
+          ]
+        },
+        {
+          "id": "mcp-registry",
+          "label": "MCPサーバー登録",
+          "scope": "user",
+          "items": [
+            { "id": "mcp-name", "label": "名前", "type": "text", "sensitivity": "internal" },
+            { "id": "mcp-endpoint", "label": "エンドポイントURL", "type": "url", "sensitivity": "internal" },
+            { "id": "mcp-auth", "label": "認証情報", "type": "password", "sensitivity": "secret" },
+            { "id": "mcp-confirmation", "label": "操作確認の要否", "type": "boolean", "sensitivity": "internal" },
+            { "id": "mcp-scope", "label": "登録スコープ", "type": "select", "options": ["user", "system"], "visibility": "systemはadminのみ", "sensitivity": "internal" },
+            { "id": "mcp-bot-access", "label": "Bot別利用許可", "type": "entity_toggle_list", "sensitivity": "internal" }
+          ]
+        },
+        {
+          "id": "google",
+          "label": "Googleアカウント連携",
+          "scope": "user",
+          "items": [
+            { "id": "google-accounts", "label": "連携Googleアカウント", "type": "entity_list", "sensitivity": "internal" },
+            { "id": "google-calendar-settings", "label": "カレンダー設定", "type": "entity_settings", "sensitivity": "internal" },
+            { "id": "google-account-per-bot", "label": "Bot別使用アカウント", "type": "entity_select_list", "sensitivity": "internal" }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "admin-settings",
+      "label": "管理者設定",
+      "client": "admin-web",
+      "route": "/admin",
+      "source": "frontend/src/overlays/AdminOverlay.svelte",
+      "scope": "system",
+      "visibility": "adminのみ",
+      "sections": [
+        { "id": "default-bot", "label": "システムデフォルトBot", "items": [{ "id": "default-bot-token", "label": "Discord Bot Token", "type": "password", "sensitivity": "secret" }] },
+        {
+          "id": "system",
+          "label": "システム全体設定",
+          "items": [
+            { "id": "privacy-policy-url", "label": "プライバシーポリシーURL", "type": "url_or_path", "sensitivity": "public" },
+            { "id": "terms-url", "label": "利用規約URL", "type": "url_or_path", "sensitivity": "public" }
+          ]
+        },
+        {
+          "id": "bot-attributes",
+          "label": "Bot属性設定",
+          "items": [
+            { "id": "secretary-preset-label", "label": "secretaryの表示名", "type": "text", "sensitivity": "public" },
+            { "id": "mcp-preset-label", "label": "mcp_assistantの表示名", "type": "text", "sensitivity": "public" },
+            { "id": "rate-user-minute", "label": "ユーザー上限（回／分）", "type": "number", "sensitivity": "internal" },
+            { "id": "rate-user-day", "label": "ユーザー上限（回／日）", "type": "number", "sensitivity": "internal" },
+            { "id": "rate-guild-day", "label": "ギルド上限（回／日）", "type": "number", "sensitivity": "internal" }
+          ]
+        },
+        { "id": "users", "label": "ユーザー管理", "items": [{ "id": "users-and-roles", "label": "登録ユーザーとロール", "type": "entity_list", "sensitivity": "internal" }] },
+        { "id": "moderation", "label": "Botモデレーション", "items": [{ "id": "bot-moderation", "label": "全Botの管理・差し押さえ", "type": "entity_actions", "sensitivity": "destructive" }] },
+        { "id": "personas", "label": "ペルソナ管理", "items": [{ "id": "marketplace-moderation", "label": "公開ペルソナの非公開化・削除", "type": "entity_actions", "sensitivity": "destructive" }] },
+        { "id": "audit", "label": "監査ログ", "items": [{ "id": "audit-log", "label": "セキュリティ関連操作履歴", "type": "read_only_list", "sensitivity": "internal" }] },
+        { "id": "invites", "label": "招待コード管理", "items": [{ "id": "invite-codes", "label": "新規登録用招待コード", "type": "entity_list", "sensitivity": "secret" }] }
+      ]
+    },
+    {
+      "id": "pwa-settings",
+      "label": "PWA設定",
+      "client": "pwa",
+      "route": "/settings",
+      "source": "client/pwa/src/pages/SettingsPage.vue",
+      "sections": [
+        { "id": "google", "label": "Google連携", "scope": "user", "items": [{ "id": "pwa-google-connection", "label": "Googleアカウントの接続・再認証", "type": "connection", "sensitivity": "internal" }] },
+        { "id": "ai", "label": "AI応答", "scope": "user", "items": [{ "id": "pwa-model", "label": "使用モデル", "type": "select", "sensitivity": "internal" }] },
+        { "id": "agent", "label": "エージェント", "scope": "client", "items": [{ "id": "selected-agent", "label": "使用するエージェント", "type": "entity_select", "applyMode": "immediate", "sensitivity": "internal" }] }
+      ]
+    },
+    {
+      "id": "desktop-settings",
+      "label": "デスクトップアプリ設定",
+      "client": "desktop",
+      "source": "clients/desktop/src/ui/settings.rs",
+      "scope": "client",
+      "storage": "local-settings-json",
+      "items": [
+        { "id": "desktop-hotkey", "label": "ホットキー", "type": "text", "sensitivity": "internal" },
+        { "id": "overlay-opacity", "label": "オーバーレイ不透明度", "type": "range", "sensitivity": "internal" },
+        { "id": "auto-send-recording", "label": "録音後の自動送信", "type": "boolean", "sensitivity": "internal" }
+      ]
+    }
+  ],
+  "designFindings": [
+    {
+      "id": "mixed-scopes-in-bot-config",
+      "severity": "high",
+      "summary": "Bot基本設定の中にbot、user、user_botスコープの設定が混在している",
+      "examples": ["Bot登録名はbot", "アシスタント設定とバックアップはuser", "有効な機能はuser_bot"]
+    },
+    {
+      "id": "integration-management-split",
+      "severity": "high",
+      "summary": "MCP、認証情報、Google連携がBot設定と統合管理に分散している",
+      "examples": ["MCPの登録は統合管理、Bot別利用許可やツール確認はBot設定", "AI認証情報はBot設定では参照のみ"]
+    },
+    {
+      "id": "gemini-settings-duplication",
+      "severity": "high",
+      "summary": "Gemini関連設定がアカウント、Bot、PWAに存在し、優先順位がUIから分かりにくい",
+      "examples": ["個人APIキーとモデル", "Bot専用APIキー", "PWAのモデル選択"]
+    },
+    {
+      "id": "operations-mixed-with-settings",
+      "severity": "medium",
+      "summary": "起動・停止、履歴クリア、端末失効、監査ログなど運用操作が設定画面群に含まれている"
+    },
+    {
+      "id": "preset-dependent-navigation",
+      "severity": "medium",
+      "summary": "secretaryとmcp_assistantで設定ハブの構成が変わるため、Bot切替時に項目が消える"
+    },
+    {
+      "id": "cross-client-overlap",
+      "severity": "medium",
+      "summary": "管理画面、PWA、デスクトップで一部設定概念が重複しているが、適用範囲と同期関係が明示されていない"
+    }
+  ]
+}
