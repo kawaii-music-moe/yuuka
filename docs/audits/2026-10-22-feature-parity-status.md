@@ -2,12 +2,12 @@
 
 ## 基準と読み方
 
-[#97](https://github.com/kawaii-music-moe/yuuka/issues/97) の対応表。`develop` の `52abc35` を基準に、マージ履歴と実装の接続先を照合した。
+[#97](https://github.com/kawaii-music-moe/yuuka/issues/97) の対応表。`develop` の `97566f0` を基準に、マージ履歴と実装の接続先を照合した。
 [2026-10-08の棚卸し](2026-10-08-feature-parity.md)にある「現在」「未コミット」「未接続」は当時の記録を含み、本表を現在の対応状況として参照する。
 HTTP 180組・会話ツール85件のTSVも元の監査時点の入口対応表として保持する。入口の存在は挙動の同等性の保証ではない。
 
-R01〜R27の移行差分にはすべて修正がマージ済み。D01〜D08も整理方針を実装済みだが、R16の失敗処理（#182）とD06の登録時検査（#184）は追加修正が必要。
-レート制限の呼び出し側への分散は#192で追跡する。これらは本表の基準時点で未解決であり、他の作業ブランチの変更を完了扱いに含めない。
+R01〜R27の移行差分にはすべて修正がマージ済み。D01〜D08も整理方針を実装済み。R16の失敗処理（#182）は[#200](https://github.com/kawaii-music-moe/yuuka/pull/200)、D06の登録時検査（#184）は[#202](https://github.com/kawaii-music-moe/yuuka/pull/202)、レート制限判定の集約（#192）は[#203](https://github.com/kawaii-music-moe/yuuka/pull/203)で追加修正もマージ済み。
+他の作業ブランチの変更を完了扱いに含めない。IssueのOPEN/CLOSEDとdevelopへの実装のマージ状況は区別する。
 
 ## R01〜R27
 
@@ -30,7 +30,7 @@ R01〜R27の移行差分にはすべて修正がマージ済み。D01〜D08も�
 | R13 | 修正済み | 会話添付の保存 | [#191](https://github.com/kawaii-music-moe/yuuka/pull/191) | [yuuka-timeline/src/media.rs](../../crates/yuuka-timeline/src/media.rs)：本人の添付を順序・冪等性付きで保存。配信認可と実体バックアップを接続。 |
 | R14 | 修正済み | 既存支出による消込 | [#152](https://github.com/kawaii-music-moe/yuuka/pull/152) | [yuuka-finance/src/repo.rs](../../crates/yuuka-finance/src/repo.rs)：同じ利用者/Botの既存支出へexpense_idで紐付け、再記帳せずToDoを完了。 |
 | R15 | 修正済み | 消込・取消の通知停止 | [#154](https://github.com/kawaii-music-moe/yuuka/pull/154) | [yuuka-finance/src/repo.rs](../../crates/yuuka-finance/src/repo.rs)：予定更新と同じトランザクションで関連pendingリマインドを取消。 |
-| R16 | 修正済み（追加課題あり） | 記帳後の予算・候補 | [#171](https://github.com/kawaii-music-moe/yuuka/pull/171) | [yuuka-finance/src/tools.rs](../../crates/yuuka-finance/src/tools.rs)：budget_usageとsettlement_candidatesを復旧。補足取得失敗が記帳失敗になる問題は#182で追跡。 |
+| R16 | 修正済み | 記帳後の予算・候補 | [#171](https://github.com/kawaii-music-moe/yuuka/pull/171)、[#200](https://github.com/kawaii-music-moe/yuuka/pull/200) | [yuuka-finance/src/tools.rs](../../crates/yuuka-finance/src/tools.rs)：budget_usageとsettlement_candidatesを復旧。補足取得失敗時も記帳成功と支出IDを返し、unavailable_supplementsと再記帳不要の案内を添える。消込候補の未取得はnullで候補なしと区別する。 |
 | R17 | 修正済み | 既定の通知先 | [#158](https://github.com/kawaii-music-moe/yuuka/pull/158) | [yuuka-services/src/notifier.rs](../../crates/yuuka-services/src/notifier.rs)：Defaultを本人の設定で解決し、addReminderにも既定の宛先を保存。 |
 | R18 | 修正済み | 過去リマインド保護 | [#159](https://github.com/kawaii-music-moe/yuuka/pull/159) | [yuuka-reminder/src/tools.rs](../../crates/yuuka-reminder/src/tools.rs)：会話ツールの過去の単発は拒否、繰り返しは次回へ補正。管理HTTPは旧Nodeと同じく対象外。 |
 | R19 | 修正済み | cron検証 | [#160](https://github.com/kawaii-music-moe/yuuka/pull/160) | [yuuka-core/src/cron_util.rs](../../crates/yuuka-core/src/cron_util.rs)：登録と実行に同じcronerパーサを使い、発火日がない式も拒否。 |
@@ -39,7 +39,7 @@ R01〜R27の移行差分にはすべて修正がマージ済み。D01〜D08も�
 | R22 | 修正済み | ツール実績保存 | [#167](https://github.com/kawaii-music-moe/yuuka/pull/167) | [yuuka-orchestrator/src/tool_outcome.rs](../../crates/yuuka-orchestrator/src/tool_outcome.rs)：秘書・汎用のFCループにDB記録先を接続してtool_outcomesへ永続化。 |
 | R23 | 修正済み | 実利用メトリクス | [#177](https://github.com/kawaii-music-moe/yuuka/pull/177) | [yuuka-services/src/metrics.rs](../../crates/yuuka-services/src/metrics.rs)：実処理から共有MetricsRegistryへ記録。計画・非同期予測はR06/R07で追加。 |
 | R24 | 修正済み | Bot別支払い集計 | [#151](https://github.com/kawaii-music-moe/yuuka/pull/151) | [yuuka-services/src/report.rs](../../crates/yuuka-services/src/report.rs)：日報・週報の支払い予定をuser_idとbot_idの両方で限定。 |
-| R25 | 修正済み（追加課題あり） | RSS通信時検査 | [#156](https://github.com/kawaii-music-moe/yuuka/pull/156) | [yuuka-briefing/src/service.rs](../../crates/yuuka-briefing/src/service.rs)：DNS全件と各リダイレクト先を検査。登録時の弱い拒否範囲は#184で追跡。 |
+| R25 | 修正済み | RSS登録時・通信時検査 | [#156](https://github.com/kawaii-music-moe/yuuka/pull/156)、[#202](https://github.com/kawaii-music-moe/yuuka/pull/202) | [yuuka-briefing/src/service.rs](../../crates/yuuka-briefing/src/service.rs)：通信時はDNS全件と各リダイレクト先を検査。登録時もRegistrationPolicy::PublicHttpでURL正規化後に共通の内部/予約IP範囲を拒否する（DNSは通信時だけ解決）。 |
 | R26 | 修正済み | 運用設定 | [#176](https://github.com/kawaii-music-moe/yuuka/pull/176) | [yuuka-core/src/config.rs](../../crates/yuuka-core/src/config.rs)：REMINDER_CRON、SYNAPSE_*、デスクトップTTLを実処理へ反映。 |
 | R27 | 修正済み | 所有権確認meta | [#166](https://github.com/kawaii-music-moe/yuuka/pull/166) | [yuuka-web/src/static_files.rs](../../crates/yuuka-web/src/static_files.rs)：管理画面/PWAのHTMLへエスケープ済みgoogle-site-verificationを挿入。 |
 
@@ -52,25 +52,27 @@ R01〜R27の移行差分にはすべて修正がマージ済み。D01〜D08も�
 | D03 | 修正済み。Google同期込みで予定サービスへ統一 | [#162](https://github.com/kawaii-music-moe/yuuka/pull/162) | `yuuka-schedule/src/service.rs`のScheduleServiceを登録・削除の全入口で使用。 |
 | D04 | 修正済み。cronの登録・実行パーサを統一 | [#160](https://github.com/kawaii-music-moe/yuuka/pull/160) | `yuuka-core/src/cron_util.rs`。R19と同じ実装。 |
 | D05 | 整理済み。日時処理を共通関数へ集約 | [#163](https://github.com/kawaii-music-moe/yuuka/pull/163) | `yuuka-core/src/datetime.rs`。ローカル時刻・JST・PWA向けUTCの用途差を保持。 |
-| D06 | 共通化済み、登録時の追加修正は未完了 | [#189](https://github.com/kawaii-music-moe/yuuka/pull/189) | [外向き通信監査](2026-10-20-d06-ssrf-common.md)。yuuka-outboundへ集約。BriefingLegacyの弱い登録時検査は#184で追跡。 |
+| D06 | 共通化済み、登録時検査も修正済み | [#189](https://github.com/kawaii-music-moe/yuuka/pull/189)、[#202](https://github.com/kawaii-music-moe/yuuka/pull/202) | [外向き通信監査](2026-10-20-d06-ssrf-common.md)。yuuka-outboundへ集約。BriefingLegacyをRegistrationPolicy::PublicHttpへ置き換え、登録時もURL正規化後に通信時と同じ内部/予約IP範囲を拒否する。通信時のDNS全件・RSS各ホップの検査は維持。 |
 | D07 | 整理済み。同じwire契約は生成型を利用 | [#194](https://github.com/kawaii-music-moe/yuuka/pull/194) | [フロント契約監査](2026-10-20-frontend-contracts.md)。PWAは別契約の変換・契約テストを保持。 |
 | D08 | 整理済み。OCR抽出を共通化 | [#193](https://github.com/kawaii-music-moe/yuuka/pull/193) | [レシート監査](2026-10-20-d08-receipt-common.md)。PWAの下書きとDiscord/管理画面の秘書ターンの違いは維持。 |
 
 ## 仕様として受容した差と追加修正
 
-- X01〜X03：操作履歴と制限カウンタはプロセス内メモリ、会話履歴はSQLite直読みを受容。[#172](https://github.com/kawaii-music-moe/yuuka/pull/172)でレシートの制限インスタンスだけはDiscord/PWAと共有した。理由は元の棚卸しの「設計上の変更・縮小」を参照。
+- X01〜X03：操作履歴と制限カウンタはプロセス内メモリ、会話履歴はSQLite直読みを受容。[#172](https://github.com/kawaii-music-moe/yuuka/pull/172)のレシート制限共有に続き、[#203](https://github.com/kawaii-music-moe/yuuka/pull/203)でChatEngineがlimiterを保持し、Discord汎用ギルド・PWAチャット・PWA/管理画面レシートの全経路で共有する。判定はChatEngine::acquire_turnへ集約し、実行APIはTurnPermitを必須にした。PWAの保存前429、Discordのメンバー・キー確認後の判定、レシートの二重消費防止を維持する。Discord秘書・Bot DM・WSチャット・定期playbookの既存の免除範囲も維持する。メモリ保持等を受容した理由は元の棚卸しの「設計上の変更・縮小」を参照。
 - X04：[#178](https://github.com/kawaii-music-moe/yuuka/pull/178)で`runBriefingNow(deliver: true)`の設定先配信を復旧。既定は会話内表示。
 - X05：[#175](https://github.com/kawaii-music-moe/yuuka/pull/175)で定時・テスト配信のEmbedを復旧。
 - SD07：[#188](https://github.com/kawaii-music-moe/yuuka/pull/188)でbot_idの暗黙既定値と退役MCP列を除去。[移行の検証範囲](2026-10-20-sd07-bot-id-default.md)。
 - R24の補足：[#153](https://github.com/kawaii-music-moe/yuuka/pull/153)で繰り返し支払いの次回分にも元のbot_idを引き継ぐ。
 
-## 未解決の追加課題
+## 追加課題の対応と検証範囲
 
-| Issue | 必要な確認 |
-|---|---|
-| [#182](https://github.com/kawaii-music-moe/yuuka/issues/182) | 記帳後に予算・消込候補を取得できなくても、記帳成功と補足未取得を返し、二重記帳を招かないこと。 |
-| [#184](https://github.com/kawaii-music-moe/yuuka/issues/184) | 登録時も共通のIP拒否範囲を使い、省略形・10進表記のIPv4を正規化して拒否すること。通信時のDNS検査は維持する。 |
-| [#192](https://github.com/kawaii-music-moe/yuuka/issues/192) | ChatEngineのpermitへ制限判定を集約し、入口の付け忘れ防止、PWAの保存前429、Discordの判定順を維持すること。 |
+| Issue | 対応PR（developへマージ済み） | 対応内容 |
+|---|---|---|
+| [#182](https://github.com/kawaii-music-moe/yuuka/issues/182) | [#200](https://github.com/kawaii-music-moe/yuuka/pull/200)（`2b9754c`） | 記帳後の補足取得失敗でも記帳成功と未取得項目を返し、再記帳不要と案内する。 |
+| [#184](https://github.com/kawaii-music-moe/yuuka/issues/184) | [#202](https://github.com/kawaii-music-moe/yuuka/pull/202)（`97566f0`） | 登録時も共通のIP拒否範囲を使い、省略形・整数表記のIPv4を正規化して拒否する。通信時のDNS検査は維持する。 |
+| [#192](https://github.com/kawaii-music-moe/yuuka/issues/192) | [#203](https://github.com/kawaii-music-moe/yuuka/pull/203)（`b048572`） | ChatEngineのpermitへ制限判定を集約し、入口の付け忘れ防止、PWAの保存前429、Discordの判定順を維持する。 |
 
-#97の完了判断では、本表のマージ済み修正に加え、上記の追加課題と各PRに記載された未実施検証を確認する。保留中の#185は移行差分の対応範囲に含めない。
+上記3件は本表の基準時点で実装がマージ済みだが、IssueはOPENのまま。developへのマージとIssueの自動クローズは連動しないため、OPENであることを実装未完了の根拠にしない。
+
+#97の完了判断では、本表のマージ済み修正と各PRに記載された未実施検証を確認する。#200 / #202 / #203の回帰テストは追加・型検査までで、作業ブランチでのcargo testは未実施。Rustテストはdevelop → mainのCIで実行するため、通常のdevelop向けPRのCI成功だけでテスト実行済みとは扱わない。実Discord/Gemini通信など各PRの未確認範囲も残る。保留中の#185は移行差分の対応範囲に含めない。
 
