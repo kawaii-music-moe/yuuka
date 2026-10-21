@@ -10,3 +10,9 @@ export function formatDeviceCode(raw: string): string {
 		? `${cleaned.slice(0, 4)}-${cleaned.slice(4)}`
 		: cleaned;
 }
+
+/** コード発行からの経過秒を「N秒前 / N分前」に整形（承認前の端末確認表示用）。 */
+export function formatElapsed(secs: number): string {
+	const s = Math.max(0, Math.floor(secs));
+	return s < 60 ? `${s}秒前` : `${Math.floor(s / 60)}分前`;
+}

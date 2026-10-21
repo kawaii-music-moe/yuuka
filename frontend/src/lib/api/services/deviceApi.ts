@@ -43,6 +43,11 @@ export const deviceApi = {
 	desktopInfo: () => api.get<DesktopInfoResponse>("/api/desktop/info", USER),
 
 	// ── デバイス認可（ブラウザ側の承認操作） ──
+	/** POST /api/auth/device/lookup — 承認前に端末名と発行からの経過秒を確認（ログイン必須） */
+	lookup: (userCode: string) =>
+		api.post<
+			ApiResponse & { device_name?: string | null; age_secs?: number; expires_in?: number }
+		>("/api/auth/device/lookup", { user_code: userCode }, USER),
 	/** POST /api/auth/device/approve — user_code をログイン済み本人が承認 */
 	approve: (userCode: string) =>
 		api.post<ApiResponse & { device_name?: string }>(
