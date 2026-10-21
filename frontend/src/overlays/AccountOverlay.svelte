@@ -9,6 +9,7 @@
 // - 保存は settingsApi（scope:'user'）。確認は confirmDialog、通知は pushToast。
 // ─────────────────────────────────────────────────────────────────────────
 
+import { onMount } from "svelte";
 import { ApiError } from "$lib/api/client";
 import { settingsApi } from "$lib/api/services";
 import { confirmDialog, Icon } from "$lib/components/ui";
@@ -22,7 +23,21 @@ import ManagementOverlayShell from "./ManagementOverlayShell.svelte";
 
 // ── Gemini 設定 ──
 let geminiApiKey = $state("");
-let geminiModel = $state("gemini-3.1-flash-lite");
+let geminiModel = $state("");
+let llmProvider = $state("gemini");
+let llmModels = $state<string[]>([]);
+let llmLoaded = $state(false);
+onMount(() => {
+	settingsApi
+		.getGemini()
+		.then((res) => {
+			geminiModel = res.model;
+			llmProvider = res.provider;
+			llmModels = res.models;
+			llmLoaded = true;
+		})
+		.catch(reportError);
+});
 
 // ── 表示名 ──
 // 初期値は現在のセッションユーザー名（旧 fetchAccountSettings）。
@@ -55,6 +70,7 @@ async function saveGemini(e: SubmitEvent): Promise<void> {
 		await settingsApi.updateGemini({
 			apiKey: geminiApiKey.trim() || undefined,
 			model: geminiModel,
+			provider: llmProvider,
 		});
 		geminiApiKey = "";
 		pushToast("Gemini 設定を更新しました。", "success");
@@ -143,6 +159,10 @@ async function downloadPackage(e: SubmitEvent): Promise<void> {
 						あなた個人（アカウント共通）の Gemini API Key とモデルです。秘書モードで使用します。
 					</p>
 					<form onsubmit={saveGemini} style="display: flex; flex-direction: column; gap: 12px; margin-top: 16px;">
+						<div class="form-group">
+							<label for="account-llm-provider">AIプロバイダ</label>
+							<select id="account-llm-provider" bind:value={llmProvider}><option value="gemini">Google Gemini</option></select>
+						</div>
 						<div class="form-group" style="margin-bottom: 12px;">
 							<label for="gemini-api-key">Gemini API Key</label>
 							<input
@@ -156,14 +176,10 @@ async function downloadPackage(e: SubmitEvent): Promise<void> {
 						<div class="form-group" style="margin-bottom: 12px;">
 							<label for="gemini-model-select">Gemini モデル</label>
 							<select id="gemini-model-select" required bind:value={geminiModel}>
-								<option value="gemini-3.1-flash-lite">Gemini 3.1 Flash Lite (推奨)</option>
-								<option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
-								<option value="gemini-2.5-pro">Gemini 2.5 Pro</option>
-								<option value="gemini-1.5-flash">Gemini 1.5 Flash</option>
-								<option value="gemini-1.5-pro">Gemini 1.5 Pro</option>
+								{#each llmModels as name (name)}<option value={name}>{name}</option>{/each}
 							</select>
 						</div>
-						<button type="submit" class="btn btn-primary">Gemini 設定を保存</button>
+						<button type="submit" disabled={!llmLoaded} class="btn btn-primary">AI 設定を保存</button>
 					</form>
 				{/if}
 

@@ -50,7 +50,7 @@ pub async fn user_gemini(db: &Db, user_id: &str) -> Result<Option<UserGemini>, D
                 encrypted,
                 iv,
                 tag,
-                model: model.filter(|m| !m.is_empty()).unwrap_or_else(|| "gemini-3.1-flash-lite".to_owned()),
+                model: model.filter(|m| !m.is_empty()).unwrap_or_else(|| yuuka_gemini::LlmSettings::default().model),
             }))
         })
         .await

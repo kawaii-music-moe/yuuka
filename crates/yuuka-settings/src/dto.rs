@@ -16,6 +16,8 @@ pub(crate) struct ProfileInput {
 /// `POST /api/settings/gemini`。
 #[derive(Debug, Default, Deserialize)]
 pub(crate) struct GeminiInput {
+    #[serde(default)]
+    pub provider: Option<String>,
     #[serde(default, rename = "apiKey")]
     pub api_key: Option<String>,
     #[serde(default)]

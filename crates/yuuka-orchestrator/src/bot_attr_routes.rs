@@ -72,6 +72,7 @@ pub fn routes_with(
         .route("/api/bots/assistant/members", post(set_member))
         .route("/api/bots/assistant/roles", post(set_role))
         .route("/api/bots/assistant/gemini-key", post(set_gemini_key))
+        .route("/api/bots/assistant/llm", post(set_llm))
         .route("/api/bots/modules", get(get_modules).post(set_modules))
         .route("/api/bots/usage", get(get_usage))
         .route(
@@ -328,6 +329,46 @@ fn not_found_bot() -> Response {
 }
 
 // ─── POST /api/bots/assistant/gemini-key（Bot 専用 Gemini キー・owner/Admin） ─
+
+// Provider/model settings are independent of the key, so saving a model never clears it.
+async fn set_llm(
+    user: AuthenticatedUser,
+    State(db): State<Db>,
+    Json(body): Json<Value>,
+) -> Response {
+    let uid = user.0.discord_id;
+    let bot = match owned_bot_from_body(&db, &uid, &body).await {
+        Ok(b) => b,
+        Err(resp) => return *resp,
+    };
+    let settings = if body.get("inheritDefaults").and_then(Value::as_bool) == Some(true) {
+        None
+    } else {
+        let provider = body
+            .get("provider")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim();
+        let model = body
+            .get("model")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim();
+        match yuuka_gemini::LlmSettings::validate(provider, model) {
+            Ok(s) => Some(s),
+            Err(e) => return bad_request(&e.to_string()),
+        }
+    };
+    if crate::llm_settings::save(&db, &bot.id, settings)
+        .await
+        .is_err()
+    {
+        return server_error();
+    }
+    yuuka_auth::audit::add_audit_log(&db, &uid, "bot.llm_change", Some(&bot.id), Some("updated"))
+        .await;
+    ok_message("AI設定を保存しました。次のメッセージから反映されます。")
+}
 
 async fn set_gemini_key(
     user: AuthenticatedUser,
@@ -1236,8 +1277,15 @@ async fn assistant_config_get(
         Err(_) => return server_error(),
     };
 
+    let llm = match crate::llm_settings::get(&db, &bot.id).await {
+        Ok(s) => s,
+        Err(_) => return server_error(),
+    };
     Json(json!({
         "success": true,
+        "llm": llm,
+        "llm_defaults": yuuka_gemini::LlmSettings::default(),
+        "llm_models": yuuka_gemini::ALLOWED_MODELS,
         "preset": preset,
         "capabilities": caps.granted(),
         "has_gemini_key": bot.has_gemini_key,
@@ -2142,6 +2190,65 @@ mod tests {
         )
         .await;
         assert_eq!(st, StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn llm_settings_validate_authorize_and_preserve_key() {
+        let db = seed_db();
+        let state = AppState::new(Arc::new(FakeAuth), WebConfig::default(), db.clone());
+        let app = super::routes_with(None, Arc::new(NullDiscordLive)).with_state(state);
+        let path = "/api/bots/assistant/llm";
+        bot_repo::update_bot_gemini_key(
+            &db,
+            "b1",
+            Some(EncryptedTriplet {
+                encrypted: "existing-key".to_owned(),
+                iv: "iv".to_owned(),
+                tag: "tag".to_owned(),
+            }),
+        )
+        .await
+        .unwrap();
+        let key_before = bot_repo::bot_gemini(&db, "b1")
+            .await
+            .unwrap()
+            .map(|k| k.encrypted);
+        for body in [
+            r#"{"botId":"b1","provider":"openai","model":"gemini-3.5-flash-lite"}"#,
+            r#"{"botId":"b1","provider":"gemini","model":"invalid"}"#,
+        ] {
+            let (st, _) = send(&app, "POST", path, "owner", body).await;
+            assert_eq!(st, StatusCode::BAD_REQUEST);
+        }
+        let body = r#"{"botId":"b1","provider":"gemini","model":"gemini-3.5-flash-lite"}"#;
+        let (st, _) = send(&app, "POST", path, "other", body).await;
+        assert_eq!(st, StatusCode::FORBIDDEN);
+        let (st, _) = send(&app, "POST", path, "owner", body).await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(
+            crate::llm_settings::get(&db, "b1").await.unwrap().model,
+            "gemini-3.5-flash-lite"
+        );
+        assert_eq!(
+            bot_repo::bot_gemini(&db, "b1")
+                .await
+                .unwrap()
+                .map(|k| k.encrypted),
+            key_before
+        );
+        let (st, _) = send(
+            &app,
+            "POST",
+            path,
+            "owner",
+            r#"{"botId":"b1","inheritDefaults":true}"#,
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(
+            crate::llm_settings::get(&db, "b1").await.unwrap().model,
+            yuuka_gemini::LlmSettings::default().model
+        );
     }
 
     #[tokio::test]

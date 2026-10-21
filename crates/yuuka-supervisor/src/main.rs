@@ -88,6 +88,7 @@ async fn run_healthcheck() -> ExitCode {
 
 /// 起動シーケンス本体（起動時 config/DB 不備のみ fail-fast・§5.6/§5.7）。
 async fn run() -> Result<(), String> {
+    yuuka_gemini::init_llm_defaults().map_err(|e| e.to_string())?;
     // 1) config.yaml + 環境変数（欠落は既定へ・壊れた YAML/不正値は致命）。
     let cfg = Config::load_and_validate(Path::new(CONFIG_PATH))
         .map_err(|e| format!("config load failed: {e}"))?;

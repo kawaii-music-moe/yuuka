@@ -12,7 +12,7 @@ use yuuka_db::map_sqlite;
 use yuuka_discord::{BotRecord, MemberDecision, PersonaRecord, ShareRecord};
 use yuuka_web::Db;
 
-/// Bot 専用モデル（Node `BOT_DEFAULT_MODEL`・汎用モードは常にこれ）。
+/// 互換用の既定モデル定数。実行時は llm_settings のBot設定/環境既定値を使用する。
 pub const BOT_DEFAULT_MODEL: &str = "gemini-3.1-flash-lite";
 
 /// 既知の能力（Node `KNOWN_CAPABILITIES`）。JSON 内の未知エントリは除外する。`core` は暗黙付与のため含めない。

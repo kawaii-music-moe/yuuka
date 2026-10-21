@@ -8,6 +8,7 @@ publish.workspace = true
 description = "yuuka settings ドメイン（ユーザー設定 API: profile/password/gemini/user/backup/delete-account）— Node settingsRoutes.ts パリティ"
 
 [dependencies]
+yuuka-gemini.workspace = true
 yuuka-core.workspace = true
 yuuka-crypto.workspace = true
 yuuka-db.workspace = true

@@ -3,6 +3,7 @@
 // 一覧を変更する場合は Rust 側と必ず揃えること（crates/yuuka-client-api/tests/settings.rs の
 // `pwa_model_list_matches_server_allowlist` が差分を検出する）。
 export const GEMINI_MODELS = [
+  'gemini-3.5-flash-lite',
   'gemini-3.5-flash',
   'gemini-3.1-flash-lite',
   'gemini-2.5-pro',

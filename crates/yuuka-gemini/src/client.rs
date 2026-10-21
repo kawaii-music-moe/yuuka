@@ -30,6 +30,7 @@ pub const DEFAULT_MODEL: &str = "gemini-3.1-flash-lite";
 /// rpt-gemini-design-verify.md` で確認済みの GA モデル一覧と一致させ、単一の定数として
 /// `crates/` 側の唯一の正とする）。
 pub const ALLOWED_MODELS: &[&str] = &[
+    "gemini-3.5-flash-lite",
     "gemini-3.5-flash",
     "gemini-3.1-flash-lite",
     "gemini-2.5-pro",

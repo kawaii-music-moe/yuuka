@@ -29,8 +29,15 @@ export const settingsApi = {
 		api.post<ApiResponse>("/api/settings/user", body, USER),
 
 	/** POST /api/settings/gemini — Gemini API キー/モデル設定 */
-	updateGemini: (body: { apiKey?: string; model?: string }) =>
-		api.post<ApiResponse>("/api/settings/gemini", body, USER),
+	getGemini: () =>
+		api.get<
+			ApiResponse & { provider: string; model: string; models: string[] }
+		>("/api/settings/gemini", USER),
+	updateGemini: (body: {
+		apiKey?: string;
+		model?: string;
+		provider?: string;
+	}) => api.post<ApiResponse>("/api/settings/gemini", body, USER),
 
 	// ── Discord 連携 ──
 	// ★bot-scoped: サーバは GET ?botId= / POST body.botId で対象Botを特定し、

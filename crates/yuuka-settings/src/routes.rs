@@ -140,6 +140,34 @@ pub(crate) async fn user_settings(
 
 // ─── Gemini 設定更新（ユーザー単位） ──────────────────────────────────────────
 
+pub(crate) async fn gemini_get(
+    user: AuthenticatedUser,
+    State(state): State<AppState>,
+) -> Result<Response, ApiError> {
+    use rusqlite::OptionalExtension;
+    let uid = user.0.discord_id;
+    let model = state
+        .db
+        .read
+        .read(move |conn| {
+            conn.query_row(
+                "SELECT gemini_model FROM users WHERE discord_id = ?1",
+                rusqlite::params![uid],
+                |r| r.get::<_, Option<String>>(0),
+            )
+            .optional()
+            .map_err(yuuka_db::map_sqlite)
+        })
+        .await?
+        .flatten()
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| yuuka_gemini::LlmSettings::default().model);
+    Ok(json_ok(
+        json!({ "success": true, "provider": "gemini", "model": model,
+        "models": yuuka_gemini::ALLOWED_MODELS, "defaults": yuuka_gemini::LlmSettings::default() }),
+    ))
+}
+
 pub(crate) async fn gemini(
     user: AuthenticatedUser,
     Extension(rt): Extension<Arc<SettingsRuntime>>,
@@ -152,6 +180,12 @@ pub(crate) async fn gemini(
         return Ok(bad_request("モデル名は必須項目です。"));
     }
     let model = model_raw.trim();
+    if let Err(e) = yuuka_gemini::LlmSettings::validate(
+        body.provider.as_deref().unwrap_or("gemini").trim(),
+        model,
+    ) {
+        return Ok(bad_request(&e.to_string()));
+    }
 
     let api_key = body.api_key.unwrap_or_default();
     let (encrypted, iv, tag): (Option<String>, Option<String>, Option<String>);

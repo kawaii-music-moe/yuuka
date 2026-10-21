@@ -137,14 +137,22 @@ impl GenerateBackend for FakeBackend {
 
 struct FakeFactory {
     text: String,
+    expected_model: Option<String>,
 }
 
 impl GeminiFactory for FakeFactory {
     fn build(
         &self,
-        _model: &str,
+        model: &str,
         _api_key: SecretString,
     ) -> Result<Arc<dyn GenerateBackend>, GeminiError> {
+        if self
+            .expected_model
+            .as_deref()
+            .is_some_and(|expected| model != expected)
+        {
+            return Err(GeminiError::Transport(format!("unexpected model: {model}")));
+        }
         let resp: GenerateContentResponse = serde_json::from_value(json!({
             "candidates": [ { "content": { "role": "model", "parts": [ { "text": self.text } ] } } ]
         }))
@@ -172,6 +180,7 @@ fn engine_with(db: Db, crypto: Arc<SystemCrypto>, text: &str) -> ChatEngine {
         ToolRegistry::new(),
         Arc::new(FakeFactory {
             text: text.to_owned(),
+            expected_model: None,
         }),
         None,
         Arc::new(yuuka_mcp::NullMcpClient),
@@ -188,6 +197,41 @@ fn speaker(user: &str, name: &str) -> Speaker {
         user_id: UserId::new(user),
         display_name: name.to_owned(),
     }
+}
+
+#[tokio::test]
+async fn guild_uses_saved_bot_model() {
+    let (db, path) = fresh_db();
+    let crypto = Arc::new(SystemCrypto::new(SecretString::from("gen-secret")).unwrap());
+    seed_guild_bot(&path, &crypto, "botG", "owner1", true);
+    conn(&path).execute("UPDATE bots SET llm_provider = 'gemini', llm_model = 'gemini-3.5-flash-lite' WHERE id = 'botG'", []).unwrap();
+    let engine = ChatEngine::new(
+        db,
+        Some(crypto),
+        ToolRegistry::new(),
+        Arc::new(FakeFactory {
+            text: "ok".to_owned(),
+            expected_model: Some("gemini-3.5-flash-lite".to_owned()),
+        }),
+        None,
+        Arc::new(yuuka_mcp::NullMcpClient),
+        None,
+    );
+    let reply = engine
+        .process_guild(
+            &BotId::new("botG"),
+            &GuildId::new("g1"),
+            speaker("mem1", "test"),
+            IncomingChat {
+                text: "hello".to_owned(),
+                ..IncomingChat::default()
+            },
+            null_sink(),
+            Arc::new(NoopDelivery),
+        )
+        .await
+        .unwrap();
+    assert_eq!(reply.text, "ok");
 }
 
 #[tokio::test]

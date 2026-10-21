@@ -15,6 +15,9 @@ let { botId }: Props = $props();
 
 let data = $state<AssistantConfigResp | null>(null);
 let geminiKey = $state("");
+let provider = $state("gemini");
+let model = $state("");
+let savingLlm = $state(false);
 
 $effect(() => {
 	void botId;
@@ -31,6 +34,8 @@ async function load() {
 			return;
 		}
 		data = res;
+		provider = res.llm?.provider ?? "gemini";
+		model = res.llm?.model ?? "";
 		geminiKey = res.has_gemini_key ? "••••••••••••" : "";
 	} catch {
 		data = null;
@@ -58,6 +63,30 @@ const rateText = $derived.by(() => {
 	if (!rl) return "";
 	return `レート制限: ユーザー ${rl.userPerMinute}回/分・${rl.userPerDay}回/日、ギルド ${rl.guildPerDay}回/日（Admin設定で変更可）`;
 });
+
+async function saveLlm(inheritDefaults = false) {
+	savingLlm = true;
+	try {
+		const res = await botAttributeApi.setLlm({
+			botId,
+			provider,
+			model,
+			inheritDefaults,
+		});
+		pushToast(
+			res.message ?? "AI設定を保存しました。",
+			res.success ? "success" : "error",
+		);
+		if (res.success) await load();
+	} catch (err) {
+		pushToast(
+			err instanceof ApiError ? err.message : "AI設定を保存できませんでした。",
+			"error",
+		);
+	} finally {
+		savingLlm = false;
+	}
+}
 
 async function saveKey() {
 	if (!geminiKey.trim()) {
@@ -103,6 +132,23 @@ async function saveKey() {
 			{/each}
 		</div>
 	{/if}
+
+	<div class="form-group">
+		<label for="bot-llm-provider">AIプロバイダ</label>
+		<select id="bot-llm-provider" bind:value={provider}><option value="gemini">Google Gemini</option></select>
+	</div>
+	<div class="form-group">
+		<label for="bot-llm-model">モデル</label>
+		<select id="bot-llm-model" bind:value={model}>
+			{#each data?.llm_models ?? [] as name (name)}<option value={name}>{name}</option>{/each}
+		</select>
+		<span class="field-sub">無料枠・利用上限はGoogle AI Studioで確認できます。</span>
+	</div>
+	<div class="key-row">
+		<Button variant="primary" disabled={!data || savingLlm} onclick={() => saveLlm()}>AI設定を保存</Button>
+		<Button disabled={!data || savingLlm} onclick={() => saveLlm(true)}>既定値に戻す</Button>
+	</div>
+	{#if data?.llm_defaults}<span class="field-sub">既定値: {data.llm_defaults.provider} / {data.llm_defaults.model}</span>{/if}
 
 	<details class="form-group collapsible-group" open>
 		<summary>Bot専用 Gemini APIキー（必須）</summary>

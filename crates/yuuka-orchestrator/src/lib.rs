@@ -18,6 +18,7 @@ pub mod discord_ports;
 pub mod embed_recover;
 pub mod engine;
 pub mod guild_prompt;
+mod llm_settings;
 pub mod member_routes;
 pub mod message_log;
 pub mod module_catalog;

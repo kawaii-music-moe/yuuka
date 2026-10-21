@@ -86,7 +86,10 @@ pub fn routes(runtime: Arc<SettingsRuntime>) -> Router<AppState> {
         .route("/api/settings/profile", post(routes::profile))
         .route("/api/settings/delete-account", post(routes::delete_account))
         .route("/api/settings/user", post(routes::user_settings))
-        .route("/api/settings/gemini", post(routes::gemini))
+        .route(
+            "/api/settings/gemini",
+            get(routes::gemini_get).post(routes::gemini),
+        )
         .route("/api/settings/backup", post(routes::backup))
         .route("/api/status", get(status::status))
         .route(
