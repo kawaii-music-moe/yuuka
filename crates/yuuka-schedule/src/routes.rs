@@ -17,7 +17,6 @@ use axum::extract::{Query, State};
 use axum::routing::{get, post};
 use axum::{Extension, Json, Router};
 use serde::Deserialize;
-use yuuka_core::WebError;
 use yuuka_google::CalendarEventsPort;
 use yuuka_types::{EmptyData, Envelope};
 use yuuka_web::{resolve_scope, ApiError, AppState, AuthenticatedUser, Db, ScopedJson};
@@ -81,16 +80,7 @@ async fn add(
         value: input,
     }: ScopedJson<NewSchedule>,
 ) -> Result<Json<Envelope<ScheduleData>>, ApiError> {
-    if input.title.trim().is_empty() {
-        return Err(ApiError(WebError::Validation(
-            "title is required".to_owned(),
-        )));
-    }
-    if input.start_at.trim().is_empty() {
-        return Err(ApiError(WebError::Validation(
-            "startAt is required".to_owned(),
-        )));
-    }
+    // タイトル・開始日時の必須検証は PWA・ツールと共通のサービスで行う（D02 #126）。
     let scope = resolve_scope(&user.0, &db, bot_id.as_deref()).await?;
     let (schedule, _sync) = ScheduleService::new(db, calendar)
         .add(&scope, input, AddOptions::default())

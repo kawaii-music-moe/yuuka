@@ -43,6 +43,30 @@ impl From<DbError> for ApiError {
     }
 }
 
+/// 業務サービス（ToDo・家計・ノート・予定の各 `service.rs`）の失敗（D02 #126）。
+///
+/// 管理画面の `/api/*`・PWA の `/api/client/*`・LLM ツールの 3 入口が同じサービスを呼び、
+/// それぞれの応答形式（`{success:false, message}`・`{message}`・ツールの `{success:false}`）へ
+/// 変換する。入口ごとに検証やエラー分類を持たないための共通の型。
+#[derive(Debug, thiserror::Error)]
+pub enum DomainError {
+    /// 入力が業務ルールに合わない（HTTP は 400）。メッセージは利用者へそのまま返してよい。
+    #[error("{0}")]
+    Invalid(String),
+    /// DB 失敗（HTTP は 500、BUSY は 502。詳細はクライアントへ出さない）。
+    #[error(transparent)]
+    Db(#[from] DbError),
+}
+
+impl From<DomainError> for ApiError {
+    fn from(e: DomainError) -> Self {
+        match e {
+            DomainError::Invalid(message) => Self(WebError::Validation(message)),
+            DomainError::Db(e) => e.into(),
+        }
+    }
+}
+
 impl From<AuthError> for ApiError {
     fn from(e: AuthError) -> Self {
         // 認証層エラーを WebError へ写像。AuthError は #[non_exhaustive] のため別クレートの

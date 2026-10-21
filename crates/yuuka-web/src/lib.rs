@@ -23,7 +23,7 @@ pub mod test_support;
 
 pub use auth::{AdminUser, AuthBackend, AuthenticatedUser, BearerUser, OptionalUser};
 pub use config::WebConfig;
-pub use error::ApiError;
+pub use error::{ApiError, DomainError};
 pub use extract::ScopedJson;
 pub use scope::{has_bot_access, resolve_scope, ScopeError};
 pub use settings::{get_system_setting, public_legal_urls};

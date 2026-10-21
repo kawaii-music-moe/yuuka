@@ -11,6 +11,9 @@
 //!
 //! ToDo・サブタスク・タグ・進捗・優先度・ルーチンの15ツール。
 //! 自動タグはDBトリガーで予約し、supervisorのバックグラウンドサービスが生成する。
+//!
+//! 登録・更新・進捗・完了・削除は管理画面・PWA と共通の [`TodoService`] を通す（D02 #126）。
+//! タグ編集・優先度の整理・ルーチン停止はツールにしか入口が無いため repo を直接使う。
 
 use std::sync::Arc;
 
@@ -18,11 +21,12 @@ use async_trait::async_trait;
 use serde_json::{json, Value};
 use yuuka_core::cron_util;
 use yuuka_core::tool::FunctionDeclaration;
-use yuuka_core::{DbError, Tool, ToolContext, ToolError, ToolName, ToolOutcome, UserScope};
+use yuuka_core::{Tool, ToolContext, ToolError, ToolName, ToolOutcome, UserScope};
 use yuuka_web::Db;
 
 use crate::dto::{normalize_priority, NewTodo, PriorityUpdate, Todo, TodoUpdate};
 use crate::repo::{effective_progress, TodoRepo};
+use crate::service::{ProgressUpdate, TodoService};
 
 /// このドメインが公開する Native ツール一式を作る。
 ///
@@ -197,8 +201,8 @@ fn due_label(due_date: Option<&str>) -> String {
     }
 }
 
-/// DbError をツール実行エラーへ（握り潰さず Gemini へ `{success:false}` として返る・§8.4）。
-fn exec_err(e: DbError) -> ToolError {
+/// DB・サービスの失敗をツール実行エラーへ（握り潰さず Gemini へ `{success:false}` として返る・§8.4）。
+fn exec_err(e: impl std::fmt::Display) -> ToolError {
     ToolError::Execution(e.to_string())
 }
 
@@ -253,6 +257,8 @@ impl Tool for AddTodoTool {
 
         let repeat_rule = arg_str(&args, "repeat_rule");
         let due_date = arg_str(&args, "due_date");
+        // サービスも同じ parser で検証するが、エージェントが書式を直せるよう先に案内文で返す。
+        // 初回期日の必須はツールだけの指示（管理画面は期日なしのルーチンも登録できる）。
         if let Some(rule) = &repeat_rule {
             if !cron_util::is_valid(rule) {
                 return Ok(fail_payload(
@@ -288,7 +294,7 @@ impl Tool for AddTodoTool {
             list: None,
         };
 
-        let todo = TodoRepo::new(&self.db)
+        let todo = TodoService::new(&self.db)
             .add(&scope_of(ctx), new)
             .await
             .map_err(exec_err)?;
@@ -401,7 +407,7 @@ impl Tool for CompleteTodoTool {
         let Some(id) = arg_i64(&args, "todo_id") else {
             return Ok(fail_payload("todo_id を指定してください。"));
         };
-        match TodoRepo::new(&self.db)
+        match TodoService::new(&self.db)
             .complete(&scope_of(ctx), id)
             .await
             .map_err(exec_err)?
@@ -442,7 +448,7 @@ impl Tool for DeleteTodoTool {
         let Some(id) = arg_i64(&args, "todo_id") else {
             return Ok(fail_payload("todo_id を指定してください。"));
         };
-        let deleted = TodoRepo::new(&self.db)
+        let deleted = TodoService::new(&self.db)
             .delete(&scope_of(ctx), id)
             .await
             .map_err(exec_err)?;
@@ -521,7 +527,10 @@ impl Tool for AddSubtaskTool {
             repeat_count: None,
             list: None,
         };
-        let subtask = repo.add(&scope, new).await.map_err(exec_err)?;
+        let subtask = TodoService::new(&self.db)
+            .add(&scope, new)
+            .await
+            .map_err(exec_err)?;
 
         // 親（付け替えの可能性を考慮し subtask.parent_id 基準）の兄弟サブタスク完了数を返す。
         let effective_parent = subtask.parent_id.unwrap_or(parent.id);
@@ -624,7 +633,7 @@ impl Tool for UpdateTodoTool {
             priority,
             status,
         };
-        match TodoRepo::new(&self.db)
+        match TodoService::new(&self.db)
             .update(&scope_of(ctx), todo_id, update)
             .await
             .map_err(exec_err)?
@@ -680,32 +689,24 @@ impl Tool for UpdateTaskProgressTool {
                 "todo_id と progress（0〜100の数値）を指定してください。",
             ));
         };
-        let scope = scope_of(ctx);
-        let repo = TodoRepo::new(&self.db);
-        let Some(todo) = repo.get(&scope, todo_id).await.map_err(exec_err)? else {
-            return Ok(fail_payload(format!(
-                "タスク #{todo_id} が見つかりません。"
-            )));
-        };
-        // サブタスクを持つ親は進捗が自動算出のため弾く（Node パリティ）。
-        let subtasks = repo
-            .list_subtasks_tree(&scope, todo_id)
-            .await
-            .map_err(exec_err)?;
-        if !subtasks.is_empty() {
-            let done = subtasks.iter().filter(|s| s.status == "done").count();
-            return Ok(fail_payload(format!(
-                "タスク#{}「{}」はサブタスクを {} 件持つため、進捗は『完了サブタスク数/全体』(現在 {}/{}) で自動算出されます。該当サブタスクを完了/進捗更新してください。",
-                todo_id, todo.title, subtasks.len(), done, subtasks.len(),
-            )));
-        }
         let note = arg_str(&args, "note");
-        match repo
-            .update_progress(&scope, todo_id, progress, note.clone())
+        match TodoService::new(&self.db)
+            .update_progress(&scope_of(ctx), todo_id, progress, note.clone())
             .await
             .map_err(exec_err)?
         {
-            Some(updated) => {
+            ProgressUpdate::NotFound => Ok(fail_payload(format!(
+                "タスク #{todo_id} が見つかりません。"
+            ))),
+            // サブタスクを持つ親は進捗が自動算出のため弾く（Node パリティ）。
+            ProgressUpdate::HasSubtasks { task, subtasks } => {
+                let done = subtasks.iter().filter(|s| s.status == "done").count();
+                Ok(fail_payload(format!(
+                    "タスク#{}「{}」はサブタスクを {} 件持つため、進捗は『完了サブタスク数/全体』(現在 {}/{}) で自動算出されます。該当サブタスクを完了/進捗更新してください。",
+                    todo_id, task.title, subtasks.len(), done, subtasks.len(),
+                )))
+            }
+            ProgressUpdate::Updated(updated) => {
                 let done_suffix = if updated.status == "done" {
                     "（完了にしました✅）"
                 } else {
@@ -721,9 +722,6 @@ impl Tool for UpdateTaskProgressTool {
                     json!({ "todo": updated }),
                 )))
             }
-            None => Ok(fail_payload(format!(
-                "タスク #{todo_id} の進捗更新に失敗しました。"
-            ))),
         }
     }
 }

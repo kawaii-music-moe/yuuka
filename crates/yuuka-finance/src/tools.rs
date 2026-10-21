@@ -6,10 +6,11 @@
 //! **wire 契約の非対称**: HTTP route の body は camelCase だが、**tool 引数は snake_case**
 //! （Node の Gemini 宣言と一致）。ツール名は Node system prompt が参照する **bare 名**を使う。
 //!
-//! 移植済み: addExpense（収支記録・`ExpenseRepo::add`）/ listRecentExpenses（直近一覧・`ExpenseRepo::list`）。
+//! 移植済み: addExpense（収支記録）/ listRecentExpenses（直近一覧・`ExpenseRepo::list`）。
 //! addExpense は支出のとき、Node と同じく予算消化率（`budget_usage`）と消込候補
 //! （`settlement_candidates`）も返す。
 //! 記録済みの収支の修正・削除は updateExpense / deleteExpense（Rust 版で追加・Node には無かった）。
+//! 収支の記録・修正・削除は管理画面・PWA と共通の [`FinanceService`] を通す（D02 #126）。
 
 use std::sync::Arc;
 
@@ -22,6 +23,7 @@ use yuuka_web::Db;
 
 use crate::dto::{ExpenseUpdate, NewExpense, NewPlannedPayment, PlannedPayment};
 use crate::repo::ExpenseRepo;
+use crate::service::FinanceService;
 
 /// このドメインが公開する Native ツール一式を作る。
 ///
@@ -240,8 +242,8 @@ fn is_ymd(s: &str) -> bool {
     }
 }
 
-/// DbError をツール実行エラーへ（握り潰さず Gemini へ `{success:false}` として返る・§8.4）。
-fn exec_err(e: DbError) -> ToolError {
+/// DB・サービスの失敗をツール実行エラーへ（握り潰さず Gemini へ `{success:false}` として返る・§8.4）。
+fn exec_err(e: impl std::fmt::Display) -> ToolError {
     ToolError::Execution(e.to_string())
 }
 
@@ -313,8 +315,8 @@ impl Tool for AddExpenseTool {
             r#type: arg_str(&args, "type"),
         };
 
-        let expense = ExpenseRepo::new(&self.db)
-            .add_with_source(
+        let expense = FinanceService::new(&self.db)
+            .add_transaction(
                 &scope_of(ctx),
                 new,
                 args.get("source")
@@ -484,7 +486,7 @@ impl Tool for UpdateExpenseTool {
             return Ok(fail_payload("変更する項目を1つ以上指定してください。"));
         }
 
-        let Some(expense) = ExpenseRepo::new(&self.db)
+        let Some(expense) = FinanceService::new(&self.db)
             .update(&scope_of(ctx), id, update)
             .await
             .map_err(exec_err)?
@@ -540,7 +542,11 @@ impl Tool for DeleteExpenseTool {
         let Some(expense) = repo.get(&scope, id).await.map_err(exec_err)? else {
             return Ok(fail_payload(format!("ID #{id} の記録が見つかりません。")));
         };
-        if !repo.delete(&scope, id).await.map_err(exec_err)? {
+        if !FinanceService::new(&self.db)
+            .delete(&scope, id)
+            .await
+            .map_err(exec_err)?
+        {
             return Ok(fail_payload(format!("ID #{id} の記録が見つかりません。")));
         }
         let message = format!(

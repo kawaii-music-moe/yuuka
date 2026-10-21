@@ -6,12 +6,16 @@
 //!
 //! 予定は常に Yuuka に保存し、エージェントに Google アカウントが連携されているときだけ Google にも
 //! 登録・削除する。Google 側の失敗で Yuuka 側の操作は取り消さない（結果の [`GoogleSync`] で伝える）。
+//!
+//! 必須項目（タイトル・開始日時）の検証もここで行い、[`DomainError::Invalid`] で返す（D02 #126。
+//! ToDo・家計・ノートの共通サービスと同じ形）。日時の書式の解釈（PWA の `datetime-local`、ツールの
+//! ISO 8601）は入力形式の違いなので各入口に残す。
 
 use std::sync::Arc;
 
-use yuuka_core::{DbError, UserScope};
+use yuuka_core::UserScope;
 use yuuka_google::{CalendarEventsPort, GoogleEventInput, LinkedGoogleAccount};
-use yuuka_web::Db;
+use yuuka_web::{Db, DomainError};
 
 use crate::dto::{NewSchedule, Schedule};
 use crate::repo::ScheduleRepo;
@@ -64,16 +68,23 @@ impl ScheduleService {
         Self { db, calendar }
     }
 
-    /// 予定を Yuuka に保存し、連携していれば Google にも登録する。
+    /// 予定を Yuuka に保存し、連携していれば Google にも登録する。タイトルと開始日時は必須。
     ///
     /// # Errors
-    /// Yuuka 側の保存・紐付けの DB 失敗時 [`DbError`]（Google 側の失敗は [`GoogleSync::Failed`]）。
+    /// 必須項目が空なら [`DomainError::Invalid`]、Yuuka 側の保存・紐付けの DB 失敗時
+    /// [`DomainError::Db`]（Google 側の失敗は [`GoogleSync::Failed`]）。
     pub async fn add(
         &self,
         scope: &UserScope,
         new: NewSchedule,
         opts: AddOptions,
-    ) -> Result<(Schedule, GoogleSync), DbError> {
+    ) -> Result<(Schedule, GoogleSync), DomainError> {
+        if new.title.trim().is_empty() {
+            return Err(DomainError::Invalid("title is required".to_owned()));
+        }
+        if new.start_at.trim().is_empty() {
+            return Err(DomainError::Invalid("startAt is required".to_owned()));
+        }
         let repo = ScheduleRepo::new(&self.db);
         let schedule = repo.add(scope, new).await?;
         if opts.local_only {
@@ -112,8 +123,12 @@ impl ScheduleService {
     /// スコープ内に該当が無ければ `None`。
     ///
     /// # Errors
-    /// DB 失敗時 [`DbError`]。
-    pub async fn delete(&self, scope: &UserScope, id: i64) -> Result<Option<GoogleSync>, DbError> {
+    /// DB 失敗時 [`DomainError::Db`]。
+    pub async fn delete(
+        &self,
+        scope: &UserScope,
+        id: i64,
+    ) -> Result<Option<GoogleSync>, DomainError> {
         let repo = ScheduleRepo::new(&self.db);
         // 先に取得して所有（スコープ）を確認する。他人の予定の Google イベントには触れない。
         if repo.get(scope, id).await?.is_none() {
