@@ -76,11 +76,17 @@ struct FakeBackend {
 impl GenerateBackend for FakeBackend {
     async fn generate(
         &self,
-        _system_instruction: Option<&str>,
+        system_instruction: Option<&str>,
         _declarations: &[FunctionDeclaration],
         _contents: &[Content],
         _tool_config: Option<ToolConfig>,
     ) -> Result<GenerateContentResponse, GeminiError> {
+        // 事前計画（R06）はツールがあるターンだけ走る。計画なし（`{}`）で返し、台本の応答を消費しない。
+        if system_instruction
+            .is_some_and(|s| s.starts_with(yuuka_orchestrator::turn_plan::PLANNER_INSTRUCTION))
+        {
+            return Ok(text_response("{}"));
+        }
         Ok(self
             .responses
             .lock()

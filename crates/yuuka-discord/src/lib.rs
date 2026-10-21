@@ -48,6 +48,6 @@ pub use ports::{
     rate_limit_message, ActionRow, BotDirectory, BotRecord, BotStatus, Button, ButtonStyle,
     DecisionOutcome, DeliverTarget, EmbedField, FileAttachment, IncomingChat, InlineMedia,
     MemberDecision, MemberDmSender, MembershipService, Notifier, PersonaRecord, RateDecision,
-    RateExceeded, RateLimiter, RichEmbed, ShareInviteDm, ShareRecord, Speaker, StatusSink,
-    SubmitOutcome, TurnDelivery, TurnError, TurnProcessor, TurnReply,
+    RateExceeded, RateLimiter, ReplyAncestor, RichEmbed, ShareInviteDm, ShareRecord, Speaker,
+    StatusSink, SubmitOutcome, TurnDelivery, TurnError, TurnProcessor, TurnReply,
 };

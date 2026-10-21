@@ -24,8 +24,8 @@ use yuuka_core::{BotId, DiscordError, GuildId, UserId};
 use crate::idempotent::MessageDedup;
 use crate::ports::{
     rate_limit_message, BotDirectory, BotRecord, BotStatus, DeliverTarget, IncomingChat,
-    InlineMedia, Notifier, RateLimiter, Speaker, StatusSink, TurnDelivery, TurnError,
-    TurnProcessor, TurnReply,
+    InlineMedia, Notifier, RateLimiter, ReplyAncestor, Speaker, StatusSink, TurnDelivery,
+    TurnError, TurnProcessor, TurnReply,
 };
 use crate::presence::build_presence;
 use crate::reply::{send_channel_reply, send_channel_text};
@@ -365,6 +365,13 @@ async fn assistant_flow(deps: &FlowDeps, rt: &RuntimeBot, bot: &BotRecord, messa
                     audio: Some(media),
                     discord_msg_id,
                     reply_to_msg_id,
+                    reply_chain: resolve_reply_chain(
+                        deps,
+                        &message,
+                        reference.as_ref(),
+                        rt.bot_user_id,
+                    )
+                    .await,
                     channel_id,
                     ..IncomingChat::default()
                 };
@@ -381,6 +388,13 @@ async fn assistant_flow(deps: &FlowDeps, rt: &RuntimeBot, bot: &BotRecord, messa
                     image: Some(media),
                     discord_msg_id,
                     reply_to_msg_id,
+                    reply_chain: resolve_reply_chain(
+                        deps,
+                        &message,
+                        reference.as_ref(),
+                        rt.bot_user_id,
+                    )
+                    .await,
                     channel_id,
                     ..IncomingChat::default()
                 };
@@ -394,6 +408,8 @@ async fn assistant_flow(deps: &FlowDeps, rt: &RuntimeBot, bot: &BotRecord, messa
             text: full_text.clone(),
             discord_msg_id,
             reply_to_msg_id,
+            reply_chain: resolve_reply_chain(deps, &message, reference.as_ref(), rt.bot_user_id)
+                .await,
             channel_id,
             ..IncomingChat::default()
         };
@@ -538,6 +554,13 @@ async fn secretary_flow(deps: &FlowDeps, rt: &RuntimeBot, bot: &BotRecord, messa
                     timeline_attachments,
                     discord_msg_id,
                     reply_to_msg_id,
+                    reply_chain: resolve_reply_chain(
+                        deps,
+                        &message,
+                        reference.as_ref(),
+                        rt.bot_user_id,
+                    )
+                    .await,
                     channel_id,
                     ..IncomingChat::default()
                 };
@@ -562,19 +585,29 @@ async fn secretary_flow(deps: &FlowDeps, rt: &RuntimeBot, bot: &BotRecord, messa
         };
         match media {
             Ok(media) => {
-                // レシート OCR は秘書専用。caption は現メッセージ本文（空なら None）。
-                let caption = if text.is_empty() {
-                    None
-                } else {
-                    Some(text.clone())
+                // レシート OCR は秘書専用。キャプションは現メッセージ本文（空なら指示なし）。会話ログの
+                // 紐づけ（R08）のため、メッセージ ID・返信先・チャンネル・返信元チェーンも渡す。
+                let chat = IncomingChat {
+                    text: text.clone(),
+                    timeline_attachments,
+                    discord_msg_id,
+                    reply_to_msg_id,
+                    reply_chain: resolve_reply_chain(
+                        deps,
+                        &message,
+                        reference.as_ref(),
+                        rt.bot_user_id,
+                    )
+                    .await,
+                    channel_id,
+                    ..IncomingChat::default()
                 };
                 deps.processor
                     .parse_receipt(
                         &rt.bot_id,
                         &author,
                         media,
-                        caption,
-                        timeline_attachments,
+                        chat,
                         status.clone(),
                         delivery.clone(),
                     )
@@ -589,6 +622,8 @@ async fn secretary_flow(deps: &FlowDeps, rt: &RuntimeBot, bot: &BotRecord, messa
             timeline_attachments,
             discord_msg_id,
             reply_to_msg_id,
+            reply_chain: resolve_reply_chain(deps, &message, reference.as_ref(), rt.bot_user_id)
+                .await,
             channel_id,
             ..IncomingChat::default()
         };
@@ -617,7 +652,8 @@ async fn finish_reply(
 ) {
     match result {
         Ok(reply) => {
-            if skip_silent && reply.is_silent() {
+            // 後続配信へ回したターン（R07）は途中応答を送信済みで、最終結果は配信ハンドルが送る。
+            if reply.deferred || (skip_silent && reply.is_silent()) {
                 return;
             }
             send_channel_reply(&deps.http, message.channel_id, Some(message.id), &reply).await;
@@ -771,6 +807,9 @@ impl Drop for TypingGuard {
 
 /// 返信先メッセージの必要情報（純データ）。
 struct RefInfo {
+    id: Id<MessageMarker>,
+    /// この返信先がさらに返信していた先（同じチャンネルのときだけ・返信元チェーン用）。
+    parent: Option<Id<MessageMarker>>,
     author_id: Id<UserMarker>,
     author_name: String,
     content: String,
@@ -787,7 +826,14 @@ impl RefInfo {
             .as_ref()
             .and_then(|pm| pm.nick.clone())
             .unwrap_or_else(|| m.author.name.clone());
+        let parent = m
+            .reference
+            .as_ref()
+            .filter(|r| r.channel_id.is_none_or(|c| c == m.channel_id))
+            .and_then(|r| r.message_id);
         Self {
+            id: m.id,
+            parent,
             author_id: m.author.id,
             author_name,
             content: m.content.clone(),
@@ -815,6 +861,91 @@ async fn resolve_reference(deps: &FlowDeps, message: &Message) -> Option<RefInfo
             None
         }
     }
+}
+
+/// 返信元チェーンの上限件数と 1 件の最大文字数（orchestrator `message_log` の
+/// `REPLY_CHAIN_MAX`/`REPLY_CHAIN_ITEM_CHARS` と同じ値。engine 側でも同じ上限で揃える）。
+const REPLY_CHAIN_MAX: usize = 8;
+const REPLY_CHAIN_ITEM_CHARS: usize = 1200;
+/// 返信元チェーンの取得にかける時間の上限（超えたら取得済みの分だけ使う）。
+const REPLY_CHAIN_FETCH_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// 返信元チェーン（R08）を Discord から取得する。古い順・各件 `[発言者] 本文`（自 Bot は「あなた」）。
+///
+/// 返信先（[`resolve_reference`] で解決済み）から、さらにその返信先を受信チャンネル内だけで REST 取得して
+/// 遡る（Discord は返信先を 1 段しか埋め込まないため）。返信のたびに REST を叩かないよう、応答すると
+/// 決めた後のターン組み立てでだけ呼ぶ。循環・取得失敗・[`REPLY_CHAIN_FETCH_TIMEOUT`] 超過で打ち切り、
+/// 本文のない発言（添付のみ等）は飛ばす。各件は Discord のメッセージ ID を持ち、engine が会話ログから
+/// 復元した分（取得が途中で切れたときの補完）と ID で重複を除いて合わせる。
+async fn resolve_reply_chain(
+    deps: &FlowDeps,
+    message: &Message,
+    reference: Option<&RefInfo>,
+    bot_user_id: Id<UserMarker>,
+) -> Vec<ReplyAncestor> {
+    let Some(reference) = reference else {
+        return Vec::new();
+    };
+    let mut chain: Vec<ReplyAncestor> = reply_chain_entry(reference, bot_user_id)
+        .into_iter()
+        .collect();
+    let mut seen = std::collections::HashSet::from([reference.id]);
+    let mut next = reference.parent;
+    let fetch = async {
+        while chain.len() < REPLY_CHAIN_MAX {
+            let Some(mid) = next.take() else {
+                break;
+            };
+            if !seen.insert(mid) {
+                break;
+            }
+            let ancestor = match deps.http.message(message.channel_id, mid).await {
+                Ok(resp) => match resp.model().await {
+                    Ok(m) => m,
+                    Err(e) => {
+                        tracing::warn!(error = %e, "返信元チェーンの取得に失敗しました");
+                        break;
+                    }
+                },
+                Err(e) => {
+                    tracing::warn!(error = %e, "返信元チェーンの取得に失敗しました");
+                    break;
+                }
+            };
+            if ancestor.channel_id != message.channel_id {
+                break;
+            }
+            let info = RefInfo::from_message(&ancestor);
+            chain.extend(reply_chain_entry(&info, bot_user_id));
+            next = info.parent;
+        }
+    };
+    if tokio::time::timeout(REPLY_CHAIN_FETCH_TIMEOUT, fetch)
+        .await
+        .is_err()
+    {
+        tracing::debug!("返信元チェーンの取得が時間切れ: 取得済みの分だけ使います");
+    }
+    chain.reverse();
+    chain
+}
+
+/// 返信元チェーンの 1 件（本文が空なら `None`）。
+fn reply_chain_entry(info: &RefInfo, bot_user_id: Id<UserMarker>) -> Option<ReplyAncestor> {
+    let content = info.content.trim();
+    if content.is_empty() {
+        return None;
+    }
+    let name = if info.author_id == bot_user_id {
+        "あなた"
+    } else {
+        info.author_name.as_str()
+    };
+    let content: String = content.chars().take(REPLY_CHAIN_ITEM_CHARS).collect();
+    Some(ReplyAncestor {
+        message_id: info.id.get().to_string(),
+        text: format!("[{name}] {content}"),
+    })
 }
 
 /// 返信先コンテキストプレフィックスを組み立てる（現行 contextPrefix）。`strip_self` は自 Bot

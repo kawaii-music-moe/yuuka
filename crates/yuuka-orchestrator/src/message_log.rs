@@ -7,6 +7,7 @@
 use rusqlite::{params, OptionalExtension};
 use yuuka_core::DbError;
 use yuuka_db::map_sqlite;
+use yuuka_discord::ReplyAncestor;
 use yuuka_web::Db;
 
 /// 直近コンテキストの既定件数（Node `CONTEXT_LIMIT = 15`）。
@@ -14,6 +15,12 @@ pub const CONTEXT_LIMIT: i64 = 15;
 
 /// 汎用モード・ギルドコンテキストの既定件数（Node `GUILD_CONTEXT_LIMIT = 30`）。
 pub const GUILD_CONTEXT_LIMIT: i64 = 30;
+
+/// 返信元チェーンの上限件数（Node `REPLY_CHAIN_MAX_DEPTH` の既定 10 より絞る）。
+pub const REPLY_CHAIN_MAX: usize = 8;
+
+/// 返信元チェーン 1 件の最大文字数（systemInstruction の肥大を防ぐ）。
+pub const REPLY_CHAIN_ITEM_CHARS: usize = 1200;
 
 /// 会話 1 発言（LLM へ渡す履歴要素・Node `ContextEntry`）。`role` は `"user"`/`"assistant"`。
 #[derive(Debug, Clone)]
@@ -955,6 +962,144 @@ pub async fn count_bot_daily_usage(
         .await
 }
 
+/// アシスタント応答を入力メッセージへ紐づけて保存し、挿入した行 ID を返す（`source='discord'`）。
+///
+/// `reply_to` は応答した入力の Discord メッセージ ID（返信元チェーンで応答から入力へ遡るため）。
+/// 戻り値は `log:<id>` 形式で後の返信先に使える（WS など Discord のメッセージ ID を持たない経路用）。
+/// 秘書・owner DM は `guild_id = None`、ギルドは `guild_id`/`channel_id` 付きで保存する。
+///
+/// # Errors
+/// 書き込み失敗時 [`DbError`]。
+pub async fn add_linked_assistant_reply(
+    db: &Db,
+    user_id: &str,
+    bot_id: &str,
+    content: &str,
+    reply_to: Option<&str>,
+    guild_id: Option<&str>,
+    channel_id: Option<&str>,
+) -> Result<i64, DbError> {
+    let (user_id, bot_id, content) = (user_id.to_owned(), bot_id.to_owned(), content.to_owned());
+    let (reply_to, guild_id, channel_id) = (
+        reply_to.map(str::to_owned),
+        guild_id.map(str::to_owned),
+        channel_id.map(str::to_owned),
+    );
+    db.writer
+        .transaction(move |tx| {
+            tx.execute(
+                "INSERT INTO message_logs \
+                   (user_id, bot_id, role, content, reply_to_msg_id, guild_id, channel_id, source) \
+                 VALUES (?1, ?2, 'assistant', ?3, ?4, ?5, ?6, 'discord')",
+                params![user_id, bot_id, content, reply_to, guild_id, channel_id],
+            )
+            .map_err(map_sqlite)?;
+            Ok(tx.last_insert_rowid())
+        })
+        .await
+}
+
+/// 返信元チェーンを会話ログから復元する（Node `resolveReplyChain`/`resolveGuildReplyChain`）。
+///
+/// `reply_to` から `reply_to_msg_id` を辿り、最大 [`REPLY_CHAIN_MAX`] 件を古い順で返す（直近履歴に
+/// 入らない古い発言も対象）。各段で同じ Bot・`source='discord'`・通知行以外・同じスコープに限る:
+/// 秘書/owner DM（`guild_id = None`）は同じ利用者の `guild_id IS NULL` 行でリセット境界（floor）より後、
+/// ギルドは同じギルド（`channel_id` があれば同じチャンネル）の行。`bot_dm` は owner DM の floor を使う。
+/// 見つからない ID・循環で打ち切る。`log:<id>` は会話ログの行 ID、それ以外は Discord のメッセージ ID
+/// として引く。各件は `[role] 本文` を [`REPLY_CHAIN_ITEM_CHARS`] 文字までに切り、行の Discord メッセージ ID
+/// （無ければ `log:<id>`）を付ける（Discord から取得したチェーンとの重複除去・並べ替え用）。
+///
+/// # Errors
+/// 読み取り失敗時 [`DbError`]。
+pub async fn reply_chain(
+    db: &Db,
+    user_id: &str,
+    bot_id: &str,
+    guild_id: Option<&str>,
+    channel_id: Option<&str>,
+    bot_dm: bool,
+    reply_to: Option<&str>,
+) -> Result<Vec<ReplyAncestor>, DbError> {
+    let Some(reply_to) = reply_to else {
+        return Ok(Vec::new());
+    };
+    let floor_key = if bot_dm {
+        bot_dm_context_floor_key(user_id, bot_id)
+    } else {
+        context_floor_key(user_id, bot_id)
+    };
+    let (user_id, bot_id) = (user_id.to_owned(), bot_id.to_owned());
+    let (guild_id, channel_id) = (guild_id.map(str::to_owned), channel_id.map(str::to_owned));
+    let mut next = Some(reply_to.to_owned());
+    db.read
+        .read(move |conn| {
+            // ギルドはリセット境界を持たない（[`recent_guild_context`] と同じ）。
+            let floor: i64 = if guild_id.is_some() {
+                0
+            } else {
+                conn.query_row(
+                    "SELECT value FROM system_settings WHERE key = ?1",
+                    params![floor_key],
+                    |r| r.get::<_, String>(0),
+                )
+                .optional()
+                .map_err(map_sqlite)?
+                .and_then(|v| v.parse::<i64>().ok())
+                .unwrap_or(0)
+            };
+            let mut stmt = conn
+                .prepare(
+                    "SELECT id, discord_msg_id, role, content, reply_to_msg_id FROM message_logs \
+                     WHERE bot_id = ?1 AND source = 'discord' AND is_notice = 0 AND id > ?2 \
+                       AND ((?3 IS NULL AND guild_id IS NULL AND user_id = ?4) \
+                         OR (guild_id = ?3 AND (?5 IS NULL OR channel_id = ?5))) \
+                       AND (discord_msg_id = ?6 OR id = ?7) \
+                     ORDER BY id DESC LIMIT 1",
+                )
+                .map_err(map_sqlite)?;
+            let mut chain = Vec::new();
+            let mut seen = std::collections::HashSet::new();
+            while chain.len() < REPLY_CHAIN_MAX {
+                let Some(target) = next.take() else {
+                    break;
+                };
+                if !seen.insert(target.clone()) {
+                    break;
+                }
+                let row_id = target
+                    .strip_prefix("log:")
+                    .and_then(|s| s.parse::<i64>().ok());
+                let row = stmt
+                    .query_row(
+                        params![bot_id, floor, guild_id, user_id, channel_id, target, row_id],
+                        |r| {
+                            Ok((
+                                r.get::<_, i64>(0)?,
+                                r.get::<_, Option<String>>(1)?,
+                                r.get::<_, String>(2)?,
+                                r.get::<_, String>(3)?,
+                                r.get::<_, Option<String>>(4)?,
+                            ))
+                        },
+                    )
+                    .optional()
+                    .map_err(map_sqlite)?;
+                let Some((id, discord_msg_id, role, content, parent)) = row else {
+                    break;
+                };
+                let content: String = content.chars().take(REPLY_CHAIN_ITEM_CHARS).collect();
+                chain.push(ReplyAncestor {
+                    message_id: discord_msg_id.unwrap_or_else(|| format!("log:{id}")),
+                    text: format!("[{role}] {content}"),
+                });
+                next = parent;
+            }
+            chain.reverse();
+            Ok(chain)
+        })
+        .await
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -1556,5 +1701,147 @@ mod tests {
             .unwrap();
         assert_eq!(notices, i64::try_from(total).unwrap());
         assert_eq!(fail_orphaned_pwa_turns(&db, SWEEP_NOTICE).await.unwrap(), 0);
+    }
+
+    // ─── R08: 返信元チェーン ───
+
+    use super::{
+        add_guild_message_log, add_linked_assistant_reply, reply_chain, REPLY_CHAIN_ITEM_CHARS,
+        REPLY_CHAIN_MAX,
+    };
+
+    fn texts(chain: &[yuuka_discord::ReplyAncestor]) -> Vec<&str> {
+        chain.iter().map(|e| e.text.as_str()).collect()
+    }
+
+    /// 応答から入力へ、入力から `log:<id>` の応答へと遡り、古い順で返す。別の利用者・循環は辿らない。
+    #[tokio::test]
+    async fn reply_chain_follows_linked_replies_oldest_first_within_the_user_scope() {
+        let (db, path) = seed_db();
+        seed_user(&path, "u");
+        seed_user(&path, "other");
+        add_message_log(&db, "u", "b1", "user", "質問1", Some("d1"), None)
+            .await
+            .unwrap();
+        let answer = add_linked_assistant_reply(&db, "u", "b1", "回答1", Some("d1"), None, None)
+            .await
+            .unwrap();
+        let log_ref = format!("log:{answer}");
+        add_message_log(&db, "u", "b1", "user", "質問2", Some("d2"), Some(&log_ref))
+            .await
+            .unwrap();
+        // 同じ Discord ID でも別の利用者の行は辿らない。
+        add_message_log(&db, "other", "b1", "user", "他人", Some("d9"), None)
+            .await
+            .unwrap();
+
+        let chain = reply_chain(&db, "u", "b1", None, None, false, Some("d2"))
+            .await
+            .unwrap();
+        assert_eq!(
+            texts(&chain),
+            ["[user] 質問1", "[assistant] 回答1", "[user] 質問2"]
+        );
+        let ids: Vec<&str> = chain.iter().map(|e| e.message_id.as_str()).collect();
+        assert_eq!(
+            ids,
+            ["d1", log_ref.as_str(), "d2"],
+            "Discord の ID が無い行は log:<id>"
+        );
+        let none = reply_chain(&db, "u", "b1", None, None, false, Some("d9"))
+            .await
+            .unwrap();
+        assert!(none.is_empty(), "別の利用者の発言は返信元にしない");
+
+        // 循環は 1 周で打ち切る。
+        add_message_log(&db, "u", "b1", "user", "A", Some("c1"), Some("c2"))
+            .await
+            .unwrap();
+        add_message_log(&db, "u", "b1", "user", "B", Some("c2"), Some("c1"))
+            .await
+            .unwrap();
+        let cyclic = reply_chain(&db, "u", "b1", None, None, false, Some("c1"))
+            .await
+            .unwrap();
+        assert_eq!(texts(&cyclic), ["[user] B", "[user] A"]);
+
+        // リセット境界より前の発言は復元しない（直近コンテキストと同じ floor）。
+        clear_context(&db, "u", "b1").await.unwrap();
+        let after_reset = reply_chain(&db, "u", "b1", None, None, false, Some("d2"))
+            .await
+            .unwrap();
+        assert!(after_reset.is_empty());
+    }
+
+    /// ギルドは同じチャンネルの行だけを辿り、件数と 1 件の文字数に上限がある。
+    #[tokio::test]
+    async fn reply_chain_stays_in_the_guild_channel_and_is_bounded() {
+        let (db, path) = seed_db();
+        seed_user(&path, "u");
+        add_guild_message_log(
+            &db,
+            "b1",
+            "g1",
+            "u",
+            "user",
+            "別チャンネル",
+            Some("x1"),
+            None,
+            Some("c2"),
+        )
+        .await
+        .unwrap();
+        add_guild_message_log(
+            &db,
+            "b1",
+            "g1",
+            "u",
+            "user",
+            "同じチャンネル",
+            Some("x2"),
+            Some("x1"),
+            Some("c1"),
+        )
+        .await
+        .unwrap();
+        let chain = reply_chain(&db, "u", "b1", Some("g1"), Some("c1"), false, Some("x2"))
+            .await
+            .unwrap();
+        assert_eq!(texts(&chain), ["[user] 同じチャンネル"]);
+
+        let long = "あ".repeat(REPLY_CHAIN_ITEM_CHARS + 10);
+        let mut parent: Option<String> = None;
+        for i in 0..REPLY_CHAIN_MAX + 3 {
+            let id = format!("m{i}");
+            add_guild_message_log(
+                &db,
+                "b1",
+                "g1",
+                "u",
+                "user",
+                &long,
+                Some(&id),
+                parent.as_deref(),
+                Some("c1"),
+            )
+            .await
+            .unwrap();
+            parent = Some(id);
+        }
+        let chain = reply_chain(
+            &db,
+            "u",
+            "b1",
+            Some("g1"),
+            Some("c1"),
+            false,
+            parent.as_deref(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(chain.len(), REPLY_CHAIN_MAX, "新しい側から上限件数まで");
+        assert!(chain
+            .iter()
+            .all(|t| t.text.chars().count() == "[user] ".chars().count() + REPLY_CHAIN_ITEM_CHARS));
     }
 }

@@ -70,8 +70,7 @@ const RECALL_QUERY_MAX_LEN: usize = 500;
 /// L2 想起のクエリを組み立てる（Node `buildRecallQuery`）。
 ///
 /// 返信時（`reply_chain` 非空）は直近 2 件の返信元文脈を現発話へ前置して「数個前をさかのぼる」想起を
-/// 効かせ、上限でキャップする。返信でない場合は現発話そのまま。現状 Rust の秘書経路は返信チェーンを
-/// 縮退シームとして持たない（空を渡す）ため、実質は現発話がそのままクエリになる。
+/// 効かせ、上限でキャップする。返信でない場合は現発話そのまま。
 #[must_use]
 pub fn build_recall_query(message_text: &str, reply_chain: &[String]) -> String {
     let text = message_text.trim();

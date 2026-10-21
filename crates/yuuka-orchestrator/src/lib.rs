@@ -31,6 +31,7 @@ pub mod synapse_repo;
 pub mod system_prompt;
 pub mod tool_outcome;
 pub mod tool_outcome_repo;
+pub mod turn_plan;
 pub mod user;
 
 pub use bot_attr_routes::{
