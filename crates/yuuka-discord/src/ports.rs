@@ -50,6 +50,9 @@ pub struct IncomingChat {
     pub discord_msg_id: Option<String>,
     /// 返信元 Discord メッセージ ID（返信チェーン解決用）。
     pub reply_to_msg_id: Option<String>,
+    /// Discord から取得した返信元チェーン（R08・古い順・各件 `[発言者] 本文`・受信チャンネル内・上限 8 件）。
+    /// engine は会話ログから復元したチェーンと合わせて systemInstruction と想起クエリへ使う。
+    pub reply_chain: Vec<String>,
     /// 受信チャンネル ID（ギルドコンテキストのチャンネル分離用・V19）。
     pub channel_id: Option<String>,
 }
@@ -78,6 +81,8 @@ pub type StatusSink = Arc<dyn Fn(BotStatus) + Send + Sync>;
 /// ターン処理の結果（現行 `ProcessResult`）。provider 中立。
 #[derive(Debug, Clone, Default)]
 pub struct TurnReply {
+    /// Persisted reply ID, usable as a later reply target (e.g. `log:123`).
+    pub message_id: Option<String>,
     /// 最終テキスト（空かつ embeds/files 無しなら「応答なし＝黙殺」）。
     pub text: String,
     /// リッチ埋め込み（現行 `embeds`）。

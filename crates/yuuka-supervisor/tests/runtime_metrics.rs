@@ -2,7 +2,7 @@
 //!
 //! 本番と同じく 1 つの [`MetricsRegistry`] を [`ChatEngine::with_metrics`] へ注入し、秘書ターンを実経路
 //! （想起 → FC ループのツール往復 → 応答）で 1 回通すと、定期ログ（`MetricsLogService`）が出す
-//! snapshot に会話数・ツール数・想起ヒット・応答時間/想起レイテンシが現れることを確かめる。
+//! snapshot に会話数・計画数・ツール数・想起ヒット・応答時間/想起レイテンシが現れることを確かめる。
 //! Gemini は scripted fake backend（ネットワーク不要）、DB は実 SQLite、シナプスは実エンジン。
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
@@ -29,7 +29,8 @@ use yuuka_web::Db;
 /// 想起させる記憶（クエリと同文にして確実に 1st Hop へ載せる）。
 const MEMORY: &str = "好きな食べ物はカレーです";
 
-/// 1 回目はツール呼び出し、2 回目は最終テキストを返す scripted backend。
+/// 事前計画（R06）には軽い計画を返し、本編は 1 回目にツール呼び出し、2 回目に最終テキストを返す
+/// scripted backend。
 struct ScriptedBackend {
     responses: Mutex<VecDeque<GenerateContentResponse>>,
 }
@@ -38,11 +39,19 @@ struct ScriptedBackend {
 impl GenerateBackend for ScriptedBackend {
     async fn generate(
         &self,
-        _system_instruction: Option<&str>,
+        system_instruction: Option<&str>,
         _declarations: &[FunctionDeclaration],
         _contents: &[Content],
         _tool_config: Option<ToolConfig>,
     ) -> Result<GenerateContentResponse, GeminiError> {
+        if system_instruction
+            .is_some_and(|s| s.starts_with(yuuka_orchestrator::turn_plan::PLANNER_INSTRUCTION))
+        {
+            return Ok(serde_json::from_value(json!({"candidates":[{"content":{"role":"model","parts":[
+                {"text":"{\"steps\":[\"ToDo に追加する\"],\"tools\":[\"addTodo\"],\"weightMs\":500}"}
+            ]}}]}))
+            .expect("valid plan response"));
+        }
         Ok(self
             .responses
             .lock()
@@ -182,6 +191,7 @@ async fn secretary_turn_feeds_the_shared_metrics_registry() {
     let line = metrics.snapshot_line();
     for expected in [
         "messages=1",
+        "plan_attempts=1",
         "tool_calls=1",
         "recall_hit=1",
         "assemble(count=1,",
@@ -192,5 +202,9 @@ async fn secretary_turn_feeds_the_shared_metrics_registry() {
     assert!(
         !line.contains("recall_empty"),
         "ヒット時は空振りを数えない: {line}"
+    );
+    assert!(
+        !line.contains("async_predicted"),
+        "軽い計画・配信経路なしのターンは途中応答へ回さない: {line}"
     );
 }

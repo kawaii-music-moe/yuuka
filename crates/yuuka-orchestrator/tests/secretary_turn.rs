@@ -23,6 +23,20 @@ use yuuka_web::Db;
 
 static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
+/// 事前計画（R06）の呼び出しか。計画は本編の応答・記録の対象にしない。
+fn is_planner_call(system_instruction: Option<&str>) -> bool {
+    system_instruction
+        .is_some_and(|s| s.starts_with(yuuka_orchestrator::turn_plan::PLANNER_INSTRUCTION))
+}
+
+/// 計画に失敗した応答（計画なし＝能力で絞ったツールのまま本編を進める）。
+fn no_plan() -> GenerateContentResponse {
+    serde_json::from_value(json!({
+        "candidates": [ { "content": { "role": "model", "parts": [ { "text": "{}" } ] } } ]
+    }))
+    .unwrap()
+}
+
 /// migrations 適用済みの一時 DB（本番 open は CREATE しないので先にファイルを作る）。
 fn fresh_db() -> (Db, std::path::PathBuf) {
     let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -44,11 +58,14 @@ struct FakeBackend {
 impl GenerateBackend for FakeBackend {
     async fn generate(
         &self,
-        _system_instruction: Option<&str>,
+        system_instruction: Option<&str>,
         _declarations: &[FunctionDeclaration],
         _contents: &[Content],
         _tool_config: Option<ToolConfig>,
     ) -> Result<GenerateContentResponse, GeminiError> {
+        if is_planner_call(system_instruction) {
+            return Ok(no_plan());
+        }
         Ok(self
             .responses
             .lock()
@@ -663,11 +680,14 @@ struct RecordingBackend {
 impl GenerateBackend for RecordingBackend {
     async fn generate(
         &self,
-        _system_instruction: Option<&str>,
+        system_instruction: Option<&str>,
         _declarations: &[FunctionDeclaration],
         contents: &[Content],
         _tool_config: Option<ToolConfig>,
     ) -> Result<GenerateContentResponse, GeminiError> {
+        if is_planner_call(system_instruction) {
+            return Ok(no_plan());
+        }
         let rendered = contents
             .iter()
             .map(|c| {
@@ -851,6 +871,9 @@ impl GenerateBackend for CapturingBackend {
         _contents: &[Content],
         _tool_config: Option<ToolConfig>,
     ) -> Result<GenerateContentResponse, GeminiError> {
+        if is_planner_call(system_instruction) {
+            return Ok(no_plan());
+        }
         *self.seen.lock().unwrap() = Some((
             system_instruction.unwrap_or_default().to_owned(),
             declarations.iter().map(|d| d.name.clone()).collect(),
@@ -1087,11 +1110,14 @@ struct ReceiptAttachmentBackend {
 impl GenerateBackend for ReceiptAttachmentBackend {
     async fn generate(
         &self,
-        _system_instruction: Option<&str>,
+        system_instruction: Option<&str>,
         declarations: &[FunctionDeclaration],
         contents: &[Content],
         _tool_config: Option<ToolConfig>,
     ) -> Result<GenerateContentResponse, GeminiError> {
+        if is_planner_call(system_instruction) {
+            return Ok(no_plan());
+        }
         let names = declarations
             .iter()
             .map(|d| d.name.clone())
