@@ -36,6 +36,40 @@ pub fn assert_safe_outbound_url_without_dns(raw: &str) -> Result<(), String> {
     check_without_dns(raw).map(|_| ())
 }
 
+/// ホスト名（または IP リテラル）を解決し、全アドレスが公開レンジのときだけ返す。
+///
+/// 接続側がここで返したアドレスへ直接つなぐ（再解決しない）ことで、検査と接続の間の
+/// DNS rebinding を防ぐ。`reqwest` の DNS リゾルバや Chromium 用フィルタプロキシが使う。
+///
+/// # Errors
+/// localhost・内部/予約レンジ・解決不能時に日本語文言を返す。
+pub async fn resolve_public_addrs(host: &str, port: u16) -> Result<Vec<SocketAddr>, String> {
+    let host = host.trim_matches(['[', ']']).to_ascii_lowercase();
+    if host.is_empty() || host == "localhost" || host.ends_with(".localhost") {
+        return Err("ローカルホストへの接続は許可されていません。".to_owned());
+    }
+    let addrs: Vec<SocketAddr> = if let Ok(ip) = host.parse::<IpAddr>() {
+        vec![SocketAddr::new(ip, port)]
+    } else {
+        tokio::net::lookup_host((host.as_str(), port))
+            .await
+            .map_err(|_| format!("ホスト名を解決できませんでした: {host}"))?
+            .collect()
+    };
+    if addrs.is_empty() {
+        return Err(format!("ホスト名を解決できませんでした: {host}"));
+    }
+    for addr in &addrs {
+        if is_blocked_ip(addr.ip()) {
+            return Err(format!(
+                "内部/予約済みアドレスへの接続は許可されていません: {host} -> {}",
+                addr.ip()
+            ));
+        }
+    }
+    Ok(addrs)
+}
+
 async fn assert_safe_outbound_url_with_lookup<F, Fut>(raw: &str, lookup: F) -> Result<(), String>
 where
     F: FnOnce(String, u16) -> Fut,
@@ -473,5 +507,30 @@ mod tests {
         ] {
             assert!(is_likely_public_http_url(raw, policy), "{raw}");
         }
+    }
+}
+
+#[cfg(test)]
+mod resolve_tests {
+    use super::resolve_public_addrs;
+
+    #[tokio::test]
+    async fn rejects_internal_literals_and_localhost() {
+        for host in [
+            "127.0.0.1",
+            "10.0.0.5",
+            "169.254.169.254",
+            "[::1]",
+            "localhost",
+            "foo.localhost",
+        ] {
+            assert!(resolve_public_addrs(host, 80).await.is_err(), "{host}");
+        }
+    }
+
+    #[tokio::test]
+    async fn accepts_public_literal() {
+        let addrs = resolve_public_addrs("93.184.216.34", 443).await.unwrap();
+        assert_eq!(addrs.len(), 1);
     }
 }

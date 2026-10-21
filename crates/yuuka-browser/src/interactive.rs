@@ -349,14 +349,17 @@ async fn launch_session(user: &str) -> Result<Session, String> {
     let profile = std::path::Path::new("data")
         .join("browser_profiles")
         .join(user);
-    let config = BrowserConfig::builder()
+    let proxy_args = crate::proxy::chromium_proxy_args().await?;
+    let mut builder = BrowserConfig::builder()
         .chrome_executable(chrome)
-        .arg("--no-sandbox")
-        .arg("--disable-setuid-sandbox")
         .arg("--disable-dev-shm-usage")
+        .args(proxy_args)
         .arg(format!("--window-size={VIEWPORT_W},{VIEWPORT_H}"))
-        .user_data_dir(profile)
-        .build()?;
+        .user_data_dir(profile);
+    if crate::proxy::no_sandbox_required() {
+        builder = builder.no_sandbox();
+    }
+    let config = builder.build()?;
 
     let (browser, mut handler) = Browser::launch(config)
         .await
