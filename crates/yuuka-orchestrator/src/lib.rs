@@ -44,7 +44,7 @@ pub use bot_routes::{
 };
 pub use discord_live::{DiscordBotUser, DiscordLive, GuildEntry, GuildOptions, NullDiscordLive};
 pub use discord_ports::{DbBotDirectory, DbMembership, InMemoryRateLimiter};
-pub use engine::{ChatEngine, GeminiFactory, RealGeminiFactory};
+pub use engine::{Channel, ChatEngine, GeminiFactory, RealGeminiFactory, TurnPermit};
 pub use member_routes::{
     routes as member_request_routes, routes_with as member_request_routes_with, NullMemberDmSender,
 };

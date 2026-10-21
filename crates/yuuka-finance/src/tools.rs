@@ -8,7 +8,8 @@
 //!
 //! 移植済み: addExpense（収支記録）/ listRecentExpenses（直近一覧・`ExpenseRepo::list`）。
 //! addExpense は支出のとき、Node と同じく予算消化率（`budget_usage`）と消込候補
-//! （`settlement_candidates`）も返す。
+//! （`settlement_candidates`）も返す。補足の取得失敗は記帳成功を覆さず、
+//! `unavailable_supplements` に未取得項目を返す（消込候補の取得失敗は `null`）。
 //! 記録済みの収支の修正・削除は updateExpense / deleteExpense（Rust 版で追加・Node には無かった）。
 //! 収支の記録・修正・削除は管理画面・PWA と共通の [`FinanceService`] を通す（D02 #126）。
 
@@ -339,6 +340,7 @@ impl Tool for AddExpenseTool {
             memo_suffix,
             expense.id,
         );
+        let mut unavailable = Vec::new();
         let mut extra = serde_json::Map::new();
         extra.insert("expense".to_owned(), json!(expense));
         extra.insert("settlement_candidates".to_owned(), json!([]));
@@ -348,44 +350,51 @@ impl Tool for AddExpenseTool {
             let scope = scope_of(ctx);
             let repo = ExpenseRepo::new(&self.db);
 
-            let limit = repo
-                .list_budget_limits(&scope)
-                .await
-                .map_err(exec_err)?
-                .into_iter()
-                .find(|l| l.category == expense.category);
-            if let (Some(limit), Some((year, month))) = (limit, year_month_of(&expense.date)) {
-                let spent = repo
-                    .monthly_category_breakdown(&scope, year, month, "expense")
-                    .await
-                    .map_err(exec_err)?
+            // 記帳は確定済み。補足の読み出し失敗をツール失敗として返さない。
+            let budget_result: Result<(), DbError> = async {
+                let limit = repo
+                    .list_budget_limits(&scope)
+                    .await?
                     .into_iter()
-                    .find(|c| c.category == expense.category)
-                    .map_or(0, |c| c.total);
-                let ratio = if limit.limit_amount > 0 {
-                    ((spent as f64 / limit.limit_amount as f64) * 100.0).round() as i64
-                } else {
-                    0
-                };
-                message.push_str(&format!(
-                    "\n{}の{year}年{month}月の予算消化率: {ratio}% ({} / {})",
-                    expense.category,
-                    format_yen(spent),
-                    format_yen(limit.limit_amount),
-                ));
-                if ratio >= 100 {
-                    message.push_str(" ⚠️予算を超過しています！");
-                } else if ratio >= 80 {
-                    message.push_str(" ⚠️予算の8割を超えています。");
+                    .find(|l| l.category == expense.category);
+                if let (Some(limit), Some((year, month))) = (limit, year_month_of(&expense.date)) {
+                    let spent = repo
+                        .monthly_category_breakdown(&scope, year, month, "expense")
+                        .await?
+                        .into_iter()
+                        .find(|c| c.category == expense.category)
+                        .map_or(0, |c| c.total);
+                    let ratio = if limit.limit_amount > 0 {
+                        ((spent as f64 / limit.limit_amount as f64) * 100.0).round() as i64
+                    } else {
+                        0
+                    };
+                    message.push_str(&format!(
+                        "\n{}の{year}年{month}月の予算消化率: {ratio}% ({} / {})",
+                        expense.category,
+                        format_yen(spent),
+                        format_yen(limit.limit_amount),
+                    ));
+                    if ratio >= 100 {
+                        message.push_str(" ⚠️予算を超過しています！");
+                    } else if ratio >= 80 {
+                        message.push_str(" ⚠️予算の8割を超えています。");
+                    }
+                    extra.insert(
+                        "budget_usage".to_owned(),
+                        json!({
+                            "limit_amount": limit.limit_amount,
+                            "spent": spent,
+                            "ratio_percent": ratio,
+                        }),
+                    );
                 }
-                extra.insert(
-                    "budget_usage".to_owned(),
-                    json!({
-                        "limit_amount": limit.limit_amount,
-                        "spent": spent,
-                        "ratio_percent": ratio,
-                    }),
-                );
+                Ok(())
+            }
+            .await;
+            if let Err(error) = budget_result {
+                tracing::warn!(expense_id = expense.id, %error, "Recorded expense but could not load budget usage");
+                unavailable.push("budget_usage");
             }
 
             let candidates = repo
@@ -395,20 +404,32 @@ impl Tool for AddExpenseTool {
                     expense.category.clone(),
                     Some(expense.date.clone()),
                 )
-                .await
-                .map_err(exec_err)?;
-            if !candidates.is_empty() {
-                let lines: Vec<String> = candidates.iter().map(plan_line).collect();
-                message.push_str(&format!(
-                    "\n💡 この支出に対応しそうな支払い予定が{}件あります:\n{}\n\
+                .await;
+            match candidates {
+                Err(error) => {
+                    tracing::warn!(expense_id = expense.id, %error, "Recorded expense but could not load settlement candidates");
+                    unavailable.push("settlement_candidates");
+                    extra.insert("settlement_candidates".to_owned(), Value::Null);
+                }
+                Ok(candidates) if !candidates.is_empty() => {
+                    let lines: Vec<String> = candidates.iter().map(plan_line).collect();
+                    message.push_str(&format!(
+                        "\n💡 この支出に対応しそうな支払い予定が{}件あります:\n{}\n\
                      消込するかユーザーに確認し、承認されたら \
                      settlePlannedPayment(plan_id, expense_id={}) を呼んでください。",
-                    candidates.len(),
-                    lines.join("\n"),
-                    expense.id,
-                ));
-                extra.insert("settlement_candidates".to_owned(), json!(candidates));
+                        candidates.len(),
+                        lines.join("\n"),
+                        expense.id,
+                    ));
+                    extra.insert("settlement_candidates".to_owned(), json!(candidates));
+                }
+                Ok(_) => {}
             }
+        }
+
+        if !unavailable.is_empty() {
+            message.push_str("\n記帳は完了していますが、予算消化率または消込候補の補足情報を取得できませんでした。再記帳は不要です。");
+            extra.insert("unavailable_supplements".to_owned(), json!(unavailable));
         }
 
         Ok(ToolOutcome::from_payload(ok_payload(
@@ -2269,6 +2290,96 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(out.payload["candidates"].as_array().unwrap().len(), 0);
+    }
+
+    enum SupplementFault {
+        BudgetLimits,
+        MonthlyBreakdown,
+        SettlementCandidates,
+    }
+
+    // 実際の SQLite 読み出しエラーでも確定済みの記帳を失敗扱いにしない。
+    async fn assert_expense_survives_supplement_failure(fault: SupplementFault) {
+        let db = seed_db();
+        let tool_set = tools(db.clone()).unwrap();
+        find(&tool_set, "setBudgetLimit")
+            .call(&ctx(), json!({"category": "食費", "limit_amount": 10000}))
+            .await
+            .unwrap();
+        // 予算側の障害でも消込候補は読み出せることを確認する。
+        find(&tool_set, "addPlannedPayment")
+            .call(&ctx(), json!({"title": "食費予定", "amount": 1000, "category": "食費", "due_date": "2026-08-20"}))
+            .await
+            .unwrap();
+        let unavailable = if matches!(fault, SupplementFault::SettlementCandidates) {
+            "settlement_candidates"
+        } else {
+            "budget_usage"
+        };
+        db.writer
+            .execute(move |conn| {
+                match fault {
+                    SupplementFault::BudgetLimits => conn.execute_batch("DROP TABLE budget_limits"),
+                    SupplementFault::MonthlyBreakdown => conn.execute_batch(
+                        "INSERT INTO expenses (user_id, bot_id, amount, category, date)
+                     VALUES ('userA', 'system_default', 9223372036854775807, '食費', '2026-08-01')",
+                    ),
+                    SupplementFault::SettlementCandidates => {
+                        conn.execute_batch("DROP TABLE planned_payments")
+                    }
+                }
+                .map_err(yuuka_db::map_sqlite)
+            })
+            .await
+            .unwrap();
+        let repo = ExpenseRepo::new(&db);
+        let before = repo.list(&scope_of(&ctx())).await.unwrap().len();
+        let out = find(&tool_set, "addExpense")
+            .call(&ctx(), json!({"amount": 1000, "category": "食費", "date": "2026-08-20", "memo": "今回の記帳"}))
+            .await
+            .expect("補足情報の取得失敗は記帳成功を覆さない");
+        assert_eq!(out.payload["success"], true);
+        assert_eq!(out.payload["unavailable_supplements"], json!([unavailable]));
+        assert!(out.payload["message"]
+            .as_str()
+            .unwrap()
+            .contains("再記帳は不要"));
+        let entries = repo.list(&scope_of(&ctx())).await.unwrap();
+        assert_eq!(entries.len(), before + 1);
+        let recorded: Vec<_> = entries
+            .iter()
+            .filter(|entry| entry.memo.as_deref() == Some("今回の記帳"))
+            .collect();
+        assert_eq!(recorded.len(), 1);
+        assert_eq!(out.payload["expense"]["id"], recorded[0].id);
+        if unavailable == "budget_usage" {
+            assert!(out.payload.get("budget_usage").is_none());
+            assert_eq!(
+                out.payload["settlement_candidates"]
+                    .as_array()
+                    .unwrap()
+                    .len(),
+                1
+            );
+        } else {
+            assert!(out.payload["settlement_candidates"].is_null());
+            assert_eq!(out.payload["budget_usage"]["spent"], 1000);
+        }
+    }
+
+    #[tokio::test]
+    async fn add_expense_survives_budget_limits_read_failure() {
+        assert_expense_survives_supplement_failure(SupplementFault::BudgetLimits).await;
+    }
+
+    #[tokio::test]
+    async fn add_expense_survives_monthly_breakdown_read_failure() {
+        assert_expense_survives_supplement_failure(SupplementFault::MonthlyBreakdown).await;
+    }
+
+    #[tokio::test]
+    async fn add_expense_survives_settlement_candidates_read_failure() {
+        assert_expense_survives_supplement_failure(SupplementFault::SettlementCandidates).await;
     }
 
     #[tokio::test]

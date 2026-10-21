@@ -6,7 +6,7 @@
 //!   [`src/bot.ts:958-1263`]。登録ユーザー・共有アクセス・メンション/返信を通す。
 //!
 //! ルーティングは [`handle_message`]（`author.bot` 無視 → 冪等ガード → Bot 種別で分岐）。防衛線の
-//! 判定は注入ポート（[`BotDirectory`]/[`RateLimiter`]/[`TurnProcessor`]）越し。twilight 送信は
+//! 判定は注入ポート（[`BotDirectory`]/[`TurnProcessor`]）越し。twilight 送信は
 //! [`crate::reply`] に隔離する。純ヘルパ（表示名解決・添付選別・返信プレフィックス）はユニットテスト。
 
 use std::sync::Arc;
@@ -24,11 +24,12 @@ use yuuka_core::{BotId, DiscordError, GuildId, UserId};
 use crate::idempotent::MessageDedup;
 use crate::ports::{
     rate_limit_message, BotDirectory, BotRecord, BotStatus, DeliverTarget, IncomingChat,
-    InlineMedia, Notifier, RateLimiter, ReplyAncestor, Speaker, StatusSink, TurnDelivery,
-    TurnError, TurnProcessor, TurnReply,
+    InlineMedia, Notifier, ReplyAncestor, Speaker, StatusSink, TurnDelivery, TurnError,
+    TurnProcessor, TurnReply,
 };
 use crate::presence::build_presence;
 use crate::reply::{send_channel_reply, send_channel_text};
+use crate::streaming::StreamingReply;
 use crate::text::{
     is_supported_audio, strip_all_mentions, strip_self_mention, NON_MEMBER_GUIDANCE,
 };
@@ -55,7 +56,6 @@ const GENERIC_ERROR: &str =
 pub struct FlowDeps {
     pub http: Arc<Client>,
     pub directory: Arc<dyn BotDirectory>,
-    pub rate_limiter: Arc<dyn RateLimiter>,
     pub processor: Arc<dyn TurnProcessor>,
     pub notifier: Arc<dyn Notifier>,
     /// 二重応答冪等ガード（`(bot_user_id, message_id)`・TTL 60s）。
@@ -306,21 +306,6 @@ async fn assistant_flow(deps: &FlowDeps, rt: &RuntimeBot, bot: &BotRecord, messa
             tracing::warn!(bot_id = %rt.bot_id, "Gemini APIキー未設定のため応答しません");
             return;
         }
-        // レート制限（超過時は LLM を呼ばず定型応答・§6）。
-        let rate = deps.rate_limiter.consume(&rt.bot_id, gid, &author).await;
-        if !rate.allowed {
-            if let Some(exceeded) = rate.exceeded {
-                send_channel_text(
-                    &deps.http,
-                    message.channel_id,
-                    Some(message.id),
-                    &rate_limit_message(exceeded),
-                    &[],
-                )
-                .await;
-            }
-            return;
-        }
     }
 
     let typing = TypingGuard::start(deps.http.clone(), message.channel_id);
@@ -343,7 +328,21 @@ async fn assistant_flow(deps: &FlowDeps, rt: &RuntimeBot, bot: &BotRecord, messa
         user_id: author.clone(),
         display_name: resolve_display_name(&message),
     };
-    let delivery = make_delivery(deps, rt, &message, is_dm, author.clone(), typing.handle());
+    let stream = StreamingReply::new(
+        deps.http.clone(),
+        message.channel_id,
+        message.id,
+        typing.handle(),
+    );
+    let delivery = make_delivery(
+        deps,
+        rt,
+        &message,
+        is_dm,
+        author.clone(),
+        typing.handle(),
+        Arc::clone(&stream),
+    );
     let handles = TurnHandles {
         status: status.clone(),
         delivery,
@@ -437,7 +436,7 @@ async fn assistant_flow(deps: &FlowDeps, rt: &RuntimeBot, bot: &BotRecord, messa
 
     drop(typing);
     status(BotStatus::Idle);
-    finish_reply(deps, &message, result, /* skip_silent */ true).await;
+    finish_reply(deps, &message, result, /* skip_silent */ true, &stream).await;
 }
 
 /// アシスタントの DM/ギルド分岐（現行 `processBotDmMessage` / `processGuildMessage`）。
@@ -524,7 +523,21 @@ async fn secretary_flow(deps: &FlowDeps, rt: &RuntimeBot, bot: &BotRecord, messa
             .and_then(|r| select_image(&r.attachments).cloned())
     });
     let audio = select_audio(&message.attachments).cloned();
-    let delivery = make_delivery(deps, rt, &message, is_dm, author.clone(), typing.handle());
+    let stream = StreamingReply::new(
+        deps.http.clone(),
+        message.channel_id,
+        message.id,
+        typing.handle(),
+    );
+    let delivery = make_delivery(
+        deps,
+        rt,
+        &message,
+        is_dm,
+        author.clone(),
+        typing.handle(),
+        Arc::clone(&stream),
+    );
     let discord_msg_id = Some(message.id.get().to_string());
     let reply_to_msg_id = reference_message_id(&message);
     let channel_id = Some(message.channel_id.get().to_string());
@@ -639,27 +652,45 @@ async fn secretary_flow(deps: &FlowDeps, rt: &RuntimeBot, bot: &BotRecord, messa
     drop(typing);
     status(BotStatus::Idle);
     // 秘書は空応答でも既定ヘルプで必ず何か送る（silent skip 無し）。
-    finish_reply(deps, &message, result, /* skip_silent */ false).await;
+    finish_reply(
+        deps, &message, result, /* skip_silent */ false, &stream,
+    )
+    .await;
 }
 
 /// 処理結果を返信送信する（エラーは定型文へ縮退・現行 try/catch）。`skip_silent` は
-/// アシスタントの「空応答は黙殺」挙動（秘書は false）。
+/// アシスタントの「空応答は黙殺」挙動（秘書は false）。本文を逐次表示していたら、その返信を最終結果
+/// （エラー時は定型文）で確定する。
 async fn finish_reply(
     deps: &FlowDeps,
     message: &Message,
     result: Result<TurnReply, TurnError>,
     skip_silent: bool,
+    stream: &StreamingReply,
 ) {
     match result {
         Ok(reply) => {
             // 後続配信へ回したターン（R07）は途中応答を送信済みで、最終結果は配信ハンドルが送る。
-            if reply.deferred || (skip_silent && reply.is_silent()) {
+            if reply.deferred || stream.finish(&reply).await || (skip_silent && reply.is_silent()) {
                 return;
             }
             send_channel_reply(&deps.http, message.channel_id, Some(message.id), &reply).await;
         }
+        Err(TurnError::RateLimited(exceeded)) => {
+            send_channel_text(
+                &deps.http,
+                message.channel_id,
+                Some(message.id),
+                &rate_limit_message(exceeded),
+                &[],
+            )
+            .await;
+        }
         Err(e) => {
             tracing::error!(error = %e, "ターン処理に失敗（定型エラーへ縮退）");
+            if stream.finish(&TurnReply::text(GENERIC_ERROR)).await {
+                return;
+            }
             send_channel_text(
                 &deps.http,
                 message.channel_id,
@@ -713,6 +744,8 @@ struct FlowDelivery {
     user_id: UserId,
     bot_id: BotId,
     is_dm: bool,
+    /// 生成中の本文の逐次表示（最終結果もこの返信へ確定する）。
+    stream: Arc<StreamingReply>,
 }
 
 #[async_trait]
@@ -730,6 +763,10 @@ impl TurnDelivery for FlowDelivery {
     }
 
     async fn deliver_final(&self, reply: TurnReply) {
+        // 本文を逐次表示していたら、その返信を最終結果で確定する（送り先は逐次表示と同じチャンネル）。
+        if self.stream.finish(&reply).await {
+            return;
+        }
         let target = if self.is_dm {
             DeliverTarget::Dm
         } else {
@@ -746,6 +783,14 @@ impl TurnDelivery for FlowDelivery {
                 .await;
         }
     }
+
+    fn shows_partial_text(&self) -> bool {
+        true
+    }
+
+    fn on_partial_text(&self, text: &str) {
+        self.stream.push(text);
+    }
 }
 
 fn make_delivery(
@@ -755,6 +800,7 @@ fn make_delivery(
     is_dm: bool,
     user_id: UserId,
     typing_abort: tokio::task::AbortHandle,
+    stream: Arc<StreamingReply>,
 ) -> Arc<dyn TurnDelivery> {
     Arc::new(FlowDelivery {
         http: deps.http.clone(),
@@ -765,6 +811,7 @@ fn make_delivery(
         user_id,
         bot_id: rt.bot_id.clone(),
         is_dm,
+        stream,
     })
 }
 

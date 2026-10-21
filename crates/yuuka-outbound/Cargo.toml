@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
-description = "外向き URL/IP の共通 SSRF 検査（通信時 DNS 検査・登録時互換ポリシー）"
+description = "外向き URL/IP の共通 SSRF 検査（通信時 DNS 検査・登録時の URL・IP 検査）"
 
 [dependencies]
 tokio.workspace = true

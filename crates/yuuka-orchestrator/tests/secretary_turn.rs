@@ -241,7 +241,19 @@ async fn receipt_draft_has_no_turn_side_effects_and_recording_uses_same_ocr() {
         );
         let uid = UserId::new("receipt-user");
         let draft = engine
-            .extract_receipt(&uid, "QUJD", "IMAGE/PNG; x=y", "2026-10-20")
+            .extract_receipt(
+                engine
+                    .acquire_turn(
+                        &BotId::new("receipt-bot"),
+                        &uid,
+                        yuuka_orchestrator::Channel::Pwa,
+                    )
+                    .await
+                    .expect("permit"),
+                "QUJD",
+                "IMAGE/PNG; x=y",
+                "2026-10-20",
+            )
             .await;
         assert_eq!(draft.is_ok(), readable);
         if let Ok(draft) = draft {
@@ -251,8 +263,14 @@ async fn receipt_draft_has_no_turn_side_effects_and_recording_uses_same_ocr() {
         assert_eq!(count_logs(&path, uid.as_str(), "assistant"), 0);
         let reply = engine
             .receipt_turn(
-                &BotId::new("receipt-bot"),
-                &uid,
+                engine
+                    .acquire_turn(
+                        &BotId::new("receipt-bot"),
+                        &uid,
+                        yuuka_orchestrator::Channel::Web,
+                    )
+                    .await
+                    .expect("permit"),
                 yuuka_discord::InlineMedia {
                     data_base64: "QUJD".to_owned(),
                     mime_type: "image/png".to_owned(),
@@ -328,8 +346,14 @@ async fn receipt_turn_falls_back_to_image_chat_when_ocr_rejects_image() {
         let uid = UserId::new("receipt-user");
         let reply = engine
             .receipt_turn(
-                &BotId::new("receipt-bot"),
-                &uid,
+                engine
+                    .acquire_turn(
+                        &BotId::new("receipt-bot"),
+                        &uid,
+                        yuuka_orchestrator::Channel::Web,
+                    )
+                    .await
+                    .expect("permit"),
                 yuuka_discord::InlineMedia {
                     data_base64: data.to_owned(),
                     mime_type: mime.to_owned(),
@@ -365,8 +389,14 @@ async fn secretary_turn_persists_and_replies() {
     let engine = engine_with(db, Some(crypto), "こんにちは！ご用件をどうぞ。");
     let reply = engine
         .secretary_turn(
-            &BotId::system_default(),
-            &UserId::new("u1"),
+            engine
+                .acquire_turn(
+                    &BotId::system_default(),
+                    &UserId::new("u1"),
+                    yuuka_orchestrator::Channel::Web,
+                )
+                .await
+                .expect("permit"),
             IncomingChat {
                 text: "こんにちは".to_owned(),
                 ..IncomingChat::default()
@@ -402,8 +432,14 @@ async fn embed_only_reply_does_not_persist_empty_string() {
     );
     let reply = engine
         .secretary_turn(
-            &BotId::system_default(),
-            &UserId::new("u6"),
+            engine
+                .acquire_turn(
+                    &BotId::system_default(),
+                    &UserId::new("u6"),
+                    yuuka_orchestrator::Channel::Web,
+                )
+                .await
+                .expect("permit"),
             IncomingChat {
                 text: "天気教えて".to_owned(),
                 ..IncomingChat::default()
@@ -439,8 +475,14 @@ async fn second_turn_sees_prior_history() {
     for _ in 0..2 {
         engine
             .secretary_turn(
-                &BotId::system_default(),
-                &UserId::new("u2"),
+                engine
+                    .acquire_turn(
+                        &BotId::system_default(),
+                        &UserId::new("u2"),
+                        yuuka_orchestrator::Channel::Web,
+                    )
+                    .await
+                    .expect("permit"),
                 IncomingChat {
                     text: "メモして".to_owned(),
                     ..IncomingChat::default()
@@ -466,8 +508,14 @@ async fn missing_gemini_key_returns_warning_reply() {
 
     let reply = engine
         .secretary_turn(
-            &BotId::system_default(),
-            &UserId::new("u3"),
+            engine
+                .acquire_turn(
+                    &BotId::system_default(),
+                    &UserId::new("u3"),
+                    yuuka_orchestrator::Channel::Web,
+                )
+                .await
+                .expect("permit"),
             IncomingChat {
                 text: "やあ".to_owned(),
                 ..IncomingChat::default()
@@ -517,8 +565,14 @@ async fn non_llm_error_returns_persona_styled_reply() {
 
     let reply = engine
         .secretary_turn(
-            &BotId::system_default(),
-            &UserId::new("u4"),
+            engine
+                .acquire_turn(
+                    &BotId::system_default(),
+                    &UserId::new("u4"),
+                    yuuka_orchestrator::Channel::Web,
+                )
+                .await
+                .expect("permit"),
             IncomingChat {
                 text: "やあ".to_owned(),
                 ..IncomingChat::default()
@@ -542,8 +596,14 @@ async fn non_llm_error_without_key_falls_back_to_fixed_error() {
 
     let result = engine
         .secretary_turn(
-            &BotId::system_default(),
-            &UserId::new("u5"),
+            engine
+                .acquire_turn(
+                    &BotId::system_default(),
+                    &UserId::new("u5"),
+                    yuuka_orchestrator::Channel::Web,
+                )
+                .await
+                .expect("permit"),
             IncomingChat {
                 text: "やあ".to_owned(),
                 ..IncomingChat::default()
@@ -591,8 +651,14 @@ async fn secretary_turn_pwa_persists_under_pwa_source() {
 
     let reply = engine
         .secretary_turn_pwa(
-            &BotId::system_default(),
-            &UserId::new("u6"),
+            engine
+                .acquire_turn(
+                    &BotId::system_default(),
+                    &UserId::new("u6"),
+                    yuuka_orchestrator::Channel::Pwa,
+                )
+                .await
+                .expect("permit"),
             IncomingChat {
                 text: "PWAから送信".to_owned(),
                 ..IncomingChat::default()
@@ -633,8 +699,14 @@ async fn secretary_turn_pwa_context_is_isolated_from_discord() {
     // Discord 経路で 1 ターン。
     engine
         .secretary_turn(
-            &BotId::system_default(),
-            &UserId::new("u7"),
+            engine
+                .acquire_turn(
+                    &BotId::system_default(),
+                    &UserId::new("u7"),
+                    yuuka_orchestrator::Channel::Web,
+                )
+                .await
+                .expect("permit"),
             IncomingChat {
                 text: "discord発言".to_owned(),
                 ..IncomingChat::default()
@@ -650,8 +722,14 @@ async fn secretary_turn_pwa_context_is_isolated_from_discord() {
         .expect("accept");
     engine
         .secretary_turn_pwa(
-            &BotId::system_default(),
-            &UserId::new("u7"),
+            engine
+                .acquire_turn(
+                    &BotId::system_default(),
+                    &UserId::new("u7"),
+                    yuuka_orchestrator::Channel::Pwa,
+                )
+                .await
+                .expect("permit"),
             IncomingChat {
                 text: "pwa発言".to_owned(),
                 ..IncomingChat::default()
@@ -760,8 +838,14 @@ async fn secretary_turn_pwa_does_not_resave_the_accepted_user_message() {
 
     engine
         .secretary_turn_pwa(
-            &BotId::system_default(),
-            &UserId::new("u10"),
+            engine
+                .acquire_turn(
+                    &BotId::system_default(),
+                    &UserId::new("u10"),
+                    yuuka_orchestrator::Channel::Pwa,
+                )
+                .await
+                .expect("permit"),
             IncomingChat {
                 text: "受理済みの発言".to_owned(),
                 ..IncomingChat::default()
@@ -819,8 +903,14 @@ async fn secretary_turn_discord_saves_the_user_message_exactly_once() {
 
     engine
         .secretary_turn(
-            &BotId::system_default(),
-            &UserId::new("u11"),
+            engine
+                .acquire_turn(
+                    &BotId::system_default(),
+                    &UserId::new("u11"),
+                    yuuka_orchestrator::Channel::Web,
+                )
+                .await
+                .expect("permit"),
             IncomingChat {
                 text: "discordからの発言".to_owned(),
                 ..IncomingChat::default()
@@ -979,8 +1069,14 @@ async fn captured_turn(bot_id: &BotId, seed_bot: bool) -> (String, Vec<String>) 
     );
     engine
         .secretary_turn(
-            bot_id,
-            &UserId::new("u20"),
+            engine
+                .acquire_turn(
+                    bot_id,
+                    &UserId::new("u20"),
+                    yuuka_orchestrator::Channel::Web,
+                )
+                .await
+                .expect("permit"),
             IncomingChat {
                 text: "タスクを追加して".to_owned(),
                 ..IncomingChat::default()
@@ -1219,8 +1315,14 @@ async fn secretary_fc_receives_trusted_attachment_catalog_in_order() {
     let (engine, attachments) = attachment_engine();
     let reply = engine
         .secretary_turn(
-            &BotId::new("media-bot"),
-            &UserId::new("u13"),
+            engine
+                .acquire_turn(
+                    &BotId::new("media-bot"),
+                    &UserId::new("u13"),
+                    yuuka_orchestrator::Channel::Web,
+                )
+                .await
+                .expect("permit"),
             IncomingChat {
                 text: "この写真と動画を保存して".to_owned(),
                 timeline_attachments: attachments,

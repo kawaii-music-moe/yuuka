@@ -18,7 +18,9 @@ use yuuka_core::{
 };
 
 use crate::client::GenerateBackend;
-use crate::wire::{Content, FunctionDeclaration, FunctionResponse, Part, Role, ToolConfig};
+use crate::wire::{
+    Content, FunctionDeclaration, FunctionResponse, GenerateContentResponse, Part, Role, ToolConfig,
+};
 
 /// 未実行の完了報告を検知した際に注入する是正プロンプト（[`src/gemini.ts:491-495`] 直移植）。
 pub const COMPLETION_CORRECTION_PROMPT: &str = "【システム検証】あなたは今回のやり取りで一度もツール（関数）を呼び出していません。\
@@ -35,6 +37,10 @@ pub enum Status {
 
 /// ステータス通知コールバック（省略可）。
 pub type StatusCb = Arc<dyn Fn(Status) + Send + Sync>;
+
+/// 生成中の本文を受け取るコールバック（省略可）。1 回の生成でここまでに届いた本文全体を渡し、次の生成
+/// （ツール結果の返送後・完了是正後）では、その生成の本文で最初から渡し直す。
+pub type TextCb = Arc<dyn Fn(&str) + Send + Sync>;
 
 /// ツール実行の成否（`tool_outcomes.status`・Node `"success" | "error"`）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -114,6 +120,8 @@ pub struct LoopOptions {
     /// 実利用メトリクスの記録先（Node `incrMetric("tool_calls")`）。dispatch 毎に `tool_calls` を 1 増やす。
     /// None なら記録しない。
     pub metrics: Option<Arc<dyn MetricsSink>>,
+    /// 生成中の本文の逐次通知（Discord の逐次表示）。None なら本文を逐次受け取らない。
+    pub on_text: Option<TextCb>,
 }
 
 impl Default for LoopOptions {
@@ -126,6 +134,7 @@ impl Default for LoopOptions {
             action_recorder: None,
             outcome_sink: None,
             metrics: None,
+            on_text: None,
         }
     }
 }
@@ -236,6 +245,40 @@ fn notify(opts: &LoopOptions, status: Status) {
     }
 }
 
+/// ループの 1 回分の生成。`opts.on_text` があれば本文を逐次受け取って渡す。
+///
+/// `may_correct`（まだ一度もツールを呼ばず、完了是正がまだ効く）の間は、「登録しました」等の完了報告に
+/// なった本文を渡さない。是正で取り消す本文を、実行していない操作の報告として利用者へ見せないため。
+async fn generate_step(
+    backend: &dyn GenerateBackend,
+    system_instruction: &str,
+    decls: &[FunctionDeclaration],
+    contents: &[Content],
+    tool_config: Option<ToolConfig>,
+    opts: &LoopOptions,
+    may_correct: bool,
+) -> Result<GenerateContentResponse, GeminiError> {
+    let Some(on_text) = &opts.on_text else {
+        return backend
+            .generate(Some(system_instruction), decls, contents, tool_config)
+            .await;
+    };
+    let forward = |text: &str| {
+        if !(may_correct && claims_action_completed(text)) {
+            on_text(text);
+        }
+    };
+    backend
+        .generate_streaming(
+            Some(system_instruction),
+            decls,
+            contents,
+            tool_config,
+            &forward,
+        )
+        .await
+}
+
 /// Function Calling ループ本体。`contents` は往復のたびに追記される（呼び出し側の履歴）。
 ///
 /// # Errors
@@ -255,9 +298,17 @@ pub async fn run_function_calling_loop(
         provider.list(ctx).iter().map(to_wire_declaration).collect();
 
     notify(opts, Status::Thinking);
-    let mut resp = backend
-        .generate(Some(system_instruction), &decls, contents, None)
-        .await?;
+    let may_correct = opts.max_corrections > 0 && !decls.is_empty();
+    let mut resp = generate_step(
+        backend,
+        system_instruction,
+        &decls,
+        contents,
+        None,
+        opts,
+        may_correct,
+    )
+    .await?;
 
     let mut result = LoopResult::default();
     let mut iterations = 0usize;
@@ -291,9 +342,17 @@ pub async fn run_function_calling_loop(
                     notify(opts, Status::Thinking);
                     // mode=ANY で構造的に関数呼び出しを強制（AUTO のままだと是正後も繰り返し得る）。
                     let tc = ToolConfig::force_any(opts.allowed_tool_names.clone());
-                    resp = backend
-                        .generate(Some(system_instruction), &decls, contents, Some(tc))
-                        .await?;
+                    let may_correct = corrections < opts.max_corrections;
+                    resp = generate_step(
+                        backend,
+                        system_instruction,
+                        &decls,
+                        contents,
+                        Some(tc),
+                        opts,
+                        may_correct,
+                    )
+                    .await?;
                     iterations += 1;
                     continue;
                 }
@@ -347,9 +406,16 @@ pub async fn run_function_calling_loop(
             parts: response_parts,
         });
         notify(opts, Status::Writing);
-        resp = backend
-            .generate(Some(system_instruction), &decls, contents, None)
-            .await?;
+        resp = generate_step(
+            backend,
+            system_instruction,
+            &decls,
+            contents,
+            None,
+            opts,
+            false,
+        )
+        .await?;
         iterations += 1;
     }
 

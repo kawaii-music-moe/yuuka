@@ -11,14 +11,17 @@ pub mod breaker;
 pub mod client;
 pub mod fc_loop;
 pub mod settings;
+mod stream;
 pub mod wire;
 pub use settings::{init_llm_defaults, LlmSettings};
 
 pub use breaker::CircuitBreaker;
-pub use client::{ClientOptions, GeminiClient, GenerateBackend, ALLOWED_MODELS, DEFAULT_MODEL};
+pub use client::{
+    ClientOptions, GeminiClient, GenerateBackend, OnText, ALLOWED_MODELS, DEFAULT_MODEL,
+};
 pub use fc_loop::{
     claims_action_completed, run_function_calling_loop, LoopOptions, LoopResult, Status, StatusCb,
-    ToolOutcomeRecord, ToolOutcomeSink, ToolOutcomeStatus, COMPLETION_CORRECTION_PROMPT,
+    TextCb, ToolOutcomeRecord, ToolOutcomeSink, ToolOutcomeStatus, COMPLETION_CORRECTION_PROMPT,
 };
 pub use wire::{
     Candidate, Content, FunctionCall, FunctionCallingMode, FunctionDeclaration, FunctionResponse,
@@ -169,6 +172,44 @@ mod loop_tests {
         assert_eq!(fr.name, "native:add_todo");
         assert_eq!(fr.id.as_deref(), Some("c1"));
         assert_eq!(fr.response, json!({"success":true,"id":1}));
+    }
+
+    #[tokio::test]
+    async fn streams_text_but_hides_completion_claims_until_corrected() {
+        // 是正前の「登録しました」は利用者へ流さず、ツール実行後の本文だけを流す。
+        let backend = FakeBackend::new(vec![
+            resp(json!({"candidates":[{"content":{"role":"model","parts":[
+                {"text":"タスクを登録しました。"}
+            ]}}]})),
+            resp(json!({"candidates":[{"content":{"role":"model","parts":[
+                {"text":"手続きを進めます。"},
+                {"functionCall":{"name":"native:add_todo","args":{"title":"x"},"id":"c1"}}
+            ]}}]})),
+            resp(json!({"candidates":[{"content":{"role":"model","parts":[
+                {"text":"追加しました。"}
+            ]}}]})),
+        ]);
+        let provider = FakeProvider::new();
+        let mut contents = vec![Content::user_text("x を登録して")];
+        let streamed = Arc::new(Mutex::new(Vec::<String>::new()));
+        let sink = Arc::clone(&streamed);
+        let opts = LoopOptions {
+            on_text: Some(Arc::new(move |text: &str| {
+                sink.lock().unwrap().push(text.to_owned());
+            })),
+            ..LoopOptions::default()
+        };
+
+        let result =
+            run_function_calling_loop(&backend, &provider, "sys", &mut contents, &ctx(), &opts)
+                .await
+                .unwrap();
+
+        assert_eq!(result.text, "追加しました。");
+        assert_eq!(
+            *streamed.lock().unwrap(),
+            vec!["手続きを進めます。".to_owned(), "追加しました。".to_owned()]
+        );
     }
 
     #[tokio::test]

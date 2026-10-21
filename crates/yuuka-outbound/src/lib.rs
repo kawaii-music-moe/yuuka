@@ -44,7 +44,7 @@ where
 
     match url.host() {
         Some(url::Host::Ipv4(ip)) => {
-            if is_blocked_ipv4(ip, IpPolicy::Outbound) {
+            if is_blocked_ipv4(ip) {
                 return Err(format!(
                     "内部/予約済みアドレスへの接続は許可されていません: {ip}"
                 ));
@@ -52,7 +52,7 @@ where
             Ok(())
         }
         Some(url::Host::Ipv6(ip)) => {
-            if is_blocked_ipv6(ip, IpPolicy::Outbound) {
+            if is_blocked_ipv6(ip) {
                 return Err(format!(
                     "内部/予約済みアドレスへの接続は許可されていません: {ip}"
                 ));
@@ -91,29 +91,13 @@ where
 /// IP が内部/予約レンジかを判定する（`true` = ブロック）。
 fn is_blocked_ip(ip: IpAddr) -> bool {
     match ip {
-        IpAddr::V4(v4) => is_blocked_ipv4(v4, IpPolicy::Outbound),
-        IpAddr::V6(v6) => is_blocked_ipv6(v6, IpPolicy::Outbound),
+        IpAddr::V4(v4) => is_blocked_ipv4(v4),
+        IpAddr::V6(v6) => is_blocked_ipv6(v6),
     }
-}
-
-/// IP 判定の用途。登録時の互換範囲を通信時に適用しない。
-#[derive(Clone, Copy)]
-enum IpPolicy {
-    Outbound,
-    BriefingRegistration,
 }
 
 /// IPv4 の内部/予約レンジ判定。
-fn is_blocked_ipv4(ip: Ipv4Addr, policy: IpPolicy) -> bool {
-    if matches!(policy, IpPolicy::BriefingRegistration) {
-        let [a, b, c, _] = ip.octets();
-        return ip.is_private()
-            || ip.is_loopback()
-            || ip.is_link_local()
-            || ip.is_unspecified()
-            || a == 0
-            || (a == 192 && b == 0 && c == 0);
-    }
+fn is_blocked_ipv4(ip: Ipv4Addr) -> bool {
     let [a, b, c, _d] = ip.octets();
     a == 0                                   // 0.0.0.0/8 "this host"
         || a == 10                           // 10.0.0.0/8 private
@@ -131,20 +115,13 @@ fn is_blocked_ipv4(ip: Ipv4Addr, policy: IpPolicy) -> bool {
 }
 
 /// IPv6 の内部/予約レンジ判定（Node `isBlockedIpv6`）。
-fn is_blocked_ipv6(ip: Ipv6Addr, policy: IpPolicy) -> bool {
-    if matches!(policy, IpPolicy::BriefingRegistration) {
-        let seg0 = ip.segments()[0];
-        return ip.is_loopback()
-            || ip.is_unspecified()
-            || (seg0 & 0xfe00) == 0xfc00
-            || (seg0 & 0xffc0) == 0xfe80;
-    }
+fn is_blocked_ipv6(ip: Ipv6Addr) -> bool {
     if ip.is_loopback() || ip.is_unspecified() {
         return true;
     }
     // IPv4-mapped (::ffff:a.b.c.d) は内側の v4 で判定。
     if let Some(v4) = ip.to_ipv4_mapped() {
-        return is_blocked_ipv4(v4, IpPolicy::Outbound);
+        return is_blocked_ipv4(v4);
     }
     let [seg0, seg1, ..] = ip.segments();
     (seg0 & 0xffc0) == 0xfe80        // fe80::/10 link-local
@@ -154,48 +131,36 @@ fn is_blocked_ipv6(ip: Ipv6Addr, policy: IpPolicy) -> bool {
         || (seg0 == 0x2001 && seg1 == 0x0db8) // 2001:db8::/32 documentation
 }
 
-/// 登録時だけに適用する互換ポリシー。通信許可には使わない。
+/// 登録時だけに適用するポリシー。通信許可には使わない。
 #[derive(Clone, Copy, Debug)]
 pub enum RegistrationPolicy {
-    /// briefing の既存の文字列パーサーと限定的な IP 拒否範囲を維持する。
-    BriefingLegacy,
+    /// URL を正規化し、通信時と同じ内部/予約 IP 範囲を拒否する（DNS は引かない）。
+    PublicHttp,
 }
 
-/// DNS を引かず、briefing の既存の文字列・IP 簡易検査を行う。
+/// DNS を引かず、http(s) URL とリテラル IP の安全性を検査する。
 ///
-/// URL パーサーの正規化も行わないため、特殊な IP 表記や一部の予約レンジは通る。
-/// 取得時は必ず [`assert_safe_outbound_url`] を併用する。
+/// ドメイン名の解決先は検査しないため、取得時は必ず
+/// [`assert_safe_outbound_url`] を併用する。
 pub fn is_likely_public_http_url(raw: &str, policy: RegistrationPolicy) -> bool {
-    let RegistrationPolicy::BriefingLegacy = policy;
-    let Some(rest) = raw
-        .strip_prefix("http://")
-        .or_else(|| raw.strip_prefix("https://"))
-    else {
+    let RegistrationPolicy::PublicHttp = policy;
+    let Ok(url) = url::Url::parse(raw) else {
         return false;
     };
-    // authority = 最初の '/' '?' '#' まで。
-    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
-    if authority.contains('@') {
-        return false; // userinfo は拒否。
-    }
-    // ホスト（ポート除去・IPv6 は角括弧内）。
-    let host = if let Some(stripped) = authority.strip_prefix('[') {
-        stripped.split(']').next().unwrap_or("")
-    } else {
-        authority.rsplit_once(':').map_or(authority, |(h, _)| h)
-    }
-    .to_ascii_lowercase();
-    if host.is_empty() || host == "localhost" || host.ends_with(".localhost") {
+    if !matches!(url.scheme(), "http" | "https")
+        || !url.username().is_empty()
+        || url.password().is_some()
+    {
         return false;
     }
-    if let Ok(v4) = host.parse::<std::net::Ipv4Addr>() {
-        return !is_blocked_ipv4(v4, IpPolicy::BriefingRegistration);
+    match url.host() {
+        Some(url::Host::Ipv4(ip)) => !is_blocked_ip(IpAddr::V4(ip)),
+        Some(url::Host::Ipv6(ip)) => !is_blocked_ip(IpAddr::V6(ip)),
+        Some(url::Host::Domain(host)) => {
+            !host.is_empty() && host != "localhost" && !host.ends_with(".localhost")
+        }
+        None => false,
     }
-    if let Ok(v6) = host.parse::<std::net::Ipv6Addr>() {
-        return !is_blocked_ipv6(v6, IpPolicy::BriefingRegistration);
-    }
-    // ドメイン名は公開扱い（DNS リバインドは実行時の fetch 側で別途対処）。
-    true
 }
 
 #[cfg(test)]
@@ -261,7 +226,7 @@ mod tests {
             "255.255.255.255",
         ] {
             assert!(
-                is_blocked_ipv4(ip.parse().unwrap(), IpPolicy::Outbound),
+                is_blocked_ipv4(ip.parse().unwrap()),
                 "expected blocked: {ip}"
             );
         }
@@ -274,7 +239,7 @@ mod tests {
             "223.255.255.255",
         ] {
             assert!(
-                !is_blocked_ipv4(ip.parse().unwrap(), IpPolicy::Outbound),
+                !is_blocked_ipv4(ip.parse().unwrap()),
                 "expected allowed: {ip}"
             );
         }
@@ -293,14 +258,11 @@ mod tests {
             "2001:db8::1",
         ] {
             assert!(
-                is_blocked_ipv6(ip.parse().unwrap(), IpPolicy::Outbound),
+                is_blocked_ipv6(ip.parse().unwrap()),
                 "expected blocked: {ip}"
             );
         }
-        assert!(!is_blocked_ipv6(
-            "2606:4700:4700::1111".parse().unwrap(),
-            IpPolicy::Outbound
-        ));
+        assert!(!is_blocked_ipv6("2606:4700:4700::1111".parse().unwrap()));
     }
 
     #[tokio::test]
@@ -426,20 +388,29 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn registration_policy_preserves_legacy_acceptance_without_authorizing_fetch() {
-        let policy = RegistrationPolicy::BriefingLegacy;
+    async fn registration_rejects_reserved_and_normalized_ips_without_dns() {
+        let policy = RegistrationPolicy::PublicHttp;
         for raw in [
             "http://127.1/",
             "http://2130706433/",
+            "http://0x7f000001/",
+            "http://0177.0.0.1/",
             "http://[::ffff:127.0.0.1]/",
             "http://192.0.2.1/",
+            "http://198.51.100.1/",
+            "http://203.0.113.1/",
+            "http://198.18.0.1/",
+            "http://198.19.255.255/",
             "http://100.64.0.1/",
+            "http://100.127.255.255/",
             "http://224.0.0.1/",
+            "http://240.0.0.1/",
+            "http://255.255.255.255/",
             "http://[2001:db8::1]/",
             "http://[ff02::1]/",
             "http://[fec0::1]/",
         ] {
-            assert!(is_likely_public_http_url(raw, policy), "{raw}");
+            assert!(!is_likely_public_http_url(raw, policy), "{raw}");
             assert!(assert_safe_outbound_url(raw).await.is_err(), "{raw}");
         }
         for raw in [
@@ -453,16 +424,18 @@ mod tests {
             "http://[fc00::1]/",
             "http://[fe80::1]/",
             "http://u:p@example.com/",
-            "HTTP://example.com/",
+            "http://example.com:bad/",
             "ftp://example.com/",
         ] {
             assert!(!is_likely_public_http_url(raw, policy), "{raw}");
         }
-        // 登録時は DNS や URL パースをしない既存契約も維持する。
+        // 登録時に DNS は引かず、公開 IP と通常のドメイン名を許可する。
         for raw in [
             "https://example.invalid/",
             "http://8.8.8.8/",
-            "http://example.com:bad/",
+            "HTTP://example.com/",
+            "https://[2606:4700:4700::1111]/",
+            "http://[::ffff:8.8.8.8]/",
         ] {
             assert!(is_likely_public_http_url(raw, policy), "{raw}");
         }

@@ -21,12 +21,13 @@ use yuuka_core::{
 };
 use yuuka_crypto::SystemCrypto;
 use yuuka_discord::{
-    BotStatus, EmbedField, FileAttachment, IncomingChat, InlineMedia, ReplyAncestor, RichEmbed,
-    Speaker, StatusSink, TurnDelivery, TurnError, TurnProcessor, TurnReply,
+    BotStatus, EmbedField, FileAttachment, IncomingChat, InlineMedia, RateExceeded, RateLimiter,
+    ReplyAncestor, RichEmbed, Speaker, StatusSink, TurnDelivery, TurnError, TurnProcessor,
+    TurnReply,
 };
 use yuuka_gemini::{
     run_function_calling_loop, Content, GeminiClient, GenerateBackend, LoopOptions, LoopResult,
-    Part, Role, Status, StatusCb, ToolOutcomeSink,
+    Part, Role, Status, StatusCb, TextCb, ToolOutcomeSink,
 };
 use yuuka_google::CalendarEventsPort;
 use yuuka_mcp::{McpClient, McpProvider};
@@ -139,10 +140,28 @@ impl GeminiFactory for RealGeminiFactory {
     }
 }
 
+/// レート制限の guild スロット。Discord の実ギルドと HTTP 経路を区別する。
+#[derive(Debug)]
+pub enum Channel {
+    Discord(GuildId),
+    Pwa,
+    Web,
+    /// 定期マクロは従来どおり対話用 quota の対象外。
+    Automation,
+}
+
+/// 1 回の実行権。複製できず、判定した Bot とユーザーを実行まで保持する。
+#[derive(Debug)]
+pub struct TurnPermit {
+    bot_id: BotId,
+    user_id: UserId,
+}
+
 /// 会話オーケストレーションエンジン。`/ws/chat`（デスクトップ）と Discord の [`TurnProcessor`] が共有する。
 #[derive(Clone)]
 pub struct ChatEngine {
     db: Db,
+    rate_limiter: Arc<dyn RateLimiter>,
     /// 保存済み Gemini キーの復号に使う（`YUUKA_ENCRYPTION_SECRET` 未設定なら `None`）。
     crypto: Option<Arc<SystemCrypto>>,
     /// ドメインツールのレジストリ（毎ターン snapshot する）。
@@ -177,6 +196,44 @@ pub struct ChatEngine {
 }
 
 impl ChatEngine {
+    /// テスト用などの制限実装を注入する。全入口がこのインスタンスを共有する。
+    #[must_use]
+    pub fn with_rate_limiter(mut self, limiter: Arc<dyn RateLimiter>) -> Self {
+        self.rate_limiter = limiter;
+        self
+    }
+
+    /// 実行前に quota を消費する。PWA は保存・202 応答の前に取得し、permit をジョブへ渡す。
+    ///
+    /// # Errors
+    /// 上限を超えた場合、その窓を返す（LLM は呼ばない）。
+    pub async fn acquire_turn(
+        &self,
+        bot_id: &BotId,
+        user_id: &UserId,
+        channel: Channel,
+    ) -> Result<TurnPermit, RateExceeded> {
+        let guild = match channel {
+            Channel::Discord(guild) => guild,
+            Channel::Pwa => GuildId::new("pwa"),
+            Channel::Web => GuildId::new("web"),
+            Channel::Automation => {
+                return Ok(TurnPermit {
+                    bot_id: bot_id.clone(),
+                    user_id: user_id.clone(),
+                })
+            }
+        };
+        let decision = self.rate_limiter.consume(bot_id, &guild, user_id).await;
+        if !decision.allowed {
+            return Err(decision.exceeded.unwrap_or(RateExceeded::UserMinute));
+        }
+        Ok(TurnPermit {
+            bot_id: bot_id.clone(),
+            user_id: user_id.clone(),
+        })
+    }
+
     /// 依存を注入して構築する。`mcp_client` は MCP 動的ツール探索に使う（未配線は
     /// [`yuuka_mcp::NullMcpClient`] を渡す）。
     #[must_use]
@@ -190,6 +247,7 @@ impl ChatEngine {
         synapse: Option<Arc<tokio::sync::Mutex<SynapseEngine>>>,
     ) -> Self {
         Self {
+            rate_limiter: Arc::new(crate::InMemoryRateLimiter::new(db.clone())),
             db,
             crypto,
             registry,
@@ -326,12 +384,12 @@ impl ChatEngine {
     /// 暗号シークレット未設定・復号失敗は [`ReceiptExtractError::Unavailable`]。
     pub async fn extract_receipt(
         &self,
-        user_id: &UserId,
+        permit: TurnPermit,
         image_base64: &str,
         mime_type: &str,
         today: &str,
     ) -> Result<ReceiptDraft, ReceiptExtractError> {
-        self.receipt_ocr(user_id, image_base64, mime_type, today)
+        self.receipt_ocr(&permit.user_id, image_base64, mime_type, today)
             .await
             .map(ReceiptOcr::into_draft)
     }
@@ -370,13 +428,14 @@ impl ChatEngine {
     /// 抽出・秘書ターン失敗時 [`TurnError`]。
     pub async fn receipt_turn(
         &self,
-        bot_id: &BotId,
-        user_id: &UserId,
+        permit: TurnPermit,
         image: InlineMedia,
         caption: Option<String>,
         timeline_attachments: Vec<yuuka_core::tool::ConversationAttachment>,
         status: &StatusSink,
     ) -> Result<TurnReply, TurnError> {
+        let TurnPermit { bot_id, user_id } = permit;
+        let (bot_id, user_id) = (&bot_id, &user_id);
         let msg = IncomingChat {
             text: caption.unwrap_or_default(),
             timeline_attachments,
@@ -488,11 +547,12 @@ impl ChatEngine {
     /// キー未設定は ⚠️ テキスト応答（Node `processMessage` の catch と同じく `Ok` で返す）。
     pub async fn secretary_turn(
         &self,
-        bot_id: &BotId,
-        user_id: &UserId,
+        permit: TurnPermit,
         msg: IncomingChat,
         status: &StatusSink,
     ) -> Result<TurnReply, TurnError> {
+        let TurnPermit { bot_id, user_id } = permit;
+        let (bot_id, user_id) = (&bot_id, &user_id);
         self.secretary_turn_for_source(
             bot_id,
             user_id,
@@ -510,8 +570,7 @@ impl ChatEngine {
     /// [`message_log::recent_pwa_context`]）を経由し、Discord/WS の文脈と混ざらない（#38 のキー不一致
     /// バグと同種の再発を構造的に防ぐ設計を踏襲・[`MessageSource`] 参照）。
     ///
-    /// レート制限・Gemini キー事前チェックは呼び出し側（`yuuka-client-api`）が WS/Discord と同じ
-    /// [`yuuka_discord::RateLimiter`]/[`Self::user_has_gemini_key`] で行う（本メソッドはターン本体のみ）。
+    /// 呼び出し側は [`Self::acquire_turn`] で取得した permit と、Gemini キー事前チェックを使う。
     ///
     /// **前提（issue #77）**: `msg` のユーザー発言は、呼び出し側が本メソッドの**前**に
     /// [`message_log::accept_pwa_user_message`] で `source='pwa'` として永続化済みであること。
@@ -524,11 +583,12 @@ impl ChatEngine {
     /// [`Self::secretary_turn`] と同じ。
     pub async fn secretary_turn_pwa(
         &self,
-        bot_id: &BotId,
-        user_id: &UserId,
+        permit: TurnPermit,
         msg: IncomingChat,
         status: &StatusSink,
     ) -> Result<TurnReply, TurnError> {
+        let TurnPermit { bot_id, user_id } = permit;
+        let (bot_id, user_id) = (&bot_id, &user_id);
         self.secretary_turn_for_source(bot_id, user_id, msg, status, MessageSource::Pwa, None, None)
             .await
     }
@@ -723,6 +783,7 @@ impl ChatEngine {
         let opts = LoopOptions {
             allowed_tool_names: plan.as_ref().and_then(TurnPlan::correction_tools),
             on_status: Some(status_bridge(status)),
+            on_text: heavy.as_ref().and_then(PlanningSignal::text_sink),
             action_recorder: self.recorder.clone(),
             outcome_sink: self.tool_outcomes.clone(),
             metrics: self.metrics.clone(),
@@ -1081,6 +1142,7 @@ impl ChatEngine {
         let opts = LoopOptions {
             allowed_tool_names: plan.as_ref().and_then(TurnPlan::correction_tools),
             on_status: Some(status_bridge(status)),
+            on_text: heavy.as_ref().and_then(PlanningSignal::text_sink),
             outcome_sink: self.tool_outcomes.clone(),
             metrics: self.metrics.clone(),
             ..LoopOptions::default()
@@ -1379,6 +1441,9 @@ impl TurnProcessor for ChatEngine {
         status: StatusSink,
         delivery: Arc<dyn TurnDelivery>,
     ) -> Result<TurnReply, TurnError> {
+        self.acquire_turn(bot_id, &speaker.user_id, Channel::Discord(guild_id.clone()))
+            .await
+            .map_err(TurnError::RateLimited)?;
         let progress = ProgressLog::new(&self.db, &speaker.user_id, bot_id, Some(guild_id), &msg);
         let engine = self.clone();
         let (bot_id, guild_id) = (bot_id.clone(), guild_id.clone());
@@ -1666,14 +1731,45 @@ const DEFERRED_TURN_LIMIT: std::time::Duration = std::time::Duration::from_secs(
 const DEFERRED_TIMEOUT_TEXT: &str =
     "時間内に処理を完了できませんでした。少し時間をおいてもう一度お試しください。";
 
-/// 計画が重い処理と判定したことを、実行中のターンから [`run_delivered_turn`] へ伝える合図。
+/// 計画が重い処理と判定したこと・本文の逐次表示を始めたことを、実行中のターンから
+/// [`run_delivered_turn`] へ伝える合図。逐次表示の配信先もここから FC ループへ渡す（[`Self::text_sink`]）。
 #[derive(Default)]
 struct PlanningSignal {
     notify: tokio::sync::Notify,
     interim: std::sync::Mutex<String>,
+    /// 生成中の本文の配信先（Discord の返信）。`None` なら逐次表示しない。
+    delivery: Option<Arc<dyn TurnDelivery>>,
+    /// 本文を配信先へ流し始めた（以後は途中応答へ切り替えない）。
+    streaming: std::sync::atomic::AtomicBool,
+    streaming_started: tokio::sync::Notify,
 }
 
 impl PlanningSignal {
+    /// 配信先が逐次表示に対応していれば、本文をそこへ流す合図にする（WS などは従来どおり途中応答だけ）。
+    fn for_delivery(delivery: Arc<dyn TurnDelivery>) -> Self {
+        Self {
+            delivery: delivery.shows_partial_text().then_some(delivery),
+            ..Self::default()
+        }
+    }
+
+    /// FC ループへ渡す本文の逐次通知。最初に本文を流した時点で [`run_delivered_turn`] へ知らせる。
+    fn text_sink(self: &Arc<Self>) -> Option<TextCb> {
+        self.delivery.as_ref()?;
+        let signal = Arc::clone(self);
+        Some(Arc::new(move |text: &str| {
+            if !signal
+                .streaming
+                .swap(true, std::sync::atomic::Ordering::AcqRel)
+            {
+                signal.streaming_started.notify_one();
+            }
+            if let Some(delivery) = &signal.delivery {
+                delivery.on_partial_text(text);
+            }
+        }))
+    }
+
     /// 重い処理と判定した。`interim` は計画が返した途中応答の文面（空なら既定文を使う）。
     fn mark(&self, interim: &str) {
         if let Ok(mut slot) = self.interim.lock() {
@@ -1742,12 +1838,28 @@ where
     Fut: std::future::Future<Output = Result<TurnReply, TurnError>> + Send + 'static,
 {
     let deadline = tokio::time::Instant::now() + total_limit;
-    let signal = Arc::new(PlanningSignal::default());
+    let signal = Arc::new(PlanningSignal::for_delivery(Arc::clone(&delivery)));
     let mut worker = tokio::spawn(work(Arc::clone(&signal)));
     let interim = tokio::select! {
         biased;
         joined = &mut worker => {
             return joined.unwrap_or_else(|e| Err(TurnError::Failed(format!("turn task: {e}"))));
+        }
+        // 本文の逐次表示が始まったら途中応答へは切り替えず、全体の上限まで待ってそのまま返す
+        // （流れている本文が進み具合の表示を兼ねる）。
+        () = signal.streaming_started.notified() => {
+            return match tokio::time::timeout_at(deadline, &mut worker).await {
+                Ok(joined) => joined
+                    .unwrap_or_else(|e| Err(TurnError::Failed(format!("turn task: {e}")))),
+                Err(_) => {
+                    worker.abort();
+                    tracing::warn!(
+                        limit = ?total_limit,
+                        "逐次表示中のターンが全体の上限を超えたため止めました"
+                    );
+                    Ok(TurnReply::text(DEFERRED_TIMEOUT_TEXT))
+                }
+            };
         }
         () = signal.notify.notified() => signal.predicted_interim(),
         () = tokio::time::sleep(runtime_limit) => RUNTIME_INTERIM_TEXT.to_owned(),
@@ -2103,11 +2215,21 @@ mod tests {
 
     use std::time::Duration;
 
-    /// 途中応答と最終配信を順に記録する配信ハンドル。
+    /// 途中応答と最終配信を順に記録する配信ハンドル（`streams` なら逐次表示の本文も記録する）。
     #[derive(Default)]
     struct RecordingDelivery {
         events: std::sync::Mutex<Vec<String>>,
         final_sent: tokio::sync::Notify,
+        streams: bool,
+    }
+
+    impl RecordingDelivery {
+        fn streaming() -> Self {
+            Self {
+                streams: true,
+                ..Self::default()
+            }
+        }
     }
 
     #[async_trait]
@@ -2123,6 +2245,84 @@ mod tests {
                 .push(format!("final:{}", reply.text));
             self.final_sent.notify_one();
         }
+
+        fn shows_partial_text(&self) -> bool {
+            self.streams
+        }
+
+        fn on_partial_text(&self, text: &str) {
+            self.events.lock().unwrap().push(format!("partial:{text}"));
+        }
+    }
+
+    /// 逐次表示しない配信先（WS など）には本文を流さず、従来どおり途中応答へ切り替える。
+    #[tokio::test]
+    async fn non_streaming_delivery_gets_no_text_sink() {
+        let delivery = Arc::new(RecordingDelivery::default());
+        let reply = run_delivered_turn_after(
+            |signal| async move {
+                assert!(signal.text_sink().is_none());
+                Ok(TurnReply::text("done"))
+            },
+            delivery.clone(),
+            Duration::from_secs(10),
+            Duration::from_secs(10),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(reply.text, "done");
+    }
+
+    /// 本文の逐次表示が始まったターンは、実行時の切り替え時間を過ぎても途中応答を出さず、結果をそのまま返す。
+    #[tokio::test]
+    async fn streaming_turn_skips_interim_and_returns_directly() {
+        let delivery = Arc::new(RecordingDelivery::streaming());
+        let reply = run_delivered_turn_after(
+            |signal| async move {
+                let sink = signal.text_sink().expect("配信先があれば逐次通知を返す");
+                sink("こん");
+                sink("こんにちは");
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                Ok(TurnReply::text("こんにちは！"))
+            },
+            delivery.clone(),
+            Duration::from_millis(10),
+            Duration::from_secs(10),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(reply.text, "こんにちは！");
+        assert!(!reply.deferred);
+        assert_eq!(
+            *delivery.events.lock().unwrap(),
+            vec!["partial:こん".to_owned(), "partial:こんにちは".to_owned()]
+        );
+    }
+
+    /// 逐次表示中でも全体の上限を超えたら本体を止め、時間切れの定型文を返す。
+    #[tokio::test]
+    async fn streaming_turn_stops_at_total_limit() {
+        let delivery = Arc::new(RecordingDelivery::streaming());
+        let reply = run_delivered_turn_after(
+            |signal| async move {
+                signal.text_sink().unwrap()("考えています");
+                std::future::pending::<()>().await;
+                Ok(TurnReply::text("unreachable"))
+            },
+            delivery.clone(),
+            Duration::from_secs(10),
+            Duration::from_millis(50),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(reply.text, DEFERRED_TIMEOUT_TEXT);
+        assert!(!reply.deferred);
     }
 
     /// 切り替え前に終わったターンは結果をそのまま返し、配信ハンドルを使わない。

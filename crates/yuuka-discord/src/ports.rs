@@ -202,6 +202,17 @@ pub trait TurnDelivery: Send + Sync {
 
     /// 事前予測で非同期化したターンの最終結果を、完了後に配信する。
     async fn deliver_final(&self, reply: TurnReply);
+
+    /// 生成中の本文を逐次表示する配信先か。`true` のときだけ processor は本文を
+    /// [`on_partial_text`](Self::on_partial_text) へ流し、流し始めたら途中応答へ切り替えない
+    /// （流れている本文が進み具合の表示を兼ねる）。既定は `false`（従来どおり途中応答を返す）。
+    fn shows_partial_text(&self) -> bool {
+        false
+    }
+
+    /// 生成中の本文（ここまでに届いた全体）を逐次表示する。生成のコールバックから同期で呼ぶため、送信・
+    /// 編集は実装が裏で行う。[`shows_partial_text`](Self::shows_partial_text) が `false` なら呼ばれない。
+    fn on_partial_text(&self, _text: &str) {}
 }
 
 /// ユーザーへの通知配信（現行 `services/notifier.sendToUser`）。本クレートの Messenger が実装し、
@@ -226,6 +237,9 @@ pub trait Notifier: Send + Sync {
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum TurnError {
+    /// quota 超過（LLM を呼ばず、チャネル固有の応答へ変換する）。
+    #[error("{0:?}")]
+    RateLimited(RateExceeded),
     /// 上流（Gemini/synapse 等）障害。
     #[error("turn processing failed: {0}")]
     Failed(String),
