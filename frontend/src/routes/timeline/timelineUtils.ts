@@ -49,14 +49,14 @@ export const RECORD_TYPE_LABEL: Record<RecordType, string> = {
 	location: "場所",
 };
 
-export function planTypeIcon(type: PlanBlockType): string {
-	return PLAN_TYPE_ICON[type] ?? "event";
+export function planTypeIcon(type: string): string {
+	return PLAN_TYPE_ICON[type as PlanBlockType] ?? "event";
 }
-export function recordTypeIcon(type: RecordType): string {
-	return RECORD_TYPE_ICON[type] ?? "edit_note";
+export function recordTypeIcon(type: string): string {
+	return RECORD_TYPE_ICON[type as RecordType] ?? "edit_note";
 }
-export function recordTypeLabel(type: RecordType): string {
-	return RECORD_TYPE_LABEL[type] ?? type;
+export function recordTypeLabel(type: string): string {
+	return RECORD_TYPE_LABEL[type as RecordType] ?? type;
 }
 
 /** 計画ブロックの時刻レンジ表示（'HH:MM 〜 HH:MM' / 片方のみ / 空）。 */

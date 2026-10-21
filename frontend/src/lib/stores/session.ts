@@ -1,12 +1,12 @@
 import { derived, writable } from "svelte/store";
 import { api } from "$lib/api/client";
+import type {
+	MeResponse,
+	SessionUser as WireSessionUser,
+} from "$lib/api/types";
 
 // §9.1 認証セッションストア: /api/me の単一の真実
-export type SessionUser = {
-	discordId: string;
-	username: string;
-	role: "user" | "admin";
-} | null;
+export type SessionUser = WireSessionUser | null;
 
 export const currentUser = writable<SessionUser>(null);
 
@@ -21,9 +21,10 @@ export const isAuthed = derived(currentUser, (u) => u !== null);
 export async function bootstrapSession(): Promise<SessionUser> {
 	try {
 		// サーバは { success, user: { discordId, username, role }, ...legalUrls } を返す（ネスト）
-		const me = await api.get<{
-			user: { discordId: string; username: string; role: "user" | "admin" };
-		}>("/api/me", { scope: "user", isBootstrap: true });
+		const me = await api.get<MeResponse>("/api/me", {
+			scope: "user",
+			isBootstrap: true,
+		});
 		const user: SessionUser = {
 			discordId: me.user.discordId,
 			username: me.user.username,
