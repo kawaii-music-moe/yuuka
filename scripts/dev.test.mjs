@@ -77,7 +77,12 @@ test("both frontends serve HMR and proxy API; SIGTERM stops both", {
 	t.after(() => running.child.kill("SIGTERM"));
 	const base = `http://127.0.0.1:${clientPort}`;
 	await ready(`${base}/`, running);
-	await ready(`${base}/admin/`, running);
+	const admin = await ready(`${base}/admin/`, running);
+	const html = await admin.text();
+	const themeScript = html.match(/<script src="([^"]*theme-init\.js)"/);
+	assert.ok(themeScript, "theme initializer is included");
+	const theme = await fetch(new URL(themeScript[1], `${base}/admin/`));
+	assert.equal(theme.status, 200, themeScript[1]);
 	for (const path of [
 		"/@vite/client",
 		"/admin/@vite/client",
