@@ -5,7 +5,6 @@
 import { untrack } from "svelte";
 import { ApiError } from "$lib/api/client";
 import { botAttributeApi } from "$lib/api/services";
-import { Button } from "$lib/components/ui";
 import { pushToast } from "$lib/stores/toast";
 import type { BotAttrView } from "./configTypes";
 
@@ -22,7 +21,8 @@ let linked = $state(false);
 let saving = $state(false);
 // 同期解除後の親の再取得でも未保存の入力を維持する。
 let lastBotId = "";
-let lastSavedName = "";
+let lastSavedName = $state("");
+const canSave = $derived(!saving && !!name.trim() && name.trim() !== lastSavedName);
 $effect(() => {
 	const current = bot;
 	const currentBotId = botId;
@@ -67,7 +67,7 @@ async function toggleLink() {
 
 async function submit(e: SubmitEvent) {
 	e.preventDefault();
-	if (saving) return;
+	if (!canSave) return;
 	const trimmed = name.trim();
 	if (!trimmed) {
 		pushToast("登録名を入力してください。", "error");
@@ -75,7 +75,10 @@ async function submit(e: SubmitEvent) {
 	}
 	saving = true;
 	try {
-		await botAttributeApi.updateBotProfile({ botId, name: trimmed });
+		const response = await botAttributeApi.updateBotProfile({ botId, name: trimmed });
+		name = response.name;
+		lastSavedName = response.name;
+		linked = response.name_linked_to_discord;
 		pushToast("登録名を変更しました。", "success");
 		onsaved?.();
 	} catch (err) {
@@ -116,7 +119,15 @@ async function submit(e: SubmitEvent) {
 				onclick={toggleLink}
 			><span class="material-symbols-outlined" aria-hidden="true">{linked ? "link" : "link_off"}</span></button>
 		</div>
-		<Button type="submit" variant="primary" disabled={saving}>登録名を保存</Button>
+		<button
+			type="submit"
+			class="save-button"
+			disabled={!canSave}
+			aria-label="登録名を保存"
+			title="登録名を保存"
+		>
+			<span class="material-symbols-outlined" aria-hidden="true">check</span>
+		</button>
 	</form>
 </section>
 
@@ -135,6 +146,31 @@ async function submit(e: SubmitEvent) {
 		width: 100%;
 		padding-right: 44px;
 		box-sizing: border-box;
+		border: 0;
+		outline: none;
+		box-shadow: none;
+	}
+	.name-input input:focus {
+		border: 0;
+		outline: none;
+		box-shadow: none;
+	}
+	.save-button {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		width: 40px;
+		flex-shrink: 0;
+		border: 0;
+		border-radius: 6px;
+		background: transparent;
+		color: var(--color-primary);
+		cursor: pointer;
+	}
+	.save-button:disabled {
+		color: var(--text-secondary);
+		opacity: 0.4;
+		cursor: default;
 	}
 	.link-button {
 		position: absolute;
