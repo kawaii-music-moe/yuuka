@@ -9,12 +9,17 @@
 // （BotShell のパンくず/アクティブ判定も同じ集合を参照する）。
 // ─────────────────────────────────────────────────────────────────────────
 
+import { botAttributeApi } from "$lib/api/services";
 import { botPreset, hubGroups } from "$lib/botTabs";
 import { Icon } from "$lib/components/ui";
 import { navigateTo } from "$lib/router";
 import { activeBot } from "$lib/stores/activeBot";
 import { isAdmin } from "$lib/stores/session";
-import { isDefaultBot, isSystemDefaultBot } from "./config/configTypes";
+import {
+	type AssistantConfigResp,
+	isDefaultBot,
+	isSystemDefaultBot,
+} from "./config/configTypes";
 
 const groups = $derived(
 	hubGroups({
@@ -24,6 +29,24 @@ const groups = $derived(
 		isAdmin: $isAdmin,
 	}),
 );
+
+// 汎用属性で Bot 専用 API キーが未設定なら「LLM機能」に警告を出す（設定を見られる人だけ）。
+let missingLlmKey = $state(false);
+$effect(() => {
+	const id = $activeBot?.id ?? "";
+	missingLlmKey = false;
+	if (!id || botPreset($activeBot) !== "mcp_assistant") return;
+	botAttributeApi
+		.assistantConfig(id)
+		.then((r) => {
+			const res = r as AssistantConfigResp;
+			if (id === ($activeBot?.id ?? ""))
+				missingLlmKey = res.success && !res.has_gemini_key;
+		})
+		.catch(() => {
+			/* 警告を出さないだけ */
+		});
+});
 </script>
 
 <section class="tab-view">
@@ -42,7 +65,13 @@ const groups = $derived(
 					onclick={() => navigateTo(`/bot/${item.tab}`)}
 				>
 					<span class="settings-hub-text">
-						<span class="settings-hub-label">{item.label}</span>
+						<span class="settings-hub-label"
+							>{item.label}{#if item.tab === "llm" && missingLlmKey}<span
+									class="settings-hub-warn"
+									title="API キーが未設定です"
+									aria-label="API キーが未設定です"><Icon name="warning" size={16} /></span
+								>{/if}</span
+						>
 						<span class="settings-hub-desc">{item.desc}</span>
 					</span>
 					<Icon name="chevron_right" class="settings-hub-chevron" />
@@ -106,7 +135,14 @@ const groups = $derived(
 		min-width: 0;
 	}
 	.settings-hub-label {
+		display: flex;
+		align-items: center;
+		gap: 6px;
 		font-weight: 600;
+	}
+	.settings-hub-warn {
+		display: inline-flex;
+		color: #f59e0b;
 	}
 	.settings-hub-desc {
 		font-size: 0.82rem;

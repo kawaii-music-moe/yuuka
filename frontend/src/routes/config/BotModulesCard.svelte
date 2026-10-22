@@ -4,7 +4,13 @@
 
 import { ApiError } from "$lib/api/client";
 import { botAttributeApi } from "$lib/api/services";
-import { Button, Checkbox, ScopeBadge } from "$lib/components/ui";
+import {
+	Button,
+	Checkbox,
+	confirmDialog,
+	Icon,
+	ScopeBadge,
+} from "$lib/components/ui";
 import { pushToast } from "$lib/stores/toast";
 import type { ModuleItem, ModulesResp } from "./configTypes";
 
@@ -42,79 +48,93 @@ async function load() {
 	}
 }
 
-async function save(enabled: string[] | "all") {
+async function save(enabled: string[] | "all", toastOnSuccess: boolean) {
 	try {
 		const res = await botAttributeApi.updateModules({
 			botId,
 			enabledModules: enabled,
 		});
-		pushToast(
-			res.message ?? "保存しました。",
-			res.success ? "success" : "error",
-		);
-		if (res.success) await load();
+		if (!res.success || toastOnSuccess)
+			pushToast(
+				res.message ?? "保存しました。",
+				res.success ? "success" : "error",
+			);
+		await load();
 	} catch (err) {
 		pushToast(
 			err instanceof ApiError ? err.message : "通信エラーが発生しました。",
 			"error",
 		);
+		await load();
 	}
 }
 
+// チェックの切り替えごとに即時保存する（失敗時は load で元に戻る）。
 function saveSelected() {
 	const enabled = modules.filter((m) => enabledMap[m.id]).map((m) => m.id);
-	void save(enabled);
+	void save(enabled, false);
+}
+
+async function resetToDefault() {
+	const ok = await confirmDialog({
+		message: "有効な機能を既定に戻しますか？",
+		confirmLabel: "既定に戻す",
+	});
+	if (ok) void save("all", true);
 }
 </script>
 
 {#if visible}
 	<section class="config-card card">
 		<div class="column-header badge-right">
-			<h3><span class="material-symbols-outlined header-icon-symbol">tune</span>有効な機能</h3>
 			<ScopeBadge scope="user_bot" />
 			<span class="badge badge-accent">{onCount} / {modules.length}</span>
+			<Button
+				variant="icon-sm"
+				title="既定に戻す"
+				aria-label="既定に戻す"
+				onclick={resetToDefault}><Icon name="restart_alt" /></Button
+			>
 		</div>
 		<div class="modules-grid">
 			{#each modules as m (m.id)}
 				<label class="module-toggle">
-					<Checkbox bind:checked={enabledMap[m.id]} aria-label={m.label} />
-					<div>
-						<div class="module-label">{m.label}</div>
-						<div class="field-sub">{m.description || ""}</div>
-					</div>
+					<Checkbox
+						bind:checked={enabledMap[m.id]}
+						onchange={saveSelected}
+						aria-label={m.label}
+					/>
+					<div class="module-label">{m.label}</div>
+					{#if m.description}
+						<div class="field-sub module-desc">{m.description}</div>
+					{/if}
 				</label>
 			{/each}
-		</div>
-		<div class="modules-actions">
-			<Button variant="primary" onclick={saveSelected}>機能を保存</Button>
-			<Button variant="secondary" onclick={() => save("all")}>既定に戻す</Button>
 		</div>
 	</section>
 {/if}
 
 <style>
 	.modules-grid {
-		display: grid;
-		grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-		gap: 8px;
+		display: flex;
+		flex-direction: column;
 		margin-top: 12px;
 	}
 	.module-toggle {
-		display: flex;
-		gap: 8px;
-		align-items: flex-start;
-		padding: 8px;
-		border: 1px solid var(--border-matte);
-		border-radius: 8px;
+		display: grid;
+		grid-template-columns: auto 1fr;
+		column-gap: 8px;
+		align-items: center;
+		padding: 10px 0;
 		cursor: pointer;
+	}
+	.module-toggle + .module-toggle {
+		border-top: 1px solid var(--border-matte);
+	}
+	.module-desc {
+		grid-column: 2;
 	}
 	.module-label {
 		font-weight: 600;
-	}
-	.modules-actions {
-		display: flex;
-		gap: 12px;
-		margin-top: 16px;
-		align-items: center;
 	}
 </style>

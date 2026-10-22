@@ -96,6 +96,7 @@ export type BotTab =
 	| "profile"
 	| "personas"
 	| "features"
+	| "llm"
 	| "access"
 	| "playbooks"
 	| "delivery"
@@ -112,7 +113,7 @@ export interface ResolvedRoute {
 }
 
 /**
- * Bot タブ: 日常機能 7 + 設定ハブ配下 8（$lib/botTabs）+ 設定ハブ自身。
+ * Bot タブ: 日常機能 7 + 設定ハブ配下 9（$lib/botTabs）+ 設定ハブ自身。
  * 未知タブ（再構成で無くなった旧 /bot/config・/bot/devices・/bot/mcp を含む）→ DEFAULT_BOT_TAB。
  */
 export const BOT_TABS: BotTab[] = [
@@ -126,6 +127,7 @@ export const BOT_TABS: BotTab[] = [
 	"profile",
 	"personas",
 	"features",
+	"llm",
 	"access",
 	"playbooks",
 	"delivery",

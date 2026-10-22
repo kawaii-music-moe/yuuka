@@ -44,6 +44,7 @@ const TAB_LOADERS: Record<BotTab, Loader> = {
 	profile: () => import("./BotProfile.svelte"),
 	personas: () => import("./BotPersonas.svelte"),
 	features: () => import("./BotFeatures.svelte"),
+	llm: () => import("./BotLlm.svelte"),
 	access: () => import("./BotAccess.svelte"),
 	playbooks: () => import("./BotPlaybooks.svelte"),
 	delivery: () => import("./BotDelivery.svelte"),

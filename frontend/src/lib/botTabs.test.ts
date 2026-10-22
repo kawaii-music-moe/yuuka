@@ -42,7 +42,7 @@ describe("hubGroups", () => {
 		expect(groups).toEqual([
 			{
 				category: "bot",
-				tabs: ["profile", "personas", "features", "access"],
+				tabs: ["profile", "personas", "features", "llm", "access"],
 				unavailable: false,
 			},
 			{ category: "automation", tabs: [], unavailable: true },
@@ -85,6 +85,7 @@ describe("hubGroups", () => {
 			"profile",
 			"personas",
 			"features",
+			"llm",
 			"access",
 			"playbooks",
 			"delivery",

@@ -218,7 +218,7 @@ async function downloadPackage(e: SubmitEvent): Promise<void> {
 					<div class="config-card card account-card">
 						<p class="description-text">
 							秘書属性のBotは、話しかけた人のこの API キーとモデルで応答します（共有されたBotでも、各自のキーが使われます）。
-							汎用属性のBotはこの設定を使わず、Bot設定の「機能と AI」にある Bot 専用のキーとモデルで応答します。
+							汎用属性のBotはこの設定を使わず、Bot設定の「LLM機能」にある Bot 専用のキーとモデルで応答します。
 						</p>
 						<p class="description-text">Web アプリ（PWA）の設定にある「使用モデル」も、この設定と同じです。</p>
 						<form onsubmit={saveGemini} style="display: flex; flex-direction: column; gap: 12px; margin-top: 16px;">

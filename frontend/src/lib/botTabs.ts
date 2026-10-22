@@ -80,9 +80,16 @@ export const SETTINGS_HUB_ITEMS: SettingsHubItem[] = [
 	},
 	{
 		tab: "features",
-		label: "機能と AI",
-		desc: "このBotで使う機能と、応答に使う AI",
+		label: "有効な機能",
+		desc: "このBotで使う機能",
 		category: "bot",
+	},
+	{
+		tab: "llm",
+		label: "LLM機能",
+		desc: "このBotが応答に使う AI プロバイダ・モデル・API キー",
+		category: "bot",
+		only: "mcp_assistant",
 	},
 	{
 		tab: "access",
