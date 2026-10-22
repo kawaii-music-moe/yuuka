@@ -131,7 +131,7 @@ async function revoke(share: BotShare) {
 								{share.status === "active" ? "承認済み" : "招待中"}
 							</span>
 						</div>
-						<Button variant="secondary" small onclick={() => revoke(share)}>
+						<Button variant="secondary" class="revoke-button" small onclick={() => revoke(share)}>
 							取り消し
 						</Button>
 					</div>
@@ -161,6 +161,9 @@ async function revoke(share: BotShare) {
 		padding: 8px 12px;
 		border: 1px solid var(--border-matte);
 		border-radius: var(--radius);
+	}
+	.share-row :global(.revoke-button) {
+		border: 0;
 	}
 	.share-info {
 		display: flex;
