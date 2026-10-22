@@ -12,6 +12,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { beforeAll, describe, expect, it, vi } from "vitest";
+import { ADMIN_SECTIONS } from "./managementSections";
 import { cleanPath, isAllowedReturnPath, isPublicPath } from "./router";
 
 describe("cleanPath", () => {
@@ -160,9 +161,11 @@ describe("with BASE_PATH=/admin (frontend/vite.config.ts の base と一致)", (
 			expect(withBasePath("/admin")).toBe("/admin/admin");
 		});
 
-		it("is idempotent when already base-prefixed", () => {
-			expect(withBasePath("/admin/bot/dashboard")).toBe("/admin/bot/dashboard");
-			expect(withBasePath("/admin/")).toBe("/admin/");
+		it("prefixes admin section paths, including queries and fragments", () => {
+			expect(withBasePath("/admin/users?sort=name#list")).toBe(
+				"/admin/admin/users?sort=name#list",
+			);
+			expect(withBasePath("/admin/")).toBe("/admin/admin/");
 		});
 	});
 
@@ -172,6 +175,24 @@ describe("with BASE_PATH=/admin (frontend/vite.config.ts の base と一致)", (
 		it("resolves the physical SPA root to the bots view", () => {
 			expect(resolveRoute(toUrl("/admin")).view).toBe("bots");
 			expect(resolveRoute(toUrl("/admin/")).view).toBe("bots");
+		});
+
+		it.each(
+			ADMIN_SECTIONS,
+		)("keeps the admin view when navigating to $key and after reloading", ({
+			key,
+		}) => {
+			const path = withBasePath(`/admin/${key}`);
+			expect(path).toBe(`/admin/admin/${key}`);
+			expect(resolveRoute(toUrl(path))).toEqual({
+				view: "admin",
+				params: { section: key },
+			});
+			const target = resolveReturnTarget(path);
+			expect(target).toEqual({ kind: "app", path: `/admin/${key}` });
+			if (target.kind === "app") {
+				expect(withBasePath(target.path)).toBe(path);
+			}
 		});
 
 		it("resolves the physical /admin/admin path to the admin view (no collision with BASE_PATH)", () => {

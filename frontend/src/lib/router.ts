@@ -60,16 +60,12 @@ function stripBasePath(pathname: string): string {
  * アプリ相対パス（"/bot/dashboard" 等。クエリ付きも可）に BASE_PATH を付与し、ブラウザで実際に
  * 使える URL にする。`<a href>` や pushState に使う。
  *
- * 既に `${BASE_PATH}/...`（物理パス）の形であればそのまま返す（外部由来の returnTo 等、既に
- * 物理パスが渡ってくる場合の二重付与を防ぐ）。ただし **`path === BASE_PATH` 単独一致では
- * 早期リターンしない**: アプリには実在するルート "/admin"（AdminOverlay）があり、これは
- * BASE_PATH="/admin" と文字列として偶然一致する。ここで素通りさせると
- * withBasePath("/admin") が "/admin/admin" ではなく "/admin" を返してしまい、AdminOverlay への
- * 遷移が壊れる（物理 URL がアプリ相対パスと同じ＝実質ルート "/" に化ける）。
+ * 入力は常にアプリ相対パス。管理者設定の "/admin/users" 等も BASE_PATH と同じ接頭辞を
+ * 持つため、文字列から物理パスかどうかは判別できない。外部由来の物理 URL は
+ * resolveReturnTarget() で先にアプリ相対パスへ変換する。
  */
 export function withBasePath(path: string): string {
 	if (!BASE_PATH) return path;
-	if (path.startsWith(`${BASE_PATH}/`)) return path;
 	return path === "/" ? `${BASE_PATH}/` : `${BASE_PATH}${path}`;
 }
 
