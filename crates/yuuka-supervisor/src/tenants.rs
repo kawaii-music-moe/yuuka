@@ -103,6 +103,17 @@ impl TenantRegistry {
         }
     }
 
+    /// REST 更新を gateway のプロフィールキャッシュにも反映する。
+    fn cache_bot_account(&self, user: &GatewayBotUser) {
+        for slot in self.slots().values() {
+            if let Some(current) = slot.status.bot_user().filter(|u| u.id == user.id) {
+                let mut updated = user.clone();
+                updated.avatar_url = current.avatar_url;
+                slot.status.set_bot_user(updated);
+            }
+        }
+    }
+
     /// 稼働中テナントの REST クライアント（非稼働は `None`。guild-options 照会用）。
     #[must_use]
     pub fn http_client(&self, bot_id: &str) -> Option<Arc<HttpClient>> {
@@ -368,6 +379,57 @@ impl RegistryDiscordLive {
 
 #[async_trait::async_trait]
 impl yuuka_orchestrator::DiscordLive for RegistryDiscordLive {
+    async fn fetch_bot_account(
+        &self,
+        bot_id: &str,
+    ) -> Result<yuuka_orchestrator::DiscordBotUser, String> {
+        let client = self
+            .registry
+            .http_client(bot_id)
+            .ok_or("DiscordのBotが未連携または停止中です。連携と起動状態を確認してください。")?;
+        let response = client.current_user().await.map_err(|error| {
+            tracing::warn!(%error, bot_id, "Discord アカウント取得失敗");
+            "DiscordのBotアカウントを取得できませんでした。トークンと接続状態を確認してください。"
+        })?;
+        let user = response
+            .model()
+            .await
+            .map_err(|_| "Discordの応答を読み取れませんでした。")?;
+        let account = GatewayBotUser {
+            id: user.id.to_string(),
+            username: user.name,
+            avatar_url: String::new(),
+        };
+        self.registry.cache_bot_account(&account);
+        Ok(Self::to_bot_user(account))
+    }
+
+    async fn rename_bot_account(
+        &self,
+        bot_id: &str,
+        name: &str,
+    ) -> Result<yuuka_orchestrator::DiscordBotUser, String> {
+        let client = self
+            .registry
+            .http_client(bot_id)
+            .ok_or("DiscordのBotが未連携または停止中です。連携と起動状態を確認してください。")?;
+        let response = client.update_current_user().username(name).await.map_err(|error| {
+            tracing::warn!(%error, bot_id, "Discord アカウント名更新失敗");
+            "DiscordのBotアカウント名を更新できませんでした。名前の制約・変更頻度・接続状態を確認して再試行してください。"
+        })?;
+        let user = response
+            .model()
+            .await
+            .map_err(|_| "Discordの応答を読み取れませんでした。")?;
+        let account = GatewayBotUser {
+            id: user.id.to_string(),
+            username: user.name,
+            avatar_url: String::new(),
+        };
+        self.registry.cache_bot_account(&account);
+        Ok(Self::to_bot_user(account))
+    }
+
     async fn custom_bot_user(&self, bot_id: &str) -> Option<yuuka_orchestrator::DiscordBotUser> {
         self.registry.bot_user(bot_id).map(Self::to_bot_user)
     }

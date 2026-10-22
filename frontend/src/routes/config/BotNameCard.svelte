@@ -2,6 +2,7 @@
 // Bot登録名カード（旧 bot-name-form / fetchBotAttributeConfig の name 部分）。
 // owner/Admin かつ非デフォルト Bot のときだけ親が描画する。
 
+import { untrack } from "svelte";
 import { ApiError } from "$lib/api/client";
 import { botAttributeApi } from "$lib/api/services";
 import { Button } from "$lib/components/ui";
@@ -19,10 +20,20 @@ let { botId, bot, onsaved }: Props = $props();
 let name = $state("");
 let linked = $state(false);
 let saving = $state(false);
-// bot が変わるたびに現在の登録名で初期化。
+// 同期解除後の親の再取得でも未保存の入力を維持する。
+let lastBotId = "";
+let lastSavedName = "";
 $effect(() => {
-	name = bot.name ?? "";
-	linked = bot.name_linked_to_discord ?? false;
+	const current = bot;
+	const currentBotId = botId;
+	untrack(() => {
+		if (lastBotId !== currentBotId || current.name !== lastSavedName) {
+			name = current.name ?? "";
+		}
+		lastBotId = currentBotId;
+		lastSavedName = current.name;
+		linked = current.name_linked_to_discord ?? false;
+	});
 });
 
 async function toggleLink() {
@@ -30,16 +41,17 @@ async function toggleLink() {
 	saving = true;
 	try {
 		const next = !linked;
-		await botAttributeApi.updateBotProfile({
+		const response = await botAttributeApi.updateBotProfile({
 			botId,
 			nameLinkedToDiscord: next,
 		});
 		linked = next;
-		name = next ? bot.discord_username || bot.name : name;
+		if (next) name = response.name;
+		lastSavedName = response.name;
 		pushToast(
 			next
-				? "Discord名とのリンクを有効にしました。"
-				: "Discord名とのリンクを解除しました。",
+				? "Discordアカウント名との同期を有効にしました。"
+				: "Discordアカウント名との同期を解除しました。",
 			"success",
 		);
 		onsaved?.();
@@ -55,7 +67,7 @@ async function toggleLink() {
 
 async function submit(e: SubmitEvent) {
 	e.preventDefault();
-	if (saving || linked) return;
+	if (saving) return;
 	const trimmed = name.trim();
 	if (!trimmed) {
 		pushToast("登録名を入力してください。", "error");
@@ -91,21 +103,20 @@ async function submit(e: SubmitEvent) {
 				autocomplete="off"
 				bind:value={name}
 				aria-label="Bot登録名"
-				readonly={linked}
 				disabled={saving}
 			/>
 			<button
 				type="button"
 				class="link-button"
 				class:linked
-				aria-label={linked ? "Discord名とのリンクを解除" : "Discord名とリンク"}
-				title={linked ? "Discord名とのリンクを解除" : "Discord名とリンク"}
+				aria-label={linked ? "Discordアカウント名との同期を解除" : "Discordアカウント名と同期"}
+				title={linked ? "Discordアカウント名との同期を解除" : "Discordアカウント名と同期"}
 				aria-pressed={linked}
 				disabled={saving}
 				onclick={toggleLink}
 			><span class="material-symbols-outlined" aria-hidden="true">{linked ? "link" : "link_off"}</span></button>
 		</div>
-		<Button type="submit" variant="primary" disabled={saving || linked}>登録名を保存</Button>
+		<Button type="submit" variant="primary" disabled={saving}>登録名を保存</Button>
 	</form>
 </section>
 

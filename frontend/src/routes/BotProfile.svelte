@@ -6,6 +6,7 @@
 // 編集できるのは owner|Admin かつ非デフォルト Bot のみ（旧 BotConfig の showOwnerCards と同条件）。
 // デフォルト Bot は設定ハブに行自体を出さない（$lib/botTabs）。
 // ─────────────────────────────────────────────────────────────────────────
+import { untrack } from "svelte";
 import { activeBot } from "$lib/stores/activeBot";
 import { currentUser } from "$lib/stores/session";
 import BotAttributeCard from "./config/BotAttributeCard.svelte";
@@ -31,11 +32,17 @@ const canEdit = $derived(
 $effect(() => {
 	const id = botId;
 	void reloadNonce;
-	loaded = false;
+	if (untrack(() => bot?.id) !== id) loaded = false;
 	void fetchBotAttr(id).then((b) => {
 		// Bot 切替の競合防止: 応答が現在選択中の Bot のものでなければ捨てる。
 		if (id !== ($activeBot?.id ?? "")) return;
 		bot = b;
+		if (b)
+			activeBot.update((current) =>
+				current?.id === id && current.name !== b.name
+					? { ...current, name: b.name }
+					: current,
+			);
 		loaded = true;
 	});
 });

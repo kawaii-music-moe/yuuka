@@ -345,7 +345,7 @@ pub async fn delete_bot(db: &Db, bot_id: &str) -> Result<bool, DbError> {
         .await
 }
 
-/// Bot プロフィール（名前 + 任意のアバター）を更新する（Node `updateBotProfile`）。行が動けば `true`。
+/// 登録名・任意のアバター・同期状態を保存する。Discord への変更は呼び出し側で先に行う。
 /// `avatar_url` が `None` のときは既存アバターを保持（`COALESCE`）。
 ///
 /// # Errors
@@ -366,8 +366,7 @@ pub async fn update_bot_profile(
         .transaction(move |tx| {
             let n = tx
                 .execute(
-                    "UPDATE bots SET name = CASE WHEN COALESCE(?4, name_linked_to_discord) = 1 \
-                        THEN COALESCE(NULLIF(discord_username, ''), name) ELSE ?1 END, \
+                    "UPDATE bots SET name = ?1, \
                         name_linked_to_discord = COALESCE(?4, name_linked_to_discord), \
                         discord_avatar_url = COALESCE(?2, discord_avatar_url), \
                         updated_at = datetime('now','localtime') WHERE id = ?3",
@@ -375,6 +374,47 @@ pub async fn update_bot_profile(
                 )
                 .map_err(map_sqlite)?;
             Ok(n > 0)
+        })
+        .await
+}
+
+/// Discord 更新成功後に登録名と同期状態を一括保存する。
+/// 同じアカウントに連携する Bot は、同期 ON の登録名だけ追従する。
+///
+/// # Errors
+/// DB 書き込み失敗時に返す。
+pub async fn save_discord_account_name(
+    db: &Db,
+    bot_id: &str,
+    name: &str,
+    account_id: &str,
+    avatar: Option<&str>,
+) -> Result<(), DbError> {
+    let (bid, name, account_id, avatar) = (
+        bot_id.to_owned(),
+        name.to_owned(),
+        account_id.to_owned(),
+        avatar.map(str::to_owned),
+    );
+    db.writer
+        .transaction(move |tx| {
+            tx.execute(
+                "UPDATE bots SET name = ?2, name_linked_to_discord = 1,
+             discord_username = ?2, discord_application_id = ?3,
+             discord_avatar_url = COALESCE(?4, discord_avatar_url),
+             updated_at = datetime('now','localtime') WHERE id = ?1",
+                params![bid, name, account_id, avatar],
+            )
+            .map_err(map_sqlite)?;
+            tx.execute(
+                "UPDATE bots SET discord_username = ?2,
+             name = CASE WHEN name_linked_to_discord = 1 THEN ?2 ELSE name END,
+             updated_at = datetime('now','localtime')
+             WHERE discord_application_id = ?1 AND id != ?3",
+                params![account_id, name, bid],
+            )
+            .map_err(map_sqlite)?;
+            Ok(())
         })
         .await
 }
@@ -2206,7 +2246,7 @@ mod crud_tests {
             .await
             .unwrap();
         assert_eq!(read().await.unwrap().unwrap().name, "Local");
-        update_bot_profile(&db, "linked", "Local", None, Some(true))
+        save_discord_account_name(&db, "linked", "Discord", "account", None)
             .await
             .unwrap();
         let bot = read().await.unwrap().unwrap();
@@ -2216,14 +2256,14 @@ mod crud_tests {
             .await
             .unwrap();
         assert_eq!(read().await.unwrap().unwrap().name, "Changed");
-        update_bot_profile(&db, "linked", "Ignored", None, None)
+        update_bot_profile(&db, "linked", "Manual", None, None)
             .await
             .unwrap();
-        assert_eq!(read().await.unwrap().unwrap().name, "Changed");
+        assert_eq!(read().await.unwrap().unwrap().name, "Manual");
         update_discord_profile(&db, "linked", "", "", "")
             .await
             .unwrap();
-        assert_eq!(read().await.unwrap().unwrap().name, "Changed");
+        assert_eq!(read().await.unwrap().unwrap().name, "Manual");
         update_bot_profile(&db, "linked", "Custom", None, Some(false))
             .await
             .unwrap();
@@ -2233,7 +2273,7 @@ mod crud_tests {
         let bot = read().await.unwrap().unwrap();
         assert!(!bot.name_linked_to_discord);
         assert_eq!(bot.name, "Custom");
-        // Enabling before the first Discord profile arrives preserves a usable name.
+        // Repository persistence accepts an explicit link flag; the HTTP route validates Discord first.
         create_bot(&db, "waiting", "owner", "Waiting")
             .await
             .unwrap();
@@ -2251,6 +2291,33 @@ mod crud_tests {
             get_bot_detail(&db, "waiting").await.unwrap().unwrap().name,
             "Arrived"
         );
+    }
+
+    #[tokio::test]
+    async fn same_account_updates_linked_bots_and_preserves_unlinked_names() {
+        let db = seed_db();
+        for id in ["first", "second", "unlinked"] {
+            create_bot(&db, id, "owner", id).await.unwrap();
+            update_discord_profile(&db, id, "Account", "", "shared-account")
+                .await
+                .unwrap();
+        }
+        save_discord_account_name(&db, "second", "Account", "shared-account", None)
+            .await
+            .unwrap();
+        save_discord_account_name(&db, "first", "Renamed", "shared-account", None)
+            .await
+            .unwrap();
+        for id in ["first", "second"] {
+            let bot = get_bot_detail(&db, id).await.unwrap().unwrap();
+            assert_eq!(bot.name, "Renamed");
+            assert_eq!(bot.discord_username.as_deref(), Some("Renamed"));
+            assert!(bot.name_linked_to_discord);
+        }
+        let bot = get_bot_detail(&db, "unlinked").await.unwrap().unwrap();
+        assert_eq!(bot.name, "unlinked");
+        assert_eq!(bot.discord_username.as_deref(), Some("Renamed"));
+        assert!(!bot.name_linked_to_discord);
     }
 
     #[tokio::test]

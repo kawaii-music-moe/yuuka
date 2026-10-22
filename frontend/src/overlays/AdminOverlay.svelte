@@ -494,7 +494,7 @@ function botStatus(bot: AdminBotView): { label: string; tone: string } {
 						{#each botsList as bot (bot.id)}
 							{@const st = botStatus(bot)}
 							<tr>
-								<td class="admin-table-td admin-td-name">{bot.discord_username || bot.name}</td>
+								<td class="admin-table-td admin-td-name">{bot.name}</td>
 								<td class="admin-table-td">{bot.owner_username}</td>
 								<td class="admin-table-td"
 									><span class="admin-status-badge {st.tone}">{st.label}</span></td

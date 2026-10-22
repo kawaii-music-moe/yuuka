@@ -82,7 +82,7 @@ impl TenantStatus {
             .clone()
     }
 
-    pub(crate) fn set_bot_user(&self, user: GatewayBotUser) {
+    pub fn set_bot_user(&self, user: GatewayBotUser) {
         *self
             .user
             .lock()
@@ -159,9 +159,10 @@ pub async fn run_tenant(
                         status.set_connected(true);
                     }
                     Event::UserUpdate(update) => {
-                        // 稼働中のプロフィール変更（旧 `client.user` の自動更新相当）。DB への反映は
-                        // 定期同期に任せる（旧 Node と同じ）。
-                        status.set_bot_user(gateway_bot_user(&update));
+                        // アカウント名を外部から変更した場合も同期 ON の登録名へ即時反映。
+                        let user = gateway_bot_user(&update);
+                        status.set_bot_user(user.clone());
+                        sync_profile(flow.directory.as_ref(), &cfg.bot_id, &user).await;
                     }
                     Event::MessageCreate(msg) => {
                         if let Some(rt) = runtime.clone() {

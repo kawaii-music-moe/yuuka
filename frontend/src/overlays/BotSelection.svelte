@@ -104,7 +104,7 @@ function statusOf(bot: BotView): { dot: string; label: string } {
 }
 
 function displayName(bot: BotView): string {
-	return bot.discord_username || bot.name;
+	return bot.name;
 }
 
 // ── Bot 選択（旧 selectBot） ──

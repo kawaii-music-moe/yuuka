@@ -35,9 +35,13 @@ export const botApi = {
 	syncDiscord: (botId: string) =>
 		api.post<BotResponse>("/api/bots/sync-discord", { botId }, USER),
 
-	/** POST /api/bots/profile — トークン/APIキー等プロフィール更新 */
+	/** POST /api/bots/profile — 登録名保存・Discordアカウント名との同期切り替え */
 	updateProfile: (body: Record<string, unknown>) =>
-		api.post<BotResponse>("/api/bots/profile", body, USER),
+		api.post<ApiResponse & { name: string; name_linked_to_discord: boolean }>(
+			"/api/bots/profile",
+			body,
+			USER,
+		),
 
 	/** GET /api/bots/presets — プリセット一覧 */
 	presets: () => api.get<PresetsResponse>("/api/bots/presets", USER),
