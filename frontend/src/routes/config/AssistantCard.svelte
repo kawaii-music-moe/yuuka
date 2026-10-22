@@ -121,9 +121,6 @@ async function saveKey() {
 		<h3><span class="material-symbols-outlined header-icon-symbol">extension</span>汎用モード設定</h3>
 		<span class="badge badge-accent">OWNER専用</span>
 	</div>
-	<p class="description-text">
-		サーバー常駐アシスタントの動作設定です。応答には「Bot専用のGemini APIキー」「独自Discordトークン」「応答許可ギルド」の設定が必要です。
-	</p>
 
 	{#if warnings.length > 0}
 		<div class="warnings">
@@ -161,9 +158,6 @@ async function saveKey() {
 			/>
 			<Button variant="primary" onclick={saveKey}>保存</Button>
 		</div>
-		<span class="field-sub">
-			※あなた個人のAPIキーとは別に管理・暗号化保存されます。空欄で保存すると削除され、Botは応答を停止します。
-		</span>
 	</details>
 
 	<details class="form-group collapsible-group">

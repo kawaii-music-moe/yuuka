@@ -63,7 +63,6 @@ async function submit(e: SubmitEvent) {
 				autocomplete="new-password"
 				bind:value={token}
 			/>
-			<span class="field-sub">※独自Botを使用しない場合は空欄にしてください。</span>
 		</div>
 		<Button type="submit" variant="primary">Discord 設定を保存</Button>
 	</form>

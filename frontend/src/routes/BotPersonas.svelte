@@ -199,9 +199,6 @@ async function importPersona(id: number) {
 		<div class="column-header">
 			<h3><Icon name="theater_comedy" class="header-icon-symbol" />マイペルソナ</h3>
 		</div>
-		<p class="description-text">
-			作成したペルソナの一覧です。「適用」すると会話に反映されます。「公開」するとマーケットプレイスに掲載されます。
-		</p>
 		<div class="list-container personas-list">
 			{#if personas.length > 0}
 				{#each personas as p (p.id)}
@@ -263,9 +260,6 @@ async function importPersona(id: number) {
 			</h3>
 			<span class="badge badge-accent">公開ペルソナ</span>
 		</div>
-		<p class="description-text">
-			他のユーザーが公開しているペルソナです。インポートすると自分のペルソナとして独立コピーされます。
-		</p>
 		<div class="list-container personas-list">
 			{#if marketplace.length > 0}
 				{#each marketplace as m (m.id)}

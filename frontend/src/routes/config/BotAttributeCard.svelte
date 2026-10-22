@@ -76,9 +76,6 @@ async function save() {
 		<h3><span class="material-symbols-outlined header-icon-symbol">category</span>Bot属性（プリセット）</h3>
 		{#if currentBadge}<span class="badge badge-accent">{currentBadge}</span>{/if}
 	</div>
-	<p class="description-text">
-		このBotの機能セットを選択します。変更は次のメッセージ処理から即時反映されます。
-	</p>
 	<div class="attr-row">
 		<select bind:value={selected}>
 			{#each presets as p (p.id)}
@@ -87,9 +84,6 @@ async function save() {
 		</select>
 		<Button variant="primary" onclick={save}>属性を変更</Button>
 	</div>
-	<span class="field-sub">
-		※「汎用モード」はサーバー常駐の簡易Bot（MCP接続 + ペルソナ + メモリ）です。タスク・家計などの秘書機能は無効になります。
-	</span>
 </section>
 
 <style>

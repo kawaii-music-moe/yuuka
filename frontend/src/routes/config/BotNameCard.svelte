@@ -46,9 +46,6 @@ async function submit(e: SubmitEvent) {
 	<div class="column-header">
 		<h3><span class="material-symbols-outlined header-icon-symbol">badge</span>Bot登録名</h3>
 	</div>
-	<p class="description-text">
-		このBotの登録名（管理画面・Bot選択画面で表示される名前）を変更します。Discord上の表示名とは別です。
-	</p>
 	<form onsubmit={submit} class="name-form">
 		<input
 			type="text"

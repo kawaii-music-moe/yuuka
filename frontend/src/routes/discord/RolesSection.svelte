@@ -128,9 +128,6 @@ async function remove(r: AssistantRole, shift: boolean) {
 
 <details class="form-group collapsible-group">
 	<summary>利用可能ロール</summary>
-	<p class="description-text sub">
-		許可したDiscordロールの保有者は、個別追加なしで利用できます（判定はメッセージ受信時に行われます）。ギルドを選ぶとロール一覧を取得します。削除ボタンはShiftを押しながらで確認なしに削除できます。
-	</p>
 	<div class="add-row">
 		<select bind:value={selectedGuild} class="min180">
 			{#each guilds as g (g.guild_id)}
@@ -172,9 +169,6 @@ async function remove(r: AssistantRole, shift: boolean) {
 </details>
 
 <style>
-	.sub {
-		margin: 4px 0 8px;
-	}
 	.add-row {
 		display: flex;
 		gap: 12px;

@@ -98,9 +98,6 @@ async function remove(ch: AssistantChannel, shift: boolean) {
 
 <details class="form-group collapsible-group">
 	<summary>有効化チャンネル（メンション不要）</summary>
-	<p class="description-text sub">
-		登録したチャンネルでは、Botへのメンションや返信が無くても全メッセージに応答します。雑談チャンネルなどで気軽に会話させたい場合に使います。利用資格（メンバー/ロール）・レート制限は通常どおり適用されます。削除ボタンはShiftを押しながらで確認なしに削除できます。
-	</p>
 	<div class="add-row">
 		<select bind:value={selectedGuild} class="min180">
 			{#each guilds as g (g.guild_id)}
@@ -134,9 +131,6 @@ async function remove(ch: AssistantChannel, shift: boolean) {
 </details>
 
 <style>
-	.sub {
-		margin: 4px 0 8px;
-	}
 	.add-row {
 		display: flex;
 		gap: 12px;

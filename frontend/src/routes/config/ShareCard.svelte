@@ -89,9 +89,6 @@ async function revoke(share: BotShare) {
 			<h3><span class="material-symbols-outlined header-icon-symbol">group_add</span>Bot 共有管理</h3>
 			<span class="badge badge-accent">オーナー専用</span>
 		</div>
-		<p class="description-text">
-			このBotを他のユーザーと共有できます。招待DMが送信され、相手が承認するとアクセスが有効になります。
-		</p>
 		<div class="shares-list">
 			{#if shares.length === 0}
 				<p class="empty">共有中のユーザーはいません。</p>

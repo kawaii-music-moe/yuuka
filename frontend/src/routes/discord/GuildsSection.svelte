@@ -73,9 +73,6 @@ async function remove(g: AssistantGuild) {
 
 <details class="form-group collapsible-group" open>
 	<summary>応答許可ギルド</summary>
-	<p class="description-text sub">
-		登録したギルド（DiscordサーバーID）でのみ応答します。未許可ギルドでは一切応答・記録しません。
-	</p>
 	<div class="add-row">
 		<input type="text" placeholder="ギルドID（数字）" class="mono" bind:value={guildInput} />
 		<Button variant="primary" onclick={add}>追加</Button>
@@ -99,9 +96,6 @@ async function remove(g: AssistantGuild) {
 </details>
 
 <style>
-	.sub {
-		margin: 4px 0 8px;
-	}
 	.add-row {
 		display: flex;
 		gap: 12px;

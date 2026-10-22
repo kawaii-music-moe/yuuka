@@ -81,9 +81,6 @@ async function save() {
 
 <details class="form-group collapsible-group">
 	<summary>共有ノート（ギルドノート）</summary>
-	<p class="description-text sub">
-		ギルド共有の知識ベース（ルール・用語・運用手順）です。利用メンバーは会話からも参照・編集できます。ギルドを選んで「編集」を押すとモーダルで編集できます。
-	</p>
 	<div class="note-row">
 		<select bind:value={selectedGuild} class="grow">
 			{#each guilds as g (g.guild_id)}
@@ -109,9 +106,6 @@ async function save() {
 </Modal>
 
 <style>
-	.sub {
-		margin: 4px 0 8px;
-	}
 	.note-row {
 		display: flex;
 		gap: 12px;

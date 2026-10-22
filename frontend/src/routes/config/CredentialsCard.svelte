@@ -41,7 +41,7 @@ function updatedOf(c: CredentialRow): string {
 		<span class="badge badge-accent">読み取り専用</span>
 	</div>
 	<p class="description-text">
-		このBotがAIエージェントの自動ブラウジング等で利用できる認証情報の一覧です。パスワードはAES-256-GCMで暗号化保存され、ここには表示されません。認証情報の登録・管理は「Bot統合管理」で行います。
+		認証情報の登録・管理は「Bot統合管理」で行います。
 	</p>
 
 	<div class="table-responsive">

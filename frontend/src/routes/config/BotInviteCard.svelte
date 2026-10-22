@@ -55,7 +55,6 @@ async function sync() {
 			<CopyField
 				label="導入リンク（サーバーに追加）"
 				value={inviteUrl}
-				sub="※チャンネル表示・メッセージ送信／履歴閲覧・埋め込みリンク・ファイル添付の権限を付与した状態で開きます。"
 			/>
 			<CopyField label="プロフィールURL" value={profileUrl} />
 		</div>

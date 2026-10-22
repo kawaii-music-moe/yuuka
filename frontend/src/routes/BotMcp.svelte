@@ -185,11 +185,6 @@ function openDashboard(s: McpServerView) {
 					<Icon name="hub" class="header-icon-symbol" />このBotが利用するMCPサーバー
 				</h3>
 			</div>
-			<p class="description-text">
-				このBotが会話で利用するMCPサーバーです。<strong
-					>Botを共有しているユーザー間で同期</strong
-				>され、オーナー・共有相手のどちらからでも追加・解除できます（追加できるのは自分が登録したサーバーのみ）。
-			</p>
 			<div class="mcp-servers-list">
 				{#if botServers.length > 0}
 					{#each botServers as s (s.id)}

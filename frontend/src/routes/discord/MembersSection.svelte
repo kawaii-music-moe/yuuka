@@ -133,9 +133,6 @@ async function remove(m: AssistantMember, shift: boolean) {
 
 <details class="form-group collapsible-group">
 	<summary>利用メンバー</summary>
-	<p class="description-text sub">
-		ギルドごとの利用メンバーを管理します。あなた（owner）は常に利用できます。プルダウンから選ぶか、一覧に無い場合はユーザーIDを直接入力してください。削除ボタンはShiftを押しながらで確認なしに削除できます。
-	</p>
 	<div class="add-row">
 		<select bind:value={selectedGuild} class="min180">
 			{#each guilds as g (g.guild_id)}
@@ -179,9 +176,6 @@ async function remove(m: AssistantMember, shift: boolean) {
 </details>
 
 <style>
-	.sub {
-		margin: 4px 0 8px;
-	}
 	.add-row {
 		display: flex;
 		gap: 12px;

@@ -219,28 +219,23 @@ let sidebarOpen = $state(false);
 				<h1 class="home-greeting-title">
 					おかえりなさい、{$currentUser?.username ?? "—"}
 				</h1>
-				<p class="home-greeting-sub">AIアシスタントの管理ポータルへようこそ</p>
 			</div>
 			<div class="home-stats">
 				<div class="home-stat-card">
 					<div class="home-stat-label">TOTAL BOTS</div>
 					<div class="home-stat-value">{total}</div>
-					<div class="home-stat-sub">登録済みアシスタント</div>
 				</div>
 				<div class="home-stat-card stat-online">
 					<div class="home-stat-label">ONLINE</div>
 					<div class="home-stat-value">{online}</div>
-					<div class="home-stat-sub">Discord接続中</div>
 				</div>
 				<div class="home-stat-card" class:stat-warning={connecting > 0}>
 					<div class="home-stat-label">CONNECTING</div>
 					<div class="home-stat-value">{connecting}</div>
-					<div class="home-stat-sub">接続処理中</div>
 				</div>
 				<div class="home-stat-card">
 					<div class="home-stat-label">STOPPED</div>
 					<div class="home-stat-value">{stopped}</div>
-					<div class="home-stat-sub">停止中</div>
 				</div>
 			</div>
 		</div>

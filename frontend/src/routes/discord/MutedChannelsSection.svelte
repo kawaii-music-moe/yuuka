@@ -98,9 +98,6 @@ async function remove(ch: AssistantChannel, shift: boolean) {
 
 <details class="form-group collapsible-group">
 	<summary>発言禁止チャンネル</summary>
-	<p class="description-text sub">
-		登録したチャンネルでは、Botへのメンションや返信があってもBotは一切応答しません。特定チャンネルで発言させたくない場合に使います。削除ボタンはShiftを押しながらで確認なしに削除できます。
-	</p>
 	<div class="add-row">
 		<select bind:value={selectedGuild} class="min180">
 			{#each guilds as g (g.guild_id)}
@@ -134,9 +131,6 @@ async function remove(ch: AssistantChannel, shift: boolean) {
 </details>
 
 <style>
-	.sub {
-		margin: 4px 0 8px;
-	}
 	.add-row {
 		display: flex;
 		gap: 12px;

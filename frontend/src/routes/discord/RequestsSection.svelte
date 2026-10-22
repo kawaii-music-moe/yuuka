@@ -56,9 +56,6 @@ async function decide(id: number, decision: "approved" | "rejected") {
 
 <details class="form-group collapsible-group">
 	<summary>利用申請（承認待ち）</summary>
-	<p class="description-text sub">
-		ユーザーからの利用申請を承認/却下します。承認すると利用メンバーへ追加され、申請者へ通知されます。新規申請はデフォルトBotからDMでも届きます。
-	</p>
 	<div class="row-list">
 		{#if loading}
 			<span class="field-sub">読み込み中…</span>
@@ -82,9 +79,6 @@ async function decide(id: number, decision: "approved" | "rejected") {
 </details>
 
 <style>
-	.sub {
-		margin: 4px 0 8px;
-	}
 	.row-list {
 		display: flex;
 		flex-direction: column;
