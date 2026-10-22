@@ -135,7 +135,7 @@ pub struct FileAttachment {
 /// （`yuuka-client-api`）が `secretary_turn_pwa` の埋め込みを `message_logs.rich_content` へ JSON で
 /// 永続化し、履歴取得時に読み戻すために使う（Discord 経路は twilight へ直接写像するだけで
 /// シリアライズを使わない・PWA 専用の利用）。
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RichEmbed {
     pub title: Option<String>,
@@ -147,7 +147,7 @@ pub struct RichEmbed {
 }
 
 /// 埋め込みフィールド（`RichEmbed` 参照）。
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct EmbedField {
     pub name: String,
     pub value: String,
@@ -395,15 +395,71 @@ pub struct SubmitOutcome {
     pub request_id: Option<i64>,
 }
 
-/// 申請可否操作の結果（現行 `decideMemberRequestById` の `{ ok, message?, status?, botName? }`）。
+/// 申請可否操作の結果（現行 `decideMemberRequestById` の `{ ok, message? }` + 決定した申請）。
 #[derive(Debug, Clone, Default)]
 pub struct DecisionOutcome {
     pub ok: bool,
     pub message: String,
-    pub status: Option<MemberDecision>,
-    pub bot_name: Option<String>,
-    /// 申請者（結果 DM の宛先・Node `sendMemberDecisionDM` の applicantId）。ok 時のみ。
-    pub applicant_id: Option<String>,
+    /// 決定した申請（受付 DM を決定済みの embed へ編集する材料）。ok 時のみ。
+    pub request: Option<DecidedRequest>,
+}
+
+/// 決定した利用申請（オーナー宛の受付 DM を決定済みの embed へ編集する材料）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DecidedRequest {
+    pub decision: MemberDecision,
+    pub bot_name: String,
+    /// 申請者の Discord ユーザー ID。
+    pub applicant_id: String,
+    /// 申請時に Discord から解決した申請者名（Web 経由の申請・記録前の申請は `None`）。
+    pub applicant_label: Option<String>,
+    pub guild_id: String,
+    /// 申請時に Discord から解決したギルド名（同上）。
+    pub guild_label: Option<String>,
+    /// 申請メッセージ（Web 経由の申請のみ）。
+    pub note: Option<String>,
+}
+
+impl DecidedRequest {
+    /// 受付 DM を置き換える決定済みの embed（Discord ボタン・Web のどちらで決定しても同じ表示にする）。
+    #[must_use]
+    pub fn embed(&self) -> RichEmbed {
+        let (title, color) = match self.decision {
+            MemberDecision::Approved => ("✅ 利用申請が承認されました", 0x57_F2_87),
+            MemberDecision::Rejected => ("🚫 利用申請が却下されました", 0xED_42_45),
+        };
+        let field = |name: &str, value: String, inline: bool| EmbedField {
+            name: name.to_owned(),
+            value,
+            inline,
+        };
+        let mut fields = vec![
+            field("Bot", self.bot_name.clone(), true),
+            field(
+                "申請者",
+                self.applicant_label
+                    .clone()
+                    .unwrap_or_else(|| format!("<@{}>", self.applicant_id)),
+                true,
+            ),
+            field(
+                "ギルド",
+                self.guild_label
+                    .clone()
+                    .unwrap_or_else(|| self.guild_id.clone()),
+                true,
+            ),
+        ];
+        if let Some(note) = &self.note {
+            fields.push(field("申請メッセージ", note.clone(), false));
+        }
+        RichEmbed {
+            title: Some(title.to_owned()),
+            color: Some(color),
+            fields,
+            ..RichEmbed::default()
+        }
+    }
 }
 
 /// 利用申請のオーナー宛 DM の所在（決定後にその DM を編集してボタンを外すために控える）。
@@ -411,16 +467,6 @@ pub struct DecisionOutcome {
 pub struct DmMessageRef {
     pub channel_id: String,
     pub message_id: String,
-}
-
-/// 決定済みの利用申請 DM の本文（Discord ボタン・Web のどちらで決定しても同じ文面にする）。
-#[must_use]
-pub fn member_request_decided_content(bot_name: &str, approved: bool) -> String {
-    if approved {
-        format!("✅ 承認済み: Bot「**{bot_name}**」の利用申請を承認しました。")
-    } else {
-        format!("🚫 却下済み: Bot「**{bot_name}**」の利用申請を却下しました。")
-    }
 }
 
 /// 共有招待レコード（現行 `getShareById`）。
@@ -479,12 +525,13 @@ pub trait MembershipService: Send + Sync {
     async fn get_public_persona(&self, persona_id: i64) -> Option<PersonaRecord>;
 }
 
-/// 利用申請の受付/結果 DM 送信（Node `sendMemberRequestDM`/`sendMemberDecisionDM`）。
+/// 利用申請の受付 DM 送信と、決定後のその DM の編集（Node `sendMemberRequestDM`）。
 ///
 /// interaction ハンドラ（Discord ボタン経路）と Web の利用申請ルート（`yuuka-orchestrator::member_routes`）
 /// が DB 確定後に呼ぶ。常に共有デフォルト Bot から送る（実装側で担保）。fire-and-forget
-/// （戻り値の false は握り潰す・DB 上の申請は Web 管理から拾えるため）。fake でユニットテスト可能にするため
-/// 注入ポートにする（[`DiscordMessenger`] が本実装）。
+/// （失敗は握り潰す・DB 上の申請は Web 管理から拾えるため）。決定の結果は受付 DM の編集だけで示し、
+/// 申請者へ別の DM は送らない。fake でユニットテスト可能にするため注入ポートにする
+/// （[`DiscordMessenger`] が本実装）。
 #[async_trait]
 pub trait MemberDmSender: Send + Sync {
     /// 申請受付を Bot オーナーへ通知（承認/却下ボタン付き）。
@@ -498,11 +545,8 @@ pub trait MemberDmSender: Send + Sync {
         request_id: i64,
     ) -> Option<DmMessageRef>;
 
-    /// 承認/却下の結果を申請者へ通知（ボタンなし）。
-    async fn send_decision_dm(&self, applicant_id: &str, bot_name: &str, approved: bool) -> bool;
-
-    /// 申請受付 DM を「承認済み/却下済み」の本文へ編集してボタンを外す（Web から決定した場合）。
-    async fn close_request_dm(&self, dm: &DmMessageRef, bot_name: &str, approved: bool) -> bool;
+    /// 受付 DM を決定済みの embed へ編集してボタンを外す（Web から決定した場合）。
+    async fn close_request_dm(&self, dm: &DmMessageRef, request: &DecidedRequest) -> bool;
 }
 
 /// Bot 共有招待 DM の送信ポート（Node `sendShareInviteDM`）。

@@ -203,16 +203,17 @@ impl MembershipService for DbMembership {
         guild_id: &str,
         applicant: &UserId,
         applicant_label: Option<String>,
-        _guild_label: Option<String>,
+        guild_label: Option<String>,
     ) -> SubmitOutcome {
-        // applicant_label/guild_label は owner 宛 DM 用途で interaction ハンドラが直接使う（本ポートは DB のみ）。
-        let _ = (applicant_label, _guild_label);
+        // 表示名は決定後に受付 DM を決定済みの embed へ編集するときに使うので申請に控える。
         let r = bot_repo::submit_member_request(
             &self.db,
             bot_id.as_str(),
             guild_id,
             applicant.as_str(),
             None,
+            applicant_label,
+            guild_label,
         )
         .await;
         match r {
@@ -245,9 +246,7 @@ impl MembershipService for DbMembership {
             Ok(res) => DecisionOutcome {
                 ok: res.ok,
                 message: res.message,
-                status: res.status,
-                bot_name: res.bot_name,
-                applicant_id: res.applicant_id,
+                request: res.request,
             },
             Err(e) => {
                 tracing::warn!(error = %e, "利用申請の承認/却下に失敗");

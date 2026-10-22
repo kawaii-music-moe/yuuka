@@ -9,7 +9,9 @@ use rusqlite::{params, OptionalExtension};
 use yuuka_core::DbError;
 use yuuka_core::{BotId, CapabilitySet, UserId};
 use yuuka_db::map_sqlite;
-use yuuka_discord::{BotRecord, DmMessageRef, MemberDecision, PersonaRecord, ShareRecord};
+use yuuka_discord::{
+    BotRecord, DecidedRequest, DmMessageRef, MemberDecision, PersonaRecord, ShareRecord,
+};
 use yuuka_web::Db;
 
 /// 互換用の既定モデル定数。実行時は llm_settings のBot設定/環境既定値を使用する。
@@ -1435,6 +1437,15 @@ fn deny_submit(code: SubmitDeny, message: &str) -> SubmitResult {
     }
 }
 
+/// 申請時の表示名を整える（前後の空白を除き、空なら `None`・極端に長い名前は切る）。
+fn clean_label(label: Option<String>) -> Option<String> {
+    label
+        .as_deref()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(|l| l.chars().take(100).collect())
+}
+
 /// 成功結果（owner 宛 DM 用の id を伴う）。
 fn ok_submit(owner_id: String, bot_name: String, request_id: i64) -> SubmitResult {
     SubmitResult {
@@ -1452,6 +1463,8 @@ fn ok_submit(owner_id: String, bot_name: String, request_id: i64) -> SubmitResul
 /// 本関数は DB のみ確定し、owner 宛の受付 DM 用に `owner_id`/`bot_name`/`request_id` を返す
 /// （interaction ハンドラが `sendMemberRequestDM` を送る・Node `memberRequest.ts:64-71` と同分業）。
 /// DM 送信失敗でも DB 上の申請は有効で Web 管理画面の「利用申請」から拾える（Node も DM 失敗を許容）。
+/// `applicant_label`/`guild_label` は Discord から解決した表示名で、決定後に受付 DM を決定済みの embed へ
+/// 編集するときに使う（Web 経由は `None`）。
 ///
 /// # Errors
 /// 書き込み失敗時 [`DbError`]。
@@ -1461,9 +1474,12 @@ pub async fn submit_member_request(
     guild_id: &str,
     applicant: &str,
     note: Option<String>,
+    applicant_label: Option<String>,
+    guild_label: Option<String>,
 ) -> Result<SubmitResult, DbError> {
     let (bot_id, guild_id, applicant) =
         (bot_id.to_owned(), guild_id.to_owned(), applicant.to_owned());
+    let (applicant_label, guild_label) = (clean_label(applicant_label), clean_label(guild_label));
     db.writer
         .transaction(move |tx| {
             // Bot 存在 + system_default 除外 + owner 判定。owner/name は承認 DM（Node sendMemberRequestDM）にも使う。
@@ -1524,19 +1540,30 @@ pub async fn submit_member_request(
                     "既に申請済みです。オーナーの承認をお待ちください。",
                 )),
                 Some((id, _)) => {
+                    // 前回の受付 DM は決定済みの表示になっているので所在を外す（新しい DM で控え直す）。
                     tx.execute(
                         "UPDATE bot_member_requests SET status = 'pending', note = ?1, \
-                         decided_by = NULL, updated_at = datetime('now','localtime') WHERE id = ?2",
-                        params![trimmed_note, id],
+                         applicant_label = ?2, guild_label = ?3, decided_by = NULL, \
+                         dm_channel_id = NULL, dm_message_id = NULL, \
+                         updated_at = datetime('now','localtime') WHERE id = ?4",
+                        params![trimmed_note, applicant_label, guild_label, id],
                     )
                     .map_err(map_sqlite)?;
                     Ok(ok_submit(owner, bot_name, id))
                 }
                 None => {
                     tx.execute(
-                        "INSERT INTO bot_member_requests (bot_id, guild_id, user_id, note) \
-                         VALUES (?1, ?2, ?3, ?4)",
-                        params![bot_id, guild_id, applicant, trimmed_note],
+                        "INSERT INTO bot_member_requests \
+                         (bot_id, guild_id, user_id, note, applicant_label, guild_label) \
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                        params![
+                            bot_id,
+                            guild_id,
+                            applicant,
+                            trimmed_note,
+                            applicant_label,
+                            guild_label
+                        ],
                     )
                     .map_err(map_sqlite)?;
                     Ok(ok_submit(owner, bot_name, tx.last_insert_rowid()))
@@ -1546,16 +1573,14 @@ pub async fn submit_member_request(
         .await
 }
 
-/// 承認/却下の結果（Node `decideMemberRequestById` の `{ ok, message, status?, botName? }`）。
+/// 承認/却下の結果（Node `decideMemberRequestById` の `{ ok, message }` + 決定した申請）。
 pub struct DecideResult {
     pub ok: bool,
     pub message: String,
     /// 失敗理由（Web-API の HTTP status 分岐用・Node `DecisionResult.code`）。ok 時は `None`。
     pub code: Option<DecideDeny>,
-    pub status: Option<MemberDecision>,
-    pub bot_name: Option<String>,
-    /// 申請者（結果 DM の宛先・Node `sendMemberDecisionDM` の applicantId）。ok 時のみ。
-    pub applicant_id: Option<String>,
+    /// 決定した申請（受付 DM を決定済みの embed へ編集する材料）。ok 時のみ。
+    pub request: Option<DecidedRequest>,
     /// オーナー宛の受付 DM の所在（Web から決定したときに編集する）。控えていなければ `None`。
     pub request_dm: Option<DmMessageRef>,
 }
@@ -1570,8 +1595,8 @@ pub enum DecideDeny {
 
 /// オーナー/Admin による申請の承認・却下（Node `decideMemberRequestById` + `decideMemberRequest`）。
 ///
-/// 本関数は DB のみ確定し、申請者宛の結果 DM 用に `applicant_id`（+ `bot_name`/`status`）を返す
-/// （interaction ハンドラが `sendMemberDecisionDM` を送る・Node `memberRequest.ts:131-135` と同分業）。
+/// 本関数は DB のみ確定し、受付 DM を決定済みの embed へ編集する材料（[`DecidedRequest`]）と、控えてある
+/// その DM の所在を返す（編集は Discord ボタン経路なら interaction 応答、Web 経路なら member_routes が行う）。
 ///
 /// # Errors
 /// 書き込み失敗時 [`DbError`]。
@@ -1584,40 +1609,41 @@ pub async fn decide_member_request(
     let actor = actor.to_owned();
     db.writer
         .transaction(move |tx| {
-            type RequestCols = (
-                String,
-                String,
-                String,
-                String,
-                Option<String>,
-                Option<String>,
-            );
-            let req: Option<RequestCols> = tx
+            let req = tx
                 .query_row(
-                    "SELECT bot_id, guild_id, user_id, status, dm_channel_id, dm_message_id \
-                     FROM bot_member_requests WHERE id = ?1",
+                    "SELECT bot_id, guild_id, user_id, status, note, applicant_label, guild_label, \
+                     dm_channel_id, dm_message_id FROM bot_member_requests WHERE id = ?1",
                     params![request_id],
                     |r| {
-                        Ok((
-                            r.get(0)?,
-                            r.get(1)?,
-                            r.get(2)?,
-                            r.get(3)?,
-                            r.get(4)?,
-                            r.get(5)?,
-                        ))
+                        let dm_channel: Option<String> = r.get("dm_channel_id")?;
+                        let dm_message: Option<String> = r.get("dm_message_id")?;
+                        Ok(RequestToDecide {
+                            bot_id: r.get("bot_id")?,
+                            guild_id: r.get("guild_id")?,
+                            applicant: r.get("user_id")?,
+                            status: r.get("status")?,
+                            note: r.get("note")?,
+                            applicant_label: r.get("applicant_label")?,
+                            guild_label: r.get("guild_label")?,
+                            dm: dm_channel.zip(dm_message).map(|(channel_id, message_id)| {
+                                DmMessageRef {
+                                    channel_id,
+                                    message_id,
+                                }
+                            }),
+                        })
                     },
                 )
                 .optional()
                 .map_err(map_sqlite)?;
-            let Some((bot_id, guild_id, applicant, status, dm_channel, dm_message)) = req else {
+            let Some(req) = req else {
                 return Ok(deny_decide(DecideDeny::NotFound, "申請が見つかりません。"));
             };
             // Bot と owner。
             let bot: Option<(String, String)> = tx
                 .query_row(
                     "SELECT user_id, name FROM bots WHERE id = ?1",
-                    params![bot_id],
+                    params![req.bot_id],
                     |r| Ok((r.get(0)?, r.get(1)?)),
                 )
                 .optional()
@@ -1641,7 +1667,7 @@ pub async fn decide_member_request(
                     "このBotのオーナーのみが承認/却下できます。",
                 ));
             }
-            if status != "pending" {
+            if req.status != "pending" {
                 return Ok(deny_decide(
                     DecideDeny::AlreadyDecided,
                     "この申請は既に処理済みです。",
@@ -1668,7 +1694,7 @@ pub async fn decide_member_request(
                 tx.execute(
                     "INSERT OR IGNORE INTO bot_members (bot_id, guild_id, user_id, added_by) \
                      VALUES (?1, ?2, ?3, ?4)",
-                    params![bot_id, guild_id, applicant, actor],
+                    params![req.bot_id, req.guild_id, req.applicant, actor],
                 )
                 .map_err(map_sqlite)?;
             }
@@ -1676,15 +1702,16 @@ pub async fn decide_member_request(
                 ok: true,
                 message: String::new(),
                 code: None,
-                status: Some(decision),
-                bot_name: Some(bot_name),
-                applicant_id: Some(applicant),
-                request_dm: dm_channel.zip(dm_message).map(|(channel_id, message_id)| {
-                    DmMessageRef {
-                        channel_id,
-                        message_id,
-                    }
+                request: Some(DecidedRequest {
+                    decision,
+                    bot_name,
+                    applicant_id: req.applicant,
+                    applicant_label: req.applicant_label,
+                    guild_id: req.guild_id,
+                    guild_label: req.guild_label,
+                    note: req.note,
                 }),
+                request_dm: req.dm,
             })
         })
         .await
@@ -1718,11 +1745,21 @@ fn deny_decide(code: DecideDeny, message: &str) -> DecideResult {
         ok: false,
         message: message.to_owned(),
         code: Some(code),
-        status: None,
-        bot_name: None,
-        applicant_id: None,
+        request: None,
         request_dm: None,
     }
+}
+
+/// 承認/却下の対象として読む申請行。
+struct RequestToDecide {
+    bot_id: String,
+    guild_id: String,
+    applicant: String,
+    status: String,
+    note: Option<String>,
+    applicant_label: Option<String>,
+    guild_label: Option<String>,
+    dm: Option<DmMessageRef>,
 }
 
 /// `bot_member_requests` 1 行（Web 管理画面の一覧・Node `BotMemberRequestRecord` 全列）。

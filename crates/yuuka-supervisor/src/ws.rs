@@ -690,6 +690,7 @@ async fn process_interaction(
     let plan = if action == "demo_echo" && demo_components {
         InteractionPlan::Update {
             content: format!("ボタンを受け取りました: {id}"),
+            embeds: Vec::new(),
             followup: None,
         }
     } else {
@@ -710,8 +711,17 @@ async fn process_interaction(
 fn apply_interaction_plan(output: &WsOutput, message_id: String, plan: InteractionPlan) {
     match plan {
         InteractionPlan::Reply(text) => output.send_reply(TurnReply::text(text), true),
-        InteractionPlan::Update { content, followup } => {
-            output.update(message_id, content);
+        InteractionPlan::Update {
+            content,
+            embeds,
+            followup,
+        } => {
+            // update フレームは本文だけを運ぶ。埋め込みだけの更新（決定済みの利用申請）は見出しを本文にする。
+            let text = match embeds.first().and_then(|e| e.title.clone()) {
+                Some(title) if content.is_empty() => title,
+                _ => content,
+            };
+            output.update(message_id, text);
             if let Some(followup) = followup {
                 output.send_reply(
                     TurnReply {
@@ -1146,6 +1156,7 @@ mod interaction_tests {
             "log:42".to_owned(),
             InteractionPlan::Update {
                 content: "完了".to_owned(),
+                embeds: Vec::new(),
                 followup: Some(yuuka_discord::interaction::Followup {
                     content: "次の確認".to_owned(),
                     components: rows(),
