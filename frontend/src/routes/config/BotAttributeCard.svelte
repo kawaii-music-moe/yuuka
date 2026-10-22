@@ -19,7 +19,6 @@ let { botId, bot, onchanged }: Props = $props();
 
 let presets = $state<PresetItem[]>([]);
 let selected = $state("");
-const currentBadge = $derived(bot.preset_display_name ?? "");
 
 // bot 変更でプリセット一覧を取得し、現在値を選択。
 $effect(() => {
@@ -72,9 +71,8 @@ async function save() {
 </script>
 
 <section class="config-card card">
-	<div class="column-header badge-right">
+	<div class="column-header">
 		<h3><span class="material-symbols-outlined header-icon-symbol">category</span>Bot属性（プリセット）</h3>
-		{#if currentBadge}<span class="badge badge-accent">{currentBadge}</span>{/if}
 	</div>
 	<div class="attr-row">
 		<select bind:value={selected}>

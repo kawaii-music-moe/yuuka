@@ -85,9 +85,8 @@ async function revoke(share: BotShare) {
 
 {#if visible}
 	<section class="config-card card">
-		<div class="column-header badge-right">
+		<div class="column-header">
 			<h3><span class="material-symbols-outlined header-icon-symbol">group_add</span>Bot 共有管理</h3>
-			<span class="badge badge-accent">オーナー専用</span>
 		</div>
 		<div class="shares-list">
 			{#if shares.length === 0}
