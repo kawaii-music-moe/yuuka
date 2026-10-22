@@ -4,7 +4,7 @@
 import { get } from "svelte/store";
 import { ApiError } from "$lib/api/client";
 import { botAttributeApi } from "$lib/api/services";
-import { Button, Checkbox, confirmDialog } from "$lib/components/ui";
+import { Checkbox } from "$lib/components/ui";
 import { activeBot, selectBot } from "$lib/stores/activeBot";
 import { pushToast } from "$lib/stores/toast";
 import type { BotAttrView } from "./configTypes";
@@ -20,7 +20,6 @@ let { botId, bot, onchanged }: Props = $props();
 let secretaryEnabled = $state(false);
 let saving = $state(false);
 const currentPreset = $derived(bot.preset ?? "secretary");
-const selected = $derived(secretaryEnabled ? "secretary" : "mcp_assistant");
 
 // Bot 切替・保存後の再取得時に現在のモードを反映。
 $effect(() => {
@@ -28,18 +27,14 @@ $effect(() => {
 	secretaryEnabled = currentPreset === "secretary";
 });
 
-async function save() {
-	if (saving || selected === currentPreset) return;
-	const preset = selected;
+async function save(enabled: boolean) {
+	if (saving) return;
+	const preset = enabled ? "secretary" : "mcp_assistant";
+	if (preset === currentPreset) return;
 	const id = botId;
-	const presetLabel = secretaryEnabled ? "パーソナル秘書" : "汎用モード";
+	const previousPreset = currentPreset;
 	saving = true;
 	try {
-		const ok = await confirmDialog({
-			message: `Botのモードを「${presetLabel}」へ変更しますか？\n機能セットが切り替わります（会話の文脈はモードごとに分離されます）。`,
-			confirmLabel: "変更する",
-		});
-		if (!ok) return;
 		const res = await botAttributeApi.updateAttributes({
 			botId: id,
 			preset,
@@ -50,6 +45,7 @@ async function save() {
 		if (cur && cur.id === id) selectBot({ ...cur, preset });
 		onchanged?.();
 	} catch (err) {
+		if (botId === id) secretaryEnabled = previousPreset === "secretary";
 		pushToast(
 			err instanceof ApiError ? err.message : "変更に失敗しました。",
 			"error",
@@ -69,10 +65,9 @@ async function save() {
 			bind:checked={secretaryEnabled}
 			disabled={saving}
 			label="Enable secretary mode"
+			onchange={save}
 		/>
-		<Button variant="primary" disabled={saving || selected === currentPreset} onclick={save}>
-			{saving ? "変更中…" : "変更を保存"}
-		</Button>
+		{#if saving}<span role="status">変更中…</span>{/if}
 	</div>
 	<p class="mode-description">オンでパーソナル秘書、オフで汎用モードになります。</p>
 </section>
