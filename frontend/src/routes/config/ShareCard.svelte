@@ -165,6 +165,9 @@ async function revoke(share: BotShare) {
 	.share-row :global(.revoke-button) {
 		border: 0;
 	}
+	.share-row :global(.revoke-button:hover) {
+		background-color: transparent;
+	}
 	.share-info {
 		display: flex;
 		align-items: center;
