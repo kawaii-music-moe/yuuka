@@ -22,7 +22,9 @@ let saving = $state(false);
 // 同期解除後の親の再取得でも未保存の入力を維持する。
 let lastBotId = "";
 let lastSavedName = $state("");
-const canSave = $derived(!saving && !!name.trim() && name.trim() !== lastSavedName);
+const canSave = $derived(
+	!saving && !!name.trim() && name.trim() !== lastSavedName,
+);
 $effect(() => {
 	const current = bot;
 	const currentBotId = botId;
@@ -75,7 +77,10 @@ async function submit(e: SubmitEvent) {
 	}
 	saving = true;
 	try {
-		const response = await botAttributeApi.updateBotProfile({ botId, name: trimmed });
+		const response = await botAttributeApi.updateBotProfile({
+			botId,
+			name: trimmed,
+		});
 		name = response.name;
 		lastSavedName = response.name;
 		linked = response.name_linked_to_discord;
