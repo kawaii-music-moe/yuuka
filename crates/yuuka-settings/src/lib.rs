@@ -85,12 +85,18 @@ pub fn routes(runtime: Arc<SettingsRuntime>) -> Router<AppState> {
     Router::new()
         .route("/api/settings/profile", post(routes::profile))
         .route("/api/settings/delete-account", post(routes::delete_account))
-        .route("/api/settings/user", post(routes::user_settings))
+        .route(
+            "/api/settings/user",
+            get(routes::user_settings_get).post(routes::user_settings),
+        )
         .route(
             "/api/settings/gemini",
             get(routes::gemini_get).post(routes::gemini),
         )
-        .route("/api/settings/backup", post(routes::backup))
+        .route(
+            "/api/settings/backup",
+            get(routes::backup_get).post(routes::backup),
+        )
         .route("/api/status", get(status::status))
         .route(
             "/api/settings/discord",

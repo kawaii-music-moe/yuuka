@@ -6,7 +6,7 @@ import { defineConfig, type Plugin } from "vite";
 import { VitePWA } from "vite-plugin-pwa";
 
 // API の proxy 先。HOST_PORT は環境毎に異なる(dev=7856, prod=7701 等)ため、必ず env で切替可能に
-const API = process.env.VITE_API_TARGET ?? "http://127.0.0.1:7855";
+const API = process.env.VITE_API_TARGET ?? "http://127.0.0.1:3403";
 
 // P1a: vite-plugin-pwa の virtual:pwa-register は `workbox-window` を import するが、
 // pnpm の厳格 hoist 配置では bare specifier が top-level から解決できず rolldown が

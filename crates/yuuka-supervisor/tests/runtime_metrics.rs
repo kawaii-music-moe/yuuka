@@ -177,8 +177,14 @@ async fn secretary_turn_feeds_the_shared_metrics_registry() {
     let status: StatusSink = Arc::new(|_: BotStatus| {});
     let reply = engine
         .secretary_turn(
-            &bot_id,
-            &UserId::new("u1"),
+            engine
+                .acquire_turn(
+                    &bot_id,
+                    &UserId::new("u1"),
+                    yuuka_orchestrator::Channel::Web,
+                )
+                .await
+                .expect("permit"),
             IncomingChat {
                 text: MEMORY.to_owned(),
                 ..IncomingChat::default()

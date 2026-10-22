@@ -51,13 +51,15 @@ chmod 600 deploy/prod/secret.key
 
 > `pnpm deploy`（`run` 無し）は pnpm 組込みコマンドと衝突するため、必ず `pnpm run deploy` を使います。
 
-開発(dev)インスタンスは pnpm スクリプトを介さず `deploy/instance.sh dev update`（ロールバックは `dev rollback`、ログは `pnpm run deploy:logs:dev` または `dev logs -f`）で操作します。dev は `YUUKA_IMAGE_TAG=dev`（`yuuka:dev`）で prod の `yuuka:latest` と分離されているため、prod と同じ手順で安全に更新できます（`deploy/dev/instance.env` に `YUUKA_IMAGE_TAG=dev` が必要。詳細は [deploy/README.md](../../deploy/README.md#dev-インスタンス)）。
+開発(dev)インスタンスは pnpm スクリプトを介さず `deploy/instance.sh dev update`（ロールバックは `dev rollback`、ログは `pnpm run deploy:logs:dev` または `dev logs -f`）で操作します。dev は `YUUKA_IMAGE_TAG=dev`（`yuuka:dev`）で prod の `yuuka:latest` と分離されているため、prod と同じ手順で安全に更新できます（`deploy/dev/instance.env` に `YUUKA_IMAGE_TAG=dev` が必要。詳細は [deploy/README.md](../../deploy/README.md#docker-の-dev-インスタンス従来構成)）。
 
 低レベルには `deploy/instance.sh <name> <update|rollback|verify|up -d|down|logs -f|build|ps>` でも操作できます。
 
 再作成時は数秒のダウンタイムが発生し、Bot は自動で再ログインします。
 
 ### dev のフロント（Vite dev server・HMR）
+
+現在のホストの systemd 運用は [deploy/README.md](../../deploy/README.md#dev-インスタンスsystemd現在のホスト) を参照してください。以下は Docker 運用の手順です。
 
 dev のフロントは、Vite dev server を Docker で常駐させる `deploy/dev/vite.compose.yml`（API とは別の compose プロジェクト `yuuka-dev-vite`）で動かします。`/api`・`/ws/chat` は dev API（`HOST_PORT`=7856）へ proxy されます。dev API を先に起動しておいてください。
 
@@ -74,7 +76,7 @@ docker compose -f deploy/dev/vite.compose.yml restart vite
 docker compose -f deploy/dev/vite.compose.yml down
 ```
 
-既定は `127.0.0.1:7855` で待受、proxy 先は `http://127.0.0.1:7856`、公開ホスト名（トンネル）は `yuuka-dev.kawaii-music.moe` です。使うソースツリー・実行ユーザー・ポート・proxy 先は `deploy/dev/.env` の `VITE_*` で変更できます（変数の一覧・デバッグ用の一時プロキシは [deploy/README.md](../../deploy/README.md#dev-インスタンス) の「フロント（Vite dev server・HMR）」を参照）。
+入口は既定で `127.0.0.1:5173`（管理画面 Vite は内部用の `127.0.0.1:7855`）で待受、proxy 先は `http://127.0.0.1:7856`、公開ホスト名（トンネル）は `yuuka-dev.kawaii-music.moe` です。使うソースツリー・実行ユーザー・ポート・proxy 先は `deploy/dev/.env` の `VITE_*` で変更できます（変数の一覧・デバッグ用の一時プロキシは [deploy/README.md](../../deploy/README.md#docker-の-dev-インスタンス従来構成) の「フロント（Vite dev server・HMR）」を参照）。
 
 ---
 

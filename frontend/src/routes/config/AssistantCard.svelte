@@ -1,10 +1,11 @@
 <script lang="ts">
-// 汎用モード（MCPアシスタント）設定カード（旧 loadAssistantConfig の Gemini/MCP/usage 部分）。
+// 汎用モード（MCPアシスタント）の AI 設定カード（旧 loadAssistantConfig の Gemini/usage 部分）。
+// Bot設定 › 機能と AI に置く。MCP の選択は Bot設定 › 連携の利用許可（BotAccess）へ移した。
 // mcp_assistant プリセットの owner にのみ親が描画する。
 
 import { ApiError } from "$lib/api/client";
 import { botAttributeApi } from "$lib/api/services";
-import { Button, confirmDialog } from "$lib/components/ui";
+import { Button, confirmDialog, ScopeBadge } from "$lib/components/ui";
 import { pushToast } from "$lib/stores/toast";
 import type { AssistantConfigResp } from "./configTypes";
 
@@ -51,10 +52,12 @@ const warnings = $derived.by(() => {
 		);
 	if (!data.has_discord_token)
 		w.push(
-			"⚠️ 独自のDiscord Botトークンが未設定です。汎用モードは専用のDiscordクライアントとして動作するため、「Discord連携」ページの「Discord 独自Bot設定」から設定してください。",
+			"⚠️ 独自のDiscord Botトークンが未設定です。汎用モードは専用のDiscordクライアントとして動作するため、Bot設定の「Discord」→「接続」から設定してください。",
 		);
 	if ((data.guilds ?? []).length === 0)
-		w.push("⚠️ 応答許可ギルドが未設定です。許可したギルドでのみ応答します。");
+		w.push(
+			"⚠️ 応答許可ギルドが未設定です。許可したギルドでのみ応答します（Bot設定の「Discord」→「応答する場所」）。",
+		);
 	return w;
 });
 
@@ -118,7 +121,8 @@ async function saveKey() {
 
 <section class="config-card card">
 	<div class="column-header badge-right">
-		<h3><span class="material-symbols-outlined header-icon-symbol">extension</span>汎用モード設定</h3>
+		<h3><span class="material-symbols-outlined header-icon-symbol">extension</span>AI（汎用モード）</h3>
+		<ScopeBadge scope="bot" />
 		<span class="badge badge-accent">OWNER専用</span>
 	</div>
 
@@ -160,28 +164,9 @@ async function saveKey() {
 		</div>
 	</details>
 
-	<details class="form-group collapsible-group">
-		<summary>利用中のMCPサーバー</summary>
-		<p class="description-text mcp-guide">
-			MCPサーバーの登録・編集・削除は「MCPサーバー」タブで、表示中のBotごとに行います。
-		</p>
-		{#if (data?.mcp_servers ?? []).length === 0}
-			<span class="field-sub">
-				このBot専用のMCPサーバーは未登録です。「MCPサーバー」タブ（このBotを選択した状態）から登録してください。
-			</span>
-		{:else}
-			{#each data?.mcp_servers ?? [] as s (s.id)}
-				<div class="mcp-row">
-					<span class="mcp-name">{s.name}</span>
-					{#if s.system || !s.enabled}
-						<span class="field-sub">
-							（{[s.system ? "システムレベル・常時利用可" : "", !s.enabled ? "無効化中" : ""].filter(Boolean).join("・")}）
-						</span>
-					{/if}
-				</div>
-			{/each}
-		{/if}
-	</details>
+	<p class="field-sub mcp-guide">
+		このBotが使う MCP サーバーは、Bot設定の「連携の利用許可」で選びます（現在 {(data?.mcp_servers ?? []).length} 件）。
+	</p>
 
 	<details class="form-group collapsible-group">
 		<summary>利用量（直近14日）</summary>
@@ -219,16 +204,7 @@ async function saveKey() {
 		flex-grow: 1;
 	}
 	.mcp-guide {
-		margin: 4px 0 8px;
-	}
-	.mcp-row {
-		display: flex;
-		align-items: center;
-		gap: 8px;
-		padding: 4px 0;
-	}
-	.mcp-name {
-		font-size: 0.9rem;
+		margin: 12px 0 4px;
 	}
 	.usage {
 		margin-top: 8px;

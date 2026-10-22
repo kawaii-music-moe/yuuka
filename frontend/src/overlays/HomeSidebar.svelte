@@ -1,6 +1,6 @@
 <script lang="ts">
 // ─────────────────────────────────────────────────────────────────────────
-// HomeSidebar — 管理ポータル（Bot 一覧 / 統合管理 / アカウント管理 / 管理者設定）
+// HomeSidebar — 管理ポータル（Bot 一覧 / あなたの設定 / 連携サービス / 管理者設定）
 // 共通の左サイドバー。BotSelection と ManagementOverlayShell の両方から使い、
 // どの画面からでも同じ導線で行き来できるようにする。
 //
@@ -23,8 +23,8 @@ let { open = $bindable(false) }: Props = $props();
 
 const items = $derived([
 	{ path: "/", icon: "home", label: "ホーム（Bot一覧）" },
-	{ path: "/integrated", icon: "hub", label: "統合管理" },
-	{ path: "/account", icon: "manage_accounts", label: "アカウント管理" },
+	{ path: "/account", icon: "manage_accounts", label: "あなたの設定" },
+	{ path: "/integrated", icon: "hub", label: "連携サービス" },
 	...($isAdmin
 		? [{ path: "/admin", icon: "admin_panel_settings", label: "管理者設定" }]
 		: []),

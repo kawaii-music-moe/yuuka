@@ -97,14 +97,14 @@ export type BotTab =
 	| "expenses"
 	| "reminders"
 	| "personal"
+	| "profile"
 	| "personas"
+	| "features"
+	| "access"
+	| "playbooks"
 	| "delivery"
 	| "webhooks"
-	| "mcp"
-	| "playbooks"
 	| "discord"
-	| "config"
-	| "devices"
 	| "settings";
 
 export interface ResolvedRoute {
@@ -115,7 +115,10 @@ export interface ResolvedRoute {
 	params?: Record<string, string>;
 }
 
-/** §8 の 16 Bot タブ（+ 設定ハブ）。未知タブ → "config" フォールバック。 */
+/**
+ * Bot タブ: 日常機能 7 + 設定ハブ配下 8（$lib/botTabs）+ 設定ハブ自身。
+ * 未知タブ（再構成で無くなった旧 /bot/config・/bot/devices・/bot/mcp を含む）→ DEFAULT_BOT_TAB。
+ */
 export const BOT_TABS: BotTab[] = [
 	"dashboard",
 	"tasks",
@@ -124,19 +127,19 @@ export const BOT_TABS: BotTab[] = [
 	"expenses",
 	"reminders",
 	"personal",
+	"profile",
 	"personas",
+	"features",
+	"access",
+	"playbooks",
 	"delivery",
 	"webhooks",
-	"mcp",
-	"playbooks",
 	"discord",
-	"config",
-	"devices",
 	"settings",
 ];
 
 /** §8: /bot 直下・未知タブ時の既定タブ（BotShell の loader フォールバックも共用）。 */
-export const DEFAULT_BOT_TAB: BotTab = "config";
+export const DEFAULT_BOT_TAB: BotTab = "dashboard";
 
 /** §8 PUBLIC_PATHS: 認証を待たず描画できる公開ルート。 */
 export const PUBLIC_PATHS = [

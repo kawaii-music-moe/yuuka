@@ -1,10 +1,10 @@
 <script lang="ts">
 // ─────────────────────────────────────────────────────────────────────────
-// 接続端末 タブ（旧 app.js buildDeviceCard / fetchDevices / fetchDesktopDownload
-//   + index.html #tab-devices を移植）。
+// あなたの設定 > ログイン中の端末（旧 Bot設定の「接続端末」タブ。旧 app.js buildDeviceCard /
+//   fetchDevices / fetchDesktopDownload + index.html #tab-devices を移植）。
 //
-// デバイス系は user-scoped（deviceApi は scope:'user'、botId を付けない）。activeBot 非依存。
-//   デスクトップ配布状況の取得と、認可済み端末の一覧・失効を扱う。
+// デバイス系は user-scoped（deviceApi は scope:'user'、botId を付けない）。activeBot 非依存なので
+//   Bot設定ではなくアカウント側に置く。デスクトップ配布状況の取得と、認可済み端末の一覧・失効を扱う。
 // ─────────────────────────────────────────────────────────────────────────
 import { onMount } from "svelte";
 import { ApiError } from "$lib/api/client";
@@ -12,7 +12,7 @@ import { deviceApi } from "$lib/api/services";
 import type { DesktopDevice } from "$lib/api/services/deviceApi";
 import { confirmDialog, EmptyState } from "$lib/components/ui";
 import { pushToast } from "$lib/stores/toast";
-import DeviceCard from "./devices/DeviceCard.svelte";
+import DeviceCard from "./DeviceCard.svelte";
 
 let devices = $state<DesktopDevice[]>([]);
 let loaded = $state(false);

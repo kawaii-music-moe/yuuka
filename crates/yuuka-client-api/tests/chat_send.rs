@@ -499,6 +499,18 @@ async fn rate_limit_rejects_after_default_per_minute_quota() {
         body["message"].as_str().unwrap().contains("利用ペース"),
         "body={body:?}"
     );
+    let rejected: i64 = rusqlite::Connection::open(&path)
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM message_logs WHERE content = 'one more'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        rejected, 0,
+        "quota rejection precedes user-message persistence"
+    );
 }
 
 #[tokio::test]

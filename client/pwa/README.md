@@ -4,6 +4,14 @@ Discord エージェント基盤（Yuuka）向けの Web コントロールパ�
 
 ## Development commands
 
+実際の dev API（systemd・`127.0.0.1:3403`）で開発する場合は、repo ルートで
+`pnpm install --frozen-lockfile` と `npm --prefix client/pwa ci` を実行し、
+`pnpm dev`（前景）または `pnpm dev:start`（常駐）で PWA と管理画面をまとめて起動します。
+入口は `http://127.0.0.1:5173/`、管理画面は `/admin/` です。
+詳細は [dev 運用手順](../../deploy/README.md) を参照してください。
+
+以下はモック API を使う場合の手順です。
+
 From the repository root:
 
 ```bash
@@ -21,7 +29,7 @@ are sent to `/admin/login` with a `returnTo` of the current page and come back
 to the Client after signing in. In mock mode the sk-account sign-in button logs you in as `admin` immediately.
 
 ```bash
-pnpm dev
+pnpm dev:admin
 ```
 
 Starts just the shared-login/admin Svelte dev server (`frontend`) on its own,

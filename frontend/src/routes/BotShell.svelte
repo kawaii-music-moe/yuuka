@@ -18,9 +18,9 @@
 import type { Component } from "svelte";
 import { derived } from "svelte/store";
 import { authApi } from "$lib/api/services";
-import { botPreset, SETTINGS_CHILD_TABS } from "$lib/botTabs";
-import { Icon } from "$lib/components/ui";
-import { type BotTab, DEFAULT_BOT_TAB, navigateTo, page } from "$lib/router";
+import { botPreset, hubItemOf, SETTINGS_CHILD_TABS } from "$lib/botTabs";
+import { Icon, ScopeBadge } from "$lib/components/ui";
+import { type BotTab, DEFAULT_BOT_TAB, navigateTo } from "$lib/router";
 import { activeBot, selectBot } from "$lib/stores/activeBot";
 import { currentUser } from "$lib/stores/session";
 import { theme, toggleTheme } from "$lib/stores/theme";
@@ -41,14 +41,14 @@ const TAB_LOADERS: Record<BotTab, Loader> = {
 	expenses: () => import("./BotExpenses.svelte"),
 	reminders: () => import("./BotReminders.svelte"),
 	personal: () => import("./BotPersonal.svelte"),
+	profile: () => import("./BotProfile.svelte"),
 	personas: () => import("./BotPersonas.svelte"),
+	features: () => import("./BotFeatures.svelte"),
+	access: () => import("./BotAccess.svelte"),
+	playbooks: () => import("./BotPlaybooks.svelte"),
 	delivery: () => import("./BotDelivery.svelte"),
 	webhooks: () => import("./BotWebhooks.svelte"),
-	mcp: () => import("./BotMcp.svelte"),
-	playbooks: () => import("./BotPlaybooks.svelte"),
 	discord: () => import("./BotDiscord.svelte"),
-	config: () => import("./BotConfig.svelte"),
-	devices: () => import("./BotDevices.svelte"),
 	settings: () => import("./BotSettingsHub.svelte"),
 };
 
@@ -56,8 +56,8 @@ const TAB_LOADERS: Record<BotTab, Loader> = {
 let { tab = DEFAULT_BOT_TAB }: { tab?: BotTab } = $props();
 
 // §8 プリセット別タブフィルタ（旧 app.js:157-170）。
-// 2階層化: 設定系（personas/delivery/webhooks/mcp/playbooks/discord/config/
-// devices）はサイドバーから外し /bot/settings ハブへ集約（BotSettingsHub）。
+// 2階層化: 設定系（$lib/botTabs の SETTINGS_CHILD_TABS）はサイドバーから外し
+// /bot/settings ハブへ集約（BotSettingsHub）。
 const SECRETARY_ONLY_TABS: BotTab[] = [
 	"tasks",
 	"timeline",
@@ -81,7 +81,8 @@ const ALL_MENU: { tab: BotTab; label: string; icon: string }[] = [
 ];
 
 // §8 ヘッダタイトルマップ（旧 app.js:338-354 switchTab）。
-const TAB_TITLES: Record<BotTab, string> = {
+// 設定ハブ配下のタブはハブの行ラベル（$lib/botTabs）をそのまま見出しにする。
+const TAB_TITLES: Partial<Record<BotTab, string>> = {
 	dashboard: "ダッシュボード",
 	tasks: "タスク管理",
 	timeline: "デイリータイムライン",
@@ -89,14 +90,6 @@ const TAB_TITLES: Record<BotTab, string> = {
 	expenses: "家計管理",
 	reminders: "リマインダー",
 	personal: "メモ・連絡先",
-	personas: "ペルソナ管理",
-	delivery: "配信設定",
-	webhooks: "Webhook 連携",
-	mcp: "MCPサーバー管理",
-	playbooks: "Playbook 設定",
-	discord: "Discord 連携設定",
-	config: "システム設定情報",
-	devices: "接続端末",
 	settings: "Bot設定",
 };
 
@@ -145,25 +138,8 @@ const modulePromise = $derived(
 // 設定ハブ配下ページか（パンくず表記とサイドバー「Bot設定」アクティブ判定に使用）。
 // パンくず時の「Bot設定 ›」プレフィックスはテンプレート側でリンク付き分割描画する。
 const inSettingsChild = $derived(SETTINGS_CHILD_TABS.includes(tab));
-const title = $derived(TAB_TITLES[tab] ?? "ダッシュボード");
-const CONFIG_SECTION_TITLES: Record<string, string> = {
-	"bot-profile": "Bot登録名・属性",
-	"bot-name": "Bot登録名・属性",
-	"discord-token": "Discord 独自Bot",
-	"bot-invite": "招待リンク・プロフィール",
-	"bot-attributes": "Bot登録名・属性",
-	modules: "有効な機能",
-	"assistant-mode": "汎用モード設定",
-	"assistant-settings": "アシスタント設定",
-	sharing: "Bot共有管理",
-	backup: "Google Drive バックアップ",
-	credentials: "AI認証情報",
-};
-const configSectionTitle = $derived(
-	tab === "config"
-		? CONFIG_SECTION_TITLES[$page.searchParams.get("section") ?? ""]
-		: undefined,
-);
+const hubItem = $derived(hubItemOf(tab));
+const title = $derived(TAB_TITLES[tab] ?? hubItem?.label ?? "ダッシュボード");
 
 // Bot ブランディング（旧 updateSidebarBotBranding）。
 // Bot 未選択時は App が Bot 一覧へ戻すので、ここは描画中の一瞬だけの既定値。
@@ -293,22 +269,14 @@ const themeTitle = $derived(
 							onclick={() => go("settings")}>Bot設定</button
 						>
 						<span class="breadcrumb-sep">›</span>
-						{#if configSectionTitle}
-							<button
-								type="button"
-								class="breadcrumb-link"
-								title="システム設定情報に戻る"
-								onclick={() => go("config")}>{title}</button
-							>
-							<span class="breadcrumb-sep">›</span>
-							<span aria-current="page">{configSectionTitle}</span>
-						{:else}
-							{title}
-						{/if}
+						<span aria-current="page">{title}</span>
 					{:else}
 						{title}
 					{/if}
 				</h2>
+				{#if hubItem?.scope}
+					<div class="header-scope"><ScopeBadge scope={hubItem.scope} /></div>
+				{/if}
 			</div>
 		</header>
 
@@ -387,5 +355,8 @@ const themeTitle = $derived(
 	.breadcrumb-sep {
 		color: var(--text-secondary);
 		margin: 0 2px;
+	}
+	.header-scope {
+		margin-top: 6px;
 	}
 </style>

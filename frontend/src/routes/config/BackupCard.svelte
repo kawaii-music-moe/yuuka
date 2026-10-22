@@ -1,19 +1,15 @@
 <script lang="ts">
 // Google Drive バックアップ設定カード（旧 backup-config-form + btn-trigger-backup）。
+// 「あなたの設定」は Bot を選ばずに開くため、現在値は GET /api/settings/backup から読む
+// （/api/status は bot-scoped で、フォルダ ID もマスクされている）。
 
+import { onMount } from "svelte";
 import { ApiError } from "$lib/api/client";
 import { settingsApi } from "$lib/api/services";
 import { Button } from "$lib/components/ui";
 import { pushToast } from "$lib/stores/toast";
-import type { StatusConfig } from "./configTypes";
 
-interface Props {
-	config: StatusConfig | null;
-	/** 保存後に /api/status を再取得して最終実行時刻等を反映 */
-	onsaved?: () => void;
-}
-let { config, onsaved }: Props = $props();
-
+let loaded = $state(false);
 let enabled = $state(false);
 let folderId = $state("");
 let intervalHours = $state(24);
@@ -21,14 +17,27 @@ let generations = $state(7);
 let lastRun = $state<string | null>(null);
 let triggering = $state(false);
 
-$effect(() => {
-	const c = config;
-	if (!c) return;
-	enabled = !!c.backupEnabled;
-	folderId = c.backupFolderId === "未設定" ? "" : (c.backupFolderId ?? "");
-	intervalHours = c.backupIntervalHours ?? 24;
-	generations = c.backupGenerations ?? 7;
-	lastRun = c.backupLastRunAt ?? null;
+async function load() {
+	try {
+		const c = await settingsApi.getBackup();
+		enabled = !!c.enabled;
+		folderId = c.folderId ?? "";
+		intervalHours = c.intervalHours ?? 24;
+		generations = c.generations ?? 7;
+		lastRun = c.lastRunAt ?? null;
+		loaded = true;
+	} catch (err) {
+		pushToast(
+			err instanceof ApiError
+				? err.message
+				: "バックアップ設定を読み込めませんでした。",
+			"error",
+		);
+	}
+}
+
+onMount(() => {
+	void load();
 });
 
 async function submit(e: SubmitEvent) {
@@ -44,7 +53,7 @@ async function submit(e: SubmitEvent) {
 		});
 		if (res.success) {
 			pushToast("バックアップ設定を保存しました。", "success");
-			onsaved?.();
+			await load();
 		} else {
 			pushToast(`設定の保存に失敗しました: ${res.message ?? ""}`, "error");
 		}
@@ -76,6 +85,7 @@ async function trigger() {
 				`バックアップが完了しました！${res.url ? ` URL: ${res.url}` : ""}`,
 				"success",
 			);
+			await load();
 		} else {
 			pushToast(`バックアップ失敗: ${res.message ?? ""}`, "error");
 		}
@@ -123,7 +133,7 @@ async function trigger() {
 		</div>
 		<div class="field-sub last-run">最終実行: {lastRun || "—"}</div>
 		<div class="backup-actions">
-			<Button type="submit" variant="primary" block>設定を保存</Button>
+			<Button type="submit" variant="primary" block disabled={!loaded}>設定を保存</Button>
 			<Button variant="secondary" block onclick={trigger} disabled={triggering}>
 				{triggering ? "バックアップ実行中..." : "今すぐバックアップ実行"}
 			</Button>

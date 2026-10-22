@@ -20,7 +20,7 @@ use crate::SettingsRuntime;
 ///
 /// 旧 Node 版は PWA 分離前提で `/?oauth=...`（ドキュメントルート）へ戻していたが、管理画面 SPA が
 /// `ADMIN_PREFIX`（`/admin`）配下に閉じたため、そのままではルートに何も無く連携結果が表示されない
-/// （issue #34 症状5）。連携操作の起点である「Bot統合管理」（`IntegratedOverlay.svelte`）へ戻す。
+/// （issue #34 症状5）。連携操作の起点である「連携サービス」（`IntegratedOverlay.svelte`）へ戻す。
 fn oauth_landing(query: &str) -> String {
     format!("{ADMIN_PREFIX}/integrated?{query}")
 }

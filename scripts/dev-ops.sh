@@ -1,61 +1,31 @@
 #!/usr/bin/env bash
 set -euo pipefail
-
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-INSTANCE_SCRIPT="$ROOT/deploy/instance.sh"
-VITE_COMPOSE="$ROOT/deploy/dev/vite.compose.yml"
-
-usage() {
-  cat <<'EOF'
-Usage: pnpm dev:update [--no-cache] | pnpm dev:stop | pnpm dev:logs | pnpm dev:logs:vite
-
-  dev:update      Rebuild the yuuka:dev image and recreate the dev API (--no-cache: full rebuild).
-  dev:stop        Stop the dev API, Redis, and the Vite dev servers.
-  dev:logs        Follow the dev API logs.
-  dev:logs:vite   Follow the Vite dev server logs (PWA Client and admin UI).
-EOF
-}
-
-# COMPOSE_PROJECT_NAME が環境に残っていると vite.compose.yml の `name: yuuka-dev-vite` より
-# 優先されてしまうため外す（scripts/dev-start.sh と同じ）。
-vite_compose() { env -u COMPOSE_PROJECT_NAME docker compose -f "$VITE_COMPOSE" "$@"; }
-
 command="${1:-}"
 [[ $# -gt 0 ]] && shift
-
-NO_CACHE=0
-for arg in "$@"; do
-  case "$arg" in
-    # pnpm 10+ は `pnpm dev:xxx -- --opt` の `--` もそのまま渡すので読み飛ばす。
-    --) ;;
-    --no-cache) [[ "$command" == "update" ]] || { echo "Unknown option: $arg" >&2; usage >&2; exit 2; }; NO_CACHE=1 ;;
-    -h|--help) usage; exit 0 ;;
-    *) echo "Unknown option: $arg" >&2; usage >&2; exit 2 ;;
-  esac
-done
-
+if [[ $# -gt 0 ]]; then echo 'This command takes no options.' >&2; exit 2; fi
 case "$command" in
   update)
-    if (( NO_CACHE )); then
-      "$INSTANCE_SCRIPT" dev update --no-cache
-    else
-      "$INSTANCE_SCRIPT" dev update
+    runtime="$(systemctl --user show yuuka-dev.service --property=WorkingDirectory --value)"
+    if [[ ! -d "$runtime/bin" || ! -f "$runtime/bin/yuuka" ]]; then
+      echo 'yuuka-dev.service must use a runtime directory containing bin/yuuka.' >&2
+      exit 1
     fi
+    cd "$ROOT"
+    cargo build --release --bin yuuka
+    # Replace atomically; a build failure leaves the running binary intact.
+    install -m 755 "${CARGO_TARGET_DIR:-$ROOT/target}/release/yuuka" "$runtime/bin/yuuka.new"
+    mv "$runtime/bin/yuuka.new" "$runtime/bin/yuuka"
+    systemctl --user restart yuuka-dev.service
     ;;
   stop)
-    echo "Stopping the Vite dev servers..."
-    vite_compose stop
-    echo "Stopping the dev API and Redis..."
-    "$INSTANCE_SCRIPT" dev stop
+    systemctl --user stop yuuka-dev-vite.service 2>/dev/null || {
+      if systemctl --user is-active --quiet yuuka-dev-vite.service; then exit 1; fi
+    }
+    systemctl --user stop yuuka-dev.service
+    # Redis is shared with production; leave it running.
     ;;
-  logs)
-    "$INSTANCE_SCRIPT" dev logs -f
-    ;;
-  logs-vite)
-    vite_compose logs -f client vite
-    ;;
-  *)
-    usage >&2
-    exit 2
-    ;;
+  logs) exec journalctl --user -u yuuka-dev.service -n 100 -f ;;
+  logs-vite) exec journalctl --user -u yuuka-dev-vite.service -n 100 -f ;;
+  *) echo 'Usage: pnpm dev:update | pnpm dev:stop | pnpm dev:logs | pnpm dev:logs:vite' >&2; exit 2 ;;
 esac

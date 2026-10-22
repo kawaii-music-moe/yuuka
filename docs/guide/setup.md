@@ -78,7 +78,11 @@ YUUKA_INIT_DB=1 cargo run --bin yuuka   # 初回のみ。DB（と data/ ディ�
 
 ## 3. ビルド・起動
 
-開発モード（バックエンド + フロントエンドを別々に起動、双方ホットリロード）:
+現在の systemd ホストでの起動は [deploy/README.md](../../deploy/README.md#dev-インスタンスsystemd現在のホスト) を参照。
+`pnpm dev` は PWA と管理画面の両方を起動するため、初回は `npm --prefix client/pwa ci` も実行する。
+以下は API を自分で起動する場合の手順。
+
+開発モード（バックエンド + フロントエンドを別々に起動、フロントエンドはホットリロード）:
 
 ```bash
 # ターミナル1: バックエンド（config.yaml を読む cwd で実行すること）
@@ -88,7 +92,7 @@ cargo run --bin yuuka
 VITE_API_TARGET=http://127.0.0.1:7854 pnpm dev
 ```
 
-> `pnpm dev` のデフォルト proxy 先は `http://127.0.0.1:7855` です。`cargo run` を直接使うローカル実行では、`config.yaml` の `PORT`（既定 `7854`）に合わせて `VITE_API_TARGET` を明示してください。Docker の dev インスタンス（`HOST_PORT=7856`）へ向ける場合は `VITE_API_TARGET=http://127.0.0.1:7856`。dev の Vite を Docker で常駐させる手順は [deployment.md](deployment.md) を参照。
+> `pnpm dev` のデフォルト proxy 先は `http://127.0.0.1:3403` です。`cargo run` を直接使うローカル実行では、`config.yaml` の `PORT`（既定 `7854`）に合わせて `VITE_API_TARGET` を明示してください。Docker の dev インスタンス（`HOST_PORT=7856`）へ向ける場合は `VITE_API_TARGET=http://127.0.0.1:7856`。dev の Vite を Docker で常駐させる手順は [deployment.md](deployment.md) を参照。
 
 プロダクション相当（Docker を使わない場合）:
 

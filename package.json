@@ -9,7 +9,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "dev": "vite --config frontend/vite.config.ts",
+    "dev": "node scripts/dev.mjs",
     "dev:reset": "bash scripts/dev-reset.sh",
     "dev:start": "bash scripts/dev-start.sh",
     "dev:help": "bash scripts/dev-help.sh",
@@ -32,7 +32,13 @@
     "deploy:logs": "deploy/instance.sh prod logs -f",
     "deploy:logs:dev": "deploy/instance.sh dev logs -f",
     "deploy:down": "deploy/instance.sh prod down",
-    "deploy:ps": "deploy/instance.sh prod ps"
+    "deploy:ps": "deploy/instance.sh prod ps",
+    "dev:admin": "vite --config frontend/vite.config.ts",
+    "dev:docker:start": "bash scripts/dev-docker-start.sh",
+    "dev:docker:update": "bash scripts/dev-docker-ops.sh update",
+    "dev:docker:stop": "bash scripts/dev-docker-ops.sh stop",
+    "dev:docker:help": "bash scripts/dev-docker-help.sh",
+    "test:dev": "node --test scripts/dev.test.mjs"
   },
   "dependencies": {
     "chart.js": "^4.5.1"

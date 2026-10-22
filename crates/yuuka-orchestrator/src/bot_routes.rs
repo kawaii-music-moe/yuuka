@@ -166,7 +166,7 @@ async fn create_bot(
         Err(_) => return server_error(),
     };
     let message = if preset == BotPresetId::McpAssistant {
-        "Botを作成しました。汎用モードの利用にはBot専用のGemini APIキーの設定が必要です（Bot設定から設定してください）。"
+        "Botを作成しました。汎用モードの利用にはBot専用のGemini APIキーの設定が必要です（Bot設定の「機能と AI」から設定してください）。"
     } else {
         "Botを作成しました。"
     };
