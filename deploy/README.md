@@ -91,23 +91,85 @@ Rust は**既定では存在しない DB を作らない**（`open_conn` は `SQ
 同一 `data/` に対する writer は 1 つでなければならない（SQLite WAL 単一ライター）。同じ `DATA_DIR` を
 指すコンテナを複数同時に起動しないこと。
 
-## dev インスタンス
+## dev インスタンス（systemd・現在のホスト）
+
+現在のホストでは Docker を使わず、ユーザー systemd の `yuuka-dev.service` が
+`127.0.0.1:3403` で Rust API を実行する。実行ディレクトリは
+`/home/suki/apps/yuuka/deploy/dev/runtime` で、`.env`・`config.yaml`・DB・
+`bin/yuuka` を持つ。`yuuka-redis.service` は本番と共有している。
+フロントは開発中の作業ツリーから Vite で配信する。
+
+### 初回準備と起動
+
+Node.js 24 と pnpm、npm が必要。作業ツリーごとに依存をインストールする。
+
+```bash
+pnpm install --frozen-lockfile
+npm --prefix client/pwa ci
+pnpm dev:start
+```
+
+`dev:start` は既存の `yuuka-dev.service` を起動し、同じユーザーの一時的な
+`yuuka-dev-vite.service` で PWA と管理画面の Vite を常駐させる。
+起動済みなら再起動しない。別の作業ツリーに切り替えるときは
+`pnpm dev:stop` 後、新しい作業ツリーで `pnpm dev:start` を実行する。
+新しいホストでは事前に dev API の systemd ユニット・設定・DB を用意する必要がある。
+
+API が起動済みなら `pnpm dev` でも両方の Vite を前景で起動できる。
+Ctrl-C で両方停止する。`pnpm dev:admin` は管理画面だけを起動する。
+前景とバックグラウンドを同時には起動しない（ポート競合はエラーになる）。
+
+```text
+http://127.0.0.1:5173/          PWA（Vue・HMR）
+  /admin/  -> 127.0.0.1:7855  管理画面（Svelte・HMR）
+  /api     -> 127.0.0.1:3403  dev API
+```
+
+`VITE_API_TARGET`（既定 `http://127.0.0.1:3403`）、`VITE_PORT`（7855）、
+`VITE_CLIENT_PORT`（5173）、`VITE_BIND_ADDR`（127.0.0.1）を環境変数で変更できる。
+フロントの変更は HMR で反映される。Rust は自動再ビルドされない。
+API の 3403 番ポートへ直接アクセスすると、runtime に配置されたビルド済み画面が返る。
+HMR を使うブラウザやリバースプロキシは 5173 番へ接続する。
+ローカルでは `127.0.0.1` の URL を使う。別ホスト名でアクセスする場合は、runtime の
+`config.yaml` の `BASE_URL` をブラウザで開く URL に合わせて dev API を再起動する
+（Cookie・ログインリダイレクト・CSRF 検証のため）。
+
+### 更新・停止・ログ
+
+```bash
+pnpm dev:update       # この作業ツリーで cargo build --release、dev バイナリ置換・再起動
+pnpm dev:stop         # dev API と Vite を停止。共有 Redis は停止しない
+pnpm dev:logs         # dev API の journal
+pnpm dev:logs:vite    # バックグラウンド Vite の journal
+pnpm dev:help
+```
+
+`dev:update` は systemd の WorkingDirectory にある `bin/yuuka` を更新する。
+本番のサービス・バイナリは操作しない。設定・DB・静的ビルド成果物は更新しない。
+`CARGO_TARGET_DIR` を設定している場合はその出力を使う。
+フロントの依存を変更したら再インストールして Vite を起動し直す。
+pnpm の `ERR_PNPM_VERIFY_DEPS_BEFORE_RUN` が出た場合も、まず
+`pnpm install --frozen-lockfile` で作業ツリーの node_modules を同期する。
+
+`pnpm dev:reset` は従来の Docker 用で、データを削除する。systemd 環境では使用しない。
+
+## Docker の dev インスタンス（従来構成）
 
 ### dev 環境の起動
 
 dev API + Redis と、PWA Client / 管理画面の Vite（下記 `vite.compose.yml`）をまとめて起動する。
 
 ```bash
-pnpm dev:start             # 停止中なら起動。起動済みなら確認のうえ全コンテナを作り直して再起動
-pnpm dev:start -- --yes    # 確認なしで再起動（端末以外から実行するときは必須）
-pnpm dev:update            # yuuka:dev イメージをビルドして dev API を作り直す（-- --no-cache でフル再ビルド）
-pnpm dev:stop              # dev API・Redis と Vite dev server を停止
-pnpm dev:logs              # dev API のログを追う（Vite は pnpm dev:logs:vite）
-pnpm dev:help              # dev 用コマンドと構成（ポート・入口）の早見表（-- --ja で日本語）
+pnpm dev:docker:start             # 停止中なら起動。起動済みなら確認のうえ全コンテナを作り直して再起動
+pnpm dev:docker:start -- --yes    # 確認なしで再起動（端末以外から実行するときは必須）
+pnpm dev:docker:update            # yuuka:dev イメージをビルドして dev API を作り直す（-- --no-cache でフル再ビルド）
+pnpm dev:docker:stop              # dev API・Redis と Vite dev server を停止
+deploy/instance.sh dev logs -f              # dev API のログを追う（Vite は docker compose -f deploy/dev/vite.compose.yml logs -f）
+pnpm dev:docker:help              # dev 用コマンドと構成（ポート・入口）の早見表（-- --ja で日本語）
 ```
 
 既存の `yuuka:dev` イメージで起動する（ビルドしない。イメージが無ければ
-`pnpm dev:update` を案内して終了）。API のヘルスチェックの後、入口
+`pnpm dev:docker:update` を案内して終了）。API のヘルスチェックの後、入口
 （`127.0.0.1:5173`）が `/`・`/admin/`・`/api` を返すまで待つ。
 
 ### dev データの初期化
@@ -213,4 +275,4 @@ docker compose -f deploy/dev/vite.compose.yml down     # 停止・撤去
 > `restart client vite`。恒久的なロガーはこのリポジトリには含めない（#57）。
 
 ホストで直接 `pnpm dev`（Vite）を動かす場合も `VITE_API_TARGET` で proxy 先を指定する
-（未指定の既定は `http://127.0.0.1:7855`。dev API へ向けるなら `VITE_API_TARGET=http://127.0.0.1:7856 pnpm dev`）。
+（未指定の既定は `http://127.0.0.1:3403`。dev API へ向けるなら `VITE_API_TARGET=http://127.0.0.1:7856 pnpm dev`）。

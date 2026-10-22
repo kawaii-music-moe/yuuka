@@ -13,6 +13,18 @@
 | Docker 本番デプロイ・複数インスタンス運用 | [docs/guide/deployment.md](docs/guide/deployment.md) |
 | 設計・仕様・アーキテクチャ（開発者 / AI 向け） | [docs/index.md](docs/index.md) |
 
+## 開発（現在の systemd ホスト）
+
+```bash
+pnpm install --frozen-lockfile
+npm --prefix client/pwa ci
+pnpm dev:start  # dev API + PWA / 管理画面の Vite を起動
+```
+
+入口は `http://127.0.0.1:5173/`、管理画面は `/admin/`。API 起動済みなら
+`pnpm dev` でフロントだけを前景起動できます。
+事前設定・更新・停止・ログは [dev 運用手順](deploy/README.md#dev-インスタンスsystemd現在のホスト) を参照してください。
+
 ## クイックスタート（Docker）
 
 ```bash
