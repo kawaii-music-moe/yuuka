@@ -16,6 +16,8 @@ let { botId }: Props = $props();
 let shares = $state<BotShare[]>([]);
 let visible = $state(false);
 let inviteId = $state("");
+let inviting = $state(false);
+const canInvite = $derived(!inviting && !!inviteId.trim());
 
 $effect(() => {
 	void botId;
@@ -40,7 +42,8 @@ async function load() {
 async function invite(e: SubmitEvent) {
 	e.preventDefault();
 	const targetUserId = inviteId.trim();
-	if (!targetUserId) return;
+	if (!canInvite) return;
+	inviting = true;
 	try {
 		const res = await botAttributeApi.inviteShare({ botId, targetUserId });
 		pushToast(
@@ -56,6 +59,8 @@ async function invite(e: SubmitEvent) {
 			err instanceof ApiError ? err.message : "通信エラーが発生しました。",
 			"error",
 		);
+	} finally {
+		inviting = false;
 	}
 }
 
@@ -94,9 +99,19 @@ async function revoke(share: BotShare) {
 				required
 				placeholder="招待するユーザーの Discord ID"
 				autocomplete="off"
+				aria-label="招待するユーザーの Discord ID"
+				disabled={inviting}
 				bind:value={inviteId}
 			/>
-			<Button type="submit" variant="primary">招待を送信</Button>
+			<button
+				type="submit"
+				class="invite-button"
+				disabled={!canInvite}
+				aria-label="招待を送信"
+				title="招待を送信"
+			>
+				<span class="material-symbols-outlined" aria-hidden="true">check</span>
+			</button>
 		</form>
 		<div class="shares-list">
 			{#if shares.length === 0}
@@ -164,6 +179,33 @@ async function revoke(share: BotShare) {
 		margin-top: 12px;
 	}
 	.invite-form input {
-		flex-grow: 1;
+		flex: 1;
+		min-width: 0;
+		box-sizing: border-box;
+		border: 0;
+		outline: none;
+		box-shadow: none;
+	}
+	.invite-form input:focus {
+		border: 0;
+		outline: none;
+		box-shadow: none;
+	}
+	.invite-button {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		width: 40px;
+		flex-shrink: 0;
+		border: 0;
+		border-radius: 6px;
+		background: transparent;
+		color: var(--color-primary);
+		cursor: pointer;
+	}
+	.invite-button:disabled {
+		color: var(--text-secondary);
+		opacity: 0.4;
+		cursor: default;
 	}
 </style>
