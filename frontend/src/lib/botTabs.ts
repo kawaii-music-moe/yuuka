@@ -70,7 +70,6 @@ export const SETTINGS_HUB_ITEMS: SettingsHubItem[] = [
 		label: "基本情報と共有",
 		desc: "Botの登録名・属性と、Botを利用できるメンバー",
 		category: "bot",
-		scope: "bot",
 		visible: (ctx) => !ctx.defaultBot,
 	},
 	{
