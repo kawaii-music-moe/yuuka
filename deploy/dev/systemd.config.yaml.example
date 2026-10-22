@@ -1,0 +1,9 @@
+# Copy to the WorkingDirectory of yuuka-dev.service as config.yaml.
+# BASE_URL must match the browser URL, including HTTPS, for host-only auth cookies and CSRF.
+HOST: "127.0.0.1"
+PORT: 3403
+DB_PATH: "./data/yuuka.db"
+REDIS_URL: "redis://127.0.0.1:6379/15"
+BASE_URL: "https://yuuka-dev.sk-9.net"
+SK_ACCOUNT_URL: "https://account.sk-9.net"
+SK_ACCOUNT_INTERNAL_URL: "http://127.0.0.1:3100"

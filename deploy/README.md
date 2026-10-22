@@ -134,6 +134,19 @@ HMR を使うブラウザやリバースプロキシは 5173 番へ接続する�
 `config.yaml` の `BASE_URL` をブラウザで開く URL に合わせて dev API を再起動する
 （Cookie・ログインリダイレクト・CSRF 検証のため）。
 
+公開中の dev は `https://yuuka-dev.sk-9.net`。設定例は
+[systemd.config.yaml.example](dev/systemd.config.yaml.example) を参照。
+トンネルの転送先は `http://127.0.0.1:5173` にする（API の 3403 番へ直接向けない）。
+このホストでは `suki-tunnel add yuuka-dev.sk-9.net http://127.0.0.1:5173` で変更できる。
+
+sk-account は認可リクエストの `redirect_uri` に
+`https://yuuka-dev.sk-9.net/api/auth/sk/callback` を許可する必要がある。
+Yuuka は `BASE_URL` から戻り先を組み立て、認可開始と認可コード交換の両方で送る。
+sk-account は本番・dev の完全一致の戻り先だけを許可し、コードの交換先も分離する。
+古い sk-account の本番固定 callback では dev ログインに失敗するため、両側を更新する。
+設定変更後は dev API を再起動し、公開 URL でログインを最初からやり直す。
+
+
 ### 更新・停止・ログ
 
 ```bash

@@ -127,11 +127,13 @@ async fn begin_login(router: &axum::Router) -> (String, String) {
         .to_str()
         .expect("ascii")
         .to_owned();
-    let state = location
-        .split_once("?state=")
-        .expect("state in authorize url")
+    let state = reqwest::Url::parse(&location)
+        .expect("authorize URL")
+        .query_pairs()
+        .find(|(key, _)| key == "state")
+        .expect("state in authorize URL")
         .1
-        .to_owned();
+        .into_owned();
     let cookie = set_cookies(&response)
         .into_iter()
         .next()
@@ -396,4 +398,78 @@ async fn callback_rejects_invalid_or_missing_code() {
     )
     .await;
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn sk_login_start_uses_configured_public_callback() {
+    let config = WebConfig {
+        https: true,
+        base_url: Some("https://yuuka-dev.sk-9.net/".to_owned()),
+        ..WebConfig::default()
+    };
+    let t = app_with_config("http://127.0.0.1:3100", Vec::new(), config);
+    let response = t
+        .router
+        .oneshot(
+            Request::builder()
+                .uri("/api/auth/sk/start")
+                .header("host", "attacker.example")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::FOUND);
+    let url = reqwest::Url::parse(
+        response
+            .headers()
+            .get(LOCATION)
+            .expect("location")
+            .to_str()
+            .expect("ascii"),
+    )
+    .expect("url");
+    let pairs: std::collections::HashMap<_, _> = url.query_pairs().collect();
+    assert_eq!(
+        pairs.get("redirect_uri").map(|v| v.as_ref()),
+        Some("https://yuuka-dev.sk-9.net/api/auth/sk/callback")
+    );
+    assert_eq!(pairs.get("state").expect("state").len(), 43);
+    assert!(set_cookies(&response)[0].contains("; Secure"));
+}
+
+#[tokio::test]
+async fn dev_callback_binds_code_exchange_to_configured_callback() {
+    let exchange = axum::Router::new().route(
+        "/api/services/yuuka/exchange",
+        post(|Json(body): Json<Value>| async move {
+            assert_eq!(
+                body["redirect_uri"],
+                "https://yuuka-dev.sk-9.net/api/auth/sk/callback"
+            );
+            assert_eq!(body["code"], "dev-code");
+            Json(json!({ "account": account("acc-dev", "999", "Dev User") }))
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let addr = listener.local_addr().expect("address");
+    let server = tokio::spawn(async move { axum::serve(listener, exchange).await.expect("serve") });
+    let t = app_with_config(
+        &format!("http://{addr}"),
+        Vec::new(),
+        WebConfig {
+            https: true,
+            base_url: Some("https://yuuka-dev.sk-9.net".to_owned()),
+            ..WebConfig::default()
+        },
+    );
+    let response = callback(&t.router, "dev-code").await;
+    assert_eq!(response.status(), StatusCode::FOUND);
+    assert!(set_cookies(&response)
+        .iter()
+        .any(|cookie| cookie.starts_with("__Host-yuuka-session=") && cookie.contains("; Secure")));
+    assert!(user_row(&t.db_path, "999").is_some());
+    server.abort();
 }
