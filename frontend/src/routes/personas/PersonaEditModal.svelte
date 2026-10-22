@@ -46,21 +46,23 @@ function submit(e: SubmitEvent) {
 >
 	<form class="persona-edit-form" onsubmit={submit}>
 		<div class="form-group">
-			<label for="persona-edit-name">ペルソナ名 *</label>
+			<label for="persona-edit-name">ペルソナ名 <span class="required-mark">*</span></label>
 			<input
 				type="text"
 				id="persona-edit-name"
+				class="persona-edit-field"
 				required
+				autocomplete="off"
 				placeholder="例: 関西弁の秘書"
 				bind:value={name}
 			/>
 		</div>
 		<div class="form-group">
-			<label for="persona-edit-prompt">ペルソナ定義（システムプロンプト指示） *</label>
+			<label for="persona-edit-prompt">ペルソナ定義（システムプロンプト指示） <span class="required-mark">*</span></label>
 			<textarea
 				id="persona-edit-prompt"
 				required
-				class="persona-edit-prompt"
+				class="persona-edit-field persona-edit-prompt"
 				placeholder="例: あなたは優秀なAIアシスタントです。常に丁寧な関西弁で答えてください。"
 				bind:value={prompt}
 			></textarea>
@@ -78,6 +80,15 @@ function submit(e: SubmitEvent) {
 		display: flex;
 		flex-direction: column;
 		gap: 16px;
+	}
+	/* 名前・定義の入力欄は枠線とフォーカスリングを出さない。 */
+	.persona-edit-form .persona-edit-field,
+	.persona-edit-form .persona-edit-field:focus {
+		border-color: transparent;
+		box-shadow: none;
+	}
+	.required-mark {
+		color: var(--color-error);
 	}
 	.persona-edit-prompt {
 		min-height: 320px;

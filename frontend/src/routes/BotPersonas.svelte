@@ -241,38 +241,50 @@ async function clearHistory() {
 								<span class="persona-name">{p.name}</span>
 								{#if p.id === activePersonaId}
 									<Badge tone="status-sent">適用中</Badge>
-								{/if}
+							{/if}
 								{#if p.is_public}
 									<Badge tone="status-pending">公開中</Badge>
-								{/if}
+							{/if}
 							</div>
 							<span class="persona-len">{p.prompt.length.toLocaleString()} 文字</span>
 						</div>
 						<div class="persona-preview">{p.prompt.slice(0, 120)}</div>
 						<div class="persona-item-actions">
 							{#if p.id !== activePersonaId}
-								<button
-									type="button"
-									class="btn-mini"
+								<Button
+									variant="icon"
+									title="適用"
+									aria-label="適用"
 									onclick={() => activate(p.id)}
 								>
-									<Icon name="check" />適用
-								</button>
+									<Icon name="check" />
+								</Button>
 							{/if}
-							<button type="button" class="btn-mini" onclick={() => openEdit(p)}>
-								<Icon name="edit" />編集
-							</button>
-							<button type="button" class="btn-mini" onclick={() => togglePublish(p)}>
-								<Icon name={p.is_public ? "lock" : "public"} />
-								{p.is_public ? "非公開にする" : "公開する"}
-							</button>
-							<button
-								type="button"
-								class="btn-mini"
+							<Button
+								variant="icon"
+								title="編集"
+								aria-label="編集"
+								onclick={() => openEdit(p)}
+							>
+								<Icon name="edit" />
+							</Button>
+							<Button
+								variant="icon"
+								title={p.is_public ? "公開中（クリックで非公開にする）" : "非公開（クリックで公開する）"}
+								aria-label={p.is_public ? "公開中（クリックで非公開にする）" : "非公開（クリックで公開する）"}
+								onclick={() => togglePublish(p)}
+							>
+								<Icon name={p.is_public ? "public" : "lock"} />
+							</Button>
+							<Button
+								variant="icon"
+								class="persona-action-delete"
+								title="削除"
+								aria-label="削除"
 								onclick={() => deletePersona(p)}
 							>
-								<Icon name="delete" />削除
-							</button>
+								<Icon name="delete" />
+							</Button>
 						</div>
 					</div>
 				{/each}
@@ -343,6 +355,9 @@ async function clearHistory() {
 		align-items: stretch;
 		gap: 8px;
 	}
+	.persona-item:last-child {
+		border-bottom: none;
+	}
 	.persona-item-head {
 		display: flex;
 		justify-content: space-between;
@@ -373,5 +388,20 @@ async function clearHistory() {
 		display: flex;
 		flex-wrap: wrap;
 		gap: 6px;
+	}
+	.persona-item-actions :global(.btn-icon) {
+		border-color: transparent;
+		color: var(--color-zinc-muted);
+		transition: color 0.18s ease;
+	}
+	.persona-item-actions :global(.btn-icon:hover) {
+		background-color: transparent;
+		color: var(--text-primary);
+	}
+	.persona-item-actions :global(.btn-icon .material-symbols-outlined) {
+		font-size: 16px;
+	}
+	.persona-item-actions :global(.btn-icon.persona-action-delete:hover) {
+		color: var(--color-error);
 	}
 </style>
