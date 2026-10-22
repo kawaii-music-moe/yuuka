@@ -20,7 +20,6 @@ import {
 	confirmDialog,
 	EmptyState,
 	Icon,
-	ScopeBadge,
 } from "$lib/components/ui";
 import { activeBot } from "$lib/stores/activeBot";
 import { pushToast } from "$lib/stores/toast";
@@ -291,7 +290,6 @@ async function clearHistory() {
 		<div class="card personas-card-spacer">
 			<div class="column-header badge-right">
 				<h3><Icon name="history" class="header-icon-symbol" />会話履歴のクリア</h3>
-				<ScopeBadge scope="user_bot" />
 			</div>
 			<p class="description-text">
 				このBotとのあなたの会話履歴をクリアし、次のメッセージから新しい会話にします。ペルソナを切り替えたあと、前の口調を引きずるときに使います。永続ログは保持され、検索・監査では引き続き利用できます。
