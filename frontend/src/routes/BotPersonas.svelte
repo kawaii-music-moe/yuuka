@@ -42,10 +42,6 @@ let previewName = $state("");
 let previewPrompt = $state("");
 let previewId = $state<number | null>(null);
 
-const activeName = $derived(
-	personas.find((p) => p.id === activePersonaId)?.name ?? "デフォルトペルソナ",
-);
-
 function reportError(e: unknown) {
 	pushToast(
 		e instanceof ApiError ? e.message : "エラーが発生しました",
@@ -206,12 +202,23 @@ async function clearHistory() {
 
 <section class="tab-view">
 	<div class="view-actions-card card">
-		<div class="filters-group">
-			<span class="label-text">適用中: {activeName}</span>
-		</div>
 		<div class="personas-actions">
-			<Button variant="secondary" onclick={() => activate(null)}>デフォルトに戻す</Button>
-			<Button variant="primary" onclick={openNew}>＋ ペルソナ作成</Button>
+			<Button
+				variant="icon"
+				title="デフォルトに戻す"
+				aria-label="デフォルトに戻す"
+				onclick={() => activate(null)}
+			>
+				<Icon name="restart_alt" />
+			</Button>
+			<Button
+				variant="icon"
+				title="ペルソナを追加"
+				aria-label="ペルソナを追加"
+				onclick={openNew}
+			>
+				<Icon name="add" />
+			</Button>
 		</div>
 	</div>
 
@@ -267,7 +274,7 @@ async function clearHistory() {
 			{:else}
 				<EmptyState
 					icon="theater_comedy"
-					message="ペルソナが作成されていません。「＋ ペルソナ作成」から作成できます。"
+					message="ペルソナが作成されていません。上の＋ボタンから作成できます。"
 				/>
 			{/if}
 		</div>
@@ -345,6 +352,7 @@ async function clearHistory() {
 <style>
 	.personas-actions {
 		display: flex;
+		margin-left: auto;
 		gap: 10px;
 	}
 	.personas-card-spacer {

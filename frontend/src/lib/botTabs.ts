@@ -77,7 +77,6 @@ export const SETTINGS_HUB_ITEMS: SettingsHubItem[] = [
 		label: "人格",
 		desc: "口調・性格などのペルソナと、会話履歴のクリア",
 		category: "bot",
-		scope: "bot",
 	},
 	{
 		tab: "features",
