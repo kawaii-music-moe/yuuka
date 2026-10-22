@@ -23,7 +23,8 @@ use twilight_model::user::{CurrentUser, User};
 use yuuka_core::{BotId, DiscordError};
 
 use crate::interaction::{
-    button_custom_id, decide, invoker_id, parse_custom_id, respond, InteractionDeps,
+    button_custom_id, decide, defer_ephemeral, invoker_id, needs_defer, parse_custom_id, respond,
+    respond_deferred, InteractionDeps,
 };
 use crate::message_flow::{handle_message, FlowDeps, RuntimeBot};
 use crate::ports::{BotDirectory, BotStatus};
@@ -231,9 +232,10 @@ pub async fn run_tenant(
                     }
                     Event::InteractionCreate(interaction) => {
                         let ideps = interaction_deps.clone();
+                        let bot_id = cfg.bot_id.clone();
                         let interaction = interaction.0;
                         tokio::spawn(async move {
-                            handle_interaction_event(&ideps, interaction).await;
+                            handle_interaction_event(&ideps, &bot_id, interaction).await;
                         });
                     }
                     Event::Resumed => {
@@ -363,6 +365,7 @@ fn current_user_avatar_url(user: &CurrentUser) -> String {
 /// インタラクションイベントを処理する（ボタン判定 → ラベル解決 → decide → respond）。
 async fn handle_interaction_event(
     ideps: &InteractionDeps,
+    bot_id: &BotId,
     interaction: twilight_model::application::interaction::Interaction,
 ) {
     // ボタン以外は無視。custom_id をコピーして借用を解放する。
@@ -375,9 +378,20 @@ async fn handle_interaction_event(
     };
     let (action, id_str, extra) = parsed;
 
+    if is_other_bots_apply(&action, &id_str, bot_id) {
+        tracing::debug!(bot_id = %bot_id, target = %id_str, "黙殺: 他の Bot 宛ての利用申請ボタン");
+        return;
+    }
+
     let Some(invoker) = invoker_id(&interaction) else {
         return;
     };
+
+    // 応答前に REST を挟む操作は先に ACK する（3 秒の応答期限）。ACK できなければ処理しない。
+    let deferred = needs_defer(&action);
+    if deferred && !defer_ephemeral(ideps, &interaction).await {
+        return;
+    }
 
     // memreq_apply のみ、owner DM の可読性向上のため申請者名・ギルド名を best-effort 解決する。
     let (applicant_label, guild_label) = if action == "memreq_apply" {
@@ -396,7 +410,11 @@ async fn handle_interaction_event(
         guild_label,
     )
     .await;
-    respond(ideps, &interaction, plan).await;
+    if deferred {
+        respond_deferred(ideps, &interaction, plan).await;
+    } else {
+        respond(ideps, &interaction, plan).await;
+    }
 }
 
 /// 申請者表示名（member.nick → global_name → username）とギルド名（best-effort REST 取得）。
@@ -420,6 +438,15 @@ async fn resolve_interaction_labels(
     };
 
     (applicant, guild_label)
+}
+
+/// 他の Bot 宛ての申請ボタン（`memreq_apply:{bot_id}:{guild_id}`）か。
+///
+/// 申請ボタンは、それを出したテナントの Bot 宛てだけを扱う。同じトークンで別の Yuuka（本番と開発など）が
+/// 動いていると同じインタラクションが両方に届き、その Bot を知らない側が先に「対象のBotが見つかりません」と
+/// 応答してしまうため、他の Bot 宛ては黙って譲る。
+fn is_other_bots_apply(action: &str, target_bot: &str, bot_id: &BotId) -> bool {
+    action == "memreq_apply" && target_bot != bot_id.as_str()
 }
 
 fn partial_member_nick(member: &PartialMember) -> Option<String> {
@@ -454,6 +481,15 @@ mod tests {
     use crate::ports::BotRecord;
 
     const PERIOD: Duration = PROFILE_SYNC_INTERVAL;
+
+    #[test]
+    fn apply_button_for_other_bot_is_left_to_its_tenant() {
+        let own = BotId::new("bot_a");
+        assert!(!is_other_bots_apply("memreq_apply", "bot_a", &own));
+        assert!(is_other_bots_apply("memreq_apply", "bot_b", &own));
+        // 申請以外（承認/却下の id は申請 ID）は対象外。
+        assert!(!is_other_bots_apply("memreq_approve", "5", &own));
+    }
 
     /// `update_profile` の呼び出しだけを記録する directory。
     #[derive(Default)]

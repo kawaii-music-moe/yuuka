@@ -381,6 +381,65 @@ pub async fn respond(deps: &InteractionDeps, interaction: &Interaction, plan: In
     }
 }
 
+/// 応答の前に Discord REST（ギルド名の取得・オーナー宛 DM）を挟む操作か。
+///
+/// これらは先に ACK しないと 3 秒の応答期限を過ぎ、申請自体は登録されたのに申請者には失敗と出る。
+#[must_use]
+pub fn needs_defer(action: &str) -> bool {
+    action == "memreq_apply"
+}
+
+/// 本人にだけ見える「考え中…」で先に ACK する（現行 `interaction.deferReply({ ephemeral: true })`）。
+///
+/// ACK できなければ（期限切れ・別プロセスが応答済みなど）`false`。呼び出し側は処理せずに終える。
+pub async fn defer_ephemeral(deps: &InteractionDeps, interaction: &Interaction) -> bool {
+    let resp = InteractionResponse {
+        kind: InteractionResponseType::DeferredChannelMessageWithSource,
+        data: Some(
+            InteractionResponseDataBuilder::new()
+                .flags(MessageFlags::EPHEMERAL)
+                .build(),
+        ),
+    };
+    match deps
+        .http
+        .interaction(interaction.application_id)
+        .create_response(interaction.id, &interaction.token, &resp)
+        .await
+    {
+        Ok(_) => true,
+        Err(e) => {
+            tracing::warn!(error = %e, "インタラクションの ACK に失敗");
+            false
+        }
+    }
+}
+
+/// [`defer_ephemeral`] 済みの応答を判定結果へ書き換える（現行 `interaction.editReply`）。
+///
+/// 先に ACK する操作（[`needs_defer`]）の判定は返信（[`InteractionPlan::Reply`]）だけなので、
+/// それ以外は「考え中…」を残さないよう消す。
+pub async fn respond_deferred(
+    deps: &InteractionDeps,
+    interaction: &Interaction,
+    plan: InteractionPlan,
+) {
+    let client = deps.http.interaction(interaction.application_id);
+    let result = match plan {
+        InteractionPlan::Reply(content) => client
+            .update_response(&interaction.token)
+            .content(Some(&content))
+            .await
+            .map(drop),
+        InteractionPlan::Update { .. } | InteractionPlan::Ignore => {
+            client.delete_response(&interaction.token).await.map(drop)
+        }
+    };
+    if let Err(e) = result {
+        tracing::warn!(error = %e, "インタラクション応答の書き換えに失敗");
+    }
+}
+
 /// invoker（操作ユーザー）の UserId を取り出す（`interaction.author_id()`）。
 #[must_use]
 pub fn invoker_id(interaction: &Interaction) -> Option<UserId> {
