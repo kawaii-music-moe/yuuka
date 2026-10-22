@@ -80,11 +80,24 @@ async fn start(
             "ログインを開始できません。",
         );
     };
-    // generate_token は URL セーフ文字だけを返すのでそのままクエリに載せられる。
-    let mut response = redirect(&format!(
-        "{}/api/services/yuuka/authorize?state={login_state}",
+    let Ok(mut authorize_url) = reqwest::Url::parse(&format!(
+        "{}/api/services/yuuka/authorize",
         rt.sk_account_public_url
-    ));
+    )) else {
+        return error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "認証先の設定が不正です。",
+        );
+    };
+    authorize_url
+        .query_pairs_mut()
+        .append_pair("state", &login_state);
+    if let Some(callback) = callback_url(&state) {
+        authorize_url
+            .query_pairs_mut()
+            .append_pair("redirect_uri", &callback);
+    }
+    let mut response = redirect(authorize_url.as_str());
     response.headers_mut().insert(
         SET_COOKIE,
         build_state_cookie(state.config.https, &login_state, STATE_TTL_SECS),
@@ -146,13 +159,17 @@ async fn exchange_and_login(
     let Some(code) = query.code.filter(|v| !v.is_empty()) else {
         return error(StatusCode::BAD_REQUEST, "認証コードがありません。");
     };
+    let mut exchange_body = json!({ "code": code });
+    if let Some(callback) = callback_url(state) {
+        exchange_body["redirect_uri"] = json!(callback);
+    }
     let response = match rt
         .http
         .post(format!(
             "{}/api/services/yuuka/exchange",
             rt.sk_account_internal_url
         ))
-        .json(&json!({ "code": code }))
+        .json(&exchange_body)
         .send()
         .await
     {
@@ -233,6 +250,15 @@ async fn users_route(user: AuthenticatedUser, State(state): State<AppState>) -> 
         Ok(None) => error(StatusCode::NOT_FOUND, "ユーザーが見つかりません。"),
         Err(e) => ApiError::from(e).into_response(),
     }
+}
+
+// Host/Origin ヘッダではなく、運用設定を認可コードの戻り先・対象に使う。
+fn callback_url(state: &AppState) -> Option<String> {
+    state
+        .config
+        .base_url
+        .as_ref()
+        .map(|base| format!("{}/api/auth/sk/callback", base.trim_end_matches('/')))
 }
 
 fn redirect(location: &str) -> Response {
