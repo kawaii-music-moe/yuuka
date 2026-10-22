@@ -88,6 +88,16 @@ async function revoke(share: BotShare) {
 		<div class="column-header">
 			<h3><span class="material-symbols-outlined header-icon-symbol">group_add</span>Bot 共有管理</h3>
 		</div>
+		<form onsubmit={invite} class="invite-form">
+			<input
+				type="text"
+				required
+				placeholder="招待するユーザーの Discord ID"
+				autocomplete="off"
+				bind:value={inviteId}
+			/>
+			<Button type="submit" variant="primary">招待を送信</Button>
+		</form>
 		<div class="shares-list">
 			{#if shares.length === 0}
 				<p class="empty">共有中のユーザーはいません。</p>
@@ -113,15 +123,6 @@ async function revoke(share: BotShare) {
 				{/each}
 			{/if}
 		</div>
-		<form onsubmit={invite} class="invite-form">
-			<input
-				type="text"
-				required
-				placeholder="招待するユーザーの Discord ID"
-				bind:value={inviteId}
-			/>
-			<Button type="submit" variant="primary">招待を送信</Button>
-		</form>
 	</section>
 {/if}
 
@@ -160,7 +161,7 @@ async function revoke(share: BotShare) {
 	.invite-form {
 		display: flex;
 		gap: 12px;
-		margin-top: 16px;
+		margin-top: 12px;
 	}
 	.invite-form input {
 		flex-grow: 1;
