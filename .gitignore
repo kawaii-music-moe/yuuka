@@ -31,3 +31,8 @@ node_modules
 # 旧 Node 時代の出力先だった src/public/pwa も、古いブランチ等から再生成されて誤コミットされないよう明示的に除外する。
 /src/public/pwa/
 .claude/worktrees/
+
+# 本番デプロイで生成されるバックアップ・リビジョン記録
+/deploy/prod/backups/
+/deploy/prod/deployed-revision
+/deploy/prod/deployed-frontend-revision
