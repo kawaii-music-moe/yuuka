@@ -190,7 +190,6 @@ async function submit(e: SubmitEvent) {
 	}
 	.link-button.linked {
 		color: var(--color-primary);
-		background: var(--surface-4dp);
 	}
 	.link-button:disabled {
 		opacity: 0.5;
