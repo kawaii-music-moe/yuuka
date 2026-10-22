@@ -254,11 +254,20 @@ async fn update_profile(
         Ok(b) => b,
         Err(_) => return server_error(),
     };
-    let is_owner = bot.is_some_and(|b| b.user_id == uid);
+    let is_owner = bot.as_ref().is_some_and(|b| b.user_id == uid);
     if !is_owner {
         return status_json(StatusCode::FORBIDDEN, "Botの所有者のみが変更できます。");
     }
-    let name = str_field(&body, "name");
+    let linked = match body.get("nameLinkedToDiscord") {
+        None => None,
+        Some(Value::Bool(value)) => Some(*value),
+        Some(_) => return bad_request("nameLinkedToDiscord は真偽値で指定してください。"),
+    };
+    let name = if linked.is_some() && body.get("name").is_none() {
+        bot.as_ref().map(|b| b.name.clone()).unwrap_or_default()
+    } else {
+        str_field(&body, "name")
+    };
     if name.is_empty() {
         return bad_request("Botの名前は必須です。");
     }
@@ -268,7 +277,7 @@ async fn update_profile(
     } else {
         Some(avatar.as_str())
     };
-    if let Err(_e) = bot_repo::update_bot_profile(&db, &bot_id, &name, avatar_opt).await {
+    if let Err(_e) = bot_repo::update_bot_profile(&db, &bot_id, &name, avatar_opt, linked).await {
         return server_error();
     }
     (
@@ -369,6 +378,7 @@ fn bot_view(
         "id": bot.id,
         "user_id": bot.user_id,
         "name": bot.name,
+        "name_linked_to_discord": bot.name_linked_to_discord,
         "recommended_persona_id": bot.recommended_persona_id,
         "persona_id": bot.persona_id,
         "capabilities": bot.capabilities,
@@ -650,6 +660,33 @@ mod tests {
         .await;
         assert_eq!(st, StatusCode::FORBIDDEN);
 
+        // リンク設定だけの更新と一覧への永続化。
+        for linked in [true, false] {
+            let body = json!({ "botId": bot_id, "nameLinkedToDiscord": linked }).to_string();
+            let (st, _) = send(&app, "POST", "/api/bots/profile", "other", &body).await;
+            assert_eq!(st, StatusCode::FORBIDDEN);
+            let (st, _) = send(&app, "POST", "/api/bots/profile", "owner", &body).await;
+            assert_eq!(st, StatusCode::OK);
+            let (_, list) = send(&app, "GET", "/api/bots", "owner", "").await;
+            let bot = list["bots"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|b| b["id"] == bot_id)
+                .unwrap();
+            assert_eq!(bot["name_linked_to_discord"], linked);
+            assert_eq!(bot["name"], "Renamed");
+        }
+        let (st, _) = send(
+            &app,
+            "POST",
+            "/api/bots/profile",
+            "owner",
+            &json!({ "botId": bot_id, "nameLinkedToDiscord": "true" }).to_string(),
+        )
+        .await;
+        assert_eq!(st, StatusCode::BAD_REQUEST);
+
         // 削除ガード。
         let (st, _) = send(
             &app,
@@ -707,6 +744,7 @@ mod tests {
             id: "b1".to_owned(),
             user_id: "owner".to_owned(),
             name: "B".to_owned(),
+            name_linked_to_discord: false,
             recommended_persona_id: None,
             persona_id: None,
             capabilities: r#"["persona","memory","mcp","secretary"]"#.to_owned(),

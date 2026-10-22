@@ -56,6 +56,7 @@ export interface DiscordTokenResponse {
 
 // ── /api/bots（属性カードが現在の Bot を探す） ───────────────────────────────
 export interface BotAttrView {
+	name_linked_to_discord?: boolean;
 	id: string;
 	user_id: string;
 	name: string;

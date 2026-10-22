@@ -191,6 +191,7 @@ pub struct BotDetail {
     pub id: String,
     pub user_id: String,
     pub name: String,
+    pub name_linked_to_discord: bool,
     pub recommended_persona_id: Option<i64>,
     pub persona_id: Option<i64>,
     pub capabilities: String,
@@ -210,7 +211,7 @@ pub struct BotDetail {
 const BOT_DETAIL_SELECT: &str = "SELECT id, user_id, name, recommended_persona_id, persona_id, \
      capabilities, discord_username, discord_avatar_url, discord_application_id, suspended, \
      created_at, updated_at, discord_token_encrypted, discord_token_iv, discord_token_tag, \
-     gemini_api_key_encrypted FROM bots";
+     gemini_api_key_encrypted, name_linked_to_discord FROM bots";
 
 fn map_bot_detail(r: &rusqlite::Row<'_>) -> rusqlite::Result<BotDetail> {
     let token_encrypted: Option<String> = r.get(12)?;
@@ -229,6 +230,7 @@ fn map_bot_detail(r: &rusqlite::Row<'_>) -> rusqlite::Result<BotDetail> {
         id: r.get(0)?,
         user_id: r.get(1)?,
         name: r.get(2)?,
+        name_linked_to_discord: r.get(16)?,
         recommended_persona_id: r.get(3)?,
         persona_id: r.get(4)?,
         capabilities: r.get::<_, Option<String>>(5)?.unwrap_or_default(),
@@ -280,7 +282,7 @@ pub async fn list_bots_for_user(db: &Db, user_id: &str) -> Result<Vec<BotDetail>
                         b.persona_id, b.capabilities, b.discord_username, b.discord_avatar_url, \
                         b.discord_application_id, b.suspended, b.created_at, b.updated_at, \
                         b.discord_token_encrypted, b.discord_token_iv, b.discord_token_tag, \
-                        b.gemini_api_key_encrypted \
+                        b.gemini_api_key_encrypted, b.name_linked_to_discord \
                  FROM bots b \
                  LEFT JOIN bot_shares s ON s.bot_id = b.id AND s.shared_user_id = ?1 \
                     AND s.status = 'active' \
@@ -353,6 +355,7 @@ pub async fn update_bot_profile(
     bot_id: &str,
     name: &str,
     avatar_url: Option<&str>,
+    name_linked_to_discord: Option<bool>,
 ) -> Result<bool, DbError> {
     let (bid, nm, avatar) = (
         bot_id.to_owned(),
@@ -363,10 +366,12 @@ pub async fn update_bot_profile(
         .transaction(move |tx| {
             let n = tx
                 .execute(
-                    "UPDATE bots SET name = ?1, \
+                    "UPDATE bots SET name = CASE WHEN COALESCE(?4, name_linked_to_discord) = 1 \
+                        THEN COALESCE(NULLIF(discord_username, ''), name) ELSE ?1 END, \
+                        name_linked_to_discord = COALESCE(?4, name_linked_to_discord), \
                         discord_avatar_url = COALESCE(?2, discord_avatar_url), \
                         updated_at = datetime('now','localtime') WHERE id = ?3",
-                    params![nm, avatar, bid],
+                    params![nm, avatar, bid, name_linked_to_discord],
                 )
                 .map_err(map_sqlite)?;
             Ok(n > 0)
@@ -568,7 +573,9 @@ pub async fn update_discord_profile(
     db.writer
         .transaction(move |tx| {
             tx.execute(
-                "UPDATE bots SET discord_username = COALESCE(?1, discord_username), \
+                "UPDATE bots SET name = CASE WHEN name_linked_to_discord = 1 \
+                 THEN COALESCE(?1, name) ELSE name END, \
+                 discord_username = COALESCE(?1, discord_username), \
                  discord_avatar_url = COALESCE(?2, discord_avatar_url), \
                  discord_application_id = COALESCE(?3, discord_application_id), \
                  updated_at = datetime('now', 'localtime') WHERE id = ?4",
@@ -2190,6 +2197,63 @@ mod crud_tests {
     }
 
     #[tokio::test]
+    async fn discord_name_link_tracks_updates_and_can_be_disabled() {
+        let db = seed_db();
+        create_bot(&db, "linked", "owner", "Local").await.unwrap();
+        let read = || get_bot_detail(&db, "linked");
+        assert!(!read().await.unwrap().unwrap().name_linked_to_discord);
+        update_discord_profile(&db, "linked", "Discord", "", "")
+            .await
+            .unwrap();
+        assert_eq!(read().await.unwrap().unwrap().name, "Local");
+        update_bot_profile(&db, "linked", "Local", None, Some(true))
+            .await
+            .unwrap();
+        let bot = read().await.unwrap().unwrap();
+        assert!(bot.name_linked_to_discord);
+        assert_eq!(bot.name, "Discord");
+        update_discord_profile(&db, "linked", "Changed", "", "")
+            .await
+            .unwrap();
+        assert_eq!(read().await.unwrap().unwrap().name, "Changed");
+        update_bot_profile(&db, "linked", "Ignored", None, None)
+            .await
+            .unwrap();
+        assert_eq!(read().await.unwrap().unwrap().name, "Changed");
+        update_discord_profile(&db, "linked", "", "", "")
+            .await
+            .unwrap();
+        assert_eq!(read().await.unwrap().unwrap().name, "Changed");
+        update_bot_profile(&db, "linked", "Custom", None, Some(false))
+            .await
+            .unwrap();
+        update_discord_profile(&db, "linked", "Next", "", "")
+            .await
+            .unwrap();
+        let bot = read().await.unwrap().unwrap();
+        assert!(!bot.name_linked_to_discord);
+        assert_eq!(bot.name, "Custom");
+        // Enabling before the first Discord profile arrives preserves a usable name.
+        create_bot(&db, "waiting", "owner", "Waiting")
+            .await
+            .unwrap();
+        update_bot_profile(&db, "waiting", "Waiting", None, Some(true))
+            .await
+            .unwrap();
+        assert_eq!(
+            get_bot_detail(&db, "waiting").await.unwrap().unwrap().name,
+            "Waiting"
+        );
+        update_discord_profile(&db, "waiting", "Arrived", "", "")
+            .await
+            .unwrap();
+        assert_eq!(
+            get_bot_detail(&db, "waiting").await.unwrap().unwrap().name,
+            "Arrived"
+        );
+    }
+
+    #[tokio::test]
     async fn create_update_delete_roundtrip() {
         let db = seed_db();
         let created = create_bot(&db, "b1", "owner", "MyBot").await.unwrap();
@@ -2202,7 +2266,7 @@ mod crud_tests {
         assert!(created.capabilities.contains("secretary"));
 
         // プロフィール更新（アバターは None で保持）。
-        assert!(update_bot_profile(&db, "b1", "Renamed", None)
+        assert!(update_bot_profile(&db, "b1", "Renamed", None, None)
             .await
             .unwrap());
         let d = get_bot_detail(&db, "b1").await.unwrap().unwrap();
@@ -2210,7 +2274,7 @@ mod crud_tests {
         assert!(d.discord_avatar_url.is_none());
         // アバター設定。
         assert!(
-            update_bot_profile(&db, "b1", "Renamed", Some("https://cdn/x.png"))
+            update_bot_profile(&db, "b1", "Renamed", Some("https://cdn/x.png"), None)
                 .await
                 .unwrap()
         );
