@@ -24,6 +24,7 @@ import {
 } from "$lib/components/ui";
 import { activeBot } from "$lib/stores/activeBot";
 import { pushToast } from "$lib/stores/toast";
+import PersonaAddModal from "./personas/PersonaAddModal.svelte";
 import PersonaEditModal from "./personas/PersonaEditModal.svelte";
 import PersonaPreviewModal from "./personas/PersonaPreviewModal.svelte";
 
@@ -31,6 +32,9 @@ let personas = $state<PersonaRecord[]>([]);
 let activePersonaId = $state<number | null>(null);
 let maxLength = $state(20000);
 let marketplace = $state<PublicPersonaView[]>([]);
+
+// 追加モーダル（自分で作成 / マーケットから追加）
+let addOpen = $state(false);
 
 // 編集モーダル
 let editOpen = $state(false);
@@ -83,8 +87,12 @@ async function reloadAll() {
 	await loadMarketplace();
 }
 
+function openAdd() {
+	addOpen = true;
+}
 function openNew() {
 	editingPersona = null;
+	addOpen = false;
 	editOpen = true;
 }
 function openEdit(p: PersonaRecord) {
@@ -174,6 +182,7 @@ async function importPersona(id: number) {
 		const res = await personaApi.import(id);
 		pushToast(res.message ?? "インポートしました。", "success");
 		previewOpen = false;
+		addOpen = false;
 		await loadPersonas();
 	} catch (e) {
 		reportError(e);
@@ -201,31 +210,28 @@ async function clearHistory() {
 </script>
 
 <section class="tab-view">
-	<div class="view-actions-card card">
-		<div class="personas-actions">
-			<Button
-				variant="icon"
-				title="デフォルトに戻す"
-				aria-label="デフォルトに戻す"
-				onclick={() => activate(null)}
-			>
-				<Icon name="restart_alt" />
-			</Button>
-			<Button
-				variant="icon"
-				title="ペルソナを追加"
-				aria-label="ペルソナを追加"
-				onclick={openNew}
-			>
-				<Icon name="add" />
-			</Button>
-		</div>
-	</div>
-
 	<!-- マイペルソナ -->
 	<div class="card personas-card-spacer">
-		<div class="column-header">
+		<div class="column-header badge-right">
 			<h3><Icon name="theater_comedy" class="header-icon-symbol" />マイペルソナ</h3>
+			<div class="personas-actions">
+				<Button
+					variant="icon"
+					title="デフォルトに戻す"
+					aria-label="デフォルトに戻す"
+					onclick={() => activate(null)}
+				>
+					<Icon name="restart_alt" />
+				</Button>
+				<Button
+					variant="icon"
+					title="ペルソナを追加"
+					aria-label="ペルソナを追加"
+					onclick={openAdd}
+				>
+					<Icon name="add" />
+				</Button>
+			</div>
 		</div>
 		<div class="list-container personas-list">
 			{#if personas.length > 0}
@@ -274,45 +280,7 @@ async function clearHistory() {
 			{:else}
 				<EmptyState
 					icon="theater_comedy"
-					message="ペルソナが作成されていません。上の＋ボタンから作成できます。"
-				/>
-			{/if}
-		</div>
-	</div>
-
-	<!-- マーケットプレイス -->
-	<div class="card personas-card-spacer">
-		<div class="column-header badge-right">
-			<h3>
-				<Icon name="storefront" class="header-icon-symbol" />ペルソナ マーケットプレイス
-			</h3>
-			<span class="badge badge-accent">公開ペルソナ</span>
-		</div>
-		<div class="list-container personas-list">
-			{#if marketplace.length > 0}
-				{#each marketplace as m (m.id)}
-					<div class="card-item glass persona-item">
-						<div class="persona-item-head">
-							<span class="persona-name">{m.name}</span>
-							<span class="persona-len">
-								by {m.owner_username} ・ {m.prompt_length.toLocaleString()} 文字
-							</span>
-						</div>
-						<div class="persona-preview">{m.prompt_preview}</div>
-						<div class="persona-item-actions">
-							<button type="button" class="btn-mini" onclick={() => openPreview(m)}>
-								<Icon name="visibility" />全文表示
-							</button>
-							<button type="button" class="btn-mini" onclick={() => importPersona(m.id)}>
-								<Icon name="download" />インポート
-							</button>
-						</div>
-					</div>
-				{/each}
-			{:else}
-				<EmptyState
-					icon="storefront"
-					message="公開されているペルソナはまだありません。"
+					message="ペルソナが作成されていません。右上の＋ボタンから作成、またはマーケットから追加できます。"
 				/>
 			{/if}
 		</div>
@@ -341,6 +309,14 @@ async function clearHistory() {
 	{maxLength}
 	onsave={savePersona}
 />
+<PersonaAddModal
+	bind:open={addOpen}
+	{marketplace}
+	closeOnEsc={!previewOpen}
+	oncreate={openNew}
+	onpreview={openPreview}
+	onimport={importPersona}
+/>
 <PersonaPreviewModal
 	bind:open={previewOpen}
 	personaName={previewName}
@@ -353,7 +329,7 @@ async function clearHistory() {
 	.personas-actions {
 		display: flex;
 		margin-left: auto;
-		gap: 10px;
+		gap: 8px;
 	}
 	.personas-card-spacer {
 		margin-top: 20px;
