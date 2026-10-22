@@ -62,10 +62,10 @@ $effect(() => {
 						<div class="persona-add-item-head">
 							<span class="persona-add-name">{m.name}</span>
 							<span class="persona-add-meta">
-								by {m.owner_username} ・ {m.prompt_length.toLocaleString()} 文字
+								by {m.owner_username} ・ {m.prompt.length.toLocaleString()} 文字
 							</span>
 						</div>
-						<div class="persona-add-preview">{m.prompt_preview}</div>
+						<div class="persona-add-preview">{m.prompt.slice(0, 120)}</div>
 						<div class="persona-add-actions">
 							<button type="button" class="btn-mini" onclick={() => onpreview(m)}>
 								<Icon name="visibility" />全文表示
@@ -125,9 +125,14 @@ $effect(() => {
 	}
 	.persona-add-market {
 		max-height: 60vh;
+		overflow-x: hidden;
 		overflow-y: auto;
 	}
+	.persona-add-item:last-child {
+		border-bottom: none;
+	}
 	.persona-add-item {
+		margin: 0;
 		flex-direction: column;
 		align-items: stretch;
 		gap: 8px;

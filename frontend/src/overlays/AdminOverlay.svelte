@@ -548,7 +548,7 @@ function botStatus(bot: AdminBotView): { label: string; tone: string } {
 								<td class="admin-table-td admin-mono">{p.id}</td>
 								<td class="admin-table-td admin-td-name">{p.name}</td>
 								<td class="admin-table-td">{p.owner_username}</td>
-								<td class="admin-table-td admin-mono">{(p.prompt_length || 0).toLocaleString()}</td>
+								<td class="admin-table-td admin-mono">{p.prompt.length.toLocaleString()}</td>
 								<td class="admin-table-td admin-td-actions">
 									<div class="admin-action-group">
 										<button

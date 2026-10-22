@@ -193,8 +193,8 @@ export type PersonaRecord = JsonWire<WirePersonaRecord>;
 export interface PublicPersonaView {
 	id: number;
 	name: string;
-	prompt_preview: string;
-	prompt_length: number;
+	/** 全文（一覧側で文字数と冒頭を出す）。 */
+	prompt: string;
 	owner_username: string;
 	updated_at: string;
 }
