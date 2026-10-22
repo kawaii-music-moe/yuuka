@@ -1,4 +1,4 @@
-:root { --primary:#bb86fc; --primary-hover:#cda3ff; --primary-soft:rgba(187,134,252,.12); --primary-border:rgba(187,134,252,.42); --line:rgba(255,255,255,.12); --field:rgba(255,255,255,.2); --surface-1:#1d1d1d; --surface-2:#212121; --text-high:rgba(255,255,255,.87); --text-medium:rgba(255,255,255,.6); --border-divider:rgba(255,255,255,.12); font-family: Inter, 'Noto Sans JP', sans-serif; color:var(--text-high); background:#121212; font-synthesis:none; color-scheme:dark; }
+:root { --primary:#bb86fc; --primary-hover:#cda3ff; --primary-soft:rgba(187,134,252,.12); --primary-border:rgba(187,134,252,.42); --line:rgba(255,255,255,.12); --field:rgba(255,255,255,.2); --surface-1:#1d1d1d; --surface-2:#212121; --text-high:rgba(255,255,255,.87); --text-medium:rgba(255,255,255,.6); --border-divider:rgba(255,255,255,.12); font-family: 'Roboto', 'Zen Kaku Gothic New', sans-serif; color:var(--text-high); background:#121212; font-synthesis:none; color-scheme:dark; }
 * { box-sizing: border-box; }
 /* スクロールバーの有無でページ幅が変わってガタつかないよう、縦スクロールバーを常に表示する。
    （scrollbar-gutter で余白だけ確保すると、その余白でヘッダーの背景・罫線が途切れて見える） */

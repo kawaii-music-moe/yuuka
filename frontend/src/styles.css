@@ -62,7 +62,8 @@
 
 	--transition-smooth: all 0.15s ease-in-out;
 	--font-family-sans:
-		"Inter", "Roboto", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+		"Roboto", "Zen Kaku Gothic New", -apple-system, BlinkMacSystemFont,
+		"Segoe UI", sans-serif;
 	--font-family-mono: "JetBrains Mono", Consolas, monospace;
 }
 
