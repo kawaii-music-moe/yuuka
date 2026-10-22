@@ -16,7 +16,7 @@ twilight-gateway = { workspace = true }
 twilight-http = { workspace = true }
 twilight-model = { workspace = true }
 # builder feature: InteractionResponseDataBuilder / EmbedBuilder（既定 off・明示 opt-in が必須）。
-twilight-util = { workspace = true, features = ["builder"] }
+twilight-util = { workspace = true, features = ["builder", "permission-calculator"] }
 tokio = { workspace = true }
 secrecy = { workspace = true }
 # RichEmbed/EmbedField の Serialize/Deserialize（PWA チャット送信の rich_content 永続化・issue #41 PR #75）。
