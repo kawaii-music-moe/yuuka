@@ -27,7 +27,8 @@
   <link rel="stylesheet"
     href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" />
   <!-- FOUC 対策: 同期・非module 外部 script（CSP script-src 'self' 準拠）。Vite バンドル参照より前に置く -->
-  <script src="%BASE_URL%theme-init.js"></script>
+  <!-- public の非module script は Vite が base を付加するため、%BASE_URL% を重ねない。 -->
+  <script src="/theme-init.js"></script>
 </head>
 
 <body>
