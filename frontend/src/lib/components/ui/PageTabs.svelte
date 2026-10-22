@@ -12,9 +12,11 @@ interface Props {
 	active: string;
 	/** tablist の読み上げ名 */
 	label: string;
+	/** 罫線・余白なしで描画する（ヘッダー内など、周囲に区切り線がある場所用） */
+	flush?: boolean;
 }
 
-let { tabs, active = $bindable(), label }: Props = $props();
+let { tabs, active = $bindable(), label, flush = false }: Props = $props();
 
 let buttons = $state<HTMLButtonElement[]>([]);
 
@@ -29,7 +31,7 @@ function onkeydown(e: KeyboardEvent, index: number): void {
 }
 </script>
 
-<div class="page-tabs" role="tablist" aria-label={label}>
+<div class="page-tabs" class:flush role="tablist" aria-label={label}>
 	{#each tabs as tab, i (tab.id)}
 		<button
 			type="button"
@@ -55,6 +57,12 @@ function onkeydown(e: KeyboardEvent, index: number): void {
 		overflow-x: auto;
 		border-bottom: 1px solid var(--border-divider);
 	}
+	.page-tabs.flush {
+		margin: 0;
+		border-bottom: 0;
+		overflow-y: hidden;
+		scrollbar-width: none;
+	}
 	.page-tab {
 		flex-shrink: 0;
 		padding: 10px 14px;
@@ -73,6 +81,9 @@ function onkeydown(e: KeyboardEvent, index: number): void {
 	}
 	.page-tab:hover {
 		color: var(--text-primary);
+	}
+	.page-tabs.flush .page-tab {
+		margin-bottom: 0;
 	}
 	.page-tab.active {
 		color: var(--text-primary);

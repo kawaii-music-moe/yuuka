@@ -3,9 +3,10 @@
 
 import { ApiError } from "$lib/api/client";
 import { botAttributeApi } from "$lib/api/services";
-import { Button } from "$lib/components/ui";
 import { pushToast } from "$lib/stores/toast";
 import type { MemberRequest, MemberRequestsResp } from "../config/configTypes";
+import AddButton from "./AddButton.svelte";
+import DeleteButton from "./DeleteButton.svelte";
 
 interface Props {
 	botId: string;
@@ -54,31 +55,46 @@ async function decide(id: number, decision: "approved" | "rejected") {
 }
 </script>
 
-<details class="form-group collapsible-group">
-	<summary>利用申請（承認待ち）</summary>
-	<div class="row-list">
-		{#if loading}
-			<span class="field-sub">読み込み中…</span>
-		{:else if requests.length === 0}
-			<span class="field-sub">承認待ちの利用申請はありません。</span>
-		{:else}
-			{#each requests as r (r.id)}
-				<div class="request-row">
-					<span class="row-label">
-						<span class="mono">{r.user_id}</span> @ ギルド {r.guild_id}
-						{#if r.note}<br /><span class="note">📝 {r.note}</span>{/if}
-					</span>
-					<div class="actions">
-						<Button variant="primary" small onclick={() => decide(r.id, "approved")}>承認</Button>
-						<Button variant="secondary" small onclick={() => decide(r.id, "rejected")}>却下</Button>
-					</div>
-				</div>
-			{/each}
-		{/if}
+<section class="config-card card">
+	<div class="column-header">
+		<h3><span class="material-symbols-outlined header-icon-symbol">how_to_reg</span>利用申請（承認待ち）</h3>
 	</div>
-</details>
+	<div class="section-body">
+		<div class="row-list">
+			{#if loading}
+				<span class="field-sub">読み込み中…</span>
+			{:else if requests.length === 0}
+				<span class="field-sub">承認待ちの利用申請はありません。</span>
+			{:else}
+				{#each requests as r (r.id)}
+					<div class="request-row">
+						<span class="row-label">
+							<span class="mono">{r.user_id}</span> @ ギルド {r.guild_id}
+							{#if r.note}<br /><span class="note">📝 {r.note}</span>{/if}
+						</span>
+						<div class="actions">
+							<AddButton onclick={() => decide(r.id, "approved")} icon="check" title="承認" />
+							<DeleteButton
+								onclick={() => decide(r.id, "rejected")}
+								icon="close"
+								title="却下"
+								label="却下"
+							/>
+						</div>
+					</div>
+				{/each}
+			{/if}
+		</div>
+	</div>
+</section>
 
 <style>
+	.section-body {
+		display: flex;
+		flex-direction: column;
+		gap: 12px;
+		margin-top: 12px;
+	}
 	.row-list {
 		display: flex;
 		flex-direction: column;
@@ -105,6 +121,6 @@ async function decide(id: number, decision: "approved" | "rejected") {
 	}
 	.actions {
 		display: flex;
-		gap: 8px;
+		gap: 4px;
 	}
 </style>

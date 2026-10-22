@@ -5,10 +5,13 @@
 
 import { ApiError } from "$lib/api/client";
 import { botAttributeApi } from "$lib/api/services";
-import { Button, confirmDialog } from "$lib/components/ui";
+import { confirmDialog } from "$lib/components/ui";
 import { pushToast } from "$lib/stores/toast";
 import type { AssistantChannel, AssistantGuild } from "../config/configTypes";
 import { guildLabel } from "../config/configTypes";
+import AddButton from "./AddButton.svelte";
+import ChannelInput from "./ChannelInput.svelte";
+import DeleteButton from "./DeleteButton.svelte";
 
 interface Props {
 	botId: string;
@@ -96,51 +99,58 @@ async function remove(ch: AssistantChannel, shift: boolean) {
 }
 </script>
 
-<details class="form-group collapsible-group">
-	<summary>発言禁止チャンネル</summary>
-	<div class="add-row">
-		<select bind:value={selectedGuild} class="min180">
-			{#each guilds as g (g.guild_id)}
-				<option value={g.guild_id}>{g.guild_name ?? `ギルド ${g.guild_id}`}</option>
-			{/each}
-		</select>
-		<input type="text" placeholder="チャンネルID（数字）" class="mono grow" bind:value={channelInput} />
-		<Button variant="primary" onclick={add}>追加</Button>
+<section class="config-card card">
+	<div class="column-header">
+		<h3><span class="material-symbols-outlined header-icon-symbol">volume_off</span>発言禁止チャンネル</h3>
 	</div>
-	<div class="row-list">
-		{#if mutedChannels.length === 0}
-			<span class="field-sub">発言禁止チャンネルはありません。</span>
-		{:else}
-			{#each mutedChannels as ch (ch.guild_id + ":" + ch.channel_id)}
-				<div class="list-row">
-					<span class="row-label">
-						{#if ch.channel_name}#{ch.channel_name}（<span class="mono">{ch.channel_id}</span
-							>）{:else}<span class="mono">#{ch.channel_id}</span>{/if}
-						@ {guildLabel(guilds, ch.guild_id)}
-					</span>
-					<button
-						type="button"
-						class="btn btn-secondary btn-sm"
-						title="Shiftを押しながらで確認なしに削除"
-						onclick={(e) => remove(ch, e.shiftKey)}
-					>削除</button>
-				</div>
-			{/each}
-		{/if}
+	<div class="section-body">
+		<div class="add-row">
+			<div class="joined-field">
+				<select bind:value={selectedGuild} class="guild-select" aria-label="ギルド">
+					{#each guilds as g (g.guild_id)}
+						<option value={g.guild_id}>{g.guild_name ?? `ギルド ${g.guild_id}`}</option>
+					{/each}
+				</select>
+				<span class="divider" aria-hidden="true"></span>
+				<ChannelInput
+					{botId}
+					guildId={selectedGuild}
+					bind:value={channelInput}
+					exclude={mutedChannels.filter((ch) => ch.guild_id === selectedGuild).map((ch) => ch.channel_id)}
+				/>
+			</div>
+			<AddButton onclick={add} disabled={!channelInput.trim()} icon="add_comment" title="チャンネルを追加" />
+		</div>
+		<div class="row-list">
+			{#if mutedChannels.length === 0}
+				<span class="field-sub">発言禁止チャンネルはありません。</span>
+			{:else}
+				{#each mutedChannels as ch (ch.guild_id + ":" + ch.channel_id)}
+					<div class="list-row">
+						<span class="row-label">
+							{#if ch.channel_name}#{ch.channel_name}（<span class="mono">{ch.channel_id}</span
+								>）{:else}<span class="mono">#{ch.channel_id}</span>{/if}
+							@ {guildLabel(guilds, ch.guild_id)}
+						</span>
+						<DeleteButton title="Shiftを押しながらで確認なしに削除" onclick={(e) => remove(ch, e.shiftKey)} />
+					</div>
+				{/each}
+			{/if}
+		</div>
 	</div>
-</details>
+</section>
 
 <style>
+	.section-body {
+		display: flex;
+		flex-direction: column;
+		gap: 12px;
+		margin-top: 12px;
+	}
 	.add-row {
 		display: flex;
 		gap: 12px;
 		flex-wrap: wrap;
-	}
-	.min180 {
-		min-width: 180px;
-	}
-	.grow {
-		flex-grow: 1;
 	}
 	.mono {
 		font-family: var(--font-family-mono);

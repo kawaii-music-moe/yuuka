@@ -174,6 +174,7 @@ export interface GuildOptionsResp {
 	message?: string;
 	available?: boolean;
 	members?: GuildOptionItem[];
+	channels?: GuildOptionItem[];
 	roles?: GuildOptionItem[];
 }
 

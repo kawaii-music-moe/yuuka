@@ -79,17 +79,21 @@ async function save() {
 }
 </script>
 
-<details class="form-group collapsible-group">
-	<summary>共有ノート（ギルドノート）</summary>
-	<div class="note-row">
-		<select bind:value={selectedGuild} class="grow">
-			{#each guilds as g (g.guild_id)}
-				<option value={g.guild_id}>{g.guild_name ?? `ギルド ${g.guild_id}`}</option>
-			{/each}
-		</select>
-		<Button variant="primary" onclick={openEditor}>編集</Button>
+<section class="config-card card">
+	<div class="column-header">
+		<h3><span class="material-symbols-outlined header-icon-symbol">description</span>共有ノート（ギルドノート）</h3>
 	</div>
-</details>
+	<div class="section-body">
+		<div class="note-row">
+			<select bind:value={selectedGuild} class="grow">
+				{#each guilds as g (g.guild_id)}
+					<option value={g.guild_id}>{g.guild_name ?? `ギルド ${g.guild_id}`}</option>
+				{/each}
+			</select>
+			<Button variant="primary" onclick={openEditor}>編集</Button>
+		</div>
+	</div>
+</section>
 
 <Modal bind:open wide title="共有ノートの編集">
 	<p class="field-sub note-modal-guild">
@@ -106,6 +110,12 @@ async function save() {
 </Modal>
 
 <style>
+	.section-body {
+		display: flex;
+		flex-direction: column;
+		gap: 12px;
+		margin-top: 12px;
+	}
 	.note-row {
 		display: flex;
 		gap: 12px;

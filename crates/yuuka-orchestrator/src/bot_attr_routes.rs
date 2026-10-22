@@ -1347,10 +1347,16 @@ async fn guild_options_get(
         .iter()
         .map(|e| json!({ "id": e.id, "name": e.name }))
         .collect();
+    let channels: Vec<Value> = opts
+        .channels
+        .iter()
+        .map(|e| json!({ "id": e.id, "name": e.name }))
+        .collect();
     Json(json!({
         "success": true,
         "roles": roles,
         "members": members,
+        "channels": channels,
         "members_complete": opts.members_complete,
         "available": opts.available,
     }))

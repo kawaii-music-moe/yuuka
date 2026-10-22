@@ -6,6 +6,7 @@
 //! ため best-effort（失敗は空一覧・Node もキャッシュ分のみで `members_complete:false` だった）。
 
 use twilight_http::Client;
+use twilight_model::channel::ChannelType;
 use twilight_model::id::marker::{ChannelMarker, GuildMarker, UserMarker};
 use twilight_model::id::Id;
 
@@ -21,6 +22,8 @@ pub struct GuildLiveEntry {
 pub struct GuildLiveOptions {
     pub roles: Vec<GuildLiveEntry>,
     pub members: Vec<GuildLiveEntry>,
+    /// テキストで発言できるチャンネル（テキスト・アナウンス・ボイス）。Discord の表示順。
+    pub channels: Vec<GuildLiveEntry>,
     /// メンバー一覧が完全か（Node 同様、常に false＝部分一覧の可能性を UI へ伝える）。
     pub members_complete: bool,
     /// Bot が当該ギルドに参加しているか（guild fetch 成功＝在籍）。
@@ -127,9 +130,46 @@ pub async fn fetch_guild_options(client: &Client, guild_id: &str) -> GuildLiveOp
     };
     members.sort_by(|a, b| a.name.cmp(&b.name));
 
+    // チャンネル: 有効化/発言禁止チャンネルの候補。カテゴリ・スレッド等は除外し表示順に並べる。
+    let mut channels: Vec<(i32, GuildLiveEntry)> = match client.guild_channels(gid).await {
+        Ok(resp) => match resp.model().await {
+            Ok(list) => list
+                .into_iter()
+                .filter(|c| {
+                    matches!(
+                        c.kind,
+                        ChannelType::GuildText
+                            | ChannelType::GuildAnnouncement
+                            | ChannelType::GuildVoice
+                    )
+                })
+                .map(|c| {
+                    (
+                        c.position.unwrap_or_default(),
+                        GuildLiveEntry {
+                            id: c.id.get().to_string(),
+                            name: c.name.unwrap_or_default(),
+                        },
+                    )
+                })
+                .collect(),
+            Err(e) => {
+                tracing::warn!(guild_id, error = %e, "チャンネル一覧のデコードに失敗");
+                Vec::new()
+            }
+        },
+        Err(e) => {
+            tracing::warn!(guild_id, error = %e, "チャンネル一覧の取得に失敗");
+            Vec::new()
+        }
+    };
+    channels.sort_by_key(|(pos, _)| *pos);
+    let channels = channels.into_iter().map(|(_, e)| e).collect();
+
     GuildLiveOptions {
         roles,
         members,
+        channels,
         members_complete: false,
         available: true,
     }

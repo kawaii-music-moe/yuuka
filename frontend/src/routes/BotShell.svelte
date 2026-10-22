@@ -22,6 +22,7 @@ import { botPreset, hubItemOf, SETTINGS_CHILD_TABS } from "$lib/botTabs";
 import { Icon, ScopeBadge } from "$lib/components/ui";
 import { type BotTab, DEFAULT_BOT_TAB, navigateTo } from "$lib/router";
 import { activeBot, selectBot } from "$lib/stores/activeBot";
+import { headerExtra } from "$lib/stores/headerExtra";
 import { currentUser } from "$lib/stores/session";
 import { theme, toggleTheme } from "$lib/stores/theme";
 import { pushToast } from "$lib/stores/toast";
@@ -251,7 +252,7 @@ const themeTitle = $derived(
 	{/if}
 
 	<main class="main-content">
-		<header class="top-header">
+		<header class="top-header" class:has-extra={!!$headerExtra}>
 			<button
 				type="button"
 				class="menu-toggle"
@@ -275,7 +276,9 @@ const themeTitle = $derived(
 						{title}
 					{/if}
 				</h2>
-				{#if hubItem?.scope}
+				{#if $headerExtra}
+					<div class="header-extra">{@render $headerExtra()}</div>
+				{:else if hubItem?.scope}
 					<div class="header-scope"><ScopeBadge scope={hubItem.scope} /></div>
 				{/if}
 			</div>
@@ -359,5 +362,12 @@ const themeTitle = $derived(
 	}
 	.header-scope {
 		margin-top: 6px;
+	}
+	.header-extra {
+		margin-top: 4px;
+	}
+	/* 差し込んだタブの選択下線をヘッダーの罫線に揃える */
+	.top-header.has-extra {
+		padding-bottom: 0;
 	}
 </style>

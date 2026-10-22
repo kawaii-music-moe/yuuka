@@ -3,7 +3,7 @@
 
 import { ApiError } from "$lib/api/client";
 import { botAttributeApi } from "$lib/api/services";
-import { Button, confirmDialog } from "$lib/components/ui";
+import { confirmDialog } from "$lib/components/ui";
 import { pushToast } from "$lib/stores/toast";
 import type {
 	AssistantGuild,
@@ -12,6 +12,9 @@ import type {
 	GuildOptionsResp,
 } from "../config/configTypes";
 import { guildLabel } from "../config/configTypes";
+import AddButton from "./AddButton.svelte";
+import DeleteButton from "./DeleteButton.svelte";
+import OptionCombobox from "./OptionCombobox.svelte";
 
 interface Props {
 	botId: string;
@@ -74,7 +77,7 @@ async function add() {
 	}
 	if (!/^\d{5,25}$/.test(roleId)) {
 		pushToast(
-			"ロールをプルダウンから選択してください（Botが当該ギルドに参加・起動している必要があります）。",
+			"ロールを候補から選択してください（Botが当該ギルドに参加・起動している必要があります）。",
 			"error",
 		);
 		return;
@@ -126,59 +129,58 @@ async function remove(r: AssistantRole, shift: boolean) {
 }
 </script>
 
-<details class="form-group collapsible-group">
-	<summary>利用可能ロール</summary>
-	<div class="add-row">
-		<select bind:value={selectedGuild} class="min180">
-			{#each guilds as g (g.guild_id)}
-				<option value={g.guild_id}>{g.guild_name ?? `ギルド ${g.guild_id}`}</option>
-			{/each}
-		</select>
-		<select bind:value={selectedRole} class="min180 grow">
-			{#if !available}
-				<option value="">（Bot未起動/未参加のため取得できません）</option>
+<section class="config-card card">
+	<div class="column-header">
+		<h3><span class="material-symbols-outlined header-icon-symbol">shield_person</span>利用可能ロール</h3>
+	</div>
+	<div class="section-body">
+		<div class="add-row">
+			<div class="joined-field">
+				<select bind:value={selectedGuild} class="guild-select" aria-label="ギルド">
+					{#each guilds as g (g.guild_id)}
+						<option value={g.guild_id}>{g.guild_name ?? `ギルド ${g.guild_id}`}</option>
+					{/each}
+				</select>
+				<span class="divider" aria-hidden="true"></span>
+				<OptionCombobox
+					options={roleOptions.filter(
+						(o) => !roles.some((r) => r.guild_id === selectedGuild && r.role_id === o.id),
+					)}
+					bind:value={selectedRole}
+					placeholder={available ? "ロール名 または ID" : "Bot未起動/未参加のため取得できません"}
+				/>
+			</div>
+			<AddButton onclick={add} disabled={!selectedRole.trim()} icon="group_add" title="ロールを追加" />
+		</div>
+		<div class="row-list">
+			{#if roles.length === 0}
+				<span class="field-sub">許可中のロールはありません。</span>
 			{:else}
-				<option value="">（ロールを選択）</option>
-				{#each roleOptions as r (r.id)}
-					<option value={r.id}>{r.name}</option>
+				{#each roles as r (r.guild_id + ":" + r.role_id)}
+					<div class="list-row">
+						<span class="row-label">
+							{#if r.role_name}@{r.role_name}{:else}<span class="mono">{r.role_id}</span>{/if}
+							@ {guildLabel(guilds, r.guild_id)}
+						</span>
+						<DeleteButton title="Shiftを押しながらで確認なしに削除" onclick={(e) => remove(r, e.shiftKey)} />
+					</div>
 				{/each}
 			{/if}
-		</select>
-		<Button variant="primary" onclick={add}>追加</Button>
+		</div>
 	</div>
-	<div class="row-list">
-		{#if roles.length === 0}
-			<span class="field-sub">許可中のロールはありません。</span>
-		{:else}
-			{#each roles as r (r.guild_id + ":" + r.role_id)}
-				<div class="list-row">
-					<span class="row-label">
-						{#if r.role_name}@{r.role_name}{:else}<span class="mono">{r.role_id}</span>{/if}
-						@ {guildLabel(guilds, r.guild_id)}
-					</span>
-					<button
-						type="button"
-						class="btn btn-secondary btn-sm"
-						title="Shiftを押しながらで確認なしに削除"
-						onclick={(e) => remove(r, e.shiftKey)}
-					>削除</button>
-				</div>
-			{/each}
-		{/if}
-	</div>
-</details>
+</section>
 
 <style>
+	.section-body {
+		display: flex;
+		flex-direction: column;
+		gap: 12px;
+		margin-top: 12px;
+	}
 	.add-row {
 		display: flex;
 		gap: 12px;
 		flex-wrap: wrap;
-	}
-	.min180 {
-		min-width: 180px;
-	}
-	.grow {
-		flex-grow: 1;
 	}
 	.mono {
 		font-family: var(--font-family-mono);

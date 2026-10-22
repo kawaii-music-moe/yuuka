@@ -11,9 +11,11 @@
 // 汎用モードの各セクションは assistant-config を1回 fetch して props で配る。操作後は再取得（nonce）。
 // ─────────────────────────────────────────────────────────────────────────
 
+import { onDestroy } from "svelte";
 import { botAttributeApi } from "$lib/api/services";
 import { PageTabs } from "$lib/components/ui";
 import { activeBot } from "$lib/stores/activeBot";
+import { headerExtra } from "$lib/stores/headerExtra";
 import { currentUser, isAdmin } from "$lib/stores/session";
 import BotInviteCard from "./config/BotInviteCard.svelte";
 import type {
@@ -128,13 +130,20 @@ function refreshBot() {
 
 // 汎用モードのタブが無いときは常に「接続」を出す。
 const shown = $derived(isAssistantOwner ? view : "connection");
+
+// タブはシェルのヘッダー（スコープバッジの位置）に出す。タブが無いときも空で差し込み、
+// バッジは出さない。
+headerExtra.set(headerTabs);
+onDestroy(() => headerExtra.set(null));
 </script>
 
-<section class="tab-view settings-page discord-tab">
+{#snippet headerTabs()}
 	{#if isAssistantOwner && botId}
-		<PageTabs tabs={TABS} bind:active={view} label="Discord の設定" />
+		<PageTabs tabs={TABS} bind:active={view} label="Discord の設定" flush />
 	{/if}
+{/snippet}
 
+<section class="tab-view settings-page discord-tab">
 	{#if shown === "connection"}
 		{#if showToken}
 			<DiscordTokenCard {botId} onsaved={refreshBot} />
@@ -151,26 +160,17 @@ const shown = $derived(isAssistantOwner ? view : "connection");
 			</p>
 		{/if}
 	{:else if shown === "places"}
-		<div class="config-card card">
-			<p class="description-text">
-				アシスタントが応答するギルドと、メンション無しで応答するチャンネル・応答しないチャンネルです。
-			</p>
-			<GuildsSection {botId} {guilds} onchanged={refresh} />
+		<GuildsSection {botId} {guilds} onchanged={refresh} />
+		<!-- チャンネルはギルドを選んで追加するので、ギルド未登録の間は出さない -->
+		{#if guilds.length > 0}
 			<ChannelsSection {botId} {guilds} {channels} onchanged={refresh} />
 			<MutedChannelsSection {botId} {guilds} {mutedChannels} onchanged={refresh} />
-		</div>
+		{/if}
 	{:else if shown === "people"}
-		<div class="config-card card">
-			<p class="description-text">
-				アシスタントを使えるメンバーとロール、届いた利用申請です。
-			</p>
-			<MembersSection {botId} {guilds} {members} onchanged={refresh} />
-			<RolesSection {botId} {guilds} {roles} onchanged={refresh} />
-			<RequestsSection {botId} {reloadKey} onchanged={refresh} />
-		</div>
+		<MembersSection {botId} {guilds} {members} onchanged={refresh} />
+		<RolesSection {botId} {guilds} {roles} onchanged={refresh} />
+		<RequestsSection {botId} {reloadKey} onchanged={refresh} />
 	{:else if shown === "note"}
-		<div class="config-card card">
-			<NoteSection {botId} {guilds} />
-		</div>
+		<NoteSection {botId} {guilds} />
 	{/if}
 </section>

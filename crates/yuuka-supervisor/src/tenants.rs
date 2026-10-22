@@ -319,6 +319,10 @@ impl yuuka_orchestrator::BotViewRuntime for RegistryBotViewRuntime {
 /// 表示名キャッシュの TTL（ギルド/チャンネル/メンバー名は変化が稀・REST 連打を避ける）。
 const NAME_CACHE_TTL: Duration = Duration::from_secs(300);
 
+/// ギルド候補（ロール/メンバー/チャンネル）キャッシュの TTL。guild の channels/members は
+/// rate limit が厳しく、設定画面の複数欄が別々に引くと数十秒待たされるため短時間だけ共有する。
+const OPTIONS_CACHE_TTL: Duration = Duration::from_secs(60);
+
 /// [`yuuka_orchestrator::DiscordLive`] の live 実装（sync-discord の Bot ユーザー参照・
 /// guild-options のロール/メンバー候補・UI 表示名の解決）。
 ///
@@ -328,6 +332,10 @@ pub struct RegistryDiscordLive {
     registry: Arc<TenantRegistry>,
     /// `"g:<id>"` / `"c:<id>"` / `"m:<gid>:<uid>"` → (取得時刻, 解決結果)。
     names: Mutex<HashMap<String, (std::time::Instant, Option<String>)>>,
+    /// `"<bot_id>:<guild_id>"` → (取得時刻, ギルド候補)。取得できたもの（available）だけ載せる。
+    options: Mutex<HashMap<String, (std::time::Instant, yuuka_orchestrator::GuildOptions)>>,
+    /// ギルド候補取得の直列化（同時要求で REST を重複させない）。
+    options_fetch: tokio::sync::Mutex<()>,
 }
 
 impl RegistryDiscordLive {
@@ -336,6 +344,8 @@ impl RegistryDiscordLive {
         Self {
             registry,
             names: Mutex::new(HashMap::new()),
+            options: Mutex::new(HashMap::new()),
+            options_fetch: tokio::sync::Mutex::new(()),
         }
     }
 
@@ -364,6 +374,26 @@ impl RegistryDiscordLive {
             .get(key)
             .filter(|(at, _)| at.elapsed() < NAME_CACHE_TTL)
             .map(|(_, v)| v.clone())
+    }
+
+    fn options_get(&self, key: &str) -> Option<yuuka_orchestrator::GuildOptions> {
+        let options = self
+            .options
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        options
+            .get(key)
+            .filter(|(at, _)| at.elapsed() < OPTIONS_CACHE_TTL)
+            .map(|(_, v)| v.clone())
+    }
+
+    fn options_put(&self, key: String, value: yuuka_orchestrator::GuildOptions) {
+        let mut options = self
+            .options
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        options.retain(|_, (at, _)| at.elapsed() < OPTIONS_CACHE_TTL);
+        options.insert(key, (std::time::Instant::now(), value));
     }
 
     fn cache_put(&self, key: String, value: Option<String>) {
@@ -445,6 +475,15 @@ impl yuuka_orchestrator::DiscordLive for RegistryDiscordLive {
         bot_id: &str,
         guild_id: &str,
     ) -> yuuka_orchestrator::GuildOptions {
+        let key = format!("{bot_id}:{guild_id}");
+        if let Some(cached) = self.options_get(&key) {
+            return cached;
+        }
+        // 同時に来た要求（設定画面の複数欄）は直列化し、後続は先行の結果をキャッシュから受け取る。
+        let _guard = self.options_fetch.lock().await;
+        if let Some(cached) = self.options_get(&key) {
+            return cached;
+        }
         // Node `getBotClientForUser`: 独自クライアントがあればそれ、無ければデフォルトへフォールバック。
         let Some(client) = self.client_for(bot_id) else {
             return yuuka_orchestrator::GuildOptions::default();
@@ -454,12 +493,17 @@ impl yuuka_orchestrator::DiscordLive for RegistryDiscordLive {
             id: e.id,
             name: e.name,
         };
-        yuuka_orchestrator::GuildOptions {
+        let result = yuuka_orchestrator::GuildOptions {
             roles: opts.roles.into_iter().map(entry).collect(),
             members: opts.members.into_iter().map(entry).collect(),
+            channels: opts.channels.into_iter().map(entry).collect(),
             members_complete: opts.members_complete,
             available: opts.available,
+        };
+        if result.available {
+            self.options_put(key, result.clone());
         }
+        result
     }
 
     async fn guild_name(&self, bot_id: &str, guild_id: &str) -> Option<String> {

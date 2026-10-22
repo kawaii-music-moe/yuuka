@@ -4,7 +4,6 @@
 
 import { ApiError } from "$lib/api/client";
 import { settingsApi } from "$lib/api/services";
-import { Button } from "$lib/components/ui";
 import { pushToast } from "$lib/stores/toast";
 import type { DiscordTokenResponse } from "./configTypes";
 
@@ -17,6 +16,10 @@ interface Props {
 let { botId, onsaved }: Props = $props();
 
 let token = $state("");
+// 読み込み時（マスク済み）／最後に保存した値。未変更なら保存ボタンを無効にする。
+let loadedToken = $state("");
+let saving = $state(false);
+const canSave = $derived(!saving && token.trim() !== loadedToken);
 
 // botId 変更でマスク済みトークンを再取得（/api/settings/discord は user-scoped）。
 $effect(() => {
@@ -31,19 +34,25 @@ async function load() {
 	} catch {
 		token = "";
 	}
+	loadedToken = token;
 }
 
 async function submit(e: SubmitEvent) {
 	e.preventDefault();
+	if (!canSave) return;
+	saving = true;
 	try {
 		const res = await settingsApi.updateDiscord({ token: token.trim() });
 		pushToast(res.message ?? "Discord 設定を保存しました。", "success");
+		loadedToken = token.trim();
 		onsaved?.();
 	} catch (err) {
 		pushToast(
 			err instanceof ApiError ? err.message : "保存に失敗しました。",
 			"error",
 		);
+	} finally {
+		saving = false;
 	}
 }
 </script>
@@ -54,25 +63,71 @@ async function submit(e: SubmitEvent) {
 		<span class="badge badge-accent">任意設定</span>
 	</div>
 	<form onsubmit={submit} class="token-form">
-		<div class="form-group">
-			<label for="discord-token">Discord Bot Token (任意)</label>
+		<label for="discord-token">Discord Bot Token</label>
+		<div class="token-row">
 			<input
 				type="password"
 				id="discord-token"
 				placeholder="トークンを変更・登録する場合は入力してください (マスク表示中)"
 				autocomplete="new-password"
 				bind:value={token}
+				disabled={saving}
 			/>
+			<button
+				type="submit"
+				class="save-button"
+				disabled={!canSave}
+				aria-label="Discord 設定を保存"
+				title="Discord 設定を保存"
+			>
+				<span class="material-symbols-outlined" aria-hidden="true">check</span>
+			</button>
 		</div>
-		<Button type="submit" variant="primary">Discord 設定を保存</Button>
 	</form>
 </section>
 
 <style>
+	.token-form label {
+		font-size: 0.9rem;
+		color: var(--text-primary);
+	}
 	.token-form {
 		display: flex;
 		flex-direction: column;
+		gap: 8px;
+		margin-top: 12px;
+	}
+	.token-row {
+		display: flex;
 		gap: 12px;
-		margin-top: 16px;
+	}
+	.token-row input {
+		flex: 1;
+		min-width: 0;
+		border: 0;
+		outline: none;
+		box-shadow: none;
+	}
+	.token-row input:focus {
+		border: 0;
+		outline: none;
+		box-shadow: none;
+	}
+	.save-button {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		width: 40px;
+		flex-shrink: 0;
+		border: 0;
+		border-radius: 6px;
+		background: transparent;
+		color: var(--color-primary);
+		cursor: pointer;
+	}
+	.save-button:disabled {
+		color: var(--text-secondary);
+		opacity: 0.4;
+		cursor: default;
 	}
 </style>

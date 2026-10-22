@@ -23,6 +23,8 @@ pub struct DiscordBotUser {
 pub struct GuildOptions {
     pub roles: Vec<GuildEntry>,
     pub members: Vec<GuildEntry>,
+    /// テキストで発言できるチャンネル候補（Discord の表示順）。
+    pub channels: Vec<GuildEntry>,
     /// メンバー一覧が完全か（GuildMembers intent 無しでは false）。
     pub members_complete: bool,
     /// Bot がオンラインかつ当該ギルドに在籍しているか。

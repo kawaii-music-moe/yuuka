@@ -3,9 +3,11 @@
 
 import { ApiError } from "$lib/api/client";
 import { botAttributeApi } from "$lib/api/services";
-import { Button, confirmDialog } from "$lib/components/ui";
+import { confirmDialog, Icon } from "$lib/components/ui";
 import { pushToast } from "$lib/stores/toast";
 import type { AssistantGuild } from "../config/configTypes";
+import AddButton from "./AddButton.svelte";
+import DeleteButton from "./DeleteButton.svelte";
 
 interface Props {
 	botId: string;
@@ -16,6 +18,14 @@ interface Props {
 let { botId, guilds, onchanged }: Props = $props();
 
 let guildInput = $state("");
+
+async function paste() {
+	try {
+		guildInput = (await navigator.clipboard.readText()).trim();
+	} catch {
+		pushToast("クリップボードを読み取れませんでした。", "error");
+	}
+}
 
 async function add() {
 	const guildId = guildInput.trim();
@@ -71,37 +81,80 @@ async function remove(g: AssistantGuild) {
 }
 </script>
 
-<details class="form-group collapsible-group" open>
-	<summary>応答許可ギルド</summary>
-	<div class="add-row">
-		<input type="text" placeholder="ギルドID（数字）" class="mono" bind:value={guildInput} />
-		<Button variant="primary" onclick={add}>追加</Button>
+<section class="config-card card">
+	<div class="column-header">
+		<h3><span class="material-symbols-outlined header-icon-symbol">dns</span>応答許可ギルド</h3>
 	</div>
-	<div class="row-list">
-		{#if guilds.length === 0}
-			<span class="field-sub">許可ギルドが未登録です。</span>
-		{:else}
-			{#each guilds as g (g.guild_id)}
-				<div class="list-row">
-					<span class="row-label">
-						{#if g.guild_name}{g.guild_name}（<span class="mono">{g.guild_id}</span>）{:else}<span
-								class="mono">{g.guild_id}</span
-							>{/if}
-					</span>
-					<Button variant="secondary" small onclick={() => remove(g)}>削除</Button>
-				</div>
-			{/each}
-		{/if}
+	<div class="section-body">
+		<div class="add-row">
+			<div class="guild-input">
+				<input type="text" placeholder="ギルドID（数字）" class="mono" bind:value={guildInput} />
+				<button
+					type="button"
+					class="paste-button"
+					title="クリップボードから貼り付け"
+					aria-label="クリップボードから貼り付け"
+					onclick={paste}
+				><Icon name="content_paste" /></button>
+			</div>
+			<AddButton onclick={add} disabled={!guildInput.trim()} icon="domain_add" title="ギルドを追加" />
+		</div>
+		<div class="row-list">
+			{#if guilds.length === 0}
+				<span class="field-sub">許可ギルドが未登録です。</span>
+			{:else}
+				{#each guilds as g (g.guild_id)}
+					<div class="list-row">
+						<span class="row-label">
+							{#if g.guild_name}{g.guild_name}（<span class="mono">{g.guild_id}</span>）{:else}<span
+									class="mono">{g.guild_id}</span
+								>{/if}
+						</span>
+						<DeleteButton onclick={() => remove(g)} />
+					</div>
+				{/each}
+			{/if}
+		</div>
 	</div>
-</details>
+</section>
 
 <style>
+	.section-body {
+		display: flex;
+		flex-direction: column;
+		gap: 12px;
+		margin-top: 12px;
+	}
 	.add-row {
 		display: flex;
 		gap: 12px;
 	}
-	.add-row .mono {
-		flex-grow: 1;
+	.guild-input {
+		position: relative;
+		flex: 1;
+		min-width: 0;
+	}
+	.guild-input input {
+		width: 100%;
+		box-sizing: border-box;
+		padding-right: 44px;
+	}
+	.paste-button {
+		position: absolute;
+		right: 4px;
+		top: 50%;
+		transform: translateY(-50%);
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		width: 36px;
+		height: 32px;
+		padding: 0;
+		border: 0;
+		border-radius: 6px;
+		background: transparent;
+		color: var(--text-secondary);
+		cursor: pointer;
 	}
 	.mono {
 		font-family: var(--font-family-mono);

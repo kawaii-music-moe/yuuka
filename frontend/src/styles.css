@@ -773,19 +773,43 @@ textarea {
 }
 
 /* Discord連携タブ（.discord-tab）配下のみ、注釈サイズ（0.72〜0.75rem）で描かれていた
-   見出し・説明・登録行の「名前」を本文サイズへ底上げする（IDは注釈サイズのmonoのまま）。
+   登録行の「名前」を本文サイズへ底上げする（IDは注釈サイズのmonoのまま）。
    他タブと共有のクラス自体は変えず、スコープ付き上書きに留める。 */
-.discord-tab .collapsible-group > summary {
-	font-size: 0.9rem;
-	letter-spacing: 0.02em;
-}
-.discord-tab .description-text {
-	font-size: 0.8rem;
-	line-height: 1.6;
-}
 .discord-tab .row-label {
 	font-size: 0.9rem;
 	color: var(--text-primary);
+}
+/* Discord 設定ページの入力欄は枠線・フォーカスリングなし（Bot登録名の入力欄と同じ見た目）。 */
+.tab-view.discord-tab input,
+.tab-view.discord-tab input:focus,
+.tab-view.discord-tab select,
+.tab-view.discord-tab select:focus {
+	border: 0;
+	outline: none;
+	box-shadow: none;
+}
+/* ギルド選択と、チャンネル・メンバー・ロールの入力を 1 つの枠に並べる。 */
+.discord-tab .joined-field {
+	display: flex;
+	flex: 1;
+	min-width: 0;
+	background-color: var(--surface-1dp);
+	border-radius: 4px;
+}
+.discord-tab .joined-field select,
+.discord-tab .joined-field input {
+	background: transparent;
+}
+.discord-tab .joined-field .guild-select {
+	flex-shrink: 0;
+	max-width: 40%;
+}
+.discord-tab .joined-field .divider {
+	width: 1px;
+	flex-shrink: 0;
+	/* 左はプルダウンの ▼ との間隔 */
+	margin: 8px 0 8px 12px;
+	background-color: var(--border-divider);
 }
 .discord-tab .row-label .mono {
 	font-size: 0.8rem;
