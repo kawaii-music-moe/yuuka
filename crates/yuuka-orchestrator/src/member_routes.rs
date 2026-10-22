@@ -20,7 +20,7 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::{json, Value};
-use yuuka_discord::{MemberDecision, MemberDmSender};
+use yuuka_discord::{DmMessageRef, MemberDecision, MemberDmSender};
 use yuuka_web::{AppState, AuthenticatedUser, Db};
 
 use crate::bot_repo::{self, DecideDeny, MemberRequestRow, SubmitDeny};
@@ -38,8 +38,8 @@ impl MemberDmSender for NullMemberDmSender {
         _guild_label: &str,
         _note: Option<&str>,
         _request_id: i64,
-    ) -> bool {
-        false
+    ) -> Option<DmMessageRef> {
+        None
     }
     async fn send_decision_dm(
         &self,
@@ -47,6 +47,9 @@ impl MemberDmSender for NullMemberDmSender {
         _bot_name: &str,
         _approved: bool,
     ) -> bool {
+        false
+    }
+    async fn close_request_dm(&self, _dm: &DmMessageRef, _bot_name: &str, _approved: bool) -> bool {
         false
     }
 }
@@ -142,8 +145,14 @@ async fn submit(
                 request_id,
             )
             .await;
-        if !sent {
-            tracing::warn!(request_id, owner = %owner_id, "利用申請 DM の送信に失敗");
+        match sent {
+            // 決定時に DM を「承認済み/却下済み」へ編集できるよう所在を控える。
+            Some(dm_ref) => {
+                if let Err(e) = bot_repo::set_member_request_dm(&db, request_id, &dm_ref).await {
+                    tracing::warn!(error = %e, request_id, "利用申請 DM の所在の保存に失敗");
+                }
+            }
+            None => tracing::warn!(request_id, owner = %owner_id, "利用申請 DM の送信に失敗"),
         }
     }
     ok_message("利用申請を送信しました。Bot作成者の承認をお待ちください。")
@@ -290,13 +299,19 @@ async fn decide(
     );
     yuuka_auth::audit::add_audit_log(&db, &actor, action, Some(&target), None).await;
 
-    // 申請者へ結果 DM（fire-and-forget・失敗しても決定は確定済み）。
-    if let (Some(applicant_id), Some(bot_name)) = (result.applicant_id, result.bot_name) {
-        if !dm
-            .send_decision_dm(&applicant_id, &bot_name, approved)
-            .await
-        {
-            tracing::warn!(request_id = id, user = %applicant_id, "利用申請結果 DM の送信に失敗");
+    if let Some(bot_name) = result.bot_name.as_deref() {
+        // オーナー宛の受付 DM を「承認済み/却下済み」へ編集してボタンを外す（Discord ボタンで決定した
+        // 場合と同じ見た目にする）。
+        if let Some(dm_ref) = result.request_dm.as_ref() {
+            if !dm.close_request_dm(dm_ref, bot_name, approved).await {
+                tracing::warn!(request_id = id, "利用申請 DM の編集に失敗");
+            }
+        }
+        // 申請者へ結果 DM（fire-and-forget・失敗しても決定は確定済み）。
+        if let Some(applicant_id) = result.applicant_id.as_deref() {
+            if !dm.send_decision_dm(applicant_id, bot_name, approved).await {
+                tracing::warn!(request_id = id, user = %applicant_id, "利用申請結果 DM の送信に失敗");
+            }
         }
     }
     ok_message(if approved {
@@ -377,7 +392,7 @@ mod tests {
     use serde_json::Value;
     use tower::ServiceExt;
     use yuuka_core::AuthError;
-    use yuuka_discord::MemberDmSender;
+    use yuuka_discord::{DmMessageRef, MemberDmSender};
     use yuuka_types::{Role, SessionUser};
     use yuuka_web::{AppState, AuthBackend, Db, WebConfig};
 
@@ -455,6 +470,8 @@ mod tests {
         ok: bool,
         requests: Mutex<Vec<RequestDm>>,
         decisions: Mutex<Vec<(String, String, bool)>>,
+        /// 編集された受付 DM（メッセージ ID, bot 名, 承認か）。
+        closed: Mutex<Vec<(String, String, bool)>>,
     }
 
     impl FakeMemberDm {
@@ -463,6 +480,7 @@ mod tests {
                 ok,
                 requests: Mutex::new(Vec::new()),
                 decisions: Mutex::new(Vec::new()),
+                closed: Mutex::new(Vec::new()),
             })
         }
     }
@@ -477,7 +495,7 @@ mod tests {
             guild_label: &str,
             note: Option<&str>,
             request_id: i64,
-        ) -> bool {
+        ) -> Option<DmMessageRef> {
             self.requests.lock().unwrap().push((
                 owner_id.to_owned(),
                 bot_name.to_owned(),
@@ -486,7 +504,10 @@ mod tests {
                 note.map(str::to_owned),
                 request_id,
             ));
-            self.ok
+            self.ok.then(|| DmMessageRef {
+                channel_id: "dmch".to_owned(),
+                message_id: format!("dmmsg{request_id}"),
+            })
         }
         async fn send_decision_dm(
             &self,
@@ -496,6 +517,19 @@ mod tests {
         ) -> bool {
             self.decisions.lock().unwrap().push((
                 applicant_id.to_owned(),
+                bot_name.to_owned(),
+                approved,
+            ));
+            self.ok
+        }
+        async fn close_request_dm(
+            &self,
+            dm: &DmMessageRef,
+            bot_name: &str,
+            approved: bool,
+        ) -> bool {
+            self.closed.lock().unwrap().push((
+                dm.message_id.clone(),
                 bot_name.to_owned(),
                 approved,
             ));
@@ -798,6 +832,11 @@ mod tests {
             dm.decisions.lock().unwrap().clone(),
             vec![("u".to_owned(), "TestBot".to_owned(), true)]
         );
+        // 受付時に控えた DM を「承認済み」へ編集する。
+        assert_eq!(
+            dm.closed.lock().unwrap().clone(),
+            vec![(format!("dmmsg{req_id}"), "TestBot".to_owned(), true)]
+        );
 
         // 別申請者 other の申請を却下 → other へ approved=false。
         send(
@@ -824,6 +863,10 @@ mod tests {
         assert_eq!(
             dm.decisions.lock().unwrap()[1],
             ("other".to_owned(), "TestBot".to_owned(), false)
+        );
+        assert_eq!(
+            dm.closed.lock().unwrap()[1],
+            (format!("dmmsg{other_id}"), "TestBot".to_owned(), false)
         );
     }
 

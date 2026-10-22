@@ -406,6 +406,23 @@ pub struct DecisionOutcome {
     pub applicant_id: Option<String>,
 }
 
+/// 利用申請のオーナー宛 DM の所在（決定後にその DM を編集してボタンを外すために控える）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DmMessageRef {
+    pub channel_id: String,
+    pub message_id: String,
+}
+
+/// 決定済みの利用申請 DM の本文（Discord ボタン・Web のどちらで決定しても同じ文面にする）。
+#[must_use]
+pub fn member_request_decided_content(bot_name: &str, approved: bool) -> String {
+    if approved {
+        format!("✅ 承認済み: Bot「**{bot_name}**」の利用申請を承認しました。")
+    } else {
+        format!("🚫 却下済み: Bot「**{bot_name}**」の利用申請を却下しました。")
+    }
+}
+
 /// 共有招待レコード（現行 `getShareById`）。
 #[derive(Debug, Clone)]
 pub struct ShareRecord {
@@ -443,6 +460,9 @@ pub trait MembershipService: Send + Sync {
         actor: &UserId,
     ) -> DecisionOutcome;
 
+    /// 申請に、送ったオーナー宛 DM の所在を控える（Web から決定したときの DM 編集用・best-effort）。
+    async fn record_request_dm(&self, request_id: i64, dm: &DmMessageRef);
+
     /// 共有招待を引く（現行 `getShareById`）。
     async fn get_share(&self, share_id: i64) -> Option<ShareRecord>;
 
@@ -476,10 +496,13 @@ pub trait MemberDmSender: Send + Sync {
         guild_label: &str,
         note: Option<&str>,
         request_id: i64,
-    ) -> bool;
+    ) -> Option<DmMessageRef>;
 
     /// 承認/却下の結果を申請者へ通知（ボタンなし）。
     async fn send_decision_dm(&self, applicant_id: &str, bot_name: &str, approved: bool) -> bool;
+
+    /// 申請受付 DM を「承認済み/却下済み」の本文へ編集してボタンを外す（Web から決定した場合）。
+    async fn close_request_dm(&self, dm: &DmMessageRef, bot_name: &str, approved: bool) -> bool;
 }
 
 /// Bot 共有招待 DM の送信ポート（Node `sendShareInviteDM`）。

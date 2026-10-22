@@ -24,8 +24,8 @@ use yuuka_core::{BotId, DbError, GuildId, UserId};
 use yuuka_crypto::SystemCrypto;
 use yuuka_db::map_sqlite;
 use yuuka_discord::{
-    BotDirectory, BotRecord, DecisionOutcome, MemberDecision, MembershipService, PersonaRecord,
-    RateDecision, RateExceeded, RateLimiter, ShareRecord, SubmitOutcome,
+    BotDirectory, BotRecord, DecisionOutcome, DmMessageRef, MemberDecision, MembershipService,
+    PersonaRecord, RateDecision, RateExceeded, RateLimiter, ShareRecord, SubmitOutcome,
 };
 use yuuka_web::Db;
 
@@ -257,6 +257,12 @@ impl MembershipService for DbMembership {
                     ..DecisionOutcome::default()
                 }
             }
+        }
+    }
+
+    async fn record_request_dm(&self, request_id: i64, dm: &DmMessageRef) {
+        if let Err(e) = bot_repo::set_member_request_dm(&self.db, request_id, dm).await {
+            tracing::warn!(error = %e, request_id, "利用申請 DM の所在の保存に失敗");
         }
     }
 

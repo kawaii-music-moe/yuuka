@@ -15,7 +15,7 @@ use std::sync::{Arc, RwLock};
 use async_trait::async_trait;
 use secrecy::SecretString;
 use twilight_http::Client;
-use twilight_model::id::marker::{ChannelMarker, UserMarker};
+use twilight_model::id::marker::{ChannelMarker, MessageMarker, UserMarker};
 use twilight_model::id::Id;
 use yuuka_core::{BotId, DiscordError, UserId};
 
@@ -23,8 +23,8 @@ use crate::idempotent::{MessageDedup, GUIDANCE_TTL};
 use crate::interaction::InteractionDeps;
 use crate::message_flow::FlowDeps;
 use crate::ports::{
-    ActionRow, BotDirectory, Button, ButtonStyle, DeliverTarget, MembershipService, Notifier,
-    TurnProcessor, TurnReply,
+    member_request_decided_content, ActionRow, BotDirectory, Button, ButtonStyle, DeliverTarget,
+    DmMessageRef, MembershipService, Notifier, TurnProcessor, TurnReply,
 };
 use crate::reply::{send_channel_reply, to_twilight_components};
 use crate::tenant::{run_tenant, TenantConfig, TenantStatus};
@@ -332,20 +332,65 @@ impl DiscordMessenger {
 
     /// オーナー宛の DM を、デフォルト（共有）クライアントからボタン付きで送る（DM 招待系の共通）。
     async fn send_owner_dm(&self, user_id: &str, content: &str, components: &[ActionRow]) -> bool {
+        // 送信可否をそのまま返す（現行 DM sender の boolean 戻り・偽の成功を返さない）。
+        self.send_owner_dm_message(user_id, content, components)
+            .await
+            .is_some()
+    }
+
+    /// [`Self::send_owner_dm`] と同じ送信で、成功時は送った DM の所在を返す（後から編集する用途）。
+    async fn send_owner_dm_message(
+        &self,
+        user_id: &str,
+        content: &str,
+        components: &[ActionRow],
+    ) -> Option<DmMessageRef> {
         let Some(client) = self.default_client() else {
             tracing::warn!("デフォルト Bot が未起動のため DM を送れません");
-            return false;
+            return None;
         };
         let client = &client;
-        let Ok(uid) = user_id.parse::<Id<UserMarker>>() else {
-            return false;
-        };
-        let Some(channel_id) = Self::open_dm(client, uid).await else {
-            return false;
-        };
+        let uid = user_id.parse::<Id<UserMarker>>().ok()?;
+        let channel_id = Self::open_dm(client, uid).await?;
         let comps = to_twilight_components(components);
-        // 送信可否をそのまま返す（現行 DM sender の boolean 戻り・偽の成功を返さない）。
-        crate::reply::send_channel_text(client, channel_id, None, content, &comps).await
+        let message_id =
+            crate::reply::send_channel_message(client, channel_id, None, content, &comps).await?;
+        Some(DmMessageRef {
+            channel_id: channel_id.get().to_string(),
+            message_id: message_id.get().to_string(),
+        })
+    }
+
+    /// 利用申請の受付 DM を決定済みの本文へ編集し、ボタンを外す（Web から決定した場合）。
+    pub async fn close_member_request_dm(
+        &self,
+        dm: &DmMessageRef,
+        bot_name: &str,
+        approved: bool,
+    ) -> bool {
+        let Some(client) = self.default_client() else {
+            tracing::warn!("デフォルト Bot が未起動のため DM を編集できません");
+            return false;
+        };
+        let (Ok(channel_id), Ok(message_id)) = (
+            dm.channel_id.parse::<Id<ChannelMarker>>(),
+            dm.message_id.parse::<Id<MessageMarker>>(),
+        ) else {
+            return false;
+        };
+        let content = member_request_decided_content(bot_name, approved);
+        match client
+            .update_message(channel_id, message_id)
+            .content(Some(&content))
+            .components(Some(&[]))
+            .await
+        {
+            Ok(_) => true,
+            Err(e) => {
+                tracing::warn!(error = %e, channel_id = %channel_id, "利用申請 DM の編集に失敗");
+                false
+            }
+        }
     }
 
     // ── DM 送信ヘルパ（web/services が呼ぶ・現行 sendShareInviteDM 等） ──
@@ -381,7 +426,7 @@ impl DiscordMessenger {
         guild_label: &str,
         note: Option<&str>,
         request_id: i64,
-    ) -> bool {
+    ) -> Option<DmMessageRef> {
         let note_line = note
             .map(str::trim)
             .filter(|n| !n.is_empty())
@@ -406,7 +451,8 @@ impl DiscordMessenger {
                 },
             ],
         }];
-        self.send_owner_dm(owner_id, &content, &components).await
+        self.send_owner_dm_message(owner_id, &content, &components)
+            .await
     }
 
     /// 利用申請の結果 DM（現行 `sendMemberDecisionDM`）。
@@ -435,7 +481,7 @@ impl crate::ports::MemberDmSender for DiscordMessenger {
         guild_label: &str,
         note: Option<&str>,
         request_id: i64,
-    ) -> bool {
+    ) -> Option<DmMessageRef> {
         self.send_member_request_dm(
             owner_id,
             bot_name,
@@ -450,6 +496,10 @@ impl crate::ports::MemberDmSender for DiscordMessenger {
     async fn send_decision_dm(&self, applicant_id: &str, bot_name: &str, approved: bool) -> bool {
         self.send_member_decision_dm(applicant_id, bot_name, approved)
             .await
+    }
+
+    async fn close_request_dm(&self, dm: &DmMessageRef, bot_name: &str, approved: bool) -> bool {
+        self.close_member_request_dm(dm, bot_name, approved).await
     }
 }
 

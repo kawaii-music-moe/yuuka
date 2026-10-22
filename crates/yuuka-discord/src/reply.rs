@@ -310,6 +310,19 @@ pub async fn send_channel_text(
     content: &str,
     components: &[Component],
 ) -> bool {
+    send_channel_message(http, channel_id, reply_to, content, components)
+        .await
+        .is_some()
+}
+
+/// [`send_channel_text`] と同じ送信で、成功時は送ったメッセージの ID を返す（後から編集する用途）。
+pub async fn send_channel_message(
+    http: &Client,
+    channel_id: Id<ChannelMarker>,
+    reply_to: Option<Id<MessageMarker>>,
+    content: &str,
+    components: &[Component],
+) -> Option<Id<MessageMarker>> {
     let mut req = http.create_message(channel_id).content(content);
     if let Some(rid) = reply_to {
         req = req.reply(rid);
@@ -317,11 +330,20 @@ pub async fn send_channel_text(
     if !components.is_empty() {
         req = req.components(components);
     }
-    if let Err(e) = req.await {
-        tracing::warn!(error = %e, channel_id = %channel_id, "テキスト送信に失敗");
-        return false;
+    let resp = match req.await {
+        Ok(resp) => resp,
+        Err(e) => {
+            tracing::warn!(error = %e, channel_id = %channel_id, "テキスト送信に失敗");
+            return None;
+        }
+    };
+    match resp.model().await {
+        Ok(message) => Some(message.id),
+        Err(e) => {
+            tracing::warn!(error = %e, channel_id = %channel_id, "送信メッセージの読み取りに失敗");
+            None
+        }
     }
-    true
 }
 
 #[cfg(test)]

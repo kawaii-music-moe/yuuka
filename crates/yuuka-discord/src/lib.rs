@@ -46,9 +46,10 @@ pub use twilight_http::Client as HttpClient;
 
 // よく使う契約を crate ルートへ再エクスポート（実装側の import を短くする）。
 pub use ports::{
-    rate_limit_message, ActionRow, BotDirectory, BotRecord, BotStatus, Button, ButtonStyle,
-    DecisionOutcome, DeliverTarget, EmbedField, FileAttachment, IncomingChat, InlineMedia,
-    MemberDecision, MemberDmSender, MembershipService, Notifier, PersonaRecord, RateDecision,
-    RateExceeded, RateLimiter, ReplyAncestor, RichEmbed, ShareInviteDm, ShareRecord, Speaker,
-    StatusSink, SubmitOutcome, TurnDelivery, TurnError, TurnProcessor, TurnReply,
+    member_request_decided_content, rate_limit_message, ActionRow, BotDirectory, BotRecord,
+    BotStatus, Button, ButtonStyle, DecisionOutcome, DeliverTarget, DmMessageRef, EmbedField,
+    FileAttachment, IncomingChat, InlineMedia, MemberDecision, MemberDmSender, MembershipService,
+    Notifier, PersonaRecord, RateDecision, RateExceeded, RateLimiter, ReplyAncestor, RichEmbed,
+    ShareInviteDm, ShareRecord, Speaker, StatusSink, SubmitOutcome, TurnDelivery, TurnError,
+    TurnProcessor, TurnReply,
 };

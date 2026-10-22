@@ -155,7 +155,8 @@ pub async fn decide_component(
                 if let (Some(owner), Some(name), Some(rid)) =
                     (&outcome.owner_id, &outcome.bot_name, outcome.request_id)
                 {
-                    deps.dm
+                    let sent = deps
+                        .dm
                         .send_request_dm(
                             owner,
                             name,
@@ -165,6 +166,10 @@ pub async fn decide_component(
                             rid,
                         )
                         .await;
+                    // Web から決定したときに DM を編集できるよう所在を控える。
+                    if let Some(dm) = sent {
+                        deps.membership.record_request_dm(rid, &dm).await;
+                    }
                 }
             }
             let msg = if outcome.ok {
@@ -197,13 +202,12 @@ pub async fn decide_component(
                 let approved = matches!(outcome.status, Some(MemberDecision::Approved));
                 deps.dm.send_decision_dm(applicant, name, approved).await;
             }
+            // 押された DM 自体を決定済みの本文へ更新してボタンを外す（Web で決定した場合と同じ文面）。
             let bot_name = outcome.bot_name.unwrap_or_default();
-            let content = match outcome.status {
-                Some(MemberDecision::Approved) => {
-                    format!("✅ Bot「**{bot_name}**」の利用申請を承認しました。")
-                }
-                _ => format!("🚫 Bot「**{bot_name}**」の利用申請を却下しました。"),
-            };
+            let content = ports::member_request_decided_content(
+                &bot_name,
+                matches!(outcome.status, Some(MemberDecision::Approved)),
+            );
             InteractionPlan::Update {
                 content,
                 followup: None,
@@ -393,7 +397,8 @@ mod tests {
 
     use super::*;
     use crate::ports::{
-        BotRecord, DecisionOutcome, MemberDmSender, PersonaRecord, ShareRecord, SubmitOutcome,
+        BotRecord, DecisionOutcome, DmMessageRef, MemberDmSender, PersonaRecord, ShareRecord,
+        SubmitOutcome,
     };
 
     #[test]
@@ -423,6 +428,8 @@ mod tests {
         submit_ok: bool,
         decide: Option<DecisionOutcome>,
         import_ok: bool,
+        /// `record_request_dm` で控えた (request_id, DM 所在)。
+        recorded_dms: Arc<Mutex<Vec<(i64, DmMessageRef)>>>,
     }
 
     #[async_trait]
@@ -460,6 +467,12 @@ mod tests {
                 bot_name: None,
                 applicant_id: None,
             })
+        }
+        async fn record_request_dm(&self, request_id: i64, dm: &DmMessageRef) {
+            self.recorded_dms
+                .lock()
+                .unwrap()
+                .push((request_id, dm.clone()));
         }
         async fn get_share(&self, _share_id: i64) -> Option<ShareRecord> {
             self.share.clone()
@@ -537,7 +550,7 @@ mod tests {
             guild_label: &str,
             note: Option<&str>,
             request_id: i64,
-        ) -> bool {
+        ) -> Option<DmMessageRef> {
             self.request_dms.lock().unwrap().push((
                 owner_id.to_owned(),
                 request_id,
@@ -545,7 +558,10 @@ mod tests {
                 guild_label.to_owned(),
                 note.is_some(),
             ));
-            true
+            Some(DmMessageRef {
+                channel_id: "dmch".to_owned(),
+                message_id: format!("dmmsg{request_id}"),
+            })
         }
         async fn send_decision_dm(
             &self,
@@ -557,6 +573,9 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push((applicant_id.to_owned(), approved));
+            true
+        }
+        async fn close_request_dm(&self, _dm: &DmMessageRef, _bot_name: &str, _ok: bool) -> bool {
             true
         }
     }
@@ -785,6 +804,37 @@ mod tests {
         assert!(!sent[0].4, "ボタン経路は note なし");
     }
 
+    /// 送った受付 DM の所在を申請に控える（Web から決定したときに DM を編集するため）。
+    #[tokio::test]
+    async fn memreq_apply_records_owner_dm_location() {
+        let membership = FakeMembership {
+            submit_ok: true,
+            ..Default::default()
+        };
+        let recorded = membership.recorded_dms.clone();
+        let d = deps(membership, FakeDirectory::default());
+        let _ = decide(
+            &d,
+            "memreq_apply",
+            "bot1",
+            "g9",
+            &UserId::new("u"),
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(
+            recorded.lock().unwrap().as_slice(),
+            &[(
+                99,
+                DmMessageRef {
+                    channel_id: "dmch".to_owned(),
+                    message_id: "dmmsg99".to_owned(),
+                }
+            )]
+        );
+    }
+
     #[tokio::test]
     async fn memreq_apply_dm_uses_label_fallback_when_absent() {
         let dm = Arc::new(FakeDmSender::default());
@@ -845,7 +895,14 @@ mod tests {
             None,
         )
         .await;
-        assert!(matches!(plan, InteractionPlan::Update { .. }));
+        // 押された DM は「承認済み」の本文へ更新される（ボタンは respond が外す）。
+        assert_eq!(
+            plan,
+            InteractionPlan::Update {
+                content: "✅ 承認済み: Bot「**テストBot**」の利用申請を承認しました。".to_owned(),
+                followup: None,
+            }
+        );
         let sent = dm.decision_dms.lock().unwrap();
         assert_eq!(sent.as_slice(), &[("applicant1".to_owned(), true)]);
     }

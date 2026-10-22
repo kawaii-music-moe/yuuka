@@ -9,7 +9,7 @@ use rusqlite::{params, OptionalExtension};
 use yuuka_core::DbError;
 use yuuka_core::{BotId, CapabilitySet, UserId};
 use yuuka_db::map_sqlite;
-use yuuka_discord::{BotRecord, MemberDecision, PersonaRecord, ShareRecord};
+use yuuka_discord::{BotRecord, DmMessageRef, MemberDecision, PersonaRecord, ShareRecord};
 use yuuka_web::Db;
 
 /// 互換用の既定モデル定数。実行時は llm_settings のBot設定/環境既定値を使用する。
@@ -1556,6 +1556,8 @@ pub struct DecideResult {
     pub bot_name: Option<String>,
     /// 申請者（結果 DM の宛先・Node `sendMemberDecisionDM` の applicantId）。ok 時のみ。
     pub applicant_id: Option<String>,
+    /// オーナー宛の受付 DM の所在（Web から決定したときに編集する）。控えていなければ `None`。
+    pub request_dm: Option<DmMessageRef>,
 }
 
 /// 承認/却下の失敗理由（Node `DecisionResult.code`）。`NotFound`=404・`Forbidden`=403・`AlreadyDecided`=409。
@@ -1582,15 +1584,33 @@ pub async fn decide_member_request(
     let actor = actor.to_owned();
     db.writer
         .transaction(move |tx| {
-            let req: Option<(String, String, String, String)> = tx
+            type RequestCols = (
+                String,
+                String,
+                String,
+                String,
+                Option<String>,
+                Option<String>,
+            );
+            let req: Option<RequestCols> = tx
                 .query_row(
-                    "SELECT bot_id, guild_id, user_id, status FROM bot_member_requests WHERE id = ?1",
+                    "SELECT bot_id, guild_id, user_id, status, dm_channel_id, dm_message_id \
+                     FROM bot_member_requests WHERE id = ?1",
                     params![request_id],
-                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+                    |r| {
+                        Ok((
+                            r.get(0)?,
+                            r.get(1)?,
+                            r.get(2)?,
+                            r.get(3)?,
+                            r.get(4)?,
+                            r.get(5)?,
+                        ))
+                    },
                 )
                 .optional()
                 .map_err(map_sqlite)?;
-            let Some((bot_id, guild_id, applicant, status)) = req else {
+            let Some((bot_id, guild_id, applicant, status, dm_channel, dm_message)) = req else {
                 return Ok(deny_decide(DecideDeny::NotFound, "申請が見つかりません。"));
             };
             // Bot と owner。
@@ -1659,7 +1679,35 @@ pub async fn decide_member_request(
                 status: Some(decision),
                 bot_name: Some(bot_name),
                 applicant_id: Some(applicant),
+                request_dm: dm_channel.zip(dm_message).map(|(channel_id, message_id)| {
+                    DmMessageRef {
+                        channel_id,
+                        message_id,
+                    }
+                }),
             })
+        })
+        .await
+}
+
+/// 申請に、送ったオーナー宛 DM の所在を控える（再申請で上書き・Web から決定したときの DM 編集用）。
+///
+/// # Errors
+/// 書き込み失敗時 [`DbError`]。
+pub async fn set_member_request_dm(
+    db: &Db,
+    request_id: i64,
+    dm: &DmMessageRef,
+) -> Result<(), DbError> {
+    let (channel_id, message_id) = (dm.channel_id.clone(), dm.message_id.clone());
+    db.writer
+        .transaction(move |tx| {
+            tx.execute(
+                "UPDATE bot_member_requests SET dm_channel_id = ?1, dm_message_id = ?2 WHERE id = ?3",
+                params![channel_id, message_id, request_id],
+            )
+            .map_err(map_sqlite)?;
+            Ok(())
         })
         .await
 }
@@ -1673,6 +1721,7 @@ fn deny_decide(code: DecideDeny, message: &str) -> DecideResult {
         status: None,
         bot_name: None,
         applicant_id: None,
+        request_dm: None,
     }
 }
 
