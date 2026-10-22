@@ -69,7 +69,6 @@ async function save(enabled: boolean) {
 		/>
 		{#if saving}<span role="status">変更中…</span>{/if}
 	</div>
-	<p class="mode-description">オンでパーソナル秘書、オフで汎用モードになります。</p>
 </section>
 
 <style>
@@ -79,10 +78,5 @@ async function save(enabled: boolean) {
 		flex-wrap: wrap;
 		gap: 12px;
 		margin-top: 12px;
-	}
-	.mode-description {
-		margin-top: 8px;
-		font-size: 0.85rem;
-		color: var(--text-secondary);
 	}
 </style>
