@@ -48,6 +48,8 @@ struct DeviceRecord {
     device_name: Option<String>,
     approved_user: Option<String>,
     expires_at: Instant,
+    /// 発行時刻（承認画面に「発行から何秒か」を見せる用）。
+    created_at: Instant,
     /// slow_down 判定用: 直近に token ポーリングした時刻。
     last_polled_at: Option<Instant>,
 }
@@ -143,6 +145,7 @@ impl DeviceAuthStore {
                 device_name,
                 approved_user: None,
                 expires_at,
+                created_at: now,
                 last_polled_at: None,
             },
         );
@@ -179,6 +182,25 @@ impl DeviceAuthStore {
         rec.approved_user = Some(approved_user.to_owned());
         ApproveOutcome::Ok {
             device_name: rec.device_name.clone(),
+        }
+    }
+
+    /// 承認前の確認用に端末名と発行からの経過秒を返す（状態は変えない）。
+    fn lookup(&self, user_code: &str) -> LookupOutcome {
+        let normalized = user_code.trim().to_uppercase();
+        let now = Instant::now();
+        let mut state = self.lock();
+        Self::sweep(&mut state, now);
+        let Some(rec) = state
+            .by_user_code
+            .get(&normalized)
+            .and_then(|h| state.by_hash.get(h))
+        else {
+            return LookupOutcome::NotFound;
+        };
+        LookupOutcome::Found {
+            device_name: rec.device_name.clone(),
+            age_secs: now.duration_since(rec.created_at).as_secs(),
         }
     }
 
@@ -227,6 +249,15 @@ enum ApproveOutcome {
     Ok { device_name: Option<String> },
     NotFound,
     Expired,
+}
+
+/// `lookup` の結果。
+enum LookupOutcome {
+    Found {
+        device_name: Option<String>,
+        age_secs: u64,
+    },
+    NotFound,
 }
 
 /// `poll` の判定（トークン発行前の同期的な状態）。
@@ -281,6 +312,7 @@ async fn lookup_user(
 pub fn device_auth_routes(store: Arc<DeviceAuthStore>) -> Router<AppState> {
     Router::new()
         .route("/api/auth/device/code", post(code_handler))
+        .route("/api/auth/device/lookup", post(lookup_handler))
         .route("/api/auth/device/approve", post(approve_handler))
         .route("/api/auth/device/token", post(token_handler))
         .layer(Extension(store))
@@ -375,6 +407,46 @@ async fn approve_handler(
         )
             .into_response(),
         ApproveOutcome::NotFound => (
+            StatusCode::NOT_FOUND,
+            Json(json!({
+                "success": false,
+                "message": "コードが見つかりません。入力を確認してください。"
+            })),
+        )
+            .into_response(),
+    }
+}
+
+/// §1.2a: 承認前に端末名と発行からの経過時間を返す（auth:user・ログイン済み利用者に限定）。
+/// コードを知るだけで端末名を引けると列挙の足がかりになるため、未ログインには開かない。
+async fn lookup_handler(
+    _user: AuthenticatedUser,
+    Extension(store): Extension<Arc<DeviceAuthStore>>,
+    ScopedJson { value: body, .. }: ScopedJson<ApproveBody>,
+) -> Response {
+    let user_code = as_opt_string(body.user_code).unwrap_or_default();
+    if user_code.trim().is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "success": false, "message": "ユーザーコードが必要です。" })),
+        )
+            .into_response();
+    }
+    match store.lookup(&user_code) {
+        LookupOutcome::Found {
+            device_name,
+            age_secs,
+        } => (
+            StatusCode::OK,
+            Json(json!({
+                "success": true,
+                "device_name": device_name,
+                "age_secs": age_secs,
+                "expires_in": store.device_code_ttl_secs.saturating_sub(age_secs),
+            })),
+        )
+            .into_response(),
+        LookupOutcome::NotFound => (
             StatusCode::NOT_FOUND,
             Json(json!({
                 "success": false,
@@ -707,6 +779,44 @@ mod tests {
             j["message"],
             serde_json::json!("ユーザーコードが必要です。")
         );
+    }
+
+    #[tokio::test]
+    async fn lookup_shows_device_name_before_approval_for_logged_in_only() {
+        let store = DeviceAuthStore::new("https://ex.test".to_owned());
+        let app = app(store.clone());
+        let (_, j) = send(
+            &app,
+            "/api/auth/device/code",
+            "",
+            r#"{"device_name":"Evil PC"}"#,
+        )
+        .await;
+        let user_code = j["user_code"].as_str().unwrap().to_owned();
+        let body = format!(r#"{{"user_code":"{}"}}"#, user_code.to_lowercase());
+
+        // 未ログインは引けない（401）。
+        let (st, _) = send(&app, "/api/auth/device/lookup", "", &body).await;
+        assert_eq!(st, StatusCode::UNAUTHORIZED);
+        // ログイン済みは承認前に端末名・経過時間・残り時間を得る。
+        let (st, j) = send(&app, "/api/auth/device/lookup", "owner", &body).await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(j["device_name"], serde_json::json!("Evil PC"));
+        assert!(j["age_secs"].as_u64().unwrap() < 5);
+        assert!(j["expires_in"].as_u64().unwrap() <= 600);
+        // lookup は承認しない（token は pending のまま）。
+        assert!(!store.lock().by_hash.values().any(|r| r.approved));
+        // 未知コード → 404、空 → 400。
+        let (st, _) = send(
+            &app,
+            "/api/auth/device/lookup",
+            "owner",
+            r#"{"user_code":"ZZZZ-ZZZZ"}"#,
+        )
+        .await;
+        assert_eq!(st, StatusCode::NOT_FOUND);
+        let (st, _) = send(&app, "/api/auth/device/lookup", "owner", r#"{}"#).await;
+        assert_eq!(st, StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]

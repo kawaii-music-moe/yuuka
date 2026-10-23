@@ -51,6 +51,10 @@
 - 保存先: Redis `device_auth:{sha256(device_code)}` に `{ user_code, status:"pending", device_name, created_at }`、TTL=`expires_in`。Redis 不通時は in-memory フォールバック（セッションと同様）。
 - `user_code` はレート制限つきで衝突回避・総当り耐性のため十分な空間（例 8 文字 Crockford Base32）。
 
+### 1.1a `POST /api/auth/device/lookup`（auth: user・Rust 追加）
+
+body `{ user_code }` → `{ success, device_name, age_secs, expires_in }`（不明は 404）。承認前に端末名と発行からの経過時間を見せるための照会で、状態は変えない。コードを知るだけで端末名を引けないようログイン済み利用者に限定する。承認画面は `?code=` を入力済みにせず、利用者が手入力したコードの照会結果を確認してから承認する（RFC 8628 §5.4 対策・#207）。
+
 ### 1.2 `POST /api/auth/device/approve`（auth: user）
 
 ブラウザ（既存セッション Cookie で認証済み）から、`/device` ページ経由で呼ぶ。
