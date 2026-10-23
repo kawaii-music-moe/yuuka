@@ -265,6 +265,52 @@ fn parse_ddg(html: &str) -> Vec<SearchResult> {
     results
 }
 
+/// 静的取得用 DNS リゾルバ。内部/予約レンジに解決されるホストへは接続させない（rebinding 対策・#206）。
+struct PublicOnlyResolver;
+
+impl reqwest::dns::Resolve for PublicOnlyResolver {
+    fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
+        Box::pin(async move {
+            let addrs = yuuka_outbound::resolve_public_addrs(name.as_str(), 0)
+                .await
+                .map_err(Box::<dyn std::error::Error + Send + Sync>::from)?;
+            Ok(Box::new(addrs.into_iter()) as reqwest::dns::Addrs)
+        })
+    }
+}
+
+const MAX_REDIRECTS: usize = 5;
+
+/// 1 回分の GET。リダイレクトは自動で追わず、各ホップを SSRF 検査してから追う。
+async fn get_following(
+    client: &reqwest::Client,
+    start: &str,
+    build: impl Fn(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
+) -> Result<reqwest::Response, String> {
+    let mut url = start.to_owned();
+    for _ in 0..=MAX_REDIRECTS {
+        yuuka_outbound::assert_safe_outbound_url(&url).await?;
+        let resp = build(client.get(&url))
+            .send()
+            .await
+            .map_err(|e| format!("リクエストエラー: {e}"))?;
+        if !resp.status().is_redirection() {
+            return Ok(resp);
+        }
+        let location = resp
+            .headers()
+            .get(reqwest::header::LOCATION)
+            .and_then(|v| v.to_str().ok())
+            .ok_or_else(|| "リダイレクト先が不正です。".to_owned())?;
+        url = resp
+            .url()
+            .join(location)
+            .map_err(|_| "リダイレクト先が不正です。".to_owned())?
+            .into();
+    }
+    Err("リダイレクトが多すぎます。".to_owned())
+}
+
 /// ブラウザ相当ヘッダ + 指数バックオフで HTML を取得する（Node `fetchHtmlWithRetry`）。
 /// `fetchDynamicPage` の静的取得経路でも共有する。
 ///
@@ -272,7 +318,8 @@ fn parse_ddg(html: &str) -> Vec<SearchResult> {
 /// 全リトライ失敗時に最後のエラー文言を返す。
 pub async fn fetch_html(url: &str) -> Result<String, String> {
     let client = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::limited(10))
+        .redirect(reqwest::redirect::Policy::none())
+        .dns_resolver(std::sync::Arc::new(PublicOnlyResolver))
         .build()
         .map_err(|e| e.to_string())?;
 
@@ -281,8 +328,8 @@ pub async fn fetch_html(url: &str) -> Result<String, String> {
     let mut last_err = "ページ取得に失敗しました。".to_owned();
 
     for i in 0..max_retries {
-        let req = client
-            .get(url)
+        let sent = get_following(&client, url, |req| {
+            req
             .header("User-Agent", UA)
             .header(
                 "Accept",
@@ -294,9 +341,11 @@ pub async fn fetch_html(url: &str) -> Result<String, String> {
             .header("Sec-Fetch-Mode", "navigate")
             .header("Sec-Fetch-Site", "none")
             .header("Upgrade-Insecure-Requests", "1")
-            .timeout(Duration::from_secs(15));
+                .timeout(Duration::from_secs(15))
+        })
+        .await;
 
-        match req.send().await {
+        match sent {
             Ok(response) => {
                 let status = response.status();
                 if status.is_success() {
@@ -309,7 +358,9 @@ pub async fn fetch_html(url: &str) -> Result<String, String> {
                     return Err(last_err);
                 }
             }
-            Err(e) => last_err = format!("リクエストエラー: {e}"),
+            Err(e) if e.starts_with("リクエストエラー") => last_err = e,
+            // SSRF 検査で弾いた・リダイレクト不正は再試行しても結果が変わらない。
+            Err(e) => return Err(e),
         }
 
         if i < max_retries - 1 {
@@ -323,6 +374,26 @@ pub async fn fetch_html(url: &str) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn fetch_html_refuses_internal_targets_without_connecting() {
+        // 内部アドレスのリテラルは接続前に拒否される（待受は無いので接続していれば別のエラーになる）。
+        for url in [
+            "http://127.0.0.1:9/",
+            "http://169.254.169.254/latest/meta-data",
+            "http://localhost/",
+        ] {
+            let err = fetch_html(url).await.unwrap_err();
+            assert!(err.contains("許可されていません"), "{url}: {err}");
+        }
+    }
+
+    #[tokio::test]
+    async fn public_only_resolver_rejects_loopback_names() {
+        use reqwest::dns::Resolve;
+        let name: reqwest::dns::Name = "localhost".parse().unwrap();
+        assert!(PublicOnlyResolver.resolve(name).await.is_err());
+    }
 
     #[test]
     fn encode_query_percent_encodes_spaces_and_kanji() {
