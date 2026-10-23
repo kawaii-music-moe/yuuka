@@ -9,8 +9,11 @@ use std::sync::Arc;
 use secrecy::{ExposeSecret, SecretString};
 use yuuka_core::{BotId, GuildId, UserId};
 use yuuka_crypto::SystemCrypto;
-use yuuka_discord::{BotDirectory, MemberDecision, MembershipService, RateExceeded, RateLimiter};
-use yuuka_orchestrator::{DbBotDirectory, DbMembership, InMemoryRateLimiter};
+use yuuka_discord::{
+    BotDirectory, DecidedRequest, DmMessageRef, MemberDecision, MembershipService, RateExceeded,
+    RateLimiter,
+};
+use yuuka_orchestrator::{bot_repo, DbBotDirectory, DbMembership, InMemoryRateLimiter};
 use yuuka_web::Db;
 
 static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -218,7 +221,10 @@ async fn membership_submit_and_decide_adds_member() {
         .decide_member_request(request_id, MemberDecision::Approved, &UserId::new("owner1"))
         .await;
     assert!(decided.ok, "{}", decided.message);
-    assert_eq!(decided.status, Some(MemberDecision::Approved));
+    assert_eq!(
+        decided.request.map(|r| r.decision),
+        Some(MemberDecision::Approved)
+    );
     assert!(
         dir.is_bot_member(&bot, &g1, &UserId::new("applicant"))
             .await,
@@ -243,6 +249,69 @@ async fn membership_submit_and_decide_adds_member() {
         )
         .await;
     assert!(!forbidden.ok, "オーナー/Admin のみ");
+}
+
+/// ボタン経由の申請は表示名を控え、決定時に受付 DM の所在とあわせて返す。再申請では前回の DM の所在を外す。
+#[tokio::test]
+async fn member_request_keeps_labels_and_resets_dm_on_resubmit() {
+    let (db, path) = fresh_db();
+    seed_user(&path, "owner1", "user");
+    seed_bot(&path, "botA", "owner1", "A", true);
+    let ms = DbMembership::new(db.clone());
+    let bot = BotId::new("botA");
+
+    let applied = ms
+        .submit_member_request(
+            &bot,
+            "g1",
+            &UserId::new("applicant"),
+            Some("  申請太郎 ".to_owned()),
+            Some("テストギルド".to_owned()),
+        )
+        .await;
+    let request_id = applied.request_id.expect("request id");
+    let dm = DmMessageRef {
+        channel_id: "dmch".to_owned(),
+        message_id: "dmmsg".to_owned(),
+    };
+    ms.record_request_dm(request_id, &dm).await;
+
+    let decided =
+        bot_repo::decide_member_request(&db, request_id, MemberDecision::Rejected, "owner1")
+            .await
+            .unwrap();
+    assert!(decided.ok, "{}", decided.message);
+    assert_eq!(
+        decided.request,
+        Some(DecidedRequest {
+            decision: MemberDecision::Rejected,
+            bot_name: "A".to_owned(),
+            applicant_id: "applicant".to_owned(),
+            applicant_label: Some("申請太郎".to_owned()),
+            guild_id: "g1".to_owned(),
+            guild_label: Some("テストギルド".to_owned()),
+            note: None,
+        })
+    );
+    assert_eq!(decided.request_dm, Some(dm));
+
+    // 却下後の再申請: 新しい受付 DM を控えるまで、決定済みの前回 DM を編集対象にしない。
+    let again = ms
+        .submit_member_request(&bot, "g1", &UserId::new("applicant"), None, None)
+        .await;
+    assert!(again.ok, "{}", again.message);
+    let (dm_channel, applicant_label): (Option<String>, Option<String>) = conn(&path)
+        .query_row(
+            "SELECT dm_channel_id, applicant_label FROM bot_member_requests WHERE id = ?1",
+            [request_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(dm_channel, None);
+    assert_eq!(
+        applicant_label, None,
+        "表示名も今回の申請のものに置き換える"
+    );
 }
 
 #[tokio::test]

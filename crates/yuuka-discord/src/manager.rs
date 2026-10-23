@@ -23,10 +23,10 @@ use crate::idempotent::{MessageDedup, GUIDANCE_TTL};
 use crate::interaction::InteractionDeps;
 use crate::message_flow::FlowDeps;
 use crate::ports::{
-    member_request_decided_content, ActionRow, BotDirectory, Button, ButtonStyle, DeliverTarget,
-    DmMessageRef, MembershipService, Notifier, TurnProcessor, TurnReply,
+    ActionRow, BotDirectory, Button, ButtonStyle, DecidedRequest, DeliverTarget, DmMessageRef,
+    MembershipService, Notifier, TurnProcessor, TurnReply,
 };
-use crate::reply::{send_channel_reply, to_twilight_components};
+use crate::reply::{send_channel_reply, to_twilight_components, to_twilight_embeds};
 use crate::tenant::{run_tenant, TenantConfig, TenantStatus};
 use crate::turn_gate::TurnGate;
 
@@ -361,12 +361,11 @@ impl DiscordMessenger {
         })
     }
 
-    /// 利用申請の受付 DM を決定済みの本文へ編集し、ボタンを外す（Web から決定した場合）。
+    /// 利用申請の受付 DM を決定済みの embed へ置き換え、ボタンを外す（Web から決定した場合）。
     pub async fn close_member_request_dm(
         &self,
         dm: &DmMessageRef,
-        bot_name: &str,
-        approved: bool,
+        request: &DecidedRequest,
     ) -> bool {
         let Some(client) = self.default_client() else {
             tracing::warn!("デフォルト Bot が未起動のため DM を編集できません");
@@ -378,10 +377,11 @@ impl DiscordMessenger {
         ) else {
             return false;
         };
-        let content = member_request_decided_content(bot_name, approved);
+        let embeds = to_twilight_embeds(&[request.embed()]);
         match client
             .update_message(channel_id, message_id)
-            .content(Some(&content))
+            .content(None)
+            .embeds(Some(&embeds))
             .components(Some(&[]))
             .await
         {
@@ -454,21 +454,6 @@ impl DiscordMessenger {
         self.send_owner_dm_message(owner_id, &content, &components)
             .await
     }
-
-    /// 利用申請の結果 DM（現行 `sendMemberDecisionDM`）。
-    pub async fn send_member_decision_dm(
-        &self,
-        applicant_id: &str,
-        bot_name: &str,
-        approved: bool,
-    ) -> bool {
-        let content = if approved {
-            format!("✅ Bot「**{bot_name}**」の利用申請が承認されました。メンションや返信で利用できます。")
-        } else {
-            format!("🙇 Bot「**{bot_name}**」の利用申請は承認されませんでした。")
-        };
-        self.send_owner_dm(applicant_id, &content, &[]).await
-    }
 }
 
 #[async_trait]
@@ -493,13 +478,8 @@ impl crate::ports::MemberDmSender for DiscordMessenger {
         .await
     }
 
-    async fn send_decision_dm(&self, applicant_id: &str, bot_name: &str, approved: bool) -> bool {
-        self.send_member_decision_dm(applicant_id, bot_name, approved)
-            .await
-    }
-
-    async fn close_request_dm(&self, dm: &DmMessageRef, bot_name: &str, approved: bool) -> bool {
-        self.close_member_request_dm(dm, bot_name, approved).await
+    async fn close_request_dm(&self, dm: &DmMessageRef, request: &DecidedRequest) -> bool {
+        self.close_member_request_dm(dm, request).await
     }
 }
 

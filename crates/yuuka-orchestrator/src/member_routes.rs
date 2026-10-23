@@ -4,7 +4,8 @@
 //! [`crate::bot_repo`] の `submit_member_request`/`decide_member_request`（Discord ボタンフローと共通の
 //! DB 確定層）を再利用し、HTTP status は結果の `code`（[`SubmitDeny`]/[`DecideDeny`]）で分岐する。
 //!
-//! **DM のシーム**: 申請受付/決定の通知は [`MemberDmSender`] ポート越しに fire-and-forget で送る。
+//! **DM のシーム**: 申請受付の DM 送信と、決定時のその DM の編集（決定済みの embed へ置き換えてボタンを
+//! 外す）は [`MemberDmSender`] ポート越しに fire-and-forget で行う。申請者へ結果の DM は送らない。
 //! supervisor は Discord ボタン経路（interaction）と同じ `DiscordMessenger` を [`routes_with`] で注入し、
 //! 入口によらず同じ DM が届く（Node `services/memberRequest.ts` が両経路共通だったのと同じ）。送信失敗は
 //! warn ログのみで応答は成功のまま（DB 上の申請は Web 管理から拾える・Node も同方針）。既定 [`routes`] は
@@ -20,7 +21,7 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::{json, Value};
-use yuuka_discord::{DmMessageRef, MemberDecision, MemberDmSender};
+use yuuka_discord::{DecidedRequest, DmMessageRef, MemberDecision, MemberDmSender};
 use yuuka_web::{AppState, AuthenticatedUser, Db};
 
 use crate::bot_repo::{self, DecideDeny, MemberRequestRow, SubmitDeny};
@@ -41,15 +42,7 @@ impl MemberDmSender for NullMemberDmSender {
     ) -> Option<DmMessageRef> {
         None
     }
-    async fn send_decision_dm(
-        &self,
-        _applicant_id: &str,
-        _bot_name: &str,
-        _approved: bool,
-    ) -> bool {
-        false
-    }
-    async fn close_request_dm(&self, _dm: &DmMessageRef, _bot_name: &str, _approved: bool) -> bool {
+    async fn close_request_dm(&self, _dm: &DmMessageRef, _request: &DecidedRequest) -> bool {
         false
     }
 }
@@ -102,12 +95,15 @@ async fn submit(
         );
     }
 
+    // Web からの申請には Discord の表示名が無い（決定済み embed は ID で示す）。
     let result = match bot_repo::submit_member_request(
         &db,
         bot_id,
         guild_id,
         &applicant,
         note.clone(),
+        None,
+        None,
     )
     .await
     {
@@ -299,19 +295,11 @@ async fn decide(
     );
     yuuka_auth::audit::add_audit_log(&db, &actor, action, Some(&target), None).await;
 
-    if let Some(bot_name) = result.bot_name.as_deref() {
-        // オーナー宛の受付 DM を「承認済み/却下済み」へ編集してボタンを外す（Discord ボタンで決定した
-        // 場合と同じ見た目にする）。
-        if let Some(dm_ref) = result.request_dm.as_ref() {
-            if !dm.close_request_dm(dm_ref, bot_name, approved).await {
-                tracing::warn!(request_id = id, "利用申請 DM の編集に失敗");
-            }
-        }
-        // 申請者へ結果 DM（fire-and-forget・失敗しても決定は確定済み）。
-        if let Some(applicant_id) = result.applicant_id.as_deref() {
-            if !dm.send_decision_dm(applicant_id, bot_name, approved).await {
-                tracing::warn!(request_id = id, user = %applicant_id, "利用申請結果 DM の送信に失敗");
-            }
+    // オーナー宛の受付 DM を決定済みの embed へ置き換えてボタンを外す（Discord ボタンで決定した場合と
+    // 同じ表示・fire-and-forget で失敗しても決定は確定済み）。申請者へ結果の DM は送らない。
+    if let (Some(request), Some(dm_ref)) = (&result.request, &result.request_dm) {
+        if !dm.close_request_dm(dm_ref, request).await {
+            tracing::warn!(request_id = id, "利用申請 DM の編集に失敗");
         }
     }
     ok_message(if approved {
@@ -392,7 +380,7 @@ mod tests {
     use serde_json::Value;
     use tower::ServiceExt;
     use yuuka_core::AuthError;
-    use yuuka_discord::{DmMessageRef, MemberDmSender};
+    use yuuka_discord::{DecidedRequest, DmMessageRef, MemberDecision, MemberDmSender};
     use yuuka_types::{Role, SessionUser};
     use yuuka_web::{AppState, AuthBackend, Db, WebConfig};
 
@@ -469,9 +457,8 @@ mod tests {
     struct FakeMemberDm {
         ok: bool,
         requests: Mutex<Vec<RequestDm>>,
-        decisions: Mutex<Vec<(String, String, bool)>>,
-        /// 編集された受付 DM（メッセージ ID, bot 名, 承認か）。
-        closed: Mutex<Vec<(String, String, bool)>>,
+        /// 決定済みへ編集された受付 DM（メッセージ ID, 決定した申請）。
+        closed: Mutex<Vec<(String, DecidedRequest)>>,
     }
 
     impl FakeMemberDm {
@@ -479,9 +466,25 @@ mod tests {
             Arc::new(Self {
                 ok,
                 requests: Mutex::new(Vec::new()),
-                decisions: Mutex::new(Vec::new()),
                 closed: Mutex::new(Vec::new()),
             })
+        }
+    }
+
+    /// Web 経由の申請の決定内容（表示名は無く、ID で示す）。
+    fn decided_via_web(
+        decision: MemberDecision,
+        applicant: &str,
+        note: Option<&str>,
+    ) -> DecidedRequest {
+        DecidedRequest {
+            decision,
+            bot_name: "TestBot".to_owned(),
+            applicant_id: applicant.to_owned(),
+            applicant_label: None,
+            guild_id: "123456".to_owned(),
+            guild_label: None,
+            note: note.map(str::to_owned),
         }
     }
 
@@ -509,30 +512,11 @@ mod tests {
                 message_id: format!("dmmsg{request_id}"),
             })
         }
-        async fn send_decision_dm(
-            &self,
-            applicant_id: &str,
-            bot_name: &str,
-            approved: bool,
-        ) -> bool {
-            self.decisions.lock().unwrap().push((
-                applicant_id.to_owned(),
-                bot_name.to_owned(),
-                approved,
-            ));
-            self.ok
-        }
-        async fn close_request_dm(
-            &self,
-            dm: &DmMessageRef,
-            bot_name: &str,
-            approved: bool,
-        ) -> bool {
-            self.closed.lock().unwrap().push((
-                dm.message_id.clone(),
-                bot_name.to_owned(),
-                approved,
-            ));
+        async fn close_request_dm(&self, dm: &DmMessageRef, request: &DecidedRequest) -> bool {
+            self.closed
+                .lock()
+                .unwrap()
+                .push((dm.message_id.clone(), request.clone()));
             self.ok
         }
     }
@@ -789,7 +773,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn submit_and_decide_send_dms_to_owner_and_applicant() {
+    async fn submit_and_decide_send_and_close_owner_dm() {
         let dm = FakeMemberDm::new(true);
         let app = app_with(dm.clone());
         let (st, _) = send(
@@ -816,9 +800,9 @@ mod tests {
                 req_id,
             )]
         );
-        assert!(dm.decisions.lock().unwrap().is_empty());
+        assert!(dm.closed.lock().unwrap().is_empty());
 
-        // 承認 → 申請者 u へ結果 DM（approved=true）。
+        // 承認 → 受付時に控えた DM を「承認されました」の embed へ編集する（申請者へ別の DM は送らない）。
         let (st, _) = send(
             &app,
             "POST",
@@ -829,16 +813,14 @@ mod tests {
         .await;
         assert_eq!(st, StatusCode::OK);
         assert_eq!(
-            dm.decisions.lock().unwrap().clone(),
-            vec![("u".to_owned(), "TestBot".to_owned(), true)]
-        );
-        // 受付時に控えた DM を「承認済み」へ編集する。
-        assert_eq!(
             dm.closed.lock().unwrap().clone(),
-            vec![(format!("dmmsg{req_id}"), "TestBot".to_owned(), true)]
+            vec![(
+                format!("dmmsg{req_id}"),
+                decided_via_web(MemberDecision::Approved, "u", Some("よろしく")),
+            )]
         );
 
-        // 別申請者 other の申請を却下 → other へ approved=false。
+        // 別申請者 other の申請を却下 → その受付 DM を「却下されました」へ編集する。
         send(
             &app,
             "POST",
@@ -861,12 +843,11 @@ mod tests {
         .await;
         assert_eq!(st, StatusCode::OK);
         assert_eq!(
-            dm.decisions.lock().unwrap()[1],
-            ("other".to_owned(), "TestBot".to_owned(), false)
-        );
-        assert_eq!(
             dm.closed.lock().unwrap()[1],
-            (format!("dmmsg{other_id}"), "TestBot".to_owned(), false)
+            (
+                format!("dmmsg{other_id}"),
+                decided_via_web(MemberDecision::Rejected, "other", None),
+            )
         );
     }
 
@@ -894,7 +875,7 @@ mod tests {
         .await;
         assert_eq!(st, StatusCode::NOT_FOUND);
         assert!(dm.requests.lock().unwrap().is_empty());
-        assert!(dm.decisions.lock().unwrap().is_empty());
+        assert!(dm.closed.lock().unwrap().is_empty());
     }
 
     #[tokio::test]
@@ -917,7 +898,7 @@ mod tests {
         assert_eq!(j["requests"][0]["status"], "pending");
         let req_id = j["requests"][0]["id"].as_i64().unwrap();
 
-        // 結果 DM 失敗でも 200・決定は確定済み。
+        // 受付 DM が届いていない申請も決定でき（200）、編集する DM は無い。
         let (st, j) = send(
             &app,
             "POST",
@@ -928,7 +909,7 @@ mod tests {
         .await;
         assert_eq!(st, StatusCode::OK);
         assert_eq!(j["success"], true);
-        assert_eq!(dm.decisions.lock().unwrap().len(), 1);
+        assert!(dm.closed.lock().unwrap().is_empty());
         let (_st, j) = send(&app, "GET", "/api/bots/member-requests/mine", "u", "").await;
         assert_eq!(j["requests"][0]["status"], "approved");
     }
