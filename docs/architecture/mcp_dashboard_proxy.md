@@ -226,3 +226,12 @@ Browser (隔離iframe内SPA)          yuuka                     ywrk-mcp
    │               │◀ stream(ACAO:null)─│◀─── SSE/JSON ─────│
    │◀─ データ表示 ─│                    │                    │
 ```
+
+## 現行実装の補足（rmcp 移行・Issue #211）
+
+LLM が使うツールの `tools/list` / `tools/call` は、独自実装ではなく公式 Rust SDK `rmcp`（Streamable HTTP）で行う（`crates/yuuka-mcp/src/rmcp_client.rs` の `RmcpClient`）。
+
+- 接続（`RunningService`）はサーバー ID ごとにキャッシュする。初期化・SSE・`Mcp-Session-Id`・セッション失効時の再初期化は rmcp が担う。トランスポート断は再接続して 1 回だけリトライする（ツール側エラー・タイムアウトは再試行しない）。
+- サーバーからの `tools/list_changed` 通知で `tools_cache` を更新する。サーバーの無効化・削除時は接続を破棄する（`McpClient::forget`）。エンドポイント/認証情報が変わると次回利用時に再接続する。
+- **SSRF ガード**: 接続前の事前検査に加え、rmcp に渡す `reqwest::Client` は DNS 解決結果を検査するリゾルバを持つ（検査した IP にそのまま接続するため DNS リバインディングを許さない）。自動リダイレクトとシステムプロキシは無効。rmcp 2.x は reqwest 0.13 を要求するため、この Client 専用に reqwest 0.13 を併用している（workspace の 0.12 はダッシュボード/プロキシ用）。
+- ダッシュボード取得・プロキシ中継は MCP ではない通常の HTTP のまま（`http_client.rs` の `DashboardHttpClient`）。プロキシ経路の SSRF は従来どおり事前検査のみ。

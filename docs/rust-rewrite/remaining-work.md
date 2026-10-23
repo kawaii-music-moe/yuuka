@@ -182,6 +182,7 @@
 - [x] Bot 管理 `/api/bots` `/profile` `/shares*` `/sync-discord` — `botRoutes.ts`（**sync-discord は 2026-07-15r・`DiscordLive` シーム**・CRUD/shares は既済）
 - [x] Bot 属性 `/api/bots/attributes` `/modules` `/presets` `/assistant/*` `assistant-config`（~14）— `botAttributeRoutes.ts`（**assistant-config 集約 + guild-options〔`DiscordLive`〕は 2026-07-15r**・他は既済）
 - [x] MCP `/api/mcp-servers*` `/proxy/mcp/:id/mcp`（9）— `mcpRoutes.ts`（2026-07-15r・新 `yuuka-mcp`・server CRUD + dashboard proxy + proxy token in-memory）。**2026-07-15s（A4）＝MCP client を実 reqwest（`HttpMcpClient`）へ配線**（JSON-RPC tools/list + initialize handshake + SSE パース + session-id キャッシュ + SSRF ガード〔自前移植〕 + dashboard fetch + proxy 中継・auth_credential は system 鍵復号・**live HTTP は要実 MCP サーバー検証**）
+  - **2026-10-22（#211）**: `tools/list`・`tools/call` は `HttpMcpClient` の手書き JSON-RPC/SSE から公式 SDK `rmcp`（`RmcpClient`）へ置換済み。ダッシュボード/プロキシのみ `DashboardHttpClient` に残置。
 - [x] Webhooks `/api/webhooks*` `/hook/:token`（~6）— `webhookRoutes.ts`
 - [x] Integrated `/api/integrated/*`（google accounts/calendars/grants・bot start/stop/restart 等 12）— `integratedRoutes.ts`（2026-07-15r・新 `yuuka-integrated`・**bot lifecycle は `NullBotLifecycle`〔start=502 honest degraded〕**）
 - [x] Device/Desktop `/api/auth/device/*`（2026-07-15c・`50992fa`・RFC8628 フロー）`/api/devices*`（2026-07-14g・deviceMgmt）`/api/desktop/*`（2026-07-14i・配布）— `deviceAuthRoutes.ts` 他すべて移植済
