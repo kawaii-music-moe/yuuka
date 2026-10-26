@@ -111,7 +111,6 @@ export const SETTINGS_HUB_ITEMS: SettingsHubItem[] = [
 		desc: "朝報と、タスク・支出サマリーの配信",
 		category: "automation",
 		only: "secretary",
-		scope: "user_bot",
 	},
 	{
 		tab: "webhooks",
