@@ -568,7 +568,10 @@ fn new_client(token: &SecretString) -> Client {
 /// 全送信の既定 `allowed_mentions`。`parse` を空にして、本文中の `@everyone`・`@here`・
 /// ロール・ユーザーのメンションを通知させない（LLM 返答経由のメンション注入対策）。
 /// 返信先ユーザーへの通知（`replied_user`）だけは残す。
-fn default_allowed_mentions() -> AllowedMentions {
+///
+/// クライアントの既定は `create_message` / `create_followup` / `update_response` などに効くが、
+/// `InteractionClient::create_response` には効かない。そちらは `interaction::respond` で明示する。
+pub(crate) fn default_allowed_mentions() -> AllowedMentions {
     AllowedMentions {
         parse: Vec::new(),
         replied_user: true,
@@ -603,6 +606,7 @@ mod tests {
             .expect("既定の allowed_mentions が必要");
         assert!(am.parse.is_empty());
         assert!(am.roles.is_empty() && am.users.is_empty());
+        assert!(am.replied_user, "返信先ユーザーへの通知は維持する");
     }
 
     // twilight `Client::new` は ratelimiter で Tokio ランタイムを要求するため tokio::test で回す。
