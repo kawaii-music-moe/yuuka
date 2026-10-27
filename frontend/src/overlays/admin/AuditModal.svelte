@@ -2,6 +2,7 @@
 // 監査ログ全件モーダル（旧 modal-audit + fetchAdminAuditLogsModal + prev/next/filter）。
 // action フィルタ + offset ページングを自前 state で持ち、開くたび / ページ・フィルタ変更で再取得。
 
+import { untrack } from "svelte";
 import { ApiError } from "$lib/api/client";
 import { adminApi } from "$lib/api/services";
 import type { AuditLogEntry } from "$lib/api/types";
@@ -31,11 +32,16 @@ const pageInfo = $derived(
 );
 
 // 開くたびに（現在のフィルタ入力を確定して）1ページ目から取得。
+// 依存は open だけにする。load() は page / action を同期で読むため、そのままだと
+// 「次へ」で page を変えるたびにこの effect が走り直して 1 ページ目へ戻ってしまう
+// （フィルタ欄への入力でも再取得されてしまう）。
 $effect(() => {
 	if (!open) return;
-	action = filterInput.trim();
-	page = 0;
-	void load();
+	untrack(() => {
+		action = filterInput.trim();
+		page = 0;
+		void load();
+	});
 });
 
 async function load() {
