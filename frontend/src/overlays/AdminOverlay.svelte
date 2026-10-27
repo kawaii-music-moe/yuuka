@@ -19,7 +19,7 @@ import type {
 	AuditLogEntry,
 	PublicPersonaView,
 } from "$lib/api/types";
-import { Button, confirmDialog, Icon } from "$lib/components/ui";
+import { Button, confirmDialog, Icon, SecretInput } from "$lib/components/ui";
 import { ADMIN_SECTIONS } from "$lib/managementSections";
 import { currentUser } from "$lib/stores/session";
 import { pushToast } from "$lib/stores/toast";
@@ -313,34 +313,25 @@ function botStatus(bot: AdminBotView): { label: string; tone: string } {
 	{#snippet children(section)}
 <section id="tab-admin" class="tab-view">
 	{#if section === "default-bot"}
-		<p class="description-text">
-			システム共通で動作するデフォルトBotのDiscordトークンを更新します。トークンは安全に暗号化されて保存されます。
-		</p>
 		<form class="admin-form-top" onsubmit={submitDefaultBotToken}>
 			<div class="form-group">
 				<label for="admin-default-bot-token">デフォルト Bot トークン *</label>
 				<div class="admin-inline-form">
-					<input
-						type="password"
+					<SecretInput
 						id="admin-default-bot-token"
 						bind:value={defaultBotToken}
 						required
 						placeholder="新しい Discord Bot Token を入力"
-						autocomplete="new-password"
 						class="admin-grow"
 					/>
 					<Button variant="primary" type="submit">設定を更新</Button>
 				</div>
-				<span class="field-sub"
-					>※更新すると、デフォルトBotは自動的に新しいトークンで再起動します。</span
-				>
 			</div>
 		</form>
 	{/if}
 
 	<!-- System Settings -->
 	{#if section === "system"}
-		<p class="description-text">システム全体の共通設定を行います。</p>
 		<form class="admin-form-top" onsubmit={submitSystemSettings}>
 			<div class="form-group">
 				<label for="admin-privacy-policy-url"
@@ -352,9 +343,6 @@ function botStatus(bot: AdminBotView): { label: string; tone: string } {
 					bind:value={privacyUrl}
 					placeholder="https://example.com/privacy または /privacy"
 				/>
-				<span class="field-sub"
-					>※空欄にすると、ログイン画面および使い方ガイドからプライバシーポリシーのリンクが非表示になります。</span
-				>
 			</div>
 			<div class="form-group admin-mt">
 				<label for="admin-terms-url">一般公開利用規約へのリンク (URL / パス)</label>
@@ -364,9 +352,6 @@ function botStatus(bot: AdminBotView): { label: string; tone: string } {
 					bind:value={termsUrl}
 					placeholder="https://example.com/terms または /terms"
 				/>
-				<span class="field-sub"
-					>※空欄にすると、ログイン画面および使い方ガイドから利用規約のリンクが非表示になります。</span
-				>
 			</div>
 			<Button variant="primary" type="submit" class="admin-mt">設定を更新</Button>
 		</form>
@@ -374,9 +359,6 @@ function botStatus(bot: AdminBotView): { label: string; tone: string } {
 
 	<!-- Bot Attribute Settings -->
 	{#if section === "bot-attributes"}
-		<p class="description-text">
-			Botプリセットのユーザー向け表示名と、汎用モード（MCPアシスタント）のレート制限既定値を設定します。内部IDは固定です。
-		</p>
 		<form class="admin-form-top" onsubmit={submitBotAttr}>
 			<div class="form-row">
 				<div class="form-group">
@@ -420,10 +402,7 @@ function botStatus(bot: AdminBotView): { label: string; tone: string } {
 
 	<!-- User Management -->
 	{#if section === "users"}
-		<p class="description-text">
-			登録済みユーザーの一覧とロール管理を行います。個人情報（パスワード等）は表示されません。
-		</p>
-		<div class="table-responsive admin-mt">
+		<div class="table-responsive">
 			<table class="expense-table admin-table-full">
 				<thead>
 					<tr>
@@ -455,9 +434,13 @@ function botStatus(bot: AdminBotView): { label: string; tone: string } {
 											>
 											<button
 												type="button"
-												class="admin-btn-action btn-danger"
-												onclick={() => deleteUser(user)}>削除</button
+												class="icon-plain danger"
+												aria-label="「{user.username}」を削除"
+												title="削除"
+												onclick={() => deleteUser(user)}
 											>
+												<Icon name="person_remove" />
+											</button>
 										</div>
 									{:else}
 										<span class="admin-self">自分</span>
@@ -473,10 +456,7 @@ function botStatus(bot: AdminBotView): { label: string; tone: string } {
 
 	<!-- Bot Moderation -->
 	{#if section === "moderation"}
-		<p class="description-text">
-			システム上の全Botの管理・差し押さえを行います。差し押さえるとBotのDiscordクライアントが停止され、所有者は再起動できなくなります。
-		</p>
-		<div class="table-responsive admin-mt">
+		<div class="table-responsive">
 			<table class="expense-table admin-table-full">
 				<thead>
 					<tr>
@@ -525,10 +505,7 @@ function botStatus(bot: AdminBotView): { label: string; tone: string } {
 
 	<!-- Persona Marketplace Moderation -->
 	{#if section === "personas"}
-		<p class="description-text">
-			マーケットプレイスに公開されている全ペルソナの非公開化・削除を行います。
-		</p>
-		<div class="table-responsive admin-mt">
+		<div class="table-responsive">
 			<table class="expense-table admin-table-full">
 				<thead>
 					<tr>
@@ -558,9 +535,13 @@ function botStatus(bot: AdminBotView): { label: string; tone: string } {
 										>
 										<button
 											type="button"
-											class="admin-btn-action btn-danger"
-											onclick={() => deletePersona(p)}>削除</button
+											class="icon-plain danger"
+											aria-label="「{p.name}」を削除"
+											title="削除"
+											onclick={() => deletePersona(p)}
 										>
+											<Icon name="delete" />
+										</button>
 									</div>
 								</td>
 							</tr>
@@ -666,7 +647,7 @@ function botStatus(bot: AdminBotView): { label: string; tone: string } {
 		gap: 12px;
 		margin-top: 8px;
 	}
-	.admin-grow {
+	.admin-inline-form :global(.admin-grow) {
 		flex-grow: 1;
 	}
 	.admin-audit-date,

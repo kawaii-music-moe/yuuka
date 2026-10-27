@@ -26,7 +26,7 @@ import type {
 	IntegratedGoogleAccountView,
 	IntegratedMcpServerView,
 } from "$lib/api/types";
-import { Button, confirmDialog, Icon } from "$lib/components/ui";
+import { Button, confirmDialog, Icon, SecretInput } from "$lib/components/ui";
 import { INTEGRATED_SECTIONS } from "$lib/managementSections";
 import { isAdmin } from "$lib/stores/session";
 import { pushToast } from "$lib/stores/toast";
@@ -337,9 +337,6 @@ async function connectGoogle() {
 	{#if section === "credentials"}
 		<div class="expense-actions-columns int-cols">
 			<div class="action-column">
-				<p class="description-text int-col-note">
-					新規登録（暗号化保存）。登録後、下の一覧で使わせるBotを許可してください。
-				</p>
 				<form class="int-form" onsubmit={submitCredential}>
 					<div class="form-group">
 						<label for="int-cred-service">サービス名 *</label>
@@ -364,13 +361,7 @@ async function connectGoogle() {
 					</div>
 					<div class="form-group">
 						<label for="int-cred-password">パスワード *</label>
-						<input
-							type="password"
-							id="int-cred-password"
-							bind:value={credPassword}
-							required
-							autocomplete="new-password"
-						/>
+						<SecretInput id="int-cred-password" bind:value={credPassword} required />
 					</div>
 					<div class="form-group">
 						<label for="int-cred-url">ログインURL（任意）</label>
@@ -442,11 +433,9 @@ async function connectGoogle() {
 					</div>
 					<div class="form-group">
 						<label for="int-mcp-auth">認証情報（Bearerトークン等・任意）</label>
-						<input
-							type="password"
+						<SecretInput
 							id="int-mcp-auth"
 							bind:value={mcpAuth}
-							autocomplete="new-password"
 							placeholder="登録後は表示されません"
 						/>
 					</div>
