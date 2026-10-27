@@ -14,13 +14,6 @@ export function fmtTimelineDate(iso: string): string {
 	return `${iso} (${DAY_NAMES[d.getDay()]})`;
 }
 
-/** 日付を delta 日ずらして 'YYYY-MM-DD' を返す（旧 tlShiftDay のロジック部分）。 */
-export function shiftDay(iso: string, delta: number): string {
-	const d = new Date(iso + "T00:00:00");
-	d.setDate(d.getDate() + delta);
-	return d.toISOString().slice(0, 10);
-}
-
 // タイプ → アイコン/ラベル（旧 PLAN_TYPE_ICON/LABEL, RECORD_TYPE_ICON/LABEL）
 export const PLAN_TYPE_ICON: Record<PlanBlockType, string> = {
 	task: "checklist",

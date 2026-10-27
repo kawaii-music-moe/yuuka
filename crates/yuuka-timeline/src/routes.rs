@@ -27,7 +27,7 @@ use yuuka_web::{resolve_scope, ApiError, AppState, AuthenticatedUser, Db, Scoped
 
 use crate::dto::{
     DayPlanBlockData, NewDayPlanBlock, NewTimelineMedia, NewTimelineRecord, TimelineDayData,
-    TimelineRecordData, UpdatePlanBlock,
+    TimelineNeighborsData, TimelineRecordData, UpdatePlanBlock,
 };
 use crate::media;
 use crate::repo::TimelineRepo;
@@ -49,6 +49,7 @@ struct IdInput {
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/timeline/day", get(day))
+        .route("/api/timeline/neighbors", get(neighbors))
         .route("/api/timeline/plan", post(plan_add))
         .route("/api/timeline/plan/update", post(plan_update))
         .route("/api/timeline/plan/delete", post(plan_delete))
@@ -71,6 +72,20 @@ async fn day(
     let blocks = repo.list_plans(&scope, date.clone()).await?;
     let records = repo.list(&scope, date).await?;
     Ok(Json(Envelope::ok(TimelineDayData { blocks, records })))
+}
+
+/// `GET /api/timeline/neighbors?date=` — 指定日の前後で、計画か記録のある最寄りの日付。
+///
+/// 管理画面の日付ナビが、データの無い方向のボタンを非活性にし、押下時はその日へ飛ぶために使う。
+async fn neighbors(
+    user: AuthenticatedUser,
+    State(db): State<Db>,
+    Query(q): Query<DayQuery>,
+) -> Result<Json<Envelope<TimelineNeighborsData>>, ApiError> {
+    let scope = resolve_scope(&user.0, &db, q.bot_id.as_deref()).await?;
+    let date = q.date.filter(|d| !d.trim().is_empty());
+    let (prev, next) = TimelineRepo::new(&db).neighbor_dates(&scope, date).await?;
+    Ok(Json(Envelope::ok(TimelineNeighborsData { prev, next })))
 }
 
 async fn plan_add(

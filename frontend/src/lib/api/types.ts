@@ -33,6 +33,7 @@ import type { TaskDetailData } from "./generated/TaskDetailData";
 import type { TaskListData } from "./generated/TaskListData";
 import type { TaskProgressLog as WireTaskProgressLogRecord } from "./generated/TaskProgressLog";
 import type { TimelineDayData } from "./generated/TimelineDayData";
+import type { TimelineNeighborsData } from "./generated/TimelineNeighborsData";
 import type { TimelineRecord as WireTimelineRecord } from "./generated/TimelineRecord";
 import type { Todo as WireTodoRecord } from "./generated/Todo";
 import type { TodoWithSubtasks as WireTodoWithSubtasks } from "./generated/TodoWithSubtasks";
@@ -174,6 +175,11 @@ export type TimelineRecord = JsonWire<WireTimelineRecord>;
 
 // 注: サーバ（GET /api/timeline/day）は `blocks` キーで返す（`plan` ではない）。
 export type TimelineDayResponse = ApiResponse<JsonWire<TimelineDayData>>;
+
+/** GET /api/timeline/neighbors（前後で計画か記録のある最寄りの日付。無い方向は null） */
+export type TimelineNeighborsResponse = ApiResponse<
+	JsonWire<TimelineNeighborsData>
+>;
 
 // ─── personal（contextNote / clipboard / contacts） ──────────────────────────
 

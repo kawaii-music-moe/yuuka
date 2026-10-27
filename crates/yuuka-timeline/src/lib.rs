@@ -32,6 +32,7 @@ pub fn export_bindings(base_dir: &Path) -> Result<(), ts_rs::ExportError> {
     <dto::NewDayPlanBlock as TS>::export_all(&cfg)?;
     <dto::UpdatePlanBlock as TS>::export_all(&cfg)?;
     <dto::TimelineDayData as TS>::export_all(&cfg)?;
+    <dto::TimelineNeighborsData as TS>::export_all(&cfg)?;
     <dto::TimelineRecordData as TS>::export_all(&cfg)?;
     <dto::DayPlanBlockData as TS>::export_all(&cfg)?;
     <dto::NewTimelineMedia as TS>::export_all(&cfg)?;
@@ -691,6 +692,50 @@ mod tests {
             .await
             .unwrap()
             .is_empty());
+    }
+
+    #[tokio::test]
+    async fn neighbor_dates_span_plans_and_records() {
+        let db = seed_db();
+        let repo = TimelineRepo::new(&db);
+        let s = scope("u");
+        repo.add_plan(&s, new_plan("2026-07-01", "task", "p"))
+            .await
+            .unwrap();
+        repo.add(&s, new_memo("2026-07-03", "r")).await.unwrap();
+        repo.add_plan(&s, new_plan("2026-07-05", "task", "p"))
+            .await
+            .unwrap();
+        repo.add(&s, new_memo("2026-07-09", "r")).await.unwrap();
+
+        // 基準日そのものは含めず、計画・記録のどちらでも最寄りを拾う。
+        let (prev, next) = repo
+            .neighbor_dates(&s, Some("2026-07-05".to_owned()))
+            .await
+            .unwrap();
+        assert_eq!(prev.as_deref(), Some("2026-07-03"));
+        assert_eq!(next.as_deref(), Some("2026-07-09"));
+
+        // 端では無い方向が None。
+        let (prev, next) = repo
+            .neighbor_dates(&s, Some("2026-07-01".to_owned()))
+            .await
+            .unwrap();
+        assert_eq!(prev, None);
+        assert_eq!(next.as_deref(), Some("2026-07-03"));
+        let (_, next) = repo
+            .neighbor_dates(&s, Some("2026-07-09".to_owned()))
+            .await
+            .unwrap();
+        assert_eq!(next, None);
+
+        // 別ユーザーのデータは見えない。
+        assert_eq!(
+            repo.neighbor_dates(&scope("other"), Some("2026-07-05".to_owned()))
+                .await
+                .unwrap(),
+            (None, None)
+        );
     }
 
     #[tokio::test]

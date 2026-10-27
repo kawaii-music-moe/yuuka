@@ -204,6 +204,16 @@ pub struct TimelineDayData {
     pub records: Vec<TimelineRecord>,
 }
 
+/// `GET /api/timeline/neighbors` のペイロード（`{success, prev, next}`）。
+///
+/// 指定日より前／後で、計画ブロックか記録のある最寄りの日付（`'YYYY-MM-DD'`）。無い方向は `null`。
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export_to = "generated/")]
+pub struct TimelineNeighborsData {
+    pub prev: Option<String>,
+    pub next: Option<String>,
+}
+
 /// 単一計画ブロックを返すペイロード（plan 作成/更新・`{success, block}`）。
 #[derive(Debug, Clone, Serialize, TS)]
 #[ts(export_to = "generated/")]

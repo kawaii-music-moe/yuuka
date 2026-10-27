@@ -439,6 +439,43 @@ impl<'a> TimelineRepo<'a> {
             .await
     }
 
+    /// `date` より前／後で、計画ブロックか記録のある最寄りの日付を返す（`(prev, next)`）。
+    ///
+    /// 両表を合わせて見る（どちらかに 1 件でもあれば「データのある日」）。無い方向は `None`。
+    /// `date` が `None` なら本日（UTC）を基準にする（[`Self::list`] と同じ畳み方）。
+    ///
+    /// # Errors
+    /// クエリ失敗時 [`DbError`]。
+    pub async fn neighbor_dates(
+        &self,
+        scope: &UserScope,
+        date: Option<String>,
+    ) -> Result<(Option<String>, Option<String>), DbError> {
+        let (uid, bid) = scope_keys(scope);
+        self.read
+            .read(move |conn| {
+                conn.query_row(
+                    "SELECT \
+                       (SELECT MAX(d) FROM ( \
+                          SELECT MAX(date) AS d FROM day_plan_blocks \
+                           WHERE user_id = ?1 AND bot_id = ?2 AND date < COALESCE(?3, date('now')) \
+                          UNION ALL \
+                          SELECT MAX(date) FROM timeline_records \
+                           WHERE user_id = ?1 AND bot_id = ?2 AND date < COALESCE(?3, date('now')))), \
+                       (SELECT MIN(d) FROM ( \
+                          SELECT MIN(date) AS d FROM day_plan_blocks \
+                           WHERE user_id = ?1 AND bot_id = ?2 AND date > COALESCE(?3, date('now')) \
+                          UNION ALL \
+                          SELECT MIN(date) FROM timeline_records \
+                           WHERE user_id = ?1 AND bot_id = ?2 AND date > COALESCE(?3, date('now'))))",
+                    params![uid, bid, date],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .map_err(map_sqlite)
+            })
+            .await
+    }
+
     /// スコープ内の単一計画ブロックを取得する（無ければ `None`）。
     ///
     /// # Errors

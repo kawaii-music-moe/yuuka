@@ -5,6 +5,7 @@ import type {
 	PlanBlockType,
 	RecordType,
 	TimelineDayResponse,
+	TimelineNeighborsResponse,
 } from "../types";
 
 const BOT = { scope: "bot" } as const;
@@ -46,6 +47,13 @@ export const timelineApi = {
 	/** GET /api/timeline/day?date=YYYY-MM-DD — その日の blocks + records */
 	day: (date: string) =>
 		api.get<TimelineDayResponse>("/api/timeline/day", {
+			...BOT,
+			query: { date },
+		}),
+
+	/** GET /api/timeline/neighbors?date=YYYY-MM-DD — 前後で計画か記録のある最寄りの日付 */
+	neighbors: (date: string) =>
+		api.get<TimelineNeighborsResponse>("/api/timeline/neighbors", {
 			...BOT,
 			query: { date },
 		}),
