@@ -26,7 +26,11 @@ sha1 = "0.10"                       # 動的ツール名の衝突退避に使う
 reqwest.workspace = true            # 外部 MCP サーバーへの HTTP（json/stream/rustls・workspace 固定）
 # rmcp 2.0 は reqwest 0.13 を要求する（workspace は 0.12）。rmcp transport に差し込む SSRF ガード付き Client 専用で、
 # ダッシュボード/プロキシ用の素の HTTP は従来どおり workspace の reqwest 0.12 を使う。
-reqwest13 = { package = "reqwest", version = "0.13.2", default-features = false, features = ["rustls", "stream"] }
+# TLS は rustls-no-provider（aws-lc-rs を入れない）。workspace の reqwest 0.12・twilight が使う ring と
+# 両方有効になると rustls が既定の CryptoProvider を決められず、ClientConfig::builder() が panic するため。
+# provider は build_guarded_http で ring を明示的に入れる。
+reqwest13 = { package = "reqwest", version = "0.13.2", default-features = false, features = ["rustls-no-provider", "stream"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 rmcp = { workspace = true, features = ["transport-streamable-http-client-reqwest"] }
 url = "2"                           # endpoint_url の origin 抽出
 tokio.workspace = true              # async HTTP とテスト（workspace は features=full）

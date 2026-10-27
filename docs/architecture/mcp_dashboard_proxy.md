@@ -231,7 +231,11 @@ Browser (隔離iframe内SPA)          yuuka                     ywrk-mcp
 
 LLM が使うツールの `tools/list` / `tools/call` は、独自実装ではなく公式 Rust SDK `rmcp`（Streamable HTTP）で行う（`crates/yuuka-mcp/src/rmcp_client.rs` の `RmcpClient`）。
 
-- 接続（`RunningService`）はサーバー ID ごとにキャッシュする。初期化・SSE・`Mcp-Session-Id`・セッション失効時の再初期化は rmcp が担う。トランスポート断は再接続して 1 回だけリトライする（ツール側エラー・タイムアウトは再試行しない）。
-- サーバーからの `tools/list_changed` 通知で `tools_cache` を更新する。サーバーの無効化・削除時は接続を破棄する（`McpClient::forget`）。エンドポイント/認証情報が変わると次回利用時に再接続する。
-- **SSRF ガード**: 接続前の事前検査に加え、rmcp に渡す `reqwest::Client` は DNS 解決結果を検査するリゾルバを持つ（検査した IP にそのまま接続するため DNS リバインディングを許さない）。自動リダイレクトとシステムプロキシは無効。rmcp 2.x は reqwest 0.13 を要求するため、この Client 専用に reqwest 0.13 を併用している（workspace の 0.12 はダッシュボード/プロキシ用）。
+- 接続（`RunningService`）はサーバー ID ごとにキャッシュし、接続処理はサーバーごとに直列化する（同時呼び出しで二重に initialize しない）。初期化・SSE・`Mcp-Session-Id`・セッション失効時の再初期化は rmcp が担う。
+- 再試行: トランスポート断のとき、`tools/list`（冪等）だけ再接続して 1 回再試行する。`tools/call` は再試行しない（サーバーがツールを実行した後に応答ストリームが切れた場合に、副作用が二重になるため）。どちらも壊れた接続は捨て、次回利用時に再接続する。ツール側エラー・タイムアウトは再試行しない。
+- サーバーからの `tools/list_changed` 通知で `tools_cache` を更新する。通知はサーバーごとに 2 秒待ってからまとめて 1 回取りに行き、取得中の通知はもう 1 回分にまとめる。`tools/list` は 20 ページ / 1000 件で打ち切る。サーバーの無効化・削除時は接続を破棄する（`McpClient::forget`）。エンドポイント/認証情報が変わると次回利用時に再接続する。
+- **`inputSchema` は必須**: rmcp の `Tool` は `inputSchema` を必須としてデシリアライズするため、`inputSchema` の無いツールが 1 つでもあると、そのサーバーの `tools/list` 全体が失敗する（旧実装は `{"type":"object"}` を補っていた）。MCP 仕様上も必須。
+- **SSRF ガード**: 新しく接続する前の事前検査（DNS 解決を含む）に加え、rmcp に渡す `reqwest::Client` は DNS 解決結果を検査するリゾルバを持つ（検査した IP にそのまま接続するため DNS リバインディングを許さない）。キャッシュ済み接続を使う操作では DNS を引かない検査だけ行う。自動リダイレクトとシステムプロキシは無効。rmcp 2.x は reqwest 0.13 を要求するため、この Client 専用に reqwest 0.13 を併用している（workspace の 0.12 はダッシュボード/プロキシ用）。
+- **TLS**: reqwest 0.13 は `rustls-no-provider` で使い、rustls の provider は ring に固定する（aws-lc-rs を入れると ring と両方有効になり、twilight などの `ClientConfig::builder()` が実行時に panic するため）。
+- MCP クライアントの構築に失敗しても起動は止めず、`NullMcpClient` に縮退する。
 - ダッシュボード取得・プロキシ中継は MCP ではない通常の HTTP のまま（`http_client.rs` の `DashboardHttpClient`）。プロキシ経路の SSRF は従来どおり事前検査のみ。

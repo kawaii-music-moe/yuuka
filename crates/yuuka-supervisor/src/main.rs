@@ -178,10 +178,18 @@ async fn run() -> Result<(), String> {
         Some(briefing_delivery.clone()),
     )
     .map_err(|e| format!("build tool registry: {e}"))?;
-    let mcp_client = Arc::new(
-        yuuka_mcp::RmcpClient::new(crypto.clone(), http_client.clone(), db.clone())
-            .map_err(|e| format!("build mcp client: {e}"))?,
-    );
+    let mcp_client: Arc<dyn yuuka_mcp::McpClient> = match yuuka_mcp::RmcpClient::new(
+        crypto.clone(),
+        http_client.clone(),
+        db.clone(),
+    ) {
+        Ok(client) => Arc::new(client),
+        Err(e) => {
+            // MCP は付加機能。構築に失敗しても Discord・Web・cron は止めず、MCP だけ縮退させる。
+            tracing::warn!(error = %e, "MCP クライアントを構築できないため、MCP を無効にして起動を続けます");
+            Arc::new(yuuka_mcp::NullMcpClient)
+        }
+    };
     // 4.6.5) シナプス認知エンジン（in-process・旧 rust_synapse daemon をライブラリ吸収）。起動時に DB を
     //        read-only で読み RAM ベクトル索引を 1 度だけ構築する（Node「DB から N 件のシナプスを RAM
     //        索引へロード」相当）。DB が読めなくても空索引で起動を継続する（想起は "" へデグレード・
