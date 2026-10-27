@@ -47,19 +47,15 @@ export interface PriorityBar {
 
 /**
  * pendingPriorities（0/1/2 キー）→ バー3本。
- * baColors=true で BA テーマ配色。
  */
 export function priorityBars(
 	priorities: Record<number, number>,
-	baTheme: boolean,
 ): PriorityBar[] {
 	const p0 = priorities[0] ?? 0;
 	const p1 = priorities[1] ?? 0;
 	const p2 = priorities[2] ?? 0;
 	const maxCount = Math.max(p0, p1, p2, 1);
-	const colors = baTheme
-		? ["#B8E8F8", "#51C8E8", "#02D3FB"]
-		: ["#4f545c", "#fbbf24", "#da373c"];
+	const colors = ["#4f545c", "#fbbf24", "#da373c"];
 	const labels = ["低", "中", "高"];
 	return [p0, p1, p2].map((count, i) => ({
 		label: labels[i],
@@ -141,7 +137,6 @@ export interface DonutChart {
 export function donutChart(
 	breakdown: DashboardExpenseBreakdown[] | undefined,
 	total: number,
-	baTheme: boolean,
 ): DonutChart {
 	if (!breakdown || breakdown.length === 0 || total === 0) {
 		return {
@@ -158,21 +153,13 @@ export function donutChart(
 		: 0;
 	const strokeDash = (entPct * 251.2) / 100;
 
-	const colorMap: Record<string, string> = baTheme
-		? {
-				食費: "#02D3FB",
-				日用品: "#A3BAFF",
-				交通費: "#FB90A4",
-				娯楽: "#FFD966",
-				その他: "#7A9BB0",
-			}
-		: {
-				食費: "#5865F2",
-				日用品: "#248046",
-				交通費: "#fbbf24",
-				娯楽: "#f472b6",
-				その他: "#4f545c",
-			};
+	const colorMap: Record<string, string> = {
+		食費: "#5865F2",
+		日用品: "#248046",
+		交通費: "#fbbf24",
+		娯楽: "#f472b6",
+		その他: "#4f545c",
+	};
 
 	const legend: DonutLegendItem[] = breakdown.slice(0, 4).map((cat) => {
 		const pct = Math.round((cat.total / total) * 100);

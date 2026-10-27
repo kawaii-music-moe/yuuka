@@ -30,18 +30,10 @@ interface Props {
 	breakdown: DashboardExpenseBreakdown[];
 	schedules: ScheduleRecord[];
 	pendingTasks: TodoWithSubtasks[];
-	baTheme: boolean;
 }
 
-let {
-	stats,
-	total,
-	expenses,
-	breakdown,
-	schedules,
-	pendingTasks,
-	baTheme,
-}: Props = $props();
+let { stats, total, expenses, breakdown, schedules, pendingTasks }: Props =
+	$props();
 
 const scheduleSpark = $derived(
 	sparklinePath(stats.scheduleTrend ?? [0, 0, 0, 0, 0], 2),
@@ -49,9 +41,9 @@ const scheduleSpark = $derived(
 const expenseSpark = $derived(
 	sparklinePath(stats.expenseTrend ?? [0, 0, 0, 0, 0], 5000),
 );
-const bars = $derived(priorityBars(stats.pendingPriorities ?? {}, baTheme));
+const bars = $derived(priorityBars(stats.pendingPriorities ?? {}));
 const trend = $derived(priceTrendChart(expenses));
-const donut = $derived(donutChart(breakdown, total, baTheme));
+const donut = $derived(donutChart(breakdown, total));
 const urgent = $derived(buildUrgentItems(schedules, pendingTasks));
 const highExpense = $derived(highestExpense(expenses));
 const highCategory = $derived(highestCategory(breakdown));

@@ -22,7 +22,6 @@ import {
 } from "$lib/api/services";
 import type { ScheduleRecord, TodoWithSubtasks } from "$lib/api/types";
 import { activeBot } from "$lib/stores/activeBot";
-import { theme } from "$lib/stores/theme";
 import { pushToast } from "$lib/stores/toast";
 import type {
 	DashboardExpense,
@@ -61,7 +60,6 @@ let pendingTasks = $state<TodoWithSubtasks[]>([]);
 let usage = $state<UsageDashboardData | null>(null);
 
 const isAssistant = $derived($activeBot?.preset === "mcp_assistant");
-const baTheme = $derived($theme === "blue-archive");
 
 // ウェルカムカードのアイコンは選択中Botのアバター（未設定Botは従来の固定画像へフォールバック）。
 // #34: フォールバック画像は public/materials 配下（Vite が書き換えないため BASE_URL を明示）。
@@ -172,7 +170,6 @@ $effect(() => {
 			{breakdown}
 			{schedules}
 			{pendingTasks}
-			{baTheme}
 		/>
 	{/if}
 </section>

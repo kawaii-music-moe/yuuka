@@ -7,7 +7,7 @@
 // 「時刻と通知」「バックアップ」と、旧 Bot設定の「接続端末」もここへ移した。
 //
 // - 表示名の初期値は currentUser ストア（旧: /api/status → data.user.username）。
-// - テーマは theme ストア（3ボタン。旧 .theme-option）。端末ごとの保存なのでカードに「この端末」を出す。
+// - テーマは theme ストア（ダーク/ライトの2ボタン。旧 .theme-option）。端末ごとの保存なのでカードに「この端末」を出す。
 // - 保存は settingsApi（scope:'user'）。確認は confirmDialog、通知は pushToast。
 // ─────────────────────────────────────────────────────────────────────────
 
@@ -58,7 +58,6 @@ $effect(() => {
 const THEMES: { value: Theme; label: string; preview: string }[] = [
 	{ value: "dark", label: "ダーク", preview: "dark-preview" },
 	{ value: "light", label: "ライト", preview: "light-preview" },
-	{ value: "blue-archive", label: "BA", preview: "ba-preview" },
 ];
 
 function reportError(e: unknown): void {
