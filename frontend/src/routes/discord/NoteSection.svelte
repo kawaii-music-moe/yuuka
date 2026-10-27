@@ -110,12 +110,6 @@ async function save() {
 </Modal>
 
 <style>
-	.section-body {
-		display: flex;
-		flex-direction: column;
-		gap: 12px;
-		margin-top: 12px;
-	}
 	.note-row {
 		display: flex;
 		gap: 12px;

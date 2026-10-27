@@ -235,10 +235,10 @@ async function clearHistory() {
 		<div class="list-container personas-list">
 			{#if personas.length > 0}
 				{#each personas as p (p.id)}
-					<div class="card-item glass persona-item">
-						<div class="persona-item-head">
-							<div class="persona-item-title">
-								<span class="persona-name">{p.name}</span>
+					<div class="card-item glass persona-row">
+						<div class="persona-row-head">
+							<div class="entry-title">
+								<span class="entry-name">{p.name}</span>
 								{#if p.id === activePersonaId}
 									<Badge tone="status-sent">適用中</Badge>
 							{/if}
@@ -246,10 +246,10 @@ async function clearHistory() {
 									<Badge tone="status-pending">公開中</Badge>
 							{/if}
 							</div>
-							<span class="persona-len">{p.prompt.length.toLocaleString()} 文字</span>
+							<span class="persona-row-meta">{p.prompt.length.toLocaleString()} 文字</span>
 						</div>
-						<div class="persona-preview">{p.prompt.slice(0, 120)}</div>
-						<div class="persona-item-actions">
+						<div class="persona-row-preview">{p.prompt.slice(0, 120)}</div>
+						<div class="persona-row-actions">
 							{#if p.id !== activePersonaId}
 								<Button
 									variant="icon"
@@ -350,58 +350,19 @@ async function clearHistory() {
 	.personas-list {
 		margin-top: 12px;
 	}
-	.persona-item {
-		flex-direction: column;
-		align-items: stretch;
-		gap: 8px;
-	}
-	.persona-item:last-child {
-		border-bottom: none;
-	}
-	.persona-item-head {
-		display: flex;
-		justify-content: space-between;
-		align-items: center;
-		gap: 8px;
-	}
-	.persona-item-title {
-		display: flex;
-		align-items: center;
-		gap: 8px;
-		flex-wrap: wrap;
-	}
-	.persona-name {
-		font-weight: 600;
-	}
-	.persona-len {
-		font-size: 0.75rem;
-		color: var(--color-zinc-muted);
-		white-space: nowrap;
-	}
-	.persona-preview {
-		font-size: 0.82rem;
-		color: var(--color-zinc-muted);
-		line-height: 1.5;
-		word-break: break-word;
-	}
-	.persona-item-actions {
-		display: flex;
-		flex-wrap: wrap;
-		gap: 6px;
-	}
-	.persona-item-actions :global(.btn-icon) {
+	.persona-row-actions :global(.btn-icon) {
 		border-color: transparent;
 		color: var(--color-zinc-muted);
 		transition: color 0.18s ease;
 	}
-	.persona-item-actions :global(.btn-icon:hover) {
+	.persona-row-actions :global(.btn-icon:hover) {
 		background-color: transparent;
 		color: var(--text-primary);
 	}
-	.persona-item-actions :global(.btn-icon .material-symbols-outlined) {
+	.persona-row-actions :global(.btn-icon .material-symbols-outlined) {
 		font-size: 16px;
 	}
-	.persona-item-actions :global(.btn-icon.persona-action-delete:hover) {
+	.persona-row-actions :global(.btn-icon.persona-action-delete:hover) {
 		color: var(--color-error);
 	}
 </style>

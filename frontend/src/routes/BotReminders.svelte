@@ -136,7 +136,7 @@ async function onCancel(id: number) {
 			<p class="description-text">
 				指定日時にDiscordへ通知するリマインダーを登録します。cron式を指定すると繰り返しリマインドになります。
 			</p>
-			<form class="reminder-form" onsubmit={onSubmit}>
+			<form class="form-stack" onsubmit={onSubmit}>
 				<div class="form-group">
 					<label for="reminder-message">メッセージ *</label>
 					<input
@@ -224,12 +224,6 @@ async function onCancel(id: number) {
 </section>
 
 <style>
-	.reminder-form {
-		display: flex;
-		flex-direction: column;
-		gap: 12px;
-		margin-top: 8px;
-	}
 	.reminders-showall-group {
 		display: flex;
 		align-items: center;

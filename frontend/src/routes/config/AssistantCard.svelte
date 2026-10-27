@@ -122,7 +122,7 @@ async function saveKey(e: SubmitEvent) {
 }
 </script>
 
-<section class="config-card card">
+<section class="config-card card plain-fields">
 	{#if warnings.length > 0}
 		<div class="warnings">
 			{#each warnings as w (w)}
@@ -162,7 +162,7 @@ async function saveKey(e: SubmitEvent) {
 			</div>
 			<button
 				type="button"
-				class="save-button"
+				class="icon-action"
 				aria-label="既定値に戻す"
 				title={data?.llm_defaults
 					? `既定値に戻す（${data.llm_defaults.provider} / ${data.llm_defaults.model}）`
@@ -193,7 +193,7 @@ async function saveKey(e: SubmitEvent) {
 			</div>
 			<button
 				type="submit"
-				class="save-button"
+				class="icon-action"
 				disabled={!canSaveKey}
 				aria-label="API キーを保存"
 				title="API キーを保存"
@@ -235,44 +235,14 @@ async function saveKey(e: SubmitEvent) {
 	.field-input select {
 		width: 100%;
 		box-sizing: border-box;
-		border: 0;
-		outline: none;
-		box-shadow: none;
-	}
-	.field-input input:focus,
-	.field-input select:focus {
-		border: 0;
-		outline: none;
-		box-shadow: none;
 	}
 	.required {
 		margin-left: 2px;
 		color: #ef4444;
 		font-weight: 700;
 	}
-	/* パスワード欄と誤認されて保存・提案が出ないよう、text 型を伏せ字表示にする。 */
-	.secret-input {
-		-webkit-text-security: disc;
-	}
 	.row-spacer {
 		width: 40px;
 		flex-shrink: 0;
-	}
-	.save-button {
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		width: 40px;
-		flex-shrink: 0;
-		border: 0;
-		border-radius: 6px;
-		background: transparent;
-		color: var(--color-primary);
-		cursor: pointer;
-	}
-	.save-button:disabled {
-		color: var(--text-secondary);
-		opacity: 0.4;
-		cursor: default;
 	}
 </style>

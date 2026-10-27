@@ -101,8 +101,8 @@ async function submit(e: SubmitEvent) {
 	<div class="column-header">
 		<h3><span class="material-symbols-outlined header-icon-symbol">badge</span>Bot登録名</h3>
 	</div>
-	<form onsubmit={submit} class="name-form">
-		<div class="name-input">
+	<form onsubmit={submit} class="name-form plain-fields">
+		<div class="input-wrap">
 			<input
 				type="text"
 				required
@@ -115,7 +115,7 @@ async function submit(e: SubmitEvent) {
 			/>
 			<button
 				type="button"
-				class="link-button"
+				class="inline-button link-button"
 				class:linked
 				aria-label={linked ? "Discordアカウント名との同期を解除" : "Discordアカウント名と同期"}
 				title={linked ? "Discordアカウント名との同期を解除" : "Discordアカウント名と同期"}
@@ -126,7 +126,7 @@ async function submit(e: SubmitEvent) {
 		</div>
 		<button
 			type="submit"
-			class="save-button"
+			class="icon-action"
 			disabled={!canSave}
 			aria-label="登録名を保存"
 			title="登録名を保存"
@@ -141,57 +141,6 @@ async function submit(e: SubmitEvent) {
 		display: flex;
 		gap: 12px;
 		margin-top: 12px;
-	}
-	.name-input {
-		position: relative;
-		flex: 1;
-		min-width: 0;
-	}
-	.name-input input {
-		width: 100%;
-		padding-right: 44px;
-		box-sizing: border-box;
-		border: 0;
-		outline: none;
-		box-shadow: none;
-	}
-	.name-input input:focus {
-		border: 0;
-		outline: none;
-		box-shadow: none;
-	}
-	.save-button {
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		width: 40px;
-		flex-shrink: 0;
-		border: 0;
-		border-radius: 6px;
-		background: transparent;
-		color: var(--color-primary);
-		cursor: pointer;
-	}
-	.save-button:disabled {
-		color: var(--text-secondary);
-		opacity: 0.4;
-		cursor: default;
-	}
-	.link-button {
-		position: absolute;
-		right: 4px;
-		top: 50%;
-		transform: translateY(-50%);
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		width: 36px;
-		height: 32px;
-		border: 0;
-		border-radius: 6px;
-		background: transparent;
-		color: var(--text-secondary);
-		cursor: pointer;
 	}
 	.link-button.linked {
 		color: var(--color-primary);

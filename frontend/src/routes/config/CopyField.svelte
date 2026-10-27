@@ -25,14 +25,14 @@ async function copy() {
 }
 </script>
 
-<div class="copy-field">
+<div class="copy-field plain-fields">
 	<label for={fieldId}>{label}</label>
 	<div class="copy-row">
-		<div class="copy-input-wrap">
+		<div class="input-wrap copy-input-wrap">
 			<input id={fieldId} type="text" readonly value={value} class="copy-input" />
 			<button
 				type="button"
-				class="icon-button copy-button"
+				class="inline-button"
 				onclick={copy}
 				aria-label={copied ? "コピー済み" : "コピー"}
 				title={copied ? "コピー済み" : "コピー"}
@@ -41,7 +41,7 @@ async function copy() {
 			</button>
 		</div>
 		<a
-			class="icon-button"
+			class="icon-action"
 			href={value}
 			target="_blank"
 			rel="noopener"
@@ -71,45 +71,9 @@ async function copy() {
 		gap: 4px;
 	}
 	.copy-input-wrap {
-		position: relative;
-		flex: 1;
-		min-width: 0;
 		margin-right: 8px;
 	}
 	.copy-input {
-		width: 100%;
-		box-sizing: border-box;
-		padding-right: 44px;
 		font-family: var(--font-family-mono);
-		border: 0;
-		outline: none;
-		box-shadow: none;
-	}
-	.copy-input:focus {
-		border: 0;
-		outline: none;
-		box-shadow: none;
-	}
-	.icon-button {
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		width: 40px;
-		flex-shrink: 0;
-		border: 0;
-		border-radius: 6px;
-		background: transparent;
-		color: var(--color-primary);
-		cursor: pointer;
-		text-decoration: none;
-	}
-	.copy-button {
-		position: absolute;
-		right: 4px;
-		top: 50%;
-		transform: translateY(-50%);
-		width: 36px;
-		height: 32px;
-		color: var(--text-secondary);
 	}
 </style>

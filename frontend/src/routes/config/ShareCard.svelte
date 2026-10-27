@@ -93,7 +93,7 @@ async function revoke(share: BotShare) {
 		<div class="column-header">
 			<h3><span class="material-symbols-outlined header-icon-symbol">group_add</span>Bot 共有管理</h3>
 		</div>
-		<form onsubmit={invite} class="invite-form">
+		<form onsubmit={invite} class="invite-form plain-fields">
 			<input
 				type="text"
 				required
@@ -105,7 +105,7 @@ async function revoke(share: BotShare) {
 			/>
 			<button
 				type="submit"
-				class="invite-button"
+				class="icon-action"
 				disabled={!canInvite}
 				aria-label="招待を送信"
 				title="招待を送信"
@@ -188,30 +188,5 @@ async function revoke(share: BotShare) {
 		flex: 1;
 		min-width: 0;
 		box-sizing: border-box;
-		border: 0;
-		outline: none;
-		box-shadow: none;
-	}
-	.invite-form input:focus {
-		border: 0;
-		outline: none;
-		box-shadow: none;
-	}
-	.invite-button {
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		width: 40px;
-		flex-shrink: 0;
-		border: 0;
-		border-radius: 6px;
-		background: transparent;
-		color: var(--color-primary);
-		cursor: pointer;
-	}
-	.invite-button:disabled {
-		color: var(--text-secondary);
-		opacity: 0.4;
-		cursor: default;
 	}
 </style>

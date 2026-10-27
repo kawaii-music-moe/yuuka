@@ -87,9 +87,6 @@ function submit(e: SubmitEvent) {
 		border-color: transparent;
 		box-shadow: none;
 	}
-	.required-mark {
-		color: var(--color-error);
-	}
 	.persona-edit-prompt {
 		min-height: 320px;
 		font-size: 0.9rem;

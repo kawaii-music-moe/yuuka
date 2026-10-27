@@ -62,7 +62,7 @@ async function submit(e: SubmitEvent) {
 		<h3><span class="material-symbols-outlined header-icon-symbol">robot_2</span>Discord 独自Bot 設定</h3>
 		<span class="badge badge-accent">任意設定</span>
 	</div>
-	<form onsubmit={submit} class="token-form">
+	<form onsubmit={submit} class="token-form plain-fields">
 		<label for="discord-token">Discord Bot Token</label>
 		<div class="token-row">
 			<input
@@ -75,7 +75,7 @@ async function submit(e: SubmitEvent) {
 			/>
 			<button
 				type="submit"
-				class="save-button"
+				class="icon-action"
 				disabled={!canSave}
 				aria-label="Discord 設定を保存"
 				title="Discord 設定を保存"
@@ -104,30 +104,5 @@ async function submit(e: SubmitEvent) {
 	.token-row input {
 		flex: 1;
 		min-width: 0;
-		border: 0;
-		outline: none;
-		box-shadow: none;
-	}
-	.token-row input:focus {
-		border: 0;
-		outline: none;
-		box-shadow: none;
-	}
-	.save-button {
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		width: 40px;
-		flex-shrink: 0;
-		border: 0;
-		border-radius: 6px;
-		background: transparent;
-		color: var(--color-primary);
-		cursor: pointer;
-	}
-	.save-button:disabled {
-		color: var(--text-secondary);
-		opacity: 0.4;
-		cursor: default;
 	}
 </style>

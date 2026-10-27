@@ -147,18 +147,18 @@ onDestroy(() => headerExtra.set(null));
 			<WebhookForm onsave={createEndpoint} oncancel={() => (adding = false)} />
 		{:else}
 			<div class="action-column card">
-				<div class="column-header wh-header-row">
+				<div class="column-header actions-end">
 					<Button variant="primary" onclick={() => (adding = true)}
 						><Icon name="add" />追加</Button
 					>
 				</div>
-				<div class="wh-list">
+				<div class="entry-list">
 					{#if endpoints.length > 0}
 						{#each endpoints as ep (ep.id)}
-							<div class="card-item glass wh-item">
-								<div class="wh-item-body">
-									<div class="wh-item-title">
-										<span class="wh-title">{ep.name}</span>
+							<div class="card-item glass entry">
+								<div class="entry-body">
+									<div class="entry-title">
+										<span class="entry-name">{ep.name}</span>
 										{#if ep.has_secret}
 											<Badge tone="status-default">署名検証</Badge>
 										{/if}
@@ -167,7 +167,7 @@ onDestroy(() => headerExtra.set(null));
 										<span class="wh-url">{ep.url}</span>
 										<button
 											type="button"
-											class="wh-icon-plain"
+											class="icon-plain"
 											title="URLをコピー"
 											aria-label="URLをコピー"
 											onclick={() => copyUrl(ep.url)}
@@ -184,18 +184,18 @@ onDestroy(() => headerExtra.set(null));
 										{#if ep.create_reminder}<span>リマインダー自動作成</span>{/if}
 									</div>
 								</div>
-								<div class="wh-item-actions">
+								<div class="entry-actions">
 									<button
 										type="button"
 										class="btn-mini"
-										class:wh-on={ep.enabled}
+										class:is-on={ep.enabled}
 										onclick={() => toggleEnabled(ep)}
 									>
 										{ep.enabled ? "有効" : "無効"}
 									</button>
 									<button
 										type="button"
-										class="wh-icon-plain wh-trash-plain"
+										class="icon-plain danger"
 										aria-label="削除"
 										onclick={() => deleteEndpoint(ep)}
 									>
@@ -218,16 +218,16 @@ onDestroy(() => headerExtra.set(null));
 	<!-- 受信履歴 -->
 	{#if view === "deliveries"}
 		<div class="card">
-			<div class="column-header wh-header-row">
+			<div class="column-header actions-end">
 				<Button variant="secondary" small onclick={loadDeliveries}>更新</Button>
 			</div>
-			<div class="wh-runs">
+			<div class="run-list">
 				{#if deliveries.length > 0}
 					{#each deliveries as d (d.id)}
 						<div
-							class="wh-run"
-							class:wh-run-failed={d.status === "failed"}
-							class:wh-run-success={d.status === "notified"}
+							class="run-entry"
+							class:failed={d.status === "failed"}
+							class:success={d.status === "notified"}
 						>
 							<div class="wh-run-head">
 								<Badge tone={deliveryStatusTone(d.status)}>
@@ -249,45 +249,6 @@ onDestroy(() => headerExtra.set(null));
 </section>
 
 <style>
-	@media (max-width: 768px) {
-		/* 共通の .card-item は縦積みになるため、操作 UI を同じ行に戻す。 */
-		.wh-item {
-			padding-inline: 12px;
-			flex-direction: row;
-			align-items: flex-start;
-		}
-	}
-	.wh-header-row {
-		display: flex;
-		align-items: center;
-		justify-content: flex-end;
-		gap: 8px;
-	}
-	.wh-list {
-		display: flex;
-		flex-direction: column;
-		gap: 12px;
-	}
-	.wh-item {
-		display: flex;
-		justify-content: space-between;
-		gap: 10px;
-		align-items: flex-start;
-	}
-	.wh-item-body {
-		flex: 1;
-		min-width: 0;
-		overflow-wrap: anywhere;
-	}
-	.wh-item-title {
-		display: flex;
-		align-items: center;
-		gap: 8px;
-		flex-wrap: wrap;
-	}
-	.wh-title {
-		font-weight: 600;
-	}
 	.wh-url-row {
 		display: flex;
 		align-items: center;
@@ -308,52 +269,6 @@ onDestroy(() => headerExtra.set(null));
 		margin-top: 4px;
 		font-size: 0.75rem;
 		color: var(--color-zinc-muted);
-	}
-	.wh-on {
-		color: var(--color-primary);
-		border-color: var(--color-primary);
-	}
-	.wh-icon-plain {
-		display: inline-flex;
-		align-items: center;
-		flex-shrink: 0;
-		padding: 4px;
-		appearance: none;
-		border: none;
-		box-shadow: none;
-		background: transparent;
-		color: var(--text-secondary);
-		cursor: pointer;
-	}
-	.wh-trash-plain {
-		color: var(--color-error);
-	}
-	.wh-icon-plain:hover {
-		opacity: 0.75;
-	}
-	.wh-item-actions {
-		display: flex;
-		gap: 6px;
-		align-items: center;
-		flex-shrink: 0;
-	}
-	.wh-runs {
-		display: flex;
-		flex-direction: column;
-		gap: 8px;
-		margin-top: 8px;
-	}
-	.wh-run {
-		border-left: 3px solid var(--color-zinc-muted);
-		padding: 8px 12px;
-		border-radius: var(--radius);
-		background: var(--surface-1dp);
-	}
-	.wh-run-success {
-		border-left-color: var(--color-green, #22c55e);
-	}
-	.wh-run-failed {
-		border-left-color: var(--color-red, #ef4444);
 	}
 	.wh-run-head {
 		display: flex;

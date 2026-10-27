@@ -48,7 +48,9 @@ let runs = $state<PlaybookRunRecord[]>([]);
 // 実行履歴はサーバが新しい順に最大 50 件返すので、その範囲をクライアント側でページ分けする。
 const RUNS_PAGE_SIZE = 5;
 let runsPage = $state(0);
-const runsTotalPages = $derived(Math.max(1, Math.ceil(runs.length / RUNS_PAGE_SIZE)));
+const runsTotalPages = $derived(
+	Math.max(1, Math.ceil(runs.length / RUNS_PAGE_SIZE)),
+);
 const pagedRuns = $derived(
 	runs.slice(runsPage * RUNS_PAGE_SIZE, (runsPage + 1) * RUNS_PAGE_SIZE),
 );
@@ -255,10 +257,10 @@ onDestroy(() => headerExtra.set(null));
 		<div class="column-header">
 			<h3><Icon name="edit_note" class="header-icon-symbol" />Playbook の登録・編集</h3>
 		</div>
-		<form class="pb-form" onsubmit={savePlaybook}>
+		<form class="form-stack" onsubmit={savePlaybook}>
 			<div class="form-row">
 				<div class="form-group">
-					<label for="playbook-name">プレイブック名 (英数字・ハイフン)<span class="pb-required"> *</span></label>
+					<label for="playbook-name">プレイブック名 (英数字・ハイフン)<span class="required-mark"> *</span></label>
 					<input
 						type="text"
 						id="playbook-name"
@@ -269,7 +271,7 @@ onDestroy(() => headerExtra.set(null));
 					/>
 				</div>
 				<div class="form-group">
-					<label for="playbook-title">表示タイトル<span class="pb-required"> *</span></label>
+					<label for="playbook-title">表示タイトル<span class="required-mark"> *</span></label>
 					<input
 						type="text"
 						id="playbook-title"
@@ -298,7 +300,7 @@ onDestroy(() => headerExtra.set(null));
 				/>
 			</div>
 			<div class="form-group">
-				<label for="playbook-steps">操作手順ステップ (Markdown形式等)<span class="pb-required"> *</span></label>
+				<label for="playbook-steps">操作手順ステップ (Markdown形式等)<span class="required-mark"> *</span></label>
 				<textarea
 					id="playbook-steps"
 					required
@@ -332,7 +334,7 @@ onDestroy(() => headerExtra.set(null));
 		{:else}
 		<div class="action-column card">
 			<div class="pb-search-row">
-			<div class="pb-search">
+			<div class="input-wrap">
 				<input
 					type="text"
 					placeholder="キーワード・タイトルで検索..."
@@ -340,7 +342,7 @@ onDestroy(() => headerExtra.set(null));
 				/>
 				<button
 					type="button"
-					class="pb-search-button"
+					class="inline-button pb-search-button"
 					title="検索"
 					aria-label="検索"
 					disabled={!searchQuery.trim()}
@@ -356,13 +358,13 @@ onDestroy(() => headerExtra.set(null));
 				>
 			</div>
 
-			<div class="pb-list">
+			<div class="entry-list">
 				{#if playbooks.length > 0}
 					{#each playbooks as p (p.name)}
-						<div class="card-item glass pb-item">
-							<div class="pb-item-body">
-								<div class="pb-item-title">
-									<span class="pb-title">{p.title}</span>
+						<div class="card-item glass entry">
+							<div class="entry-body">
+								<div class="entry-title">
+									<span class="entry-name">{p.title}</span>
 									<span class="pb-name-badge">{p.name}</span>
 								</div>
 								{#if p.description}
@@ -376,10 +378,10 @@ onDestroy(() => headerExtra.set(null));
 									</div>
 								{/if}
 							</div>
-							<div class="pb-item-actions">
+							<div class="entry-actions">
 								<button
 									type="button"
-									class="pb-icon-plain"
+									class="icon-plain"
 									aria-label="編集"
 									onclick={() => loadIntoForm(p)}
 								>
@@ -387,7 +389,7 @@ onDestroy(() => headerExtra.set(null));
 								</button>
 								<button
 									type="button"
-									class="pb-icon-plain pb-trash-plain"
+									class="icon-plain danger"
 									aria-label="削除"
 									onclick={() => deletePlaybook(p)}
 								>
@@ -414,9 +416,9 @@ onDestroy(() => headerExtra.set(null));
 			<div class="column-header">
 				<h3><Icon name="schedule" class="header-icon-symbol" />定期実行スケジュール設定</h3>
 			</div>
-			<form class="pb-form" onsubmit={saveSchedule}>
+			<form class="form-stack" onsubmit={saveSchedule}>
 				<div class="form-group">
-					<label for="schedule-playbook-select">実行するPlaybook<span class="pb-required"> *</span></label>
+					<label for="schedule-playbook-select">実行するPlaybook<span class="required-mark"> *</span></label>
 					<select id="schedule-playbook-select" required bind:value={schPlaybookName}>
 						<option value="">-- Playbookを選択 --</option>
 						{#each playbooks as p (p.name)}
@@ -442,7 +444,7 @@ onDestroy(() => headerExtra.set(null));
 						bind:value={schDescription}
 					/>
 				</div>
-				<label class="pb-enabled-row">
+				<label class="check-row">
 					<input type="checkbox" class="checkbox-custom" bind:checked={schEnabled} />
 					<span>有効</span>
 				</label>
@@ -460,7 +462,7 @@ onDestroy(() => headerExtra.set(null));
 		{:else}
 		<!-- スケジュール一覧 -->
 		<div class="action-column card">
-			<div class="column-header pb-header-row">
+			<div class="column-header actions-end">
 				<Button
 					variant="primary"
 					onclick={() => {
@@ -469,13 +471,13 @@ onDestroy(() => headerExtra.set(null));
 					}}><Icon name="add" />追加</Button
 				>
 			</div>
-			<div class="pb-list">
+			<div class="entry-list">
 				{#if schedules.length > 0}
 					{#each schedules as s (s.id)}
-						<div class="card-item glass pb-item">
-							<div class="pb-item-body">
-								<div class="pb-item-title">
-									<span class="pb-title">{s.playbook_name}</span>
+						<div class="card-item glass entry">
+							<div class="entry-body">
+								<div class="entry-title">
+									<span class="entry-name">{s.playbook_name}</span>
 								</div>
 								<div class="pb-cron">{s.cron_expression}</div>
 								{#if s.description}
@@ -485,18 +487,18 @@ onDestroy(() => headerExtra.set(null));
 									<div class="pb-lastrun">前回: {s.last_run_at}</div>
 								{/if}
 							</div>
-							<div class="pb-item-actions">
+							<div class="entry-actions">
 								<button
 									type="button"
 									class="btn-mini"
-									class:pb-sch-on={s.enabled}
+									class:is-on={s.enabled}
 									onclick={() => toggleSchedule(s)}
 								>
 									{s.enabled ? "有効" : "無効"}
 								</button>
 								<button
 									type="button"
-									class="pb-icon-plain pb-trash-plain"
+									class="icon-plain danger"
 									aria-label="削除"
 									onclick={() => deleteSchedule(s)}
 								>
@@ -521,13 +523,13 @@ onDestroy(() => headerExtra.set(null));
 	<!-- 実行履歴 -->
 	{#if view === "runs"}
 	<div class="card">
-		<div class="pb-runs">
+		<div class="run-list">
 			{#if runs.length > 0}
 				{#each pagedRuns as run (run.id)}
 					<div
-						class="pb-run"
-						class:pb-run-failed={run.status === "failed"}
-						class:pb-run-success={run.status === "success"}
+						class="run-entry"
+						class:failed={run.status === "failed"}
+						class:success={run.status === "success"}
 					>
 						<div class="pb-run-head">
 							<Icon name={runStatusIcon(run.status)} />
@@ -579,27 +581,11 @@ onDestroy(() => headerExtra.set(null));
 		.pb-grid {
 			grid-template-columns: minmax(0, 1fr);
 		}
-		/* スマホでは card-item の左右余白が 0 になり右端に張り付くため戻す */
-		/* 共通の .card-item は縦積みになるため、操作 UI を同じ行に戻す。 */
-		.pb-item {
-			padding-inline: 12px;
-			flex-direction: row;
-			align-items: flex-start;
-		}
-	}
-	.pb-form {
-		display: flex;
-		flex-direction: column;
-		gap: 12px;
-		margin-top: 8px;
 	}
 	.pb-steps {
 		min-height: 150px;
 		font-family: var(--font-family-mono);
 		font-size: 0.8rem;
-	}
-	.pb-required {
-		color: var(--color-error);
 	}
 	.pb-pager {
 		display: flex;
@@ -612,74 +598,20 @@ onDestroy(() => headerExtra.set(null));
 		font-size: 0.85rem;
 		color: var(--text-secondary);
 	}
-	.pb-header-row {
-		display: flex;
-		align-items: center;
-		justify-content: flex-end;
-		gap: 8px;
-	}
 	.pb-search-row {
 		display: flex;
 		align-items: center;
 		gap: 8px;
 		margin-bottom: 12px;
 	}
-	.pb-search {
-		position: relative;
-		flex: 1;
-		min-width: 0;
-	}
-	.pb-search input {
-		width: 100%;
-		box-sizing: border-box;
-		padding-right: 44px;
-	}
+	/* 検索ボタンは貼り付けボタンと違いアクセント色 */
 	.pb-search-button {
-		position: absolute;
-		right: 4px;
-		top: 50%;
-		transform: translateY(-50%);
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		width: 36px;
-		height: 32px;
-		padding: 0;
-		border: 0;
-		border-radius: 6px;
-		background: transparent;
 		color: var(--color-primary);
-		cursor: pointer;
 	}
 	.pb-search-button:disabled {
 		color: var(--text-secondary);
 		opacity: 0.4;
 		cursor: default;
-	}
-	.pb-list {
-		display: flex;
-		flex-direction: column;
-		gap: 12px;
-	}
-	.pb-item {
-		display: flex;
-		justify-content: space-between;
-		gap: 10px;
-		align-items: flex-start;
-	}
-	.pb-item-body {
-		flex: 1;
-		min-width: 0;
-		overflow-wrap: anywhere;
-	}
-	.pb-item-title {
-		display: flex;
-		align-items: center;
-		gap: 8px;
-		flex-wrap: wrap;
-	}
-	.pb-title {
-		font-weight: 600;
 	}
 	.pb-name-badge {
 		font-size: 0.72rem;
@@ -707,57 +639,6 @@ onDestroy(() => headerExtra.set(null));
 		flex-wrap: wrap;
 		gap: 4px;
 		margin-top: 6px;
-	}
-	.pb-sch-on {
-		color: var(--color-primary);
-		border-color: var(--color-primary);
-	}
-	.pb-icon-plain {
-		display: inline-flex;
-		align-items: center;
-		padding: 4px;
-		appearance: none;
-		border: none;
-		box-shadow: none;
-		background: transparent;
-		color: var(--text-secondary);
-		cursor: pointer;
-	}
-	.pb-trash-plain {
-		color: var(--color-error);
-	}
-	.pb-icon-plain:hover {
-		opacity: 0.75;
-	}
-	.pb-item-actions {
-		display: flex;
-		gap: 6px;
-		align-items: center;
-		flex-shrink: 0;
-	}
-	.pb-enabled-row {
-		display: flex;
-		align-items: center;
-		gap: 10px;
-		font-size: 0.85rem;
-	}
-	.pb-runs {
-		display: flex;
-		flex-direction: column;
-		gap: 8px;
-		margin-top: 8px;
-	}
-	.pb-run {
-		border-left: 3px solid var(--color-zinc-muted);
-		padding: 8px 12px;
-		border-radius: var(--radius);
-		background: var(--surface-1dp);
-	}
-	.pb-run-success {
-		border-left-color: var(--color-green, #22c55e);
-	}
-	.pb-run-failed {
-		border-left-color: var(--color-red, #ef4444);
 	}
 	.pb-run-head {
 		display: flex;

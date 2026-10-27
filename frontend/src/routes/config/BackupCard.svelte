@@ -148,15 +148,6 @@ async function trigger() {
 		gap: 12px;
 		margin-top: 16px;
 	}
-	.checkbox-inline {
-		display: flex;
-		align-items: center;
-		gap: 10px;
-	}
-	.checkbox-inline input {
-		width: 20px;
-		height: 20px;
-	}
 	.last-run {
 		margin-top: 4px;
 	}

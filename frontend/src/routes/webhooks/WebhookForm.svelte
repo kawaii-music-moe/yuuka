@@ -51,10 +51,10 @@ function submit(e: SubmitEvent) {
 	<div class="column-header">
 		<h3><Icon name="webhook" class="header-icon-symbol" />Webhook エンドポイントの作成</h3>
 	</div>
-	<form class="wh-form" onsubmit={submit}>
+	<form class="form-stack" onsubmit={submit}>
 		<div class="form-row">
 			<div class="form-group">
-				<label for="webhook-name">名前<span class="wh-required"> *</span></label>
+				<label for="webhook-name">名前<span class="required-mark"> *</span></label>
 				<input
 					type="text"
 					id="webhook-name"
@@ -70,7 +70,7 @@ function submit(e: SubmitEvent) {
 				<input
 					type="text"
 					id="webhook-secret"
-					class="wh-secret"
+					class="secret-input"
 					placeholder="HMAC-SHA256 署名検証に使用"
 					autocomplete="off"
 					spellcheck="false"
@@ -108,11 +108,11 @@ function submit(e: SubmitEvent) {
 				bind:value={filter}
 			/>
 		</div>
-		<label class="wh-check-row">
+		<label class="check-row">
 			<input type="checkbox" class="checkbox-custom" bind:checked={createTodo} />
 			<span>受信時にToDoを自動作成する</span>
 		</label>
-		<label class="wh-check-row">
+		<label class="check-row">
 			<input type="checkbox" class="checkbox-custom" bind:checked={createReminder} />
 			<span>受信時にリマインダーを自動作成する</span>
 		</label>
@@ -120,25 +120,3 @@ function submit(e: SubmitEvent) {
 		<Button variant="secondary" block onclick={oncancel}>キャンセル</Button>
 	</form>
 </div>
-
-<style>
-	.wh-form {
-		display: flex;
-		flex-direction: column;
-		gap: 12px;
-		margin-top: 8px;
-	}
-	/* 入力中の文字を伏せ字にする（プレースホルダーはそのまま見える）。 */
-	.wh-secret {
-		-webkit-text-security: disc;
-	}
-	.wh-required {
-		color: var(--color-error);
-	}
-	.wh-check-row {
-		display: flex;
-		align-items: center;
-		gap: 10px;
-		font-size: 0.85rem;
-	}
-</style>

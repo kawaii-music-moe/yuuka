@@ -534,8 +534,11 @@ function reset() {
 	.cb-joined.open > :global(.cb-mode) {
 		flex-grow: 0;
 	}
-	.cb-joined > .divider {
+	/* 共通の .joined-field .divider と違い、左右の余白なし */
+	.cb-joined .divider {
 		margin: 8px 0;
+	}
+	.cb-joined > .divider {
 		transition: opacity 0.2s ease;
 	}
 	.cb-joined:not(.open) > .divider {
@@ -564,11 +567,7 @@ function reset() {
 		padding: 0 0 0 12px;
 	}
 	.joined-field {
-		display: flex;
 		flex: 1;
-		min-width: 0;
-		background-color: var(--surface-1dp);
-		border-radius: 4px;
 	}
 	.joined-field > :global(.grow-select) {
 		flex: 1;
@@ -598,12 +597,6 @@ function reset() {
 	}
 	.cb-affix:last-child {
 		padding: 0 12px 0 0;
-	}
-	.divider {
-		width: 1px;
-		flex-shrink: 0;
-		margin: 8px 0;
-		background-color: var(--border-divider);
 	}
 	.cb-add {
 		display: grid;

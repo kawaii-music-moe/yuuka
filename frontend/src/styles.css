@@ -798,13 +798,9 @@ textarea {
 	outline: none;
 	box-shadow: none;
 }
-/* ギルド選択と、チャンネル・メンバー・ロールの入力を 1 つの枠に並べる。 */
+/* ギルド選択と、チャンネル・メンバー・ロールの入力を 1 つの枠（.joined-field）に並べる。 */
 .discord-tab .joined-field {
-	display: flex;
 	flex: 1;
-	min-width: 0;
-	background-color: var(--surface-1dp);
-	border-radius: 4px;
 }
 .discord-tab .joined-field select,
 .discord-tab .joined-field input {
@@ -814,12 +810,32 @@ textarea {
 	flex-shrink: 0;
 	max-width: 40%;
 }
-.discord-tab .joined-field .divider {
-	width: 1px;
-	flex-shrink: 0;
-	/* 左はプルダウンの ▼ との間隔 */
-	margin: 8px 0 8px 12px;
-	background-color: var(--border-divider);
+/* 各セクション（discord/*Section.svelte）の本文: 追加行 + 登録済みの行の一覧。 */
+.discord-tab .section-body {
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+	margin-top: 12px;
+}
+.discord-tab .add-row {
+	display: flex;
+	gap: 12px;
+	flex-wrap: wrap;
+}
+.discord-tab .row-list {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	margin-top: 8px;
+}
+.discord-tab .list-row {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 10px;
+}
+.discord-tab .mono {
+	font-family: var(--font-family-mono);
 }
 .discord-tab .row-label .mono {
 	font-size: 0.8rem;
@@ -4704,4 +4720,243 @@ details.admin-section[open] > summary > .admin-section-title::before {
 	color: var(--color-zinc-muted);
 	text-align: center;
 	padding: 24px 0;
+}
+
+/* ==============================================================================
+   Bot設定ページの共通部品
+   各ページの scoped CSS に重複していた見た目をここへ集約する。
+   ファイル末尾に置き、同じ詳細度の基本スタイル（input[type="text"] や .card-item）より後に効かせる。
+   ============================================================================== */
+
+/* 枠線・フォーカスリングなしの入力欄（Bot登録名などのカード）。内側の input / select に効かせる。 */
+.plain-fields input,
+.plain-fields input:focus,
+.plain-fields select,
+.plain-fields select:focus {
+	border: 0;
+	outline: none;
+	box-shadow: none;
+}
+
+/* 入力欄の右に置くアイコンだけのボタン（✓ 保存・＋ 追加・開く）。 */
+.icon-action {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 40px;
+	flex-shrink: 0;
+	padding: 0;
+	border: 0;
+	border-radius: 6px;
+	background: transparent;
+	color: var(--color-primary);
+	text-decoration: none;
+	cursor: pointer;
+}
+.icon-action:disabled {
+	color: var(--text-secondary);
+	opacity: 0.4;
+	cursor: default;
+}
+
+/* 入力欄の中（右端）に重ねるアイコンボタン（貼り付け・コピー・検索など）。 */
+.input-wrap {
+	position: relative;
+	flex: 1;
+	min-width: 0;
+}
+.input-wrap > input {
+	width: 100%;
+	box-sizing: border-box;
+	padding-right: 44px;
+}
+.inline-button {
+	position: absolute;
+	right: 4px;
+	top: 50%;
+	transform: translateY(-50%);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 36px;
+	height: 32px;
+	padding: 0;
+	border: 0;
+	border-radius: 6px;
+	background: transparent;
+	color: var(--text-secondary);
+	cursor: pointer;
+}
+
+/* 枠・背景なしのアイコンボタン（一覧の行の編集・コピー・削除）。.danger は赤いゴミ箱。 */
+.icon-plain {
+	display: inline-flex;
+	align-items: center;
+	flex-shrink: 0;
+	padding: 4px;
+	appearance: none;
+	border: none;
+	box-shadow: none;
+	background: transparent;
+	color: var(--text-secondary);
+	cursor: pointer;
+}
+.icon-plain:hover {
+	opacity: 0.75;
+}
+.icon-plain.danger {
+	color: var(--color-error);
+}
+
+/* 有効/無効を切り替える .btn-mini の「有効」状態 */
+.btn-mini.is-on {
+	color: var(--color-primary);
+	border-color: var(--color-primary);
+}
+
+/* 見出し行の右端に操作ボタンを寄せる（タイトルなしの見出し） */
+.column-header.actions-end {
+	display: flex;
+	align-items: center;
+	justify-content: flex-end;
+	gap: 8px;
+}
+
+/* 登録済みの一覧（Playbook・Webhook）: [本文] [操作] の行を縦に並べる。行は .card-item と併用する。 */
+.entry-list {
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+}
+.entry {
+	display: flex;
+	justify-content: space-between;
+	gap: 10px;
+	align-items: flex-start;
+}
+@media (max-width: 768px) {
+	/* 共通の .card-item は縦積みになるため、操作 UI を同じ行に戻す。 */
+	.entry {
+		padding-inline: 12px;
+		flex-direction: row;
+		align-items: flex-start;
+	}
+}
+.entry-body {
+	flex: 1;
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+.entry-title {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex-wrap: wrap;
+}
+.entry-name {
+	font-weight: 600;
+}
+.entry-actions {
+	display: flex;
+	gap: 6px;
+	align-items: center;
+	flex-shrink: 0;
+}
+
+/* 実行・受信の履歴（Playbook・Webhook）。左の罫線の色で結果を表す。 */
+.run-list {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	margin-top: 8px;
+}
+.run-entry {
+	border-left: 3px solid var(--color-zinc-muted);
+	padding: 8px 12px;
+	border-radius: var(--radius);
+	background: var(--surface-1dp);
+}
+.run-entry.success {
+	border-left-color: var(--color-green, #22c55e);
+}
+.run-entry.failed {
+	border-left-color: var(--color-red, #ef4444);
+}
+
+/* プルダウンと入力欄を 1 つの枠に並べる。間の縦線は .divider。 */
+.joined-field {
+	display: flex;
+	min-width: 0;
+	background-color: var(--surface-1dp);
+	border-radius: 4px;
+}
+.joined-field .divider {
+	width: 1px;
+	flex-shrink: 0;
+	/* 左はプルダウンの ▼ との間隔 */
+	margin: 8px 0 8px 12px;
+	background-color: var(--border-divider);
+}
+
+/* 追加・編集フォーム（Playbook・Webhook・リマインダー）の縦並び */
+.form-stack {
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+	margin-top: 8px;
+}
+.required-mark {
+	color: var(--color-error);
+}
+/* チェックボックス + 文言の 1 行 */
+.check-row {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	font-size: 0.85rem;
+}
+.checkbox-inline {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+}
+.checkbox-inline input {
+	width: 20px;
+	height: 20px;
+}
+/* パスワード欄と誤認されて保存・提案が出ないよう、text 型を伏せ字表示にする。 */
+.secret-input {
+	-webkit-text-security: disc;
+}
+
+/* ペルソナの一覧（ペルソナページ・マーケットから追加）。行は .card-item と併用する。 */
+.persona-row {
+	flex-direction: column;
+	align-items: stretch;
+	gap: 8px;
+}
+.persona-row:last-child {
+	border-bottom: none;
+}
+.persona-row-head {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	gap: 8px;
+}
+.persona-row-meta {
+	font-size: 0.75rem;
+	color: var(--color-zinc-muted);
+	white-space: nowrap;
+}
+.persona-row-preview {
+	font-size: 0.82rem;
+	color: var(--color-zinc-muted);
+	line-height: 1.5;
+	word-break: break-word;
+}
+.persona-row-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
 }

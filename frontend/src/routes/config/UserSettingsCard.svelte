@@ -103,13 +103,4 @@ async function submit(e: SubmitEvent) {
 		gap: 12px;
 		margin-top: 16px;
 	}
-	.checkbox-inline {
-		display: flex;
-		align-items: center;
-		gap: 10px;
-	}
-	.checkbox-inline input {
-		width: 20px;
-		height: 20px;
-	}
 </style>

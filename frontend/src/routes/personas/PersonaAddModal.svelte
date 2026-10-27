@@ -58,15 +58,15 @@ $effect(() => {
 		<div class="list-container persona-add-market">
 			{#if marketplace.length > 0}
 				{#each marketplace as m (m.id)}
-					<div class="card-item glass persona-add-item">
-						<div class="persona-add-item-head">
-							<span class="persona-add-name">{m.name}</span>
-							<span class="persona-add-meta">
+					<div class="card-item glass persona-row persona-add-item">
+						<div class="persona-row-head">
+							<span class="entry-name">{m.name}</span>
+							<span class="persona-row-meta">
 								by {m.owner_username} ・ {m.prompt.length.toLocaleString()} 文字
 							</span>
 						</div>
-						<div class="persona-add-preview">{m.prompt.slice(0, 120)}</div>
-						<div class="persona-add-actions">
+						<div class="persona-row-preview">{m.prompt.slice(0, 120)}</div>
+						<div class="persona-row-actions">
 							<button type="button" class="btn-mini" onclick={() => onpreview(m)}>
 								<Icon name="visibility" />全文表示
 							</button>
@@ -128,39 +128,9 @@ $effect(() => {
 		overflow-x: hidden;
 		overflow-y: auto;
 	}
-	.persona-add-item:last-child {
-		border-bottom: none;
-	}
+	/* 共通の .card-item の左右 -12px をやめ、モーダルの幅に収める */
 	.persona-add-item {
 		margin: 0;
-		flex-direction: column;
-		align-items: stretch;
-		gap: 8px;
-	}
-	.persona-add-item-head {
-		display: flex;
-		justify-content: space-between;
-		align-items: center;
-		gap: 8px;
-	}
-	.persona-add-name {
-		font-weight: 600;
-	}
-	.persona-add-meta {
-		font-size: 0.75rem;
-		color: var(--color-zinc-muted);
-		white-space: nowrap;
-	}
-	.persona-add-preview {
-		font-size: 0.82rem;
-		color: var(--color-zinc-muted);
-		line-height: 1.5;
-		word-break: break-word;
-	}
-	.persona-add-actions {
-		display: flex;
-		flex-wrap: wrap;
-		gap: 6px;
 	}
 	@media (max-width: 480px) {
 		.persona-add-choices {

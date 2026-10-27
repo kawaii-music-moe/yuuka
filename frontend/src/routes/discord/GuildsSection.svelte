@@ -86,12 +86,12 @@ async function remove(g: AssistantGuild) {
 		<h3><span class="material-symbols-outlined header-icon-symbol">dns</span>応答許可ギルド</h3>
 	</div>
 	<div class="section-body">
-		<div class="add-row">
-			<div class="guild-input">
+		<div class="add-row no-wrap">
+			<div class="input-wrap">
 				<input type="text" placeholder="ギルドID（数字）" class="mono" bind:value={guildInput} />
 				<button
 					type="button"
-					class="paste-button"
+					class="inline-button"
 					title="クリップボードから貼り付け"
 					aria-label="クリップボードから貼り付け"
 					onclick={paste}
@@ -119,56 +119,8 @@ async function remove(g: AssistantGuild) {
 </section>
 
 <style>
-	.section-body {
-		display: flex;
-		flex-direction: column;
-		gap: 12px;
-		margin-top: 12px;
-	}
-	.add-row {
-		display: flex;
-		gap: 12px;
-	}
-	.guild-input {
-		position: relative;
-		flex: 1;
-		min-width: 0;
-	}
-	.guild-input input {
-		width: 100%;
-		box-sizing: border-box;
-		padding-right: 44px;
-	}
-	.paste-button {
-		position: absolute;
-		right: 4px;
-		top: 50%;
-		transform: translateY(-50%);
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		width: 36px;
-		height: 32px;
-		padding: 0;
-		border: 0;
-		border-radius: 6px;
-		background: transparent;
-		color: var(--text-secondary);
-		cursor: pointer;
-	}
-	.mono {
-		font-family: var(--font-family-mono);
-	}
-	.row-list {
-		display: flex;
-		flex-direction: column;
-		gap: 8px;
-		margin-top: 8px;
-	}
-	.list-row {
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		gap: 10px;
+	/* 共通の .discord-tab .add-row は折り返すが、ギルド行は 1 行に収める */
+	.add-row.no-wrap {
+		flex-wrap: nowrap;
 	}
 </style>

@@ -44,12 +44,6 @@ let {
 </div>
 
 <style>
-	.joined-field {
-		display: flex;
-		min-width: 0;
-		background-color: var(--surface-1dp);
-		border-radius: 4px;
-	}
 	.joined-field :global(.target-select) {
 		flex: 1 0 auto;
 		transition: flex-grow 0.3s ease;
@@ -82,11 +76,5 @@ let {
 		outline: none;
 		box-shadow: none;
 		background: transparent;
-	}
-	.divider {
-		width: 1px;
-		flex-shrink: 0;
-		margin: 8px 0 8px 12px;
-		background-color: var(--border-divider);
 	}
 </style>

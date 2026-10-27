@@ -1,6 +1,7 @@
 <script lang="ts">
-import type { Snippet } from "svelte";
 // ? アイコンのヘルプ。ホバーで説明を出し、クリックで開いたままにできる。
+import type { Snippet } from "svelte";
+
 interface Props {
 	id: string;
 	/** 説明文（アイコンなどを混ぜるときは children で渡す） */

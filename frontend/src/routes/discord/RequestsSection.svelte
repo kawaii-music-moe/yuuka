@@ -89,27 +89,12 @@ async function decide(id: number, decision: "approved" | "rejected") {
 </section>
 
 <style>
-	.section-body {
-		display: flex;
-		flex-direction: column;
-		gap: 12px;
-		margin-top: 12px;
-	}
-	.row-list {
-		display: flex;
-		flex-direction: column;
-		gap: 8px;
-		margin-top: 8px;
-	}
 	.request-row {
 		display: flex;
 		align-items: center;
 		justify-content: space-between;
 		gap: 10px;
 		flex-wrap: wrap;
-	}
-	.mono {
-		font-family: var(--font-family-mono);
 	}
 	/* 申請行は表示名が無くIDが主役のため、.discord-tab .row-label .mono の縮小・減色を打ち消す */
 	.row-label .mono {

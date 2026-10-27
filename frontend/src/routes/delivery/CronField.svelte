@@ -20,6 +20,8 @@ interface Props {
 	label?: string;
 	/** 見出しに必須の * を付ける */
 	required?: boolean;
+	/** ? のヘルプに出す説明 */
+	help?: string;
 }
 let {
 	id,
@@ -27,6 +29,7 @@ let {
 	placeholder = "",
 	label = "配信スケジュール",
 	required = false,
+	help = "cron式で細かな設定が可能です！",
 }: Props = $props();
 
 // 一番左の切替。ふだんは cron 式の直接入力で、「かんたん」を選ぶと組み立てモーダルが開き、
@@ -72,7 +75,7 @@ function onModeChange(m: Mode) {
 
 <div class="cron-field">
 	<div class="cron-label">
-		<label for="{id}-mode">{label}{#if required}<span class="required"> *</span>{/if}</label>
+		<label for="{id}-mode">{label}{#if required}<span class="required-mark"> *</span>{/if}</label>
 		<span class="help">
 			<button
 				type="button"
@@ -86,7 +89,7 @@ function onModeChange(m: Mode) {
 				<span class="material-symbols-outlined" aria-hidden="true">help</span>
 			</button>
 			<span id="{id}-help" role="tooltip" class="help-tip" class:open={helpOpen}>
-				cron式で細かな設定が可能です！
+				{help}
 			</span>
 		</span>
 	</div>
@@ -183,18 +186,6 @@ function onModeChange(m: Mode) {
 		font-size: 18px;
 		line-height: 1;
 	}
-	.joined-field {
-		display: flex;
-		min-width: 0;
-		background-color: var(--surface-1dp);
-		border-radius: 4px;
-	}
-	.divider {
-		width: 1px;
-		flex-shrink: 0;
-		margin: 8px 0 8px 12px;
-		background-color: var(--border-divider);
-	}
 	/* かんたん/cron式 は幅を固定し、文字を中央に置く */
 	.joined-field :global(.fixed-select) {
 		flex: 0 0 120px;
@@ -211,9 +202,6 @@ function onModeChange(m: Mode) {
 		outline: none;
 		box-shadow: none;
 		background: transparent;
-	}
-	.required {
-		color: var(--color-error);
 	}
 	.unparsed {
 		margin: 0 0 16px;

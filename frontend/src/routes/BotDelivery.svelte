@@ -383,7 +383,7 @@ $effect(() => {
 				<Checkbox bind:checked={fSections.news} label="ニュースを載せる" />
 				<div class="block-body" class:off={!fSections.news} inert={!fSections.news}>
 					<div class="feed-row">
-						<div class="feed-input-wrap">
+						<div class="input-wrap feed-input-wrap">
 							<input
 								id="report-feed-input"
 								type="url"
@@ -401,7 +401,7 @@ $effect(() => {
 							/>
 							<button
 								type="button"
-								class="icon-button paste-button"
+								class="inline-button"
 								onclick={pasteFeed}
 								aria-label="貼り付け"
 								title="貼り付け"
@@ -411,7 +411,7 @@ $effect(() => {
 						</div>
 						<button
 							type="button"
-							class="icon-button"
+							class="icon-action"
 							onclick={addFeed}
 							disabled={!feedInput.trim()}
 							aria-label="フィードを追加"
@@ -507,7 +507,7 @@ $effect(() => {
 								<span>{r.sections.map((s) => SECTION_SHORT[s]).join("・")}</span>
 							</div>
 						</div>
-						<div class="report-item-actions">
+						<div class="entry-actions">
 							<button
 								type="button"
 								class="icon-plain"
@@ -520,7 +520,7 @@ $effect(() => {
 							<button
 								type="button"
 								class="btn-mini"
-								class:enabled-on={r.enabled}
+								class:is-on={r.enabled}
 								aria-pressed={r.enabled}
 								title={r.enabled ? "クリックで無効にする" : "クリックで有効にする"}
 								onclick={() => toggleEnabled(r)}
@@ -529,7 +529,7 @@ $effect(() => {
 							</button>
 							<button
 								type="button"
-								class="icon-plain trash"
+								class="icon-plain danger"
 								aria-label="「{r.name}」を削除"
 								title="削除"
 								onclick={() => deleteReport(r)}
@@ -605,42 +605,14 @@ $effect(() => {
 	gap: 4px;
 }
 .feed-input-wrap {
-	position: relative;
-	flex: 1;
-	min-width: 0;
 	margin-right: 8px;
 }
 .feed-input {
-	width: 100%;
-	box-sizing: border-box;
-	padding-right: 44px;
 	font-family: var(--font-family-mono);
 }
-.icon-button {
-	display: flex;
-	align-items: center;
-	justify-content: center;
-	width: 40px;
-	flex-shrink: 0;
-	border: 0;
-	border-radius: 6px;
-	background: transparent;
-	color: var(--color-primary);
-	cursor: pointer;
-}
-.icon-button:disabled {
-	color: var(--text-secondary);
-	opacity: 0.4;
+/* 押せない追加ボタンは、共通の .icon-action と違い禁止カーソルにする */
+.icon-action:disabled {
 	cursor: not-allowed;
-}
-.paste-button {
-	position: absolute;
-	right: 4px;
-	top: 50%;
-	transform: translateY(-50%);
-	width: 36px;
-	height: 32px;
-	color: var(--text-secondary);
 }
 /* スケジュールと報告先の行は、報告先の幅アニメーションのため grid でなく flex で並べる。 */
 .schedule-row {
@@ -659,22 +631,10 @@ $effect(() => {
 	flex: 2 1 240px;
 	min-width: 0;
 }
-.joined-field {
-	display: flex;
-	min-width: 0;
-	background-color: var(--surface-1dp);
-	border-radius: 4px;
-}
 .joined-field input {
 	flex: 1;
 	min-width: 0;
 	background: transparent;
-}
-.joined-field .divider {
-	width: 1px;
-	flex-shrink: 0;
-	margin: 8px 0 8px 12px;
-	background-color: var(--border-divider);
 }
 .field-hint {
 	margin: 6px 0 0;
@@ -885,31 +845,6 @@ $effect(() => {
 }
 .report-cron {
 	font-family: var(--font-family-mono);
-}
-.report-item-actions {
-	display: flex;
-	align-items: center;
-	gap: 6px;
-	flex-shrink: 0;
-}
-.icon-plain {
-	display: inline-flex;
-	align-items: center;
-	padding: 4px;
-	border: 0;
-	background: transparent;
-	color: var(--text-secondary);
-	cursor: pointer;
-}
-.icon-plain:hover {
-	opacity: 0.75;
-}
-.icon-plain.trash {
-	color: var(--color-error);
-}
-.enabled-on {
-	color: var(--color-primary);
-	border-color: var(--color-primary);
 }
 /* テスト配信: [定期報告] + ボタン */
 .test-row {

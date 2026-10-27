@@ -139,32 +139,3 @@ async function remove(ch: AssistantChannel, shift: boolean) {
 		</div>
 	</div>
 </section>
-
-<style>
-	.section-body {
-		display: flex;
-		flex-direction: column;
-		gap: 12px;
-		margin-top: 12px;
-	}
-	.add-row {
-		display: flex;
-		gap: 12px;
-		flex-wrap: wrap;
-	}
-	.mono {
-		font-family: var(--font-family-mono);
-	}
-	.row-list {
-		display: flex;
-		flex-direction: column;
-		gap: 8px;
-		margin-top: 8px;
-	}
-	.list-row {
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		gap: 10px;
-	}
-</style>
