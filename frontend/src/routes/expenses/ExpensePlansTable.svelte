@@ -61,7 +61,7 @@ const today = todayIso();
 								>
 								<button
 									type="button"
-									class="btn btn-secondary btn-sm plan-action-btn plan-cancel-btn"
+									class="icon-plain danger"
 									title="支払い予定をキャンセル"
 									aria-label="支払い予定をキャンセル"
 									onclick={() => onCancel(plan)}
@@ -115,9 +115,5 @@ const today = todayIso();
 		font-size: 0.72rem;
 		padding: 3px 8px;
 		line-height: 1;
-	}
-	.plan-cancel-btn {
-		display: inline-flex;
-		align-items: center;
 	}
 </style>
