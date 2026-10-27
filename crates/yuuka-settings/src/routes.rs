@@ -161,24 +161,28 @@ pub(crate) async fn gemini_get(
 ) -> Result<Response, ApiError> {
     use rusqlite::OptionalExtension;
     let uid = user.0.discord_id;
-    let model = state
+    // API キーは本体を返さず、登録済みか（hasApiKey）だけを返す。
+    let (model, has_api_key) = state
         .db
         .read
         .read(move |conn| {
             conn.query_row(
-                "SELECT gemini_model FROM users WHERE discord_id = ?1",
+                "SELECT gemini_model, \
+                 COALESCE(gemini_api_key_encrypted, '') != '' \
+                 FROM users WHERE discord_id = ?1",
                 rusqlite::params![uid],
-                |r| r.get::<_, Option<String>>(0),
+                |r| Ok((r.get::<_, Option<String>>(0)?, r.get::<_, bool>(1)?)),
             )
             .optional()
             .map_err(yuuka_db::map_sqlite)
         })
         .await?
-        .flatten()
+        .unwrap_or((None, false));
+    let model = model
         .filter(|v| !v.is_empty())
         .unwrap_or_else(|| yuuka_gemini::LlmSettings::default().model);
     Ok(json_ok(
-        json!({ "success": true, "provider": "gemini", "model": model,
+        json!({ "success": true, "provider": "gemini", "model": model, "hasApiKey": has_api_key,
         "models": yuuka_gemini::ALLOWED_MODELS, "defaults": yuuka_gemini::LlmSettings::default() }),
     ))
 }

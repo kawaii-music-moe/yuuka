@@ -41,7 +41,13 @@ export const settingsApi = {
 	/** POST /api/settings/gemini — Gemini API キー/モデル設定 */
 	getGemini: () =>
 		api.get<
-			ApiResponse & { provider: string; model: string; models: string[] }
+			ApiResponse & {
+				provider: string;
+				model: string;
+				models: string[];
+				/** API キーが登録済みか（本体は返さない） */
+				hasApiKey?: boolean;
+			}
 		>("/api/settings/gemini", USER),
 	updateGemini: (body: {
 		apiKey?: string;
