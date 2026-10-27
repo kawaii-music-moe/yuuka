@@ -779,7 +779,7 @@ textarea {
 	font-size: 0.9rem;
 	color: var(--text-primary);
 }
-/* Discord / Playbook ページの入力欄は枠線・フォーカスリングなし（Bot登録名の入力欄と同じ見た目）。 */
+/* Discord / Playbook / Webhook ページの入力欄は枠線・フォーカスリングなし（Bot登録名の入力欄と同じ見た目）。 */
 .tab-view.discord-tab input,
 .tab-view.discord-tab input:focus,
 .tab-view.discord-tab select,
@@ -789,7 +789,11 @@ textarea {
 .tab-view.playbooks-tab select,
 .tab-view.playbooks-tab select:focus,
 .tab-view.playbooks-tab textarea,
-.tab-view.playbooks-tab textarea:focus {
+.tab-view.playbooks-tab textarea:focus,
+.tab-view.webhooks-tab input,
+.tab-view.webhooks-tab input:focus,
+.tab-view.webhooks-tab textarea,
+.tab-view.webhooks-tab textarea:focus {
 	border: 0;
 	outline: none;
 	box-shadow: none;

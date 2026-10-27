@@ -28,6 +28,7 @@ import { pushToast } from "$lib/stores/toast";
 import CronField from "./delivery/CronField.svelte";
 import HelpTip from "./delivery/HelpTip.svelte";
 import InlineSelect from "./delivery/InlineSelect.svelte";
+import TargetField from "./delivery/TargetField.svelte";
 
 // ── 載せる内容 ──
 // 並びは保存・表示の順。天気・ニュースは各設定欄の見出しに、残りは「そのほかの内容」に置く。
@@ -315,27 +316,15 @@ $effect(() => {
 				<div class="form-group cron-group">
 					<CronField id="report-cron" placeholder="0 7 * * * (毎朝7時)" bind:value={fCron} />
 				</div>
-				<div class="form-group target-group" class:open={fTargetType === "channel"}>
+				<div class="form-group target-group">
 					<label for="report-target-type">報告先</label>
-					<div class="joined-field">
-						<InlineSelect
-							id="report-target-type"
-							class="target-select"
-							options={targetOptions}
-							bind:value={fTargetType}
-						/>
-						<div class="target-extra" inert={fTargetType !== "channel"}>
-							<span class="divider" aria-hidden="true"></span>
-							<input
-								id="report-target-id"
-								type="text"
-								autocomplete="off"
-								placeholder="チャンネルID（例: 123456789012345678）"
-								aria-label="チャンネルID"
-								bind:value={fTargetId}
-							/>
-						</div>
-					</div>
+					<TargetField
+						id="report-target-type"
+						idInputId="report-target-id"
+						options={targetOptions}
+						bind:type={fTargetType}
+						bind:targetId={fTargetId}
+					/>
 					{#if hasPrivate}
 						<p class="field-hint">
 							<span class="lock-inline"><Icon name="lock" size={14} /></span>
@@ -665,8 +654,7 @@ $effect(() => {
 .cron-group {
 	flex: 1 1 180px;
 }
-/* 枠の幅は固定。DM のときはプルダウンが枠いっぱいに広がり、チャンネルにすると
-   プルダウンが本来の幅へ縮んで、空いた右側に ID 入力欄が伸びてくる。 */
+/* 報告先の枠の幅は固定（中の伸び縮みは TargetField が受け持つ）。 */
 .target-group {
 	flex: 2 1 240px;
 	min-width: 0;
@@ -681,33 +669,6 @@ $effect(() => {
 	flex: 1;
 	min-width: 0;
 	background: transparent;
-}
-.target-group :global(.target-select) {
-	flex: 1 0 auto;
-	transition: flex-grow 0.3s ease;
-}
-.target-group.open :global(.target-select) {
-	flex-grow: 0;
-}
-.target-extra {
-	display: flex;
-	flex: 1 1 0;
-	width: 0;
-	min-width: 0;
-	overflow: hidden;
-	flex-grow: 0;
-	opacity: 0;
-	transition:
-		flex-grow 0.3s ease,
-		opacity 0.2s ease;
-}
-.target-group.open .target-extra {
-	flex-grow: 1;
-	opacity: 1;
-}
-.target-extra input {
-	flex: 1;
-	min-width: 0;
 }
 .joined-field .divider {
 	width: 1px;
