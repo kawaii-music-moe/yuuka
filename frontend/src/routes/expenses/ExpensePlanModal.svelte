@@ -32,6 +32,16 @@ $effect(() => {
 	description = "";
 });
 
+// 支払予定日は欄のどこを押してもブラウザ標準の日付ピッカーを開く（未対応ブラウザでは何もしない）。
+function openPicker(e: MouseEvent) {
+	const input = e.currentTarget as HTMLInputElement;
+	try {
+		input.showPicker?.();
+	} catch {
+		// ユーザー操作扱いにならない等で開けないときは、通常の入力欄のままにする
+	}
+}
+
 function submit(e: SubmitEvent) {
 	e.preventDefault();
 	const trimmed = title.trim();
@@ -65,6 +75,7 @@ function submit(e: SubmitEvent) {
 				<input
 					type="number"
 					id="plan-amount"
+					class="no-spin"
 					required
 					placeholder="5000"
 					bind:value={amount}
@@ -81,7 +92,14 @@ function submit(e: SubmitEvent) {
 		</div>
 		<div class="form-group">
 			<label for="plan-date">支払予定日 *</label>
-			<input type="date" id="plan-date" required bind:value={plannedDate} />
+			<input
+				type="date"
+				id="plan-date"
+				class="picker-input"
+				required
+				onclick={openPicker}
+				bind:value={plannedDate}
+			/>
 		</div>
 		<div class="form-group">
 			<label for="plan-description">メモ</label>
@@ -95,3 +113,18 @@ function submit(e: SubmitEvent) {
 		<Button type="submit" variant="primary" block>予定を登録</Button>
 	</form>
 </Modal>
+
+<style>
+	/* ブラウザ標準の増減ボタン（▲▼）を出さない */
+	.no-spin {
+		appearance: textfield;
+	}
+	.no-spin::-webkit-outer-spin-button,
+	.no-spin::-webkit-inner-spin-button {
+		appearance: none;
+		margin: 0;
+	}
+	.picker-input {
+		cursor: pointer;
+	}
+</style>

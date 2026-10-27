@@ -49,11 +49,7 @@ function onChange(e: Event) {
 				>document_scanner</span
 			>AIレシートスキャナー
 		</h3>
-		<span class="badge badge-accent">Gemini連携</span>
 	</div>
-	<p class="description-text">
-		レシート画像をドラッグ＆ドロップするか、ファイルを選択してください。AIが自動的に分類・登録を行います。
-	</p>
 
 	<div
 		class="dropzone"

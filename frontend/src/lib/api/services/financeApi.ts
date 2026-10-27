@@ -47,9 +47,13 @@ export const financeApi = {
 	/** GET /api/expenses/budget-limits */
 	budgetLimits: () =>
 		api.get<BudgetLimitsResponse>("/api/expenses/budget-limits", BOT),
-	/** POST /api/expenses/budget-limits — サーバは limitAmount（camelCase）を読む。 */
+	/** POST /api/expenses/budget-limits — サーバ（SetBudgetLimit）は limit_amount（snake_case）を読む。 */
 	saveBudgetLimit: (body: { category: string; limitAmount: number }) =>
-		api.post<ApiResponse>("/api/expenses/budget-limits", body, BOT),
+		api.post<ApiResponse>(
+			"/api/expenses/budget-limits",
+			{ category: body.category, limit_amount: body.limitAmount },
+			BOT,
+		),
 	/** POST /api/expenses/budget-limits/delete */
 	deleteBudgetLimit: (category: string) =>
 		api.post<ApiResponse>(

@@ -166,18 +166,6 @@ async function onAddBudget(payload: { category: string; limitAmount: number }) {
 	}
 }
 
-// ── 予算上限 削除（旧 renderBudgetSettingsList の delBtn） ──
-async function onDeleteBudget(category: string) {
-	try {
-		await financeApi.deleteBudgetLimit(category);
-		const lim = await financeApi.budgetLimits();
-		limits = lim.limits ?? [];
-		await load();
-	} catch (e) {
-		reportError(e);
-	}
-}
-
 // ── レシートスキャン（旧 handleReceiptScan） ──
 async function onReceiptPick(file: File) {
 	scanning = true;
@@ -253,19 +241,13 @@ async function onReceiptPick(file: File) {
 	<div class="expense-table-card card">
 		<div class="column-header">
 			<h3>直近の支出履歴 (30件)</h3>
-			<span class="hud-tag">LEDGER</span>
 		</div>
 		<ExpenseLedgerTable {expenses} />
 	</div>
 </section>
 
 <ExpensePlanModal bind:open={planModalOpen} onsave={savePlan} />
-<BudgetSettingsModal
-	bind:open={budgetModalOpen}
-	{limits}
-	onadd={onAddBudget}
-	ondelete={onDeleteBudget}
-/>
+<BudgetSettingsModal bind:open={budgetModalOpen} onadd={onAddBudget} />
 <ReceiptResultModal bind:open={receiptModalOpen} response={receiptResponse} />
 
 <style>
