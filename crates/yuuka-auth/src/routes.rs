@@ -159,10 +159,10 @@ async fn exchange_and_login(
     let Some(code) = query.code.filter(|v| !v.is_empty()) else {
         return error(StatusCode::BAD_REQUEST, "認証コードがありません。");
     };
-    let mut exchange_body = json!({ "code": code });
-    if let Some(callback) = callback_url(state) {
-        exchange_body["redirect_uri"] = json!(callback);
-    }
+    let exchange_body = match callback_url(state) {
+        Some(callback) => json!({ "code": code, "redirect_uri": callback }),
+        None => json!({ "code": code }),
+    };
     let response = match rt
         .http
         .post(format!(
