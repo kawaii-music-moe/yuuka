@@ -22,6 +22,7 @@ export {
 	default as ScopeBadge,
 	type SettingsScope,
 } from "./ScopeBadge.svelte";
+export { default as SecretInput } from "./SecretInput.svelte";
 export { type ChipStatus, default as StatusChip } from "./StatusChip.svelte";
 export { default as TagChip } from "./TagChip.svelte";
 export { default as Toast } from "./Toast.svelte";

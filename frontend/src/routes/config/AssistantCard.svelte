@@ -5,7 +5,7 @@
 
 import { ApiError } from "$lib/api/client";
 import { botAttributeApi } from "$lib/api/services";
-import { confirmDialog } from "$lib/components/ui";
+import { confirmDialog, SecretInput } from "$lib/components/ui";
 import { pushToast } from "$lib/stores/toast";
 import type { AssistantConfigResp } from "./configTypes";
 
@@ -178,15 +178,9 @@ async function saveKey(e: SubmitEvent) {
 		<label class="field-label" for="bot-gemini-key">API キー<span class="required" aria-label="必須">*</span></label>
 		<div class="field-row">
 			<div class="field-input">
-				<input
+				<SecretInput
 					id="bot-gemini-key"
-					type="text"
-					class="secret-input"
-					spellcheck="false"
-					data-1p-ignore
-					data-lpignore="true"
 					placeholder="このBot専用のGemini APIキーを入力"
-					autocomplete="off"
 					bind:value={geminiKey}
 					disabled={savingKey}
 				/>
@@ -231,7 +225,7 @@ async function saveKey(e: SubmitEvent) {
 		flex: 1;
 		min-width: 0;
 	}
-	.field-input input,
+	.field-input :global(input),
 	.field-input select {
 		width: 100%;
 		box-sizing: border-box;

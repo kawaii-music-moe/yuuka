@@ -1,7 +1,7 @@
 <script lang="ts">
 // Webhook エンドポイントの作成フォーム。Playbook の登録フォームと同じく、一覧の代わりに
 // ページ内へ出す。作成のみ（旧仕様どおり）。保存は親の onsave、取り消しは oncancel へ委譲。
-import { Button, Icon } from "$lib/components/ui";
+import { Button, Icon, SecretInput } from "$lib/components/ui";
 import TargetField from "../delivery/TargetField.svelte";
 
 interface Props {
@@ -65,18 +65,9 @@ function submit(e: SubmitEvent) {
 			</div>
 			<div class="form-group">
 				<label for="webhook-secret">署名シークレット (任意)</label>
-				<!-- type="password" だとブラウザやパスワードマネージャーが保存済みパスワードを
-				     候補に出すため、text にして表示だけ伏せ字にする。 -->
-				<input
-					type="text"
+				<SecretInput
 					id="webhook-secret"
-					class="secret-input"
 					placeholder="HMAC-SHA256 署名検証に使用"
-					autocomplete="off"
-					spellcheck="false"
-					data-1p-ignore
-					data-lpignore="true"
-					data-bwignore
 					bind:value={secret}
 				/>
 			</div>
