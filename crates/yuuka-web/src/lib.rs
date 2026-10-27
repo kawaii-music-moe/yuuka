@@ -9,6 +9,7 @@
 //! CSRF/ボディ上限レイヤ・WS。DAG: `web → core, types`。
 
 pub mod auth;
+pub mod client_ip;
 pub mod config;
 pub mod csrf;
 pub mod error;
@@ -22,6 +23,7 @@ pub mod static_files;
 pub mod test_support;
 
 pub use auth::{AdminUser, AuthBackend, AuthenticatedUser, BearerUser, OptionalUser};
+pub use client_ip::{client_ip, rate_limit_key};
 pub use config::WebConfig;
 pub use error::{ApiError, DomainError};
 pub use extract::ScopedJson;
