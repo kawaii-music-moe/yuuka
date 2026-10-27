@@ -3978,6 +3978,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "tracing",
  "yuuka-core",
  "yuuka-outbound",
 ]

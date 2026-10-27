@@ -265,6 +265,18 @@ fn parse_ddg(html: &str) -> Vec<SearchResult> {
     results
 }
 
+/// [`PublicOnlyResolver`] が接続を拒否したことを示すエラー（送信エラーの原因から見分ける）。
+#[derive(Debug)]
+struct BlockedByResolver(String);
+
+impl std::fmt::Display for BlockedByResolver {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for BlockedByResolver {}
+
 /// 静的取得用 DNS リゾルバ。内部/予約レンジに解決されるホストへは接続させない（rebinding 対策・#206）。
 struct PublicOnlyResolver;
 
@@ -273,7 +285,7 @@ impl reqwest::dns::Resolve for PublicOnlyResolver {
         Box::pin(async move {
             let addrs = yuuka_outbound::resolve_public_addrs(name.as_str(), 0)
                 .await
-                .map_err(Box::<dyn std::error::Error + Send + Sync>::from)?;
+                .map_err(|e| Box::new(BlockedByResolver(e)) as Box<_>)?;
             Ok(Box::new(addrs.into_iter()) as reqwest::dns::Addrs)
         })
     }
@@ -281,34 +293,63 @@ impl reqwest::dns::Resolve for PublicOnlyResolver {
 
 const MAX_REDIRECTS: usize = 5;
 
+/// [`get_following`] の失敗。再試行してよいのは `Transport` だけ。
+#[derive(Debug)]
+enum FetchError {
+    /// SSRF 検査（URL の事前検査・接続時のリゾルバ）で拒否した。再試行しても変わらない。
+    Blocked(String),
+    /// リダイレクト先が不正・多すぎる。再試行しても変わらない。
+    Redirect(String),
+    /// 通信エラー（タイムアウト・切断など）。再試行してよい。
+    Transport(String),
+}
+
+/// 送信エラーの原因をたどり、リゾルバの拒否なら `Blocked`、それ以外は `Transport` にする。
+fn classify_send_error(e: &reqwest::Error) -> FetchError {
+    let mut source: Option<&(dyn std::error::Error + 'static)> = std::error::Error::source(e);
+    while let Some(err) = source {
+        if let Some(blocked) = err.downcast_ref::<BlockedByResolver>() {
+            return FetchError::Blocked(blocked.0.clone());
+        }
+        source = err.source();
+    }
+    FetchError::Transport(format!("リクエストエラー: {e}"))
+}
+
+/// 追いかけるリダイレクトか（304 Not Modified や Location の無い 300 は追わずにそのまま返す）。
+fn is_followed_redirect(status: reqwest::StatusCode) -> bool {
+    matches!(status.as_u16(), 301 | 302 | 303 | 307 | 308)
+}
+
 /// 1 回分の GET。リダイレクトは自動で追わず、各ホップを SSRF 検査してから追う。
 async fn get_following(
     client: &reqwest::Client,
     start: &str,
     build: impl Fn(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
-) -> Result<reqwest::Response, String> {
+) -> Result<reqwest::Response, FetchError> {
     let mut url = start.to_owned();
     for _ in 0..=MAX_REDIRECTS {
-        yuuka_outbound::assert_safe_outbound_url(&url).await?;
+        yuuka_outbound::assert_safe_outbound_url(&url)
+            .await
+            .map_err(FetchError::Blocked)?;
         let resp = build(client.get(&url))
             .send()
             .await
-            .map_err(|e| format!("リクエストエラー: {e}"))?;
-        if !resp.status().is_redirection() {
+            .map_err(|e| classify_send_error(&e))?;
+        if !is_followed_redirect(resp.status()) {
             return Ok(resp);
         }
+        let invalid = || FetchError::Redirect("リダイレクト先が不正です。".to_owned());
         let location = resp
             .headers()
             .get(reqwest::header::LOCATION)
             .and_then(|v| v.to_str().ok())
-            .ok_or_else(|| "リダイレクト先が不正です。".to_owned())?;
-        url = resp
-            .url()
-            .join(location)
-            .map_err(|_| "リダイレクト先が不正です。".to_owned())?
-            .into();
+            .ok_or_else(invalid)?;
+        url = resp.url().join(location).map_err(|_| invalid())?.into();
     }
-    Err("リダイレクトが多すぎます。".to_owned())
+    Err(FetchError::Redirect(
+        "リダイレクトが多すぎます。".to_owned(),
+    ))
 }
 
 /// ブラウザ相当ヘッダ + 指数バックオフで HTML を取得する（Node `fetchHtmlWithRetry`）。
@@ -358,9 +399,9 @@ pub async fn fetch_html(url: &str) -> Result<String, String> {
                     return Err(last_err);
                 }
             }
-            Err(e) if e.starts_with("リクエストエラー") => last_err = e,
+            Err(FetchError::Transport(e)) => last_err = e,
             // SSRF 検査で弾いた・リダイレクト不正は再試行しても結果が変わらない。
-            Err(e) => return Err(e),
+            Err(FetchError::Blocked(e) | FetchError::Redirect(e)) => return Err(e),
         }
 
         if i < max_retries - 1 {
@@ -393,6 +434,43 @@ mod tests {
         use reqwest::dns::Resolve;
         let name: reqwest::dns::Name = "localhost".parse().unwrap();
         assert!(PublicOnlyResolver.resolve(name).await.is_err());
+    }
+
+    /// リゾルバの拒否は送信エラーの原因から `Blocked` と分かる（再試行しない）。
+    #[tokio::test]
+    async fn resolver_rejection_is_classified_as_blocked() {
+        let client = reqwest::Client::builder()
+            .dns_resolver(std::sync::Arc::new(PublicOnlyResolver))
+            .build()
+            .unwrap();
+        // URL の事前検査を通さず、リゾルバだけで拒否される名前（*.localhost）で送る。
+        let err = client
+            .get("http://yuuka-test.localhost/")
+            .send()
+            .await
+            .unwrap_err();
+        let classified = classify_send_error(&err);
+        assert!(
+            matches!(&classified, FetchError::Blocked(msg) if msg.contains("ローカルホスト")),
+            "{classified:?}"
+        );
+    }
+
+    #[test]
+    fn only_real_redirects_are_followed() {
+        use reqwest::StatusCode;
+        for s in [301, 302, 303, 307, 308] {
+            assert!(
+                is_followed_redirect(StatusCode::from_u16(s).unwrap()),
+                "{s}"
+            );
+        }
+        for s in [300, 304, 305, 200, 404] {
+            assert!(
+                !is_followed_redirect(StatusCode::from_u16(s).unwrap()),
+                "{s}"
+            );
+        }
     }
 
     #[test]

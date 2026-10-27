@@ -349,7 +349,7 @@ async fn launch_session(user: &str) -> Result<Session, String> {
     let profile = std::path::Path::new("data")
         .join("browser_profiles")
         .join(user);
-    let proxy_args = crate::proxy::chromium_proxy_args().await?;
+    let proxy_args = crate::proxy::chromium_proxy_args()?;
     let mut builder = BrowserConfig::builder()
         .chrome_executable(chrome)
         .arg("--disable-dev-shm-usage")
