@@ -255,6 +255,11 @@ impl DeviceAuthStore {
         if rec.expires_at <= now {
             return ApproveOutcome::Expired;
         }
+        // 承認済みを上書きしない。本人の承認からアプリの次のポーリングまでの間に、コードを知った
+        // 別ユーザーが承認すると、本人の端末が相手のアカウントでログインしてしまうため。
+        if rec.approved {
+            return ApproveOutcome::AlreadyApproved;
+        }
         rec.approved = true;
         rec.approved_user = Some(approved_user.to_owned());
         ApproveOutcome::Ok {
@@ -262,7 +267,8 @@ impl DeviceAuthStore {
         }
     }
 
-    /// 承認前の確認用に端末名と発行からの経過秒を返す（状態は変えない）。
+    /// 承認前の確認用に端末名・発行からの経過秒・残り秒を返す（状態は変えない）。
+    /// 承認済みのコードは照会できない（画面で承認ボタンを有効にしないため）。
     fn lookup(&self, user_code: &str) -> LookupOutcome {
         let normalized = user_code.trim().to_uppercase();
         let now = Instant::now();
@@ -275,9 +281,13 @@ impl DeviceAuthStore {
         else {
             return LookupOutcome::NotFound;
         };
+        if rec.approved {
+            return LookupOutcome::AlreadyApproved;
+        }
         LookupOutcome::Found {
             device_name: rec.device_name.clone(),
             age_secs: now.duration_since(rec.created_at).as_secs(),
+            remaining_secs: rec.expires_at.saturating_duration_since(now).as_secs(),
         }
     }
 
@@ -326,6 +336,7 @@ enum ApproveOutcome {
     Ok { device_name: Option<String> },
     NotFound,
     Expired,
+    AlreadyApproved,
 }
 
 /// `lookup` の結果。
@@ -333,8 +344,49 @@ enum LookupOutcome {
     Found {
         device_name: Option<String>,
         age_secs: u64,
+        remaining_secs: u64,
     },
     NotFound,
+    AlreadyApproved,
+}
+
+/// 承認済みコードへの照会・承認の応答（409）。
+fn already_approved() -> Response {
+    (
+        StatusCode::CONFLICT,
+        Json(json!({
+            "success": false,
+            "message": "このコードは既に承認済みです。心当たりがなければ、アプリでログインをやり直してください。"
+        })),
+    )
+        .into_response()
+}
+
+/// 端末名を表示・保存できる形に整える。`device_name` は `/device/code` の呼び出し側の自己申告で、
+/// 改行・制御文字・書字方向の制御文字（表示を偽装できる）を空白にし、連続する空白をまとめる。
+fn sanitize_device_name(raw: &str) -> Option<String> {
+    let cleaned: String = raw
+        .chars()
+        .map(|c| {
+            let bidi_or_zero_width = matches!(
+                c,
+                '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}' | '\u{FEFF}'
+            );
+            if c.is_control() || bidi_or_zero_width {
+                ' '
+            } else {
+                c
+            }
+        })
+        .collect();
+    let name = cleaned
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(MAX_DEVICE_NAME)
+        .collect::<String>();
+    (!name.is_empty()).then_some(name)
 }
 
 /// `poll` の判定（トークン発行前の同期的な状態）。
@@ -442,9 +494,9 @@ async fn code_handler(
     extensions: Extensions,
     ScopedJson { value: body, .. }: ScopedJson<CodeBody>,
 ) -> Response {
-    // device_name は文字列のみ採用し先頭 200 文字に制限（Node `typeof===string ? slice(0,200)`）。
-    let device_name = as_opt_string(body.device_name)
-        .map(|s| s.chars().take(MAX_DEVICE_NAME).collect::<String>());
+    // device_name は文字列のみ採用し、制御文字を除いて先頭 200 文字に制限（Node `slice(0,200)` +
+    // 承認画面での偽装対策・#207）。
+    let device_name = as_opt_string(body.device_name).and_then(|s| sanitize_device_name(&s));
     let peer = extensions
         .get::<ConnectInfo<SocketAddr>>()
         .map(|c| c.0.ip());
@@ -512,10 +564,11 @@ async fn approve_handler(
             })),
         )
             .into_response(),
+        ApproveOutcome::AlreadyApproved => already_approved(),
     }
 }
 
-/// §1.2a: 承認前に端末名と発行からの経過時間を返す（auth:user・ログイン済み利用者に限定）。
+/// §1.1a: 承認前に端末名と発行からの経過時間を返す（auth:user・ログイン済み利用者に限定）。
 /// コードを知るだけで端末名を引けると列挙の足がかりになるため、未ログインには開かない。
 async fn lookup_handler(
     _user: AuthenticatedUser,
@@ -534,16 +587,18 @@ async fn lookup_handler(
         LookupOutcome::Found {
             device_name,
             age_secs,
+            remaining_secs,
         } => (
             StatusCode::OK,
             Json(json!({
                 "success": true,
                 "device_name": device_name,
                 "age_secs": age_secs,
-                "expires_in": store.device_code_ttl_secs.saturating_sub(age_secs),
+                "expires_in": remaining_secs,
             })),
         )
             .into_response(),
+        LookupOutcome::AlreadyApproved => already_approved(),
         LookupOutcome::NotFound => (
             StatusCode::NOT_FOUND,
             Json(json!({
@@ -665,9 +720,9 @@ mod tests {
     #[async_trait::async_trait]
     impl AuthBackend for FakeAuth {
         async fn session_user(&self, token: &str) -> Result<Option<SessionUser>, AuthError> {
-            Ok((token == "owner").then(|| SessionUser {
-                discord_id: "owner".to_owned(),
-                username: "owner".to_owned(),
+            Ok(matches!(token, "owner" | "other").then(|| SessionUser {
+                discord_id: token.to_owned(),
+                username: token.to_owned(),
                 role: Role::User,
             }))
         }
@@ -936,6 +991,67 @@ mod tests {
         assert_eq!(st, StatusCode::NOT_FOUND);
         let (st, _) = send(&app, "/api/auth/device/lookup", "owner", r#"{}"#).await;
         assert_eq!(st, StatusCode::BAD_REQUEST);
+    }
+
+    /// 承認済みのコードは照会も再承認もできない（別ユーザーの承認で approved_user を上書きさせない）。
+    #[tokio::test]
+    async fn approved_code_cannot_be_looked_up_or_reapproved() {
+        let store = DeviceAuthStore::new("https://ex.test".to_owned());
+        let app = app(store.clone());
+        let (_, j) = send(&app, "/api/auth/device/code", "", "{}").await;
+        let body = format!(r#"{{"user_code":"{}"}}"#, j["user_code"].as_str().unwrap());
+
+        let (st, _) = send(&app, "/api/auth/device/approve", "owner", &body).await;
+        assert_eq!(st, StatusCode::OK);
+        let (st, j) = send(&app, "/api/auth/device/lookup", "other", &body).await;
+        assert_eq!(st, StatusCode::CONFLICT);
+        assert_eq!(j["success"], serde_json::json!(false));
+        let (st, _) = send(&app, "/api/auth/device/approve", "other", &body).await;
+        assert_eq!(st, StatusCode::CONFLICT);
+        let approved: Vec<_> = store
+            .lock()
+            .by_hash
+            .values()
+            .map(|r| r.approved_user.clone())
+            .collect();
+        assert_eq!(approved, vec![Some("owner".to_owned())]);
+    }
+
+    /// 残り時間はレコードの期限から出す（TTL からの引き算ではない）。
+    #[tokio::test]
+    async fn lookup_remaining_comes_from_record_expiry() {
+        let store = DeviceAuthStore::new("https://ex.test".to_owned());
+        let app = app(store.clone());
+        let (_, j) = send(&app, "/api/auth/device/code", "", "{}").await;
+        let body = format!(r#"{{"user_code":"{}"}}"#, j["user_code"].as_str().unwrap());
+        for r in store.lock().by_hash.values_mut() {
+            r.expires_at = Instant::now() + Duration::from_secs(42);
+        }
+        let (st, j) = send(&app, "/api/auth/device/lookup", "owner", &body).await;
+        assert_eq!(st, StatusCode::OK);
+        let remaining = j["expires_in"].as_u64().unwrap();
+        assert!((40..=42).contains(&remaining), "{remaining}");
+    }
+
+    #[test]
+    fn device_name_is_sanitized() {
+        assert_eq!(
+            sanitize_device_name("  DESKTOP-ABC\n(Windows)\t "),
+            Some("DESKTOP-ABC (Windows)".to_owned())
+        );
+        // 書字方向の上書き・ゼロ幅文字で表示を偽装できないようにする。
+        assert_eq!(
+            sanitize_device_name("abc\u{202E}gpj.exe\u{200B}x"),
+            Some("abc gpj.exe x".to_owned())
+        );
+        assert_eq!(sanitize_device_name(" \r\n\u{0007} "), None);
+        assert_eq!(
+            sanitize_device_name(&"a".repeat(MAX_DEVICE_NAME + 10))
+                .unwrap()
+                .chars()
+                .count(),
+            MAX_DEVICE_NAME
+        );
     }
 
     #[tokio::test]

@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { formatDeviceCode, formatElapsed } from "./deviceUtils";
+import {
+	displayDeviceName,
+	formatDeviceCode,
+	formatElapsed,
+} from "./deviceUtils";
 
 describe("formatDeviceCode", () => {
 	it("XXXX-XXXX に整形する", () => {
@@ -14,5 +18,21 @@ describe("formatElapsed", () => {
 		expect(formatElapsed(59)).toBe("59秒前");
 		expect(formatElapsed(60)).toBe("1分前");
 		expect(formatElapsed(-3)).toBe("0秒前");
+	});
+});
+
+describe("displayDeviceName", () => {
+	it("制御文字・書字方向の制御文字をまとめて空白にする", () => {
+		expect(displayDeviceName(" DESKTOP-ABC\n(Windows) ")).toBe(
+			"DESKTOP-ABC (Windows)",
+		);
+		expect(displayDeviceName("abc\u{202E}gpj.exe\u{200B}x")).toBe(
+			"abc gpj.exe x",
+		);
+	});
+	it("空なら「端末名なし」、長すぎる名前は省く", () => {
+		expect(displayDeviceName(null)).toBe("（端末名なし）");
+		expect(displayDeviceName(" \n ")).toBe("（端末名なし）");
+		expect(displayDeviceName("あ".repeat(70), 60)).toBe(`${"あ".repeat(60)}…`);
 	});
 });
