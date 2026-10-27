@@ -55,6 +55,7 @@ export const _settle = settle;
 </script>
 
 <Modal
+	class="confirm-modal"
 	open={s.open}
 	title={s.title ?? "確認"}
 	onclose={() => _settle(false)}
@@ -64,7 +65,7 @@ export const _settle = settle;
 	<p class="confirm-message">{s.message}</p>
 
 	{#snippet footer()}
-		<Button variant="secondary" small onclick={() => _settle(false)}>
+		<Button variant="secondary" small class="confirm-cancel" onclick={() => _settle(false)}>
 			{s.cancelLabel ?? "キャンセル"}
 		</Button>
 		<Button
@@ -80,13 +81,62 @@ export const _settle = settle;
 
 <style>
 	.confirm-message {
-		font-size: 0.9rem;
+		font-size: 1rem;
 		line-height: 1.6;
-		margin-bottom: 20px;
+		margin-bottom: 24px;
 		white-space: pre-wrap;
 	}
-	/* .modal-footer は gap 未定義のためボタン間隔を補う。 */
-	:global(.modal-footer .confirm-ok) {
-		margin-left: 8px;
+	/* 区切り線と×を消し、テキストのキャンセル + 塗りの OK にする。 */
+	:global(.modal.confirm-modal) {
+		background-color: rgba(0, 0, 0, 0.85);
+	}
+	:global(.confirm-modal .modal-content) {
+		padding: 28px 32px 24px;
+		border: none;
+		border-radius: 4px;
+		background-color: var(--surface-0dp);
+	}
+	/* スマホのモーダル全画面化（styles.css）を確認モーダルでは打ち消し、中央の小さなカードにする。 */
+	@media (max-width: 768px) {
+		:global(.modal.confirm-modal) {
+			padding: 16px;
+		}
+		:global(.confirm-modal .modal-content) {
+			width: 100%;
+			max-width: 460px;
+			height: auto;
+			max-height: 90vh;
+			padding: 24px 20px 20px;
+		}
+	}
+	:global(.confirm-modal .modal-header) {
+		border-bottom: none;
+		padding-bottom: 0;
+	}
+	:global(.confirm-modal .modal-header h3) {
+		font-size: 1.4rem;
+	}
+	:global(.confirm-modal .btn-close) {
+		display: none;
+	}
+	:global(.confirm-modal .modal-footer) {
+		border-top: none;
+		padding-top: 0;
+		align-items: center;
+		gap: 16px;
+	}
+	:global(.confirm-modal .confirm-cancel) {
+		border: none;
+		background: none;
+	}
+	:global(.confirm-modal .confirm-ok) {
+		border: none;
+	}
+	:global(.confirm-modal .confirm-ok.btn-danger) {
+		background-color: #f28b82;
+		color: #601410;
+	}
+	:global(.confirm-modal .confirm-ok.btn-danger:hover) {
+		background-color: #f6aea9;
 	}
 </style>
