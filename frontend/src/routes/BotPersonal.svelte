@@ -17,6 +17,7 @@ import {
 } from "$lib/components/ui";
 import { activeBot } from "$lib/stores/activeBot";
 import { pushToast } from "$lib/stores/toast";
+import HelpTip from "./delivery/HelpTip.svelte";
 import ContactModal from "./personal/ContactModal.svelte";
 
 // ── コンテキストノート ──
@@ -32,6 +33,12 @@ let contacts = $state<ContactView[]>([]);
 // ── 連絡先モーダル ──
 let contactOpen = $state(false);
 let editingContact = $state<ContactView | null>(null);
+
+// 誕生日（"YYYY-MM-DD" / "--MM-DD"）を一覧では "YYYY/MM/DD" / "MM/DD" で見せる。
+function formatBirthday(birthday: string | null): string {
+	if (!birthday) return "—";
+	return birthday.replace(/^--/, "").replaceAll("-", "/");
+}
 
 function reportError(e: unknown) {
 	pushToast(
@@ -164,9 +171,6 @@ async function deleteContactRow(c: ContactView) {
 			</h3>
 			<CharCounter value={noteContent} max={noteMaxLength} class="hud-tag" />
 		</div>
-		<p class="description-text">
-			AIが会話のたびに参照する長期メモです。好み・習慣・覚えておいてほしいことを自由に記述できます。
-		</p>
 		<form class="context-note-form" onsubmit={saveNote}>
 			<textarea
 				class="context-note-textarea"
@@ -174,7 +178,7 @@ async function deleteContactRow(c: ContactView) {
 				bind:value={noteContent}
 			></textarea>
 			<Button type="submit" variant="primary" class="context-note-save"
-				>ノートを保存</Button
+				>保存</Button
 			>
 		</form>
 	</div>
@@ -187,9 +191,6 @@ async function deleteContactRow(c: ContactView) {
 				(一時メモ)
 			</h3>
 		</div>
-		<p class="description-text">
-			Discordで「メモして」と頼んだ一時メモです。期限が切れると自動削除されます。
-		</p>
 		<div class="clipboard-list">
 			{#if clipboard.length > 0}
 				{#each clipboard as item (item.id)}
@@ -220,11 +221,13 @@ async function deleteContactRow(c: ContactView) {
 	<div class="card personal-card-spacer">
 		<div class="column-header action-right">
 			<h3><Icon name="contacts" class="header-icon-symbol" />連絡先</h3>
+			<HelpTip
+				id="contacts-help"
+				label="誕生日の通知"
+				text="誕生日を登録すると、当日にお祝いリマインドが自動配信されます。"
+			/>
 			<Button variant="primary" small onclick={openNewContact}>＋ 連絡先追加</Button>
 		</div>
-		<p class="description-text">
-			誕生日を登録すると、当日にお祝いリマインドが自動配信されます。
-		</p>
 		<div class="table-responsive contacts-table-wrap">
 			<table class="expense-table">
 				<thead>
@@ -242,7 +245,7 @@ async function deleteContactRow(c: ContactView) {
 						{#each contacts as c (c.id)}
 							<tr>
 								<td class="contacts-name">{c.name}</td>
-								<td class="contacts-mono">{c.birthday || "—"}</td>
+								<td class="contacts-mono">{formatBirthday(c.birthday)}</td>
 								<td>{c.relationship || "—"}</td>
 								<td class="contacts-info">{c.contact_info || "—"}</td>
 								<td>
@@ -257,16 +260,19 @@ async function deleteContactRow(c: ContactView) {
 								<td class="contacts-actions-td">
 									<button
 										type="button"
-										class="btn btn-secondary btn-sm contacts-mini-btn"
-										onclick={() => openEditContact(c)}>編集</button
+										class="icon-plain"
+										aria-label="編集"
+										onclick={() => openEditContact(c)}
 									>
+										<Icon name="edit" />
+									</button>
 									<button
 										type="button"
-										class="btn btn-secondary btn-sm contacts-mini-btn"
+										class="icon-plain danger"
 										aria-label="削除"
 										onclick={() => deleteContactRow(c)}
 									>
-										<Icon name="delete" size={13} />
+										<Icon name="delete" />
 									</button>
 								</td>
 							</tr>
@@ -297,7 +303,7 @@ async function deleteContactRow(c: ContactView) {
 		line-height: 1.6;
 	}
 	:global(.context-note-save) {
-		align-self: flex-start;
+		align-self: flex-end;
 	}
 	.personal-card-spacer {
 		margin-top: 24px;
@@ -351,9 +357,6 @@ async function deleteContactRow(c: ContactView) {
 	.contacts-actions-td {
 		text-align: right;
 		white-space: nowrap;
-	}
-	.contacts-mini-btn {
-		font-size: 0.72rem;
 	}
 	.contacts-empty {
 		text-align: center;
