@@ -34,6 +34,7 @@ $effect(() => {
 <Modal
 	bind:open
 	wide
+	class="persona-add-modal"
 	{closeOnEsc}
 	title={step === "market" ? "マーケットから追加" : "ペルソナを追加"}
 >
@@ -96,6 +97,9 @@ $effect(() => {
 		display: grid;
 		grid-template-columns: repeat(2, minmax(0, 1fr));
 		gap: 12px;
+	}
+	:global(.persona-add-modal .modal-content) {
+		background-color: var(--surface-0dp);
 	}
 	.persona-add-choice {
 		display: flex;
