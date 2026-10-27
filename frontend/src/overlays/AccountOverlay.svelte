@@ -14,7 +14,12 @@
 import { onMount } from "svelte";
 import { ApiError } from "$lib/api/client";
 import { settingsApi } from "$lib/api/services";
-import { confirmDialog, Icon, ScopeBadge } from "$lib/components/ui";
+import {
+	confirmDialog,
+	Icon,
+	ScopeBadge,
+	SecretInput,
+} from "$lib/components/ui";
 import { ACCOUNT_SECTIONS } from "$lib/managementSections";
 import { navigateTo } from "$lib/router";
 import { selectBot } from "$lib/stores/activeBot";
@@ -23,6 +28,8 @@ import { setTheme, type Theme, theme } from "$lib/stores/theme";
 import { pushToast } from "$lib/stores/toast";
 import BackupCard from "../routes/config/BackupCard.svelte";
 import UserSettingsCard from "../routes/config/UserSettingsCard.svelte";
+import HelpTip from "../routes/delivery/HelpTip.svelte";
+import InlineSelect from "../routes/delivery/InlineSelect.svelte";
 import AccountDevices from "./account/AccountDevices.svelte";
 import ManagementOverlayShell from "./ManagementOverlayShell.svelte";
 
@@ -32,6 +39,8 @@ let geminiModel = $state("");
 let llmProvider = $state("gemini");
 let llmModels = $state<string[]>([]);
 let llmLoaded = $state(false);
+const PROVIDER_OPTIONS = [{ value: "gemini", label: "Google Gemini" }];
+const modelOptions = $derived(llmModels.map((m) => ({ value: m, label: m })));
 onMount(() => {
 	settingsApi
 		.getGemini()
@@ -215,31 +224,39 @@ async function downloadPackage(e: SubmitEvent): Promise<void> {
 				<!-- AI モデル（個人の API キーとモデル。PWA の「使用モデル」と同じ値） -->
 				{#if section === "ai"}
 					<div class="config-card card account-card">
-						<p class="description-text">
-							秘書属性のBotは、話しかけた人のこの API キーとモデルで応答します（共有されたBotでも、各自のキーが使われます）。
-							汎用属性のBotはこの設定を使わず、Bot設定の「LLM機能」にある Bot 専用のキーとモデルで応答します。
-						</p>
-						<p class="description-text">Web アプリ（PWA）の設定にある「使用モデル」も、この設定と同じです。</p>
-						<form onsubmit={saveGemini} style="display: flex; flex-direction: column; gap: 12px; margin-top: 16px;">
+						<form onsubmit={saveGemini} class="ai-form">
 							<div class="form-group">
-								<label for="account-llm-provider">AIプロバイダ</label>
-								<select id="account-llm-provider" bind:value={llmProvider}><option value="gemini">Google Gemini</option></select>
+								<div class="label-row">
+									<label for="account-llm-provider">AIプロバイダ・モデル</label>
+									<HelpTip id="account-ai-help" label="この設定が使われるBot">
+										秘書属性のBotは、話しかけた人のこの API キーとモデルで応答します（共有されたBotでも、各自のキーが使われます）。
+										汎用属性のBotはこの設定を使わず、Bot設定の「LLM機能」にある Bot 専用のキーとモデルで応答します。
+										Web アプリ（PWA）の設定にある「使用モデル」も、この設定と同じです。
+									</HelpTip>
+								</div>
+								<div class="joined-field">
+									<InlineSelect
+										id="account-llm-provider"
+										options={PROVIDER_OPTIONS}
+										bind:value={llmProvider}
+									/>
+									<span class="divider" aria-hidden="true"></span>
+									<InlineSelect
+										id="gemini-model-select"
+										class="model-select"
+										ariaLabel="モデル"
+										options={modelOptions}
+										bind:value={geminiModel}
+									/>
+								</div>
 							</div>
-							<div class="form-group" style="margin-bottom: 12px;">
+							<div class="form-group">
 								<label for="gemini-api-key">Gemini API Key</label>
-								<input
-									type="password"
+								<SecretInput
 									id="gemini-api-key"
 									placeholder="APIキーを変更する場合は入力してください (マスク表示中)"
-									autocomplete="new-password"
 									bind:value={geminiApiKey}
 								/>
-							</div>
-							<div class="form-group" style="margin-bottom: 12px;">
-								<label for="gemini-model-select">Gemini モデル</label>
-								<select id="gemini-model-select" required bind:value={geminiModel}>
-									{#each llmModels as name (name)}<option value={name}>{name}</option>{/each}
-								</select>
 							</div>
 							<button type="submit" disabled={!llmLoaded} class="btn btn-primary">AI 設定を保存</button>
 						</form>
@@ -304,6 +321,27 @@ async function downloadPackage(e: SubmitEvent): Promise<void> {
 	}
 	.account-card {
 		margin-top: 16px;
+	}
+	.ai-form {
+		display: flex;
+		flex-direction: column;
+		gap: 12px;
+	}
+	/* ラベルの右に ? を並べる。.form-group label の下余白はこの行で取る */
+	.label-row {
+		display: flex;
+		align-items: center;
+		gap: 4px;
+		margin-bottom: 8px;
+	}
+	.label-row label {
+		margin: 0;
+		line-height: 1;
+	}
+	/* プロバイダは本来の幅、モデルは残りいっぱい */
+	.ai-form :global(.model-select) {
+		flex: 1;
+		min-width: 0;
 	}
 	.package-form {
 		display: flex;

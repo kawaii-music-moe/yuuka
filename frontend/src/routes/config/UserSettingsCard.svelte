@@ -8,6 +8,7 @@ import { ApiError } from "$lib/api/client";
 import { settingsApi } from "$lib/api/services";
 import { Button } from "$lib/components/ui";
 import { pushToast } from "$lib/stores/toast";
+import TargetField from "../delivery/TargetField.svelte";
 
 let loaded = $state(false);
 let richReply = $state(true);
@@ -73,20 +74,14 @@ async function submit(e: SubmitEvent) {
 				<input type="number" id="user-remind-default" min="0" placeholder="10" bind:value={remindDefault} />
 			</div>
 		</div>
-		<div class="form-row">
-			<div class="form-group">
-				<label for="user-notify-type">通知先</label>
-				<select id="user-notify-type" bind:value={notifyType}>
-					<option value="dm">DM</option>
-					<option value="channel">チャンネル</option>
-				</select>
-			</div>
-			{#if notifyType === "channel"}
-				<div class="form-group">
-					<label for="user-notify-id">通知先チャンネルID</label>
-					<input type="text" id="user-notify-id" placeholder="例: 123456789012345678" bind:value={notifyId} />
-				</div>
-			{/if}
+		<div class="form-group">
+			<label for="user-notify-type">通知先</label>
+			<TargetField
+				id="user-notify-type"
+				idInputId="user-notify-id"
+				bind:type={notifyType}
+				bind:targetId={notifyId}
+			/>
 		</div>
 		<div class="form-group checkbox-inline">
 			<input type="checkbox" id="user-rich-reply" bind:checked={richReply} />
