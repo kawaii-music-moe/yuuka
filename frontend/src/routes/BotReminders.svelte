@@ -210,7 +210,7 @@ async function onCancel(id: number) {
 
 		<!-- 一覧 -->
 		<div class="action-column card">
-			<div class="column-header">
+			<div class="column-header action-right">
 				<h3>
 					<span class="material-symbols-outlined header-icon-symbol"
 						>notifications</span
@@ -241,10 +241,16 @@ async function onCancel(id: number) {
 	.picker-input {
 		cursor: pointer;
 	}
+	/* 中身が長くても段の幅を広げない（grid の 1fr は既定で中身の幅より縮まない） */
+	.action-column {
+		min-width: 0;
+	}
+	/* 見出しの並びの右端に置く */
 	.reminders-showall-group {
 		display: flex;
 		align-items: center;
 		gap: 8px;
+		margin-left: auto;
 	}
 	.reminders-showall-group label {
 		margin: 0;
@@ -258,8 +264,10 @@ async function onCancel(id: number) {
 		flex-direction: column;
 		gap: 10px;
 		max-height: 560px;
+		overflow-x: hidden;
 		overflow-y: auto;
-		padding-right: 4px;
-		margin-top: 12px;
+		/* .card-item は左右に 12px はみ出す（margin: 0 -12px）ので、その分を枠に含めて横スクロールを出さない */
+		margin: 12px -12px 0;
+		padding: 0 12px;
 	}
 </style>

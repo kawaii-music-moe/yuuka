@@ -15,12 +15,12 @@ export function reminderStatusLabel(status: string): string {
 	}
 }
 
-/** 送信先の表示テキスト（📢 チャンネル / 📩 DM）。 */
+/** 送信先の表示テキスト（チャンネル: ID / DM）。アイコンはカード側で付ける。 */
 export function reminderTargetText(rem: ReminderRecord): string {
 	if (rem.target_type === "channel") {
-		return rem.target_id ? `📢 チャンネル: ${rem.target_id}` : "📢 チャンネル";
+		return rem.target_id ? `チャンネル: ${rem.target_id}` : "チャンネル";
 	}
-	return "📩 DM";
+	return "DM";
 }
 
 /**

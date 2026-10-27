@@ -1,6 +1,7 @@
 <script lang="ts">
 // 単一リマインダーカード（旧 app.js fetchRemindersList のカード生成を移植）。
 import type { ReminderRecord } from "$lib/api/types";
+import { Icon } from "$lib/components/ui";
 import { reminderStatusLabel, reminderTargetText } from "./reminderUtils";
 
 interface Props {
@@ -20,11 +21,17 @@ let { reminder, oncancel }: Props = $props();
 			>
 		</div>
 		<div class="reminder-meta-row">
-			<span>⏰ {reminder.trigger_at}</span>
+			<span class="reminder-meta"><Icon name="alarm" size={14} />{reminder.trigger_at}</span>
 			{#if reminder.repeat_rule}
-				<span class="reminder-repeat">🔁 {reminder.repeat_rule}</span>
+				<span class="reminder-meta reminder-repeat"
+					><Icon name="repeat" size={14} />{reminder.repeat_rule}</span
+				>
 			{/if}
-			<span>{reminderTargetText(reminder)}</span>
+			<span class="reminder-meta"
+				><Icon name={reminder.target_type === "channel" ? "tag" : "mail"} size={14} />{reminderTargetText(
+					reminder,
+				)}</span
+			>
 		</div>
 	</div>
 
@@ -56,15 +63,28 @@ let { reminder, oncancel }: Props = $props();
 		gap: 8px;
 		flex-wrap: wrap;
 	}
+	/* 空白のない長い文や ID でも、カードの幅を超えずに折り返す */
 	.reminder-msg {
+		min-width: 0;
 		font-size: 0.92rem;
+		overflow-wrap: anywhere;
 	}
 	.reminder-meta-row {
 		font-size: 0.78rem;
 		color: var(--color-zinc-muted);
 		display: flex;
-		gap: 12px;
+		gap: 4px 12px;
 		flex-wrap: wrap;
+	}
+	.reminder-meta {
+		display: inline-flex;
+		align-items: center;
+		gap: 4px;
+		min-width: 0;
+		overflow-wrap: anywhere;
+	}
+	.reminder-meta :global(.material-symbols-outlined) {
+		flex-shrink: 0;
 	}
 	.reminder-repeat {
 		font-family: var(--font-family-mono);
