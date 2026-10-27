@@ -32,12 +32,6 @@ let createOpen = $state(false);
 let newBotName = $state("");
 let newBotPreset = $state("secretary");
 
-// プロフィール編集モーダル
-let editOpen = $state(false);
-let editBotId = $state("");
-let editBotName = $state("");
-let editBotAvatar = $state("");
-
 function reportError(e: unknown): void {
 	pushToast(
 		e instanceof ApiError ? e.message : "エラーが発生しました",
@@ -133,29 +127,6 @@ async function toggleRuntime(bot: BotView): Promise<void> {
 async function syncDiscord(bot: BotView): Promise<void> {
 	try {
 		await botApi.syncDiscord(bot.id);
-		await loadBots();
-	} catch (e) {
-		reportError(e);
-	}
-}
-
-// ── プロフィール編集モーダル ──
-function openEdit(bot: BotView): void {
-	editBotId = bot.id;
-	editBotName = displayName(bot);
-	editBotAvatar = bot.discord_avatar_url || "";
-	editOpen = true;
-}
-
-async function saveEdit(e: SubmitEvent): Promise<void> {
-	e.preventDefault();
-	try {
-		await botApi.updateProfile({
-			botId: editBotId,
-			name: editBotName.trim(),
-			avatarUrl: editBotAvatar.trim() || null,
-		});
-		editOpen = false;
 		await loadBots();
 	} catch (e) {
 		reportError(e);
@@ -329,17 +300,6 @@ let sidebarOpen = $state(false);
 								{#if !isDefaultBot(bot.id)}
 									<button
 										type="button"
-										class="btn-sync-discord"
-										title="名前・アイコンを編集"
-										onclick={(e) => {
-											e.stopPropagation();
-											openEdit(bot);
-										}}
-									>
-										<Icon name="edit" size={15} />
-									</button>
-									<button
-										type="button"
 										class="btn-delete-bot-inline"
 										title="Botを削除"
 										onclick={(e) => {
@@ -406,25 +366,5 @@ let sidebarOpen = $state(false);
 			>
 		</div>
 		<button type="submit" class="btn btn-primary btn-block">作成する</button>
-	</form>
-</Modal>
-
-<!-- Bot プロフィール編集モーダル -->
-<Modal bind:open={editOpen} title="Botプロフィールの編集">
-	<form onsubmit={saveEdit}>
-		<div class="form-group">
-			<label for="edit-bot-profile-name">表示名 *</label>
-			<input type="text" id="edit-bot-profile-name" required bind:value={editBotName} />
-		</div>
-		<div class="form-group">
-			<label for="edit-bot-profile-avatar">アバターURL</label>
-			<input
-				type="text"
-				id="edit-bot-profile-avatar"
-				placeholder="https://..."
-				bind:value={editBotAvatar}
-			/>
-		</div>
-		<button type="submit" class="btn btn-primary btn-block">保存する</button>
 	</form>
 </Modal>
