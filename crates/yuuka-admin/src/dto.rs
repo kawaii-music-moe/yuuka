@@ -69,6 +69,9 @@ pub struct AdminStats {
     pub total_bots: i64,
     #[serde(rename = "suspendedBots")]
     pub suspended_bots: i64,
+    /// システムデフォルト Bot のトークンが登録済みか（トークン本体は返さない）。
+    #[serde(rename = "defaultBotTokenSet")]
+    pub default_bot_token_set: bool,
 }
 
 /// `GET /api/admin/users` の 1 行（Node `listAllUsers`＝秘密値を含まない列のみ）。

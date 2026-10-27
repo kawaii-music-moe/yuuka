@@ -4572,3 +4572,11 @@ details.admin-section[open] > summary > .admin-section-title::before {
 	flex-wrap: wrap;
 	gap: 6px;
 }
+
+/* 管理画面: デフォルト Bot トークンが登録済みのときにラベル横へ出すチェック。 */
+.admin-token-set {
+	display: inline-flex;
+	vertical-align: middle;
+	margin-left: 6px;
+	color: var(--color-primary);
+}

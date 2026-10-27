@@ -27,6 +27,12 @@ pub async fn stats(db: &Db) -> Result<AdminStats, DbError> {
                 total_bots: count("SELECT COUNT(*) FROM bots").map_err(map_sqlite)?,
                 suspended_bots: count("SELECT COUNT(*) FROM bots WHERE suspended = 1")
                     .map_err(map_sqlite)?,
+                default_bot_token_set: count(
+                    "SELECT COUNT(*) FROM bots WHERE id = 'system_default' \
+                     AND discord_token_encrypted IS NOT NULL AND discord_token_encrypted != ''",
+                )
+                .map_err(map_sqlite)?
+                    > 0,
             })
         })
         .await
@@ -433,6 +439,7 @@ mod tests {
         assert_eq!(s.total_users, 1);
         assert_eq!(s.total_bots, 2);
         assert_eq!(s.suspended_bots, 1);
+        assert!(s.default_bot_token_set);
     }
 
     #[tokio::test]

@@ -237,6 +237,7 @@ async function submitDefaultBotToken(e: SubmitEvent) {
 	try {
 		await adminApi.setDefaultBotToken({ token });
 		defaultBotToken = "";
+		if (stats) stats.defaultBotTokenSet = true;
 		pushToast("システムデフォルト Bot のトークンを更新しました！", "success");
 	} catch (err) {
 		reportError(err);
@@ -315,7 +316,14 @@ function botStatus(bot: AdminBotView): { label: string; tone: string } {
 	{#if section === "default-bot"}
 		<form class="admin-form-top" onsubmit={submitDefaultBotToken}>
 			<div class="form-group">
-				<label for="admin-default-bot-token">デフォルト Bot トークン *</label>
+				<label for="admin-default-bot-token"
+					>デフォルト Bot トークン *{#if stats?.defaultBotTokenSet}<span
+							class="admin-token-set"
+							role="img"
+							aria-label="登録済み"
+							title="登録済み"><Icon name="check_circle" size={16} /></span
+						>{/if}</label
+				>
 				<div class="admin-inline-form">
 					<SecretInput
 						id="admin-default-bot-token"

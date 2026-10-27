@@ -423,6 +423,8 @@ export interface AdminStats {
 	totalUsers: number;
 	totalBots: number;
 	suspendedBots: number;
+	/** システムデフォルト Bot のトークンが登録済みか */
+	defaultBotTokenSet: boolean;
 }
 /** GET /api/admin/bots が返す Bot 行（BotView とは別形状） */
 export interface AdminBotView {
