@@ -1,8 +1,9 @@
 <script lang="ts">
 // リソース許可 UI（旧 intGrantChips + wireIntGrantChips を {#each} + onclick/onchange 直結へ）。
-// 許可済み Bot は「× で解除できるチップ」、未許可 Bot は <select> から選んで追加する。
+// 許可済み Bot は「× で解除できるチップ」、未許可 Bot は ＋ から開く一覧で選んで追加する。
 // 手動 innerHTML/intEsc は不要（Svelte 自動エスケープ）。トグルは親の ontoggle に委譲。
 import type { IntegratedBotView } from "$lib/api/types";
+import { Select } from "$lib/components/ui";
 
 interface Props {
 	/** 全 Bot 一覧（overview.bots） */
@@ -17,13 +18,15 @@ let { bots, grantedIds, ontoggle }: Props = $props();
 
 const granted = $derived(bots.filter((b) => grantedIds.has(b.id)));
 const available = $derived(bots.filter((b) => !grantedIds.has(b.id)));
+const availableOptions = $derived(
+	available.map((b) => ({ value: b.id, label: b.name })),
+);
+// 選んだら許可して、＋ の表示に戻す
+let picked = $state("");
 
-function onSelect(e: Event) {
-	const sel = e.currentTarget as HTMLSelectElement;
-	const botId = sel.value;
-	if (!botId) return;
-	ontoggle(botId, true);
-	sel.value = "";
+function onSelect(botId: string) {
+	picked = "";
+	if (botId) ontoggle(botId, true);
 }
 </script>
 
@@ -46,17 +49,16 @@ function onSelect(e: Event) {
 	{/if}
 
 	{#if available.length}
-		<select
+		<Select
 			class="int-chip-add"
 			title="Botを追加"
-			aria-label="許可するBotを追加"
+			ariaLabel="許可するBotを追加"
+			options={availableOptions}
+			bind:value={picked}
 			onchange={onSelect}
 		>
-			<option value="">＋</option>
-			{#each available as b (b.id)}
-				<option value={b.id}>{b.name}</option>
-			{/each}
-		</select>
+			{#snippet trigger()}<span aria-hidden="true">＋</span>{/snippet}
+		</Select>
 	{/if}
 </div>
 
@@ -91,15 +93,16 @@ function onSelect(e: Event) {
 		font-size: 0.75rem;
 		color: var(--text-secondary, #71717a);
 	}
-	.int-chip-add {
-		font-size: 1rem;
-		line-height: 1;
-		width: auto;
-		padding: 2px 6px;
+	/* 入力欄の見た目ではなく、チップの横に置く小さな ＋ ボタンにする */
+	.int-grant-chips :global(.int-chip-add),
+	.int-grant-chips :global(.int-chip-add:focus-within) {
 		border: 0;
 		background: transparent;
+	}
+	.int-grant-chips :global(.int-chip-add .trigger) {
+		padding: 2px 6px;
+		font-size: 1rem;
+		line-height: 1;
 		color: var(--text-secondary, #a1a1aa);
-		cursor: pointer;
-		appearance: none;
 	}
 </style>

@@ -4,9 +4,9 @@
 // 設定済みの上限は表示しない（進捗は HUD のカテゴリー別バーで見る）。
 // 保存の API は親が担当（子は API を叩かない）。追加は onadd で親へ委譲する。
 
-import { Button, Modal } from "$lib/components/ui";
+import { Button, Modal, Select } from "$lib/components/ui";
 import { pushToast } from "$lib/stores/toast";
-import { EXPENSE_CATEGORIES } from "./expenseUtils";
+import { EXPENSE_CATEGORIES, EXPENSE_CATEGORY_OPTIONS } from "./expenseUtils";
 
 interface Props {
 	open?: boolean;
@@ -46,19 +46,18 @@ function submit(e: SubmitEvent) {
 		<div class="form-row">
 			<div class="form-group">
 				<label for="budget-category">カテゴリー</label>
-				<select id="budget-category" bind:value={category}>
-					{#each EXPENSE_CATEGORIES as cat (cat)}
-						<option value={cat}>{cat}</option>
-					{/each}
-				</select>
+				<Select
+					id="budget-category"
+					options={EXPENSE_CATEGORY_OPTIONS}
+					bind:value={category}
+				/>
 			</div>
 			<div class="form-group">
 				<label for="budget-limit-amount">上限金額 (円)</label>
 				<input
 					type="number"
 					id="budget-limit-amount"
-					class="no-spin"
-					placeholder="50000"
+										placeholder="50000"
 					min="1"
 					bind:value={limitAmount}
 				/>
@@ -73,14 +72,5 @@ function submit(e: SubmitEvent) {
 		display: flex;
 		flex-direction: column;
 		gap: 12px;
-	}
-	/* ブラウザ標準の増減ボタン（▲▼）を出さない */
-	.no-spin {
-		appearance: textfield;
-	}
-	.no-spin::-webkit-outer-spin-button,
-	.no-spin::-webkit-inner-spin-button {
-		appearance: none;
-		margin: 0;
 	}
 </style>

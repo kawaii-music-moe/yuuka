@@ -44,6 +44,14 @@
 	--border-divider: rgba(255, 255, 255, 0.12);
 	--border-focus: var(--color-primary);
 	--radius: 4px;
+	/* 入力欄の背景。フォーカス時は、ダークでは白・ライトでは黒を 4% 混ぜて周りから浮かせる */
+	--field-bg: var(--surface-1dp);
+	--field-focus-tint: #fff;
+	--field-bg-focus: color-mix(
+		in srgb,
+		var(--field-bg),
+		var(--field-focus-tint) 4%
+	);
 
 	--color-white: rgba(255, 255, 255, 0.87);
 	--color-zinc-light: rgba(255, 255, 255, 0.6);
@@ -107,6 +115,7 @@
 	--border-matte: rgba(0, 0, 0, 0.12);
 	--border-divider: rgba(0, 0, 0, 0.12);
 	--border-focus: var(--color-primary);
+	--field-focus-tint: #000;
 
 	--color-white: rgba(0, 0, 0, 0.87);
 	--color-zinc-light: rgba(0, 0, 0, 0.6);
@@ -779,32 +788,9 @@ textarea {
 	font-size: 0.9rem;
 	color: var(--text-primary);
 }
-/* Discord / Playbook / Webhook ページの入力欄は枠線・フォーカスリングなし（Bot登録名の入力欄と同じ見た目）。 */
-.tab-view.discord-tab input,
-.tab-view.discord-tab input:focus,
-.tab-view.discord-tab select,
-.tab-view.discord-tab select:focus,
-.tab-view.playbooks-tab input,
-.tab-view.playbooks-tab input:focus,
-.tab-view.playbooks-tab select,
-.tab-view.playbooks-tab select:focus,
-.tab-view.playbooks-tab textarea,
-.tab-view.playbooks-tab textarea:focus,
-.tab-view.webhooks-tab input,
-.tab-view.webhooks-tab input:focus,
-.tab-view.webhooks-tab textarea,
-.tab-view.webhooks-tab textarea:focus {
-	border: 0;
-	outline: none;
-	box-shadow: none;
-}
 /* ギルド選択と、チャンネル・メンバー・ロールの入力を 1 つの枠（.joined-field）に並べる。 */
 .discord-tab .joined-field {
 	flex: 1;
-}
-.discord-tab .joined-field select,
-.discord-tab .joined-field input {
-	background: transparent;
 }
 .discord-tab .joined-field .guild-select {
 	flex-shrink: 0;
@@ -842,27 +828,32 @@ textarea {
 	color: var(--color-zinc-muted);
 }
 
-/* Base input, select, textarea styling */
+/* Base input, select, textarea styling
+   外枠は通常時なし（透明の 1px で場所だけ取る）。フォーカス時に 1px の枠を出し、背景を少し浮かせる。 */
 input[type="text"],
 input[type="password"],
 input[type="number"],
 input[type="url"],
 input[type="email"],
+input[type="search"],
+input[type="tel"],
 input[type="date"],
 input[type="time"],
 input[type="datetime-local"],
+input[type="month"],
 select,
 textarea {
 	padding: 12px;
-	background-color: var(--surface-1dp);
-	border: 1px solid var(--border-divider);
+	background-color: var(--field-bg);
+	border: 1px solid transparent;
 	border-radius: 4px;
 	outline: none;
+	box-shadow: none;
 	font-size: 0.95rem;
 	color: var(--text-high);
 	transition:
 		border-color 0.15s ease,
-		box-shadow 0.15s ease;
+		background-color 0.15s ease;
 }
 
 input[type="text"]:focus,
@@ -870,13 +861,42 @@ input[type="password"]:focus,
 input[type="number"]:focus,
 input[type="url"]:focus,
 input[type="email"]:focus,
+input[type="search"]:focus,
+input[type="tel"]:focus,
 input[type="date"]:focus,
 input[type="time"]:focus,
 input[type="datetime-local"]:focus,
+input[type="month"]:focus,
 select:focus,
 textarea:focus {
-	border-color: var(--color-primary);
-	box-shadow: 0 0 0 1px var(--color-primary);
+	border-color: var(--border-focus);
+	background-color: var(--field-bg-focus);
+	box-shadow: none;
+}
+
+/* 数値欄のブラウザ標準の増減ボタン（▲▼）を出さない（Chrome / Safari / Firefox） */
+input[type="number"] {
+	appearance: textfield;
+	-moz-appearance: textfield;
+}
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button {
+	-webkit-appearance: none;
+	margin: 0;
+}
+
+/* 日付・時刻の欄は文字では打たせず、押すとピッカーを開く（lib/datePicker.ts） */
+input[type="date"],
+input[type="time"],
+input[type="datetime-local"],
+input[type="month"] {
+	cursor: pointer;
+}
+input[type="date"]::-webkit-datetime-edit,
+input[type="time"]::-webkit-datetime-edit,
+input[type="datetime-local"]::-webkit-datetime-edit,
+input[type="month"]::-webkit-datetime-edit {
+	cursor: pointer;
 }
 
 .form-group input,
@@ -4340,16 +4360,6 @@ details.admin-section[open] > summary > .admin-section-title::before {
    ファイル末尾に置き、同じ詳細度の基本スタイル（input[type="text"] や .card-item）より後に効かせる。
    ============================================================================== */
 
-/* 枠線・フォーカスリングなしの入力欄（Bot登録名などのカード）。内側の input / select に効かせる。 */
-.plain-fields input,
-.plain-fields input:focus,
-.plain-fields select,
-.plain-fields select:focus {
-	border: 0;
-	outline: none;
-	box-shadow: none;
-}
-
 /* 入力欄の右に置くアイコンだけのボタン（✓ 保存・＋ 追加・開く）。 */
 .icon-action {
 	display: flex;
@@ -4495,12 +4505,55 @@ details.admin-section[open] > summary > .admin-section-title::before {
 	border-left-color: var(--color-red, #ef4444);
 }
 
-/* プルダウンと入力欄を 1 つの枠に並べる。間の縦線は .divider。 */
+/* プルダウンと入力欄を 1 つの枠に並べる。間の縦線は .divider。
+   枠は通常の入力欄と同じく、どこかにフォーカスがあるとき全体を 1px の枠で囲み、背景を浮かせる。 */
 .joined-field {
 	display: flex;
 	min-width: 0;
-	background-color: var(--surface-1dp);
+	background-color: var(--field-bg);
+	border: 1px solid transparent;
 	border-radius: 4px;
+	transition:
+		border-color 0.15s ease,
+		background-color 0.15s ease;
+}
+.joined-field:focus-within {
+	border-color: var(--border-focus);
+	background-color: var(--field-bg-focus);
+}
+/* 中の入力欄・プルダウンは枠と背景を持たない（外側の .joined-field が受け持つ） */
+.joined-field input,
+.joined-field input:focus,
+.joined-field select,
+.joined-field select:focus,
+.joined-field textarea,
+.joined-field textarea:focus,
+.joined-field .inline-select,
+.joined-field .inline-select:focus-within {
+	border: 0;
+	background: transparent;
+	box-shadow: none;
+}
+.joined-field input {
+	flex: 1;
+	min-width: 0;
+}
+
+/* 独自のプルダウン（Select）を単独で置いたときは、通常の入力欄と同じ見た目にする */
+.inline-select {
+	background-color: var(--field-bg);
+	border: 1px solid transparent;
+	border-radius: 4px;
+	transition:
+		border-color 0.15s ease,
+		background-color 0.15s ease;
+}
+.inline-select:focus-within {
+	border-color: var(--border-focus);
+	background-color: var(--field-bg-focus);
+}
+.form-group > .inline-select {
+	width: 100%;
 }
 .joined-field .divider {
 	width: 1px;
@@ -4508,6 +4561,19 @@ details.admin-section[open] > summary > .admin-section-title::before {
 	/* 左はプルダウンの ▼ との間隔 */
 	margin: 8px 0 8px 12px;
 	background-color: var(--border-divider);
+}
+
+/* ラベルの横に ? ヘルプや登録済みチェックを並べる行 */
+.label-row {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	margin-bottom: 8px;
+}
+.label-row label,
+.form-group .label-row label {
+	margin: 0;
+	line-height: 1;
 }
 
 /* 追加・編集フォーム（Playbook・Webhook・リマインダー）の縦並び */
@@ -4573,8 +4639,8 @@ details.admin-section[open] > summary > .admin-section-title::before {
 	gap: 6px;
 }
 
-/* 管理画面: デフォルト Bot トークンが登録済みのときにラベル横へ出すチェック。 */
-.admin-token-set {
+/* 伏せ字の値（トークン・API キー）が登録済みのときにラベル横へ出すチェック（SecretSetMark）。 */
+.secret-set-mark {
 	display: inline-flex;
 	vertical-align: middle;
 	margin-left: 6px;

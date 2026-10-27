@@ -52,6 +52,8 @@ export interface DiscordTokenResponse {
 	success: boolean;
 	message?: string;
 	tokenMasked?: string;
+	/** トークンが登録済みか（本体は返さない） */
+	hasToken?: boolean;
 }
 
 // ── /api/bots（属性カードが現在の Bot を探す） ───────────────────────────────
@@ -231,6 +233,16 @@ export interface CredentialsResp {
 export function guildLabel(guilds: AssistantGuild[], guildId: string): string {
 	const g = guilds.find((x) => x.guild_id === guildId);
 	return g?.guild_name ? g.guild_name : `ギルド ${guildId}`;
+}
+
+/** ギルドを選ぶプルダウン（Select）の選択肢 */
+export function guildOptions(
+	guilds: AssistantGuild[],
+): { value: string; label: string }[] {
+	return guilds.map((g) => ({
+		value: g.guild_id,
+		label: g.guild_name ?? `ギルド ${g.guild_id}`,
+	}));
 }
 
 /** owner/Admin 判定用のヘルパ。activeBot には user_id が無いため /api/bots の結果と突き合わせる。 */

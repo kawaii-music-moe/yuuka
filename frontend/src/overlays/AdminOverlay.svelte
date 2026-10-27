@@ -19,7 +19,13 @@ import type {
 	AuditLogEntry,
 	PublicPersonaView,
 } from "$lib/api/types";
-import { Button, confirmDialog, Icon, SecretInput } from "$lib/components/ui";
+import {
+	Button,
+	confirmDialog,
+	Icon,
+	SecretInput,
+	SecretSetMark,
+} from "$lib/components/ui";
 import { ADMIN_SECTIONS } from "$lib/managementSections";
 import { currentUser } from "$lib/stores/session";
 import { pushToast } from "$lib/stores/toast";
@@ -317,12 +323,7 @@ function botStatus(bot: AdminBotView): { label: string; tone: string } {
 		<form class="admin-form-top" onsubmit={submitDefaultBotToken}>
 			<div class="form-group">
 				<label for="admin-default-bot-token"
-					>デフォルト Bot トークン *{#if stats?.defaultBotTokenSet}<span
-							class="admin-token-set"
-							role="img"
-							aria-label="登録済み"
-							title="登録済み"><Icon name="check_circle" size={16} /></span
-						>{/if}</label
+					>デフォルト Bot トークン *<SecretSetMark set={stats?.defaultBotTokenSet} /></label
 				>
 				<div class="admin-inline-form">
 					<SecretInput

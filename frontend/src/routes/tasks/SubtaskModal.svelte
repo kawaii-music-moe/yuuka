@@ -31,16 +31,6 @@ $effect(() => {
 	dueDate = "";
 });
 
-// 日付は欄のどこを押してもブラウザ標準の日付ピッカーを開く（未対応ブラウザでは何もしない）。
-function openPicker(e: MouseEvent) {
-	const input = e.currentTarget as HTMLInputElement;
-	try {
-		input.showPicker?.();
-	} catch {
-		// ユーザー操作扱いにならない等で開けないときは、通常の入力欄のままにする
-	}
-}
-
 function submit(e: SubmitEvent) {
 	e.preventDefault();
 	const trimmed = title.trim();
@@ -68,9 +58,7 @@ function submit(e: SubmitEvent) {
 				<input
 					type="date"
 					id="subtask-start"
-					class="picker-input"
 					bind:value={startDate}
-					onclick={openPicker}
 				/>
 			</div>
 			<div class="form-group">
@@ -78,9 +66,7 @@ function submit(e: SubmitEvent) {
 				<input
 					type="date"
 					id="subtask-due"
-					class="picker-input"
 					bind:value={dueDate}
-					onclick={openPicker}
 				/>
 			</div>
 		</div>
@@ -89,9 +75,6 @@ function submit(e: SubmitEvent) {
 </Modal>
 
 <style>
-	.picker-input {
-		cursor: pointer;
-	}
 	.subtask-parent-label {
 		font-size: 0.85rem;
 		opacity: 0.8;

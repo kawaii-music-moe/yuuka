@@ -1,15 +1,31 @@
+<script lang="ts" module>
+export interface SelectOption<T extends string = string> {
+	value: T;
+	label: string;
+	/** 表示するが選べない */
+	disabled?: boolean;
+}
+</script>
+
 <script lang="ts" generics="T extends string">
-// 枠つき入力（joined-field）の中に置くプルダウン。見た目は Discord 設定の候補リスト
+// ブラウザ標準の <select> の代わりに使うプルダウン。見た目は Discord 設定の候補リスト
 // （OptionCombobox）に合わせた独自実装で、ブラウザ標準の白い候補表示を出さない。
+// 単独で置くと通常の入力欄と同じ見た目、枠つき入力（.joined-field）の中では枠・背景なし（styles.css）。
+import type { Snippet } from "svelte";
 
 interface Props {
-	id: string;
-	/** `disabled` の選択肢は表示するが選べない */
-	options: { value: T; label: string; disabled?: boolean }[];
+	id?: string;
+	options: SelectOption<T>[];
 	value: T;
 	class?: string;
 	/** 読み上げ名（label 要素と関連付けない場合） */
 	ariaLabel?: string;
+	/** value がどの選択肢にも当たらないときに出す文言 */
+	placeholder?: string;
+	disabled?: boolean;
+	title?: string;
+	/** トリガーの中身を差し替える（＋ボタンから選ぶメニューなど）。未指定なら選択中の文言と ▼ */
+	trigger?: Snippet;
 	/** ユーザー操作で値が変わったときに呼ぶ */
 	onchange?: (value: T) => void;
 }
@@ -19,8 +35,15 @@ let {
 	value = $bindable(),
 	class: className = "",
 	ariaLabel,
+	placeholder = "",
+	disabled = false,
+	title,
+	trigger,
 	onchange,
 }: Props = $props();
+
+const uid = $props.id();
+const selected = $derived(options.find((o) => o.value === value));
 
 function choose(v: T) {
 	value = v;
@@ -72,7 +95,7 @@ function portal(node: HTMLElement) {
 		},
 	};
 }
-const listId = $derived(`${id}-list`);
+const listId = $derived(`${id ?? uid}-list`);
 
 function onkeydown(e: KeyboardEvent) {
 	if (e.key === "ArrowDown" || e.key === "ArrowUp") {
@@ -90,11 +113,13 @@ function onkeydown(e: KeyboardEvent) {
 }
 </script>
 
-<div class="inline-select {className}" bind:this={root}>
+<div class="inline-select {className}" class:disabled bind:this={root}>
 	<button
 		{id}
 		type="button"
 		class="trigger"
+		{disabled}
+		{title}
 		aria-label={ariaLabel}
 		aria-haspopup="listbox"
 		aria-expanded={open}
@@ -103,8 +128,12 @@ function onkeydown(e: KeyboardEvent) {
 		onblur={() => (open = false)}
 		{onkeydown}
 	>
-		<span>{options.find((o) => o.value === value)?.label}</span>
-		<span class="material-symbols-outlined chevron" aria-hidden="true">expand_more</span>
+		{#if trigger}
+			{@render trigger()}
+		{:else}
+			<span class="label" class:placeholder={!selected}>{selected?.label ?? placeholder}</span>
+			<span class="material-symbols-outlined chevron" aria-hidden="true">expand_more</span>
+		{/if}
 	</button>
 	{#if open}
 		<ul
@@ -145,6 +174,7 @@ function onkeydown(e: KeyboardEvent) {
 	.trigger {
 		display: flex;
 		flex: 1;
+		min-width: 0;
 		align-items: center;
 		justify-content: space-between;
 		gap: 8px;
@@ -155,10 +185,28 @@ function onkeydown(e: KeyboardEvent) {
 		font: inherit;
 		font-size: 0.95rem;
 		white-space: nowrap;
+		text-align: left;
 		cursor: pointer;
+	}
+	.trigger:disabled {
+		color: var(--text-disabled);
+		cursor: default;
+	}
+	/* 文字入力欄（line-height: normal の 1 行）と同じ高さにそろえる */
+	.label {
+		min-width: 0;
+		line-height: 1.2;
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+	.label.placeholder {
+		color: var(--text-secondary);
 	}
 	.chevron {
 		font-size: 20px;
+		line-height: 1;
+		/* アイコンで行が高くならないよう、上下にはみ出させる */
+		margin-block: -2px;
 		color: var(--text-secondary);
 	}
 	.option-list {

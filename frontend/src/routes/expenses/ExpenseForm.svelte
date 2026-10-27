@@ -3,9 +3,13 @@
 // 保存は onsave で親へ委譲。time は送信時に現在時刻を付与。
 
 import type { ExpenseType } from "$lib/api/types";
-import { Button } from "$lib/components/ui";
-import InlineSelect from "../delivery/InlineSelect.svelte";
-import { EXPENSE_CATEGORIES, nowTime, todayIso } from "./expenseUtils";
+import { Button, Select } from "$lib/components/ui";
+import {
+	EXPENSE_CATEGORIES,
+	EXPENSE_CATEGORY_OPTIONS,
+	nowTime,
+	todayIso,
+} from "./expenseUtils";
 
 interface Props {
 	onsave: (payload: {
@@ -24,26 +28,12 @@ const TYPE_OPTIONS: { value: ExpenseType; label: string }[] = [
 	{ value: "expense", label: "支出" },
 	{ value: "income", label: "収入" },
 ];
-const CATEGORY_OPTIONS = EXPENSE_CATEGORIES.map((c) => ({
-	value: c,
-	label: c,
-}));
 
 let type = $state<ExpenseType>("expense");
 let amount = $state<number | null>(null);
 let category = $state<string>(EXPENSE_CATEGORIES[0]);
 let description = $state("");
 let date = $state(todayIso());
-
-// 日付は欄のどこを押してもブラウザ標準の日付ピッカーを開く（未対応ブラウザでは何もしない）。
-function openPicker(e: MouseEvent) {
-	const input = e.currentTarget as HTMLInputElement;
-	try {
-		input.showPicker?.();
-	} catch {
-		// ユーザー操作扱いにならない等で開けないときは、通常の入力欄のままにする
-	}
-}
 
 function submit(e: SubmitEvent) {
 	e.preventDefault();
@@ -80,8 +70,8 @@ export function reset() {
 		<div class="form-row">
 			<div class="form-group">
 				<label for="exp-amount">種別・金額 (円) *</label>
-				<div class="joined-field framed-field amount-field">
-					<InlineSelect
+				<div class="joined-field amount-field">
+					<Select
 						id="exp-type"
 						ariaLabel="種別"
 						options={TYPE_OPTIONS}
@@ -99,14 +89,11 @@ export function reset() {
 			</div>
 			<div class="form-group">
 				<label for="exp-category">カテゴリー *</label>
-				<div class="joined-field framed-field">
-					<InlineSelect
-						id="exp-category"
-						class="category-select"
-						options={CATEGORY_OPTIONS}
-						bind:value={category}
-					/>
-				</div>
+				<Select
+					id="exp-category"
+					options={EXPENSE_CATEGORY_OPTIONS}
+					bind:value={category}
+				/>
 			</div>
 		</div>
 		<div class="form-group">
@@ -123,8 +110,6 @@ export function reset() {
 			<input
 				type="date"
 				id="exp-date"
-				class="picker-input"
-				onclick={openPicker}
 				bind:value={date}
 			/>
 		</div>
@@ -133,38 +118,7 @@ export function reset() {
 </div>
 
 <style>
-	/* このページの他の入力欄と同じく、枠全体に枠線とフォーカスリングを付ける。 */
-	.framed-field {
-		border: 1px solid var(--border-divider);
-		transition:
-			border-color 0.15s ease,
-			box-shadow 0.15s ease;
-	}
-	.framed-field:focus-within {
-		border-color: var(--color-primary);
-		box-shadow: 0 0 0 1px var(--color-primary);
-	}
-	/* カテゴリーは単独のプルダウンなので枠いっぱいに広げる */
-	.framed-field :global(.category-select) {
-		flex: 1;
-	}
-	.amount-field input,
-	.amount-field input:focus {
-		flex: 1;
+	.amount-field input {
 		width: auto;
-		min-width: 0;
-		border: 0;
-		box-shadow: none;
-		background: transparent;
-		/* ブラウザ標準の増減ボタン（▲▼）を出さない */
-		appearance: textfield;
-	}
-	.amount-field input::-webkit-outer-spin-button,
-	.amount-field input::-webkit-inner-spin-button {
-		appearance: none;
-		margin: 0;
-	}
-	.picker-input {
-		cursor: pointer;
 	}
 </style>

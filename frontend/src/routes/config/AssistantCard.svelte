@@ -5,7 +5,12 @@
 
 import { ApiError } from "$lib/api/client";
 import { botAttributeApi } from "$lib/api/services";
-import { confirmDialog, SecretInput } from "$lib/components/ui";
+import {
+	confirmDialog,
+	SecretInput,
+	SecretSetMark,
+	Select,
+} from "$lib/components/ui";
 import { pushToast } from "$lib/stores/toast";
 import type { AssistantConfigResp } from "./configTypes";
 
@@ -18,6 +23,10 @@ let data = $state<AssistantConfigResp | null>(null);
 let geminiKey = $state("");
 let provider = $state("gemini");
 let model = $state("");
+const PROVIDER_OPTIONS = [{ value: "gemini", label: "Google Gemini" }];
+const modelOptions = $derived(
+	(data?.llm_models ?? []).map((m) => ({ value: m, label: m })),
+);
 let savingLlm = $state(false);
 let savingKey = $state(false);
 // 保存済みキーは伏せ字で表示し、入力が変わったときだけ保存できる。
@@ -135,13 +144,13 @@ async function saveKey(e: SubmitEvent) {
 		<label class="field-label" for="bot-llm-provider">LLMプロバイダ</label>
 		<div class="field-row">
 			<div class="field-input">
-				<select
+				<Select
 					id="bot-llm-provider"
+					options={PROVIDER_OPTIONS}
 					bind:value={provider}
 					disabled={!data || savingLlm}
 					onchange={() => saveLlm()}
-					><option value="gemini">Google Gemini</option></select
-				>
+				/>
 			</div>
 			<span class="row-spacer" aria-hidden="true"></span>
 		</div>
@@ -151,14 +160,13 @@ async function saveKey(e: SubmitEvent) {
 		<label class="field-label" for="bot-llm-model">モデル</label>
 		<div class="field-row">
 			<div class="field-input">
-				<select
+				<Select
 					id="bot-llm-model"
+					options={modelOptions}
 					bind:value={model}
 					disabled={!data || savingLlm}
 					onchange={() => saveLlm()}
-				>
-					{#each data?.llm_models ?? [] as name (name)}<option value={name}>{name}</option>{/each}
-				</select>
+				/>
 			</div>
 			<button
 				type="button"
@@ -175,7 +183,7 @@ async function saveKey(e: SubmitEvent) {
 	</div>
 
 	<form class="field" onsubmit={saveKey}>
-		<label class="field-label" for="bot-gemini-key">API キー<span class="required" aria-label="必須">*</span></label>
+		<label class="field-label" for="bot-gemini-key">API キー<span class="required" aria-label="必須">*</span><SecretSetMark set={data?.has_gemini_key} /></label>
 		<div class="field-row">
 			<div class="field-input">
 				<SecretInput
@@ -226,7 +234,7 @@ async function saveKey(e: SubmitEvent) {
 		min-width: 0;
 	}
 	.field-input :global(input),
-	.field-input select {
+	.field-input :global(.inline-select) {
 		width: 100%;
 		box-sizing: border-box;
 	}

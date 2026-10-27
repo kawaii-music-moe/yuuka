@@ -21,7 +21,7 @@ import type {
 	IntegratedBotView,
 	IntegratedGoogleAccountView,
 } from "$lib/api/types";
-import { Button, EmptyState, Icon, TagChip } from "$lib/components/ui";
+import { Button, EmptyState, Icon, Select, TagChip } from "$lib/components/ui";
 import { withBasePath } from "$lib/router";
 import { activeBot } from "$lib/stores/activeBot";
 import { pushToast } from "$lib/stores/toast";
@@ -39,6 +39,15 @@ let toolsById = $state<Record<number, string[]>>({});
 let ownedBot = $state<IntegratedBotView | null>(null);
 let googleAccounts = $state<IntegratedGoogleAccountView[]>([]);
 let overviewLoaded = $state(false);
+// Bot が使う Google アカウントの選択肢（値は assignValue と同じ形）
+const assignOptions = $derived([
+	{ value: "primary", label: "（primaryを使用）" },
+	{ value: "none", label: "連携なし" },
+	...googleAccounts.map((a) => ({
+		value: `acct:${a.id}`,
+		label: a.email || `アカウント#${a.id}`,
+	})),
+]);
 
 function reportError(e: unknown) {
 	pushToast(
@@ -228,17 +237,12 @@ async function onAssignChange(value: string) {
 			</p>
 			<div class="form-group access-google">
 				<label for="access-google-account">このBotで使うアカウント</label>
-				<select
+				<Select
 					id="access-google-account"
+					options={assignOptions}
 					value={assignValue(ownedBot)}
-					onchange={(e) => onAssignChange((e.currentTarget as HTMLSelectElement).value)}
-				>
-					<option value="primary">（primaryを使用）</option>
-					<option value="none">連携なし</option>
-					{#each googleAccounts as a (a.id)}
-						<option value="acct:{a.id}">{a.email || `アカウント#${a.id}`}</option>
-					{/each}
-				</select>
+					onchange={onAssignChange}
+				/>
 			</div>
 		{:else}
 			<p class="description-text">

@@ -2,7 +2,7 @@
 // 送り先（DM / チャンネル）を選ぶ枠つき入力。定期報告の報告先と Webhook の通知先で共用する。
 // 枠の幅は固定。DM のときはプルダウンが枠いっぱいに広がり、チャンネルにすると
 // プルダウンが本来の幅へ縮んで、空いた右側に ID 入力欄が伸びてくる。
-import InlineSelect from "./InlineSelect.svelte";
+import { Select } from "$lib/components/ui";
 
 type TargetType = "dm" | "channel";
 
@@ -29,7 +29,7 @@ let {
 </script>
 
 <div class="joined-field" class:open={type === "channel"}>
-	<InlineSelect {id} class="target-select" {options} bind:value={type} />
+	<Select {id} class="target-select" {options} bind:value={type} />
 	<div class="target-extra" inert={type !== "channel"}>
 		<span class="divider" aria-hidden="true"></span>
 		<input

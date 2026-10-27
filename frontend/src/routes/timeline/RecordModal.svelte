@@ -3,7 +3,7 @@
 // タイプ（memo/expense/task_done/media/location）に応じてフィールドを出し分け。
 // 保存は onsave コールバックで親へ委譲（media は File を渡し、親が base64 化して送信）。
 import type { RecordType } from "$lib/api/types";
-import { Button, Modal } from "$lib/components/ui";
+import { Button, Modal, Select } from "$lib/components/ui";
 import { RECORD_TYPE_LABEL } from "./timelineUtils";
 
 export type RecordFormPayload =
@@ -48,6 +48,7 @@ const CATEGORIES = [
 	"光熱費",
 	"その他",
 ];
+const CATEGORY_OPTIONS = CATEGORIES.map((c) => ({ value: c, label: c }));
 
 let type = $state<RecordType>("memo");
 let title = $state("");
@@ -154,11 +155,11 @@ function onSubmit(e: SubmitEvent) {
 					</div>
 					<div class="form-group">
 						<label for="record-category">カテゴリ</label>
-						<select id="record-category" bind:value={category}>
-							{#each CATEGORIES as c (c)}
-								<option value={c}>{c}</option>
-							{/each}
-						</select>
+						<Select
+							id="record-category"
+							options={CATEGORY_OPTIONS}
+							bind:value={category}
+						/>
 					</div>
 				</div>
 			</div>

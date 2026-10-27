@@ -22,12 +22,12 @@ import {
 	confirmDialog,
 	EmptyState,
 	Icon,
+	Select,
 } from "$lib/components/ui";
 import { activeBot } from "$lib/stores/activeBot";
 import { pushToast } from "$lib/stores/toast";
 import CronField from "./delivery/CronField.svelte";
 import HelpTip from "./delivery/HelpTip.svelte";
-import InlineSelect from "./delivery/InlineSelect.svelte";
 import TargetField from "./delivery/TargetField.svelte";
 
 // ── 載せる内容 ──
@@ -340,7 +340,7 @@ $effect(() => {
 				<Checkbox bind:checked={fSections.weather} label="天気予報を載せる" />
 				<div class="block-body" class:off={!fSections.weather} inert={!fSections.weather}>
 					<div class="joined-field">
-						<InlineSelect
+						<Select
 							id="report-region-mode"
 							ariaLabel="天気予報の地域の指定方法"
 							options={REGION_OPTIONS}
@@ -558,7 +558,7 @@ $effect(() => {
 		<div class="test-row">
 			{#if testOptions.length > 0}
 				<div class="joined-field test-field">
-					<InlineSelect
+					<Select
 						id="delivery-test-kind"
 						class="test-select"
 						ariaLabel="テスト配信する定期報告"
@@ -575,23 +575,6 @@ $effect(() => {
 </section>
 
 <style>
-/* 入力欄は Discord 設定ページと同じく枠線・フォーカスリングなし。 */
-.delivery-tab input,
-.delivery-tab input:focus {
-	border: 0;
-	outline: none;
-	box-shadow: none;
-}
-/* 緯度・経度の増減スピンボタンを消す（Chrome / Firefox）。 */
-.delivery-tab input[type="number"] {
-	appearance: textfield;
-	-moz-appearance: textfield;
-}
-.delivery-tab input[type="number"]::-webkit-outer-spin-button,
-.delivery-tab input[type="number"]::-webkit-inner-spin-button {
-	-webkit-appearance: none;
-	margin: 0;
-}
 .report-form {
 	display: flex;
 	flex-direction: column;
@@ -630,11 +613,6 @@ $effect(() => {
 .target-group {
 	flex: 2 1 240px;
 	min-width: 0;
-}
-.joined-field input {
-	flex: 1;
-	min-width: 0;
-	background: transparent;
 }
 .field-hint {
 	margin: 6px 0 0;
@@ -691,10 +669,6 @@ $effect(() => {
 /* 載せない内容の設定欄は薄くして操作できないようにする（値は保持） */
 .block-body.off {
 	opacity: 0.4;
-}
-.keyword-input {
-	background-color: var(--surface-1dp);
-	border-radius: 4px;
 }
 /* フィード一覧: 入力欄の下に、開閉できる罫線区切りリスト。 */
 .feed-empty {

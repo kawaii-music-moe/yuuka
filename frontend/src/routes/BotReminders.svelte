@@ -50,16 +50,6 @@ function resetTarget() {
 	targetId = defaultTarget?.type === "channel" ? defaultTarget.id : "";
 }
 
-// 通知日時は欄のどこを押してもブラウザ標準の日時ピッカーを開く（未対応ブラウザでは何もしない）。
-function openPicker(e: MouseEvent) {
-	const input = e.currentTarget as HTMLInputElement;
-	try {
-		input.showPicker?.();
-	} catch {
-		// ユーザー操作扱いにならない等で開けないときは、通常の入力欄のままにする
-	}
-}
-
 function reportError(e: unknown) {
 	const msg = e instanceof ApiError ? e.message : "エラーが発生しました";
 	pushToast(msg, "error");
@@ -178,8 +168,6 @@ async function onCancel(id: number) {
 						type="datetime-local"
 						id="reminder-trigger-at"
 						required
-						class="picker-input"
-						onclick={openPicker}
 						bind:value={triggerAt}
 					/>
 				</div>
@@ -238,9 +226,6 @@ async function onCancel(id: number) {
 </section>
 
 <style>
-	.picker-input {
-		cursor: pointer;
-	}
 	/* 中身が長くても段の幅を広げない（grid の 1fr は既定で中身の幅より縮まない） */
 	.action-column {
 		min-width: 0;

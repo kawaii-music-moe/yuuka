@@ -81,12 +81,6 @@ function submit(e: SubmitEvent) {
 		flex-direction: column;
 		gap: 16px;
 	}
-	/* 名前・定義の入力欄は枠線とフォーカスリングを出さない。 */
-	.persona-edit-form .persona-edit-field,
-	.persona-edit-form .persona-edit-field:focus {
-		border-color: transparent;
-		box-shadow: none;
-	}
 	.persona-edit-prompt {
 		min-height: 320px;
 		font-size: 0.9rem;

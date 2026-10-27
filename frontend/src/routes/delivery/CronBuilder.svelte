@@ -5,7 +5,7 @@
 // 式の組み立て・分解は $lib/cronBuilder（バックエンドの croner と同じ 5 フィールド）。
 
 import { slide } from "svelte/transition";
-import { PageTabs } from "$lib/components/ui";
+import { PageTabs, Select } from "$lib/components/ui";
 import {
 	buildCron,
 	type CronState,
@@ -22,7 +22,6 @@ import {
 	valueLabel,
 	WEEKDAYS,
 } from "$lib/cronBuilder";
-import InlineSelect from "./InlineSelect.svelte";
 
 interface Props {
 	id: string;
@@ -264,7 +263,7 @@ function reset() {
 		     毎回と 日・月・曜日のカスタムは入力欄を持たないので、プルダウンだけが伸びる。 -->
 		<div class="cb-row">
 			<div class="joined-field cb-joined" class:open={paneOpen}>
-				<InlineSelect
+				<Select
 					id="{id}-mode"
 					class="cb-mode"
 					ariaLabel="{spec.name}の指定方法"
@@ -302,7 +301,7 @@ function reset() {
 						/>
 						<span class="cb-affix">{stepUnit}ごと</span>
 					{:else}
-						<InlineSelect
+						<Select
 							id="{id}-step"
 							class="grow-select"
 							ariaLabel="間隔を選択"
@@ -352,7 +351,7 @@ function reset() {
 						/>
 						<span class="cb-affix">{stepUnit}おき</span>
 					{:else}
-						<InlineSelect
+						<Select
 							id="{id}-range-start"
 							class="grow-select"
 							ariaLabel="範囲の開始"
@@ -360,7 +359,7 @@ function reset() {
 							bind:value={pickStart}
 						/>
 						<span class="cb-affix">〜</span>
-						<InlineSelect
+						<Select
 							id="{id}-range-end"
 							class="grow-select"
 							ariaLabel="範囲の終了"
@@ -368,7 +367,7 @@ function reset() {
 							bind:value={pickEnd}
 						/>
 						<span class="divider" aria-hidden="true"></span>
-						<InlineSelect
+						<Select
 							id="{id}-range-step"
 							class="grow-select"
 							ariaLabel="範囲内の間隔"

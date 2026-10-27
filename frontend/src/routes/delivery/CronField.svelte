@@ -2,7 +2,7 @@
 // cron 式の入力欄。[かんたん / cron式] の切替 + cron 式の入力。
 // 「かんたん」を選ぶと組み立てモーダル（CronBuilder）を開き、分/時/日/月/曜日 ごとに選んだ内容から
 // cron 式を組み立てて書き込む。今の式をビルダーで表せるときは、その内容から始める。
-import { Button, Modal } from "$lib/components/ui";
+import { Button, Modal, Select } from "$lib/components/ui";
 import {
 	buildCron,
 	type CronState,
@@ -10,7 +10,6 @@ import {
 	parseCron,
 } from "$lib/cronBuilder";
 import CronBuilder from "./CronBuilder.svelte";
-import InlineSelect from "./InlineSelect.svelte";
 
 interface Props {
 	id: string;
@@ -94,7 +93,7 @@ function onModeChange(m: Mode) {
 		</span>
 	</div>
 	<div class="joined-field">
-		<InlineSelect
+		<Select
 			id="{id}-mode"
 			class="fixed-select"
 			options={MODE_OPTIONS}

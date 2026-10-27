@@ -103,14 +103,6 @@ function nextDay() {
 function goToday() {
 	currentDate = todayIso();
 }
-// 入力欄は透明で日付ラベルに重ねている。どこを押してもカレンダーが開くようにする。
-function openPicker(e: MouseEvent & { currentTarget: HTMLInputElement }) {
-	try {
-		e.currentTarget.showPicker();
-	} catch {
-		// showPicker 非対応のブラウザは標準の挙動に任せる。
-	}
-}
 function pickDate(e: Event & { currentTarget: HTMLInputElement }) {
 	if (e.currentTarget.value) currentDate = e.currentTarget.value;
 }
@@ -241,7 +233,6 @@ onDestroy(() => headerExtra.set(null));
 					type="date"
 					aria-label="日付を選ぶ"
 					value={currentDate}
-					onclick={openPicker}
 					onchange={pickDate}
 				/>
 			</label>

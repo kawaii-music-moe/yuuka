@@ -1,8 +1,12 @@
 <script lang="ts">
 // 支払い予定の追加モーダル（旧 index.html #modal-expense-plan + app.js expensePlanForm submit）。
 // 保存は onsave で親へ委譲。開くたびに初期化（日付は今日）。
-import { Button, Modal } from "$lib/components/ui";
-import { EXPENSE_CATEGORIES, todayIso } from "./expenseUtils";
+import { Button, Modal, Select } from "$lib/components/ui";
+import {
+	EXPENSE_CATEGORIES,
+	EXPENSE_CATEGORY_OPTIONS,
+	todayIso,
+} from "./expenseUtils";
 
 interface Props {
 	open?: boolean;
@@ -31,16 +35,6 @@ $effect(() => {
 	plannedDate = todayIso();
 	description = "";
 });
-
-// 支払予定日は欄のどこを押してもブラウザ標準の日付ピッカーを開く（未対応ブラウザでは何もしない）。
-function openPicker(e: MouseEvent) {
-	const input = e.currentTarget as HTMLInputElement;
-	try {
-		input.showPicker?.();
-	} catch {
-		// ユーザー操作扱いにならない等で開けないときは、通常の入力欄のままにする
-	}
-}
 
 function submit(e: SubmitEvent) {
 	e.preventDefault();
@@ -75,19 +69,18 @@ function submit(e: SubmitEvent) {
 				<input
 					type="number"
 					id="plan-amount"
-					class="no-spin"
-					required
+										required
 					placeholder="5000"
 					bind:value={amount}
 				/>
 			</div>
 			<div class="form-group">
 				<label for="plan-category">カテゴリー *</label>
-				<select id="plan-category" required bind:value={category}>
-					{#each EXPENSE_CATEGORIES as cat (cat)}
-						<option value={cat}>{cat}</option>
-					{/each}
-				</select>
+				<Select
+					id="plan-category"
+					options={EXPENSE_CATEGORY_OPTIONS}
+					bind:value={category}
+				/>
 			</div>
 		</div>
 		<div class="form-group">
@@ -95,9 +88,7 @@ function submit(e: SubmitEvent) {
 			<input
 				type="date"
 				id="plan-date"
-				class="picker-input"
 				required
-				onclick={openPicker}
 				bind:value={plannedDate}
 			/>
 		</div>
@@ -113,18 +104,3 @@ function submit(e: SubmitEvent) {
 		<Button type="submit" variant="primary" block>予定を登録</Button>
 	</form>
 </Modal>
-
-<style>
-	/* ブラウザ標準の増減ボタン（▲▼）を出さない */
-	.no-spin {
-		appearance: textfield;
-	}
-	.no-spin::-webkit-outer-spin-button,
-	.no-spin::-webkit-inner-spin-button {
-		appearance: none;
-		margin: 0;
-	}
-	.picker-input {
-		cursor: pointer;
-	}
-</style>

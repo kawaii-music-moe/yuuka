@@ -4,10 +4,10 @@
 
 import { ApiError } from "$lib/api/client";
 import { botAttributeApi } from "$lib/api/services";
-import { Button, Modal } from "$lib/components/ui";
+import { Button, Modal, Select } from "$lib/components/ui";
 import { pushToast } from "$lib/stores/toast";
 import type { AssistantGuild, GuildNoteResp } from "../config/configTypes";
-import { guildLabel } from "../config/configTypes";
+import { guildLabel, guildOptions } from "../config/configTypes";
 
 interface Props {
 	botId: string;
@@ -85,11 +85,12 @@ async function save() {
 	</div>
 	<div class="section-body">
 		<div class="note-row">
-			<select bind:value={selectedGuild} class="grow">
-				{#each guilds as g (g.guild_id)}
-					<option value={g.guild_id}>{g.guild_name ?? `ギルド ${g.guild_id}`}</option>
-				{/each}
-			</select>
+			<Select
+				class="grow"
+				ariaLabel="ギルド"
+				options={guildOptions(guilds)}
+				bind:value={selectedGuild}
+			/>
 			<Button variant="primary" onclick={openEditor}>編集</Button>
 		</div>
 	</div>
@@ -114,7 +115,7 @@ async function save() {
 		display: flex;
 		gap: 12px;
 	}
-	.grow {
+	.note-row :global(.grow) {
 		flex-grow: 1;
 	}
 	/* Modal は body へポータルされ .discord-tab スコープ外のため、ここで直接底上げする */

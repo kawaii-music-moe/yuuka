@@ -22,6 +22,7 @@ import {
 	EmptyState,
 	Icon,
 	PageTabs,
+	Select,
 } from "$lib/components/ui";
 import { activeBot } from "$lib/stores/activeBot";
 import { headerExtra } from "$lib/stores/headerExtra";
@@ -65,6 +66,9 @@ let searchQuery = $state("");
 
 // ── スケジュール フォーム ──
 let schPlaybookName = $state("");
+const playbookOptions = $derived(
+	playbooks.map((p) => ({ value: p.name, label: p.title })),
+);
 let cronExpression = $state("");
 let schDescription = $state("");
 let schEnabled = $state(true);
@@ -419,12 +423,12 @@ onDestroy(() => headerExtra.set(null));
 			<form class="form-stack" onsubmit={saveSchedule}>
 				<div class="form-group">
 					<label for="schedule-playbook-select">実行するPlaybook<span class="required-mark"> *</span></label>
-					<select id="schedule-playbook-select" required bind:value={schPlaybookName}>
-						<option value="">-- Playbookを選択 --</option>
-						{#each playbooks as p (p.name)}
-							<option value={p.name}>{p.title}</option>
-						{/each}
-					</select>
+					<Select
+						id="schedule-playbook-select"
+						options={playbookOptions}
+						placeholder="Playbookを選択"
+						bind:value={schPlaybookName}
+					/>
 				</div>
 				<div class="form-group">
 					<CronField

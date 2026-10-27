@@ -19,6 +19,8 @@ import {
 	Icon,
 	ScopeBadge,
 	SecretInput,
+	SecretSetMark,
+	Select,
 } from "$lib/components/ui";
 import { ACCOUNT_SECTIONS } from "$lib/managementSections";
 import { navigateTo } from "$lib/router";
@@ -29,12 +31,13 @@ import { pushToast } from "$lib/stores/toast";
 import BackupCard from "../routes/config/BackupCard.svelte";
 import UserSettingsCard from "../routes/config/UserSettingsCard.svelte";
 import HelpTip from "../routes/delivery/HelpTip.svelte";
-import InlineSelect from "../routes/delivery/InlineSelect.svelte";
 import AccountDevices from "./account/AccountDevices.svelte";
 import ManagementOverlayShell from "./ManagementOverlayShell.svelte";
 
 // ── Gemini 設定 ──
 let geminiApiKey = $state("");
+// DB に API キーが登録済みか（ラベル横のチェック）
+let hasGeminiKey = $state(false);
 let geminiModel = $state("");
 let llmProvider = $state("gemini");
 let llmModels = $state<string[]>([]);
@@ -48,6 +51,7 @@ onMount(() => {
 			geminiModel = res.model;
 			llmProvider = res.provider;
 			llmModels = res.models;
+			hasGeminiKey = res.hasApiKey ?? false;
 			llmLoaded = true;
 		})
 		.catch(reportError);
@@ -85,6 +89,7 @@ async function saveGemini(e: SubmitEvent): Promise<void> {
 			model: geminiModel,
 			provider: llmProvider,
 		});
+		if (geminiApiKey.trim()) hasGeminiKey = true;
 		geminiApiKey = "";
 		pushToast("Gemini 設定を更新しました。", "success");
 	} catch (e) {
@@ -235,13 +240,13 @@ async function downloadPackage(e: SubmitEvent): Promise<void> {
 									</HelpTip>
 								</div>
 								<div class="joined-field">
-									<InlineSelect
+									<Select
 										id="account-llm-provider"
 										options={PROVIDER_OPTIONS}
 										bind:value={llmProvider}
 									/>
 									<span class="divider" aria-hidden="true"></span>
-									<InlineSelect
+									<Select
 										id="gemini-model-select"
 										class="model-select"
 										ariaLabel="モデル"
@@ -251,7 +256,7 @@ async function downloadPackage(e: SubmitEvent): Promise<void> {
 								</div>
 							</div>
 							<div class="form-group">
-								<label for="gemini-api-key">Gemini API Key</label>
+								<label for="gemini-api-key">Gemini API Key<SecretSetMark set={hasGeminiKey} /></label>
 								<SecretInput
 									id="gemini-api-key"
 									placeholder="APIキーを変更する場合は入力してください (マスク表示中)"
@@ -270,25 +275,20 @@ async function downloadPackage(e: SubmitEvent): Promise<void> {
 						<div class="column-header">
 							<h3><Icon name="inventory_2" class="header-icon-symbol" />Bot移行パッケージ</h3>
 						</div>
-						<p class="description-text">
-							所有するすべてのBotと関連データを、PINコードで暗号化した移行用ファイルとしてダウンロードします。
-							復元にはファイルとPINコードの両方が必要です。
-						</p>
 						<form onsubmit={downloadPackage} class="package-form">
 							<div class="form-group">
 								<label for="package-pin">PINコード（6〜12桁）</label>
-								<input id="package-pin" type="password" inputmode="numeric" minlength="6" maxlength="12" autocomplete="new-password" required bind:value={packagePin} />
+								<SecretInput id="package-pin" inputmode="numeric" minlength={6} maxlength={12} required bind:value={packagePin} />
 							</div>
 							<div class="form-group">
 								<label for="package-pin-confirm">PINコード（確認）</label>
-								<input id="package-pin-confirm" type="password" inputmode="numeric" minlength="6" maxlength="12" autocomplete="new-password" required bind:value={packagePinConfirm} />
+								<SecretInput id="package-pin-confirm" inputmode="numeric" minlength={6} maxlength={12} required bind:value={packagePinConfirm} />
 							</div>
 							<button type="submit" class="btn btn-primary" disabled={packaging}>
 								<Icon name="download" class="icon-button-left" />
 								{packaging ? "パッケージ作成中…" : "暗号化してダウンロード"}
 							</button>
 						</form>
-						<p class="field-sub">PINコードはサーバーに保存されません。紛失した場合、パッケージを復元できません。</p>
 					</div>
 				{/if}
 
@@ -328,16 +328,6 @@ async function downloadPackage(e: SubmitEvent): Promise<void> {
 		gap: 12px;
 	}
 	/* ラベルの右に ? を並べる。.form-group label の下余白はこの行で取る */
-	.label-row {
-		display: flex;
-		align-items: center;
-		gap: 4px;
-		margin-bottom: 8px;
-	}
-	.label-row label {
-		margin: 0;
-		line-height: 1;
-	}
 	/* プロバイダは本来の幅、モデルは残りいっぱい */
 	.ai-form :global(.model-select) {
 		flex: 1;

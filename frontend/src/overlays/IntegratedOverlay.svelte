@@ -26,7 +26,13 @@ import type {
 	IntegratedGoogleAccountView,
 	IntegratedMcpServerView,
 } from "$lib/api/types";
-import { Button, confirmDialog, Icon, SecretInput } from "$lib/components/ui";
+import {
+	Button,
+	confirmDialog,
+	Icon,
+	SecretInput,
+	Select,
+} from "$lib/components/ui";
 import { INTEGRATED_SECTIONS } from "$lib/managementSections";
 import { isAdmin } from "$lib/stores/session";
 import { pushToast } from "$lib/stores/toast";
@@ -39,6 +45,15 @@ let bots = $state<IntegratedBotView[]>([]);
 let mcpServers = $state<IntegratedMcpServerView[]>([]);
 let credentials = $state<IntegratedCredentialView[]>([]);
 let googleAccounts = $state<IntegratedGoogleAccountView[]>([]);
+// Bot が使う Google アカウントの選択肢（値は assignValue と同じ形）
+const assignOptions = $derived([
+	{ value: "primary", label: "（primaryを使用）" },
+	{ value: "none", label: "連携なし" },
+	...googleAccounts.map((a) => ({
+		value: `acct:${a.id}`,
+		label: a.email || `アカウント#${a.id}`,
+	})),
+]);
 let loading = $state(false);
 
 // dashboard 提供有無キャッシュ（serverId → available）
@@ -64,6 +79,10 @@ let mcpEndpoint = $state("");
 let mcpAuth = $state("");
 let mcpConfirm = $state(true);
 let mcpScope = $state<"user" | "system">("user");
+const MCP_SCOPE_OPTIONS: { value: "user" | "system"; label: string }[] = [
+	{ value: "user", label: "ユーザーレベル（自分のみ）" },
+	{ value: "system", label: "システムレベル（全ユーザー）" },
+];
 
 function reportError(e: unknown) {
 	pushToast(
@@ -376,7 +395,6 @@ async function connectGoogle() {
 				</form>
 			</div>
 			<div class="action-column">
-				<p class="description-text int-col-note">登録済み（チップで、使えるBotを切り替えます）</p>
 				<div class="int-list">
 					{#if credentials.length === 0}
 						<p class="description-text">未登録です。</p>
@@ -412,9 +430,6 @@ async function connectGoogle() {
 	{#if section === "mcp"}
 		<div class="expense-actions-columns int-cols">
 			<div class="action-column">
-				<p class="description-text int-col-note">
-					外部MCPサーバーを登録。登録後、使わせるBotを許可してください。
-				</p>
 				<form class="int-form" onsubmit={submitMcp}>
 					<div class="form-group">
 						<label for="int-mcp-name">名前 *</label>
@@ -448,17 +463,17 @@ async function connectGoogle() {
 					{#if $isAdmin}
 						<div class="form-group">
 							<label for="int-mcp-scope">登録スコープ (Adminのみ)</label>
-							<select id="int-mcp-scope" bind:value={mcpScope}>
-								<option value="user">ユーザーレベル（自分のみ）</option>
-								<option value="system">システムレベル（全ユーザー）</option>
-							</select>
+							<Select
+								id="int-mcp-scope"
+								options={MCP_SCOPE_OPTIONS}
+								bind:value={mcpScope}
+							/>
 						</div>
 					{/if}
 					<Button variant="primary" type="submit" block>MCPサーバーを登録</Button>
 				</form>
 			</div>
 			<div class="action-column">
-				<p class="description-text int-col-note">登録済み（チップで、使えるBotを切り替えます）</p>
 				<div class="int-list">
 					{#if mcpServers.length === 0}
 						<p class="description-text">未登録です。</p>
@@ -509,9 +524,6 @@ async function connectGoogle() {
 			<Button variant="primary" onclick={connectGoogle}>
 				<Icon name="add" size={16} /> Googleアカウントを連携
 			</Button>
-			<p class="description-text int-col-note">
-				複数のGoogleアカウントを連携でき、Botごとに使うアカウントを選べます。バックアップはprimaryアカウントを使用します。
-			</p>
 			<div class="int-list">
 				{#if googleAccounts.length === 0}
 					<p class="description-text">連携アカウントはありません。</p>
@@ -541,6 +553,7 @@ async function connectGoogle() {
 				{/if}
 			</div>
 
+			{#if googleAccounts.length > 0}
 			<p class="description-text int-assign-heading"><strong>各Botで使うアカウント</strong></p>
 			<div class="int-assign-list">
 				{#if ownedBots.length === 0}
@@ -549,22 +562,18 @@ async function connectGoogle() {
 					{#each ownedBots as b (b.id)}
 						<div class="int-assign-row">
 							<span class="int-assign-name">{b.name}</span>
-							<select
+							<Select
 								class="int-assign-select"
+								ariaLabel="{b.name} で使うアカウント"
+								options={assignOptions}
 								value={assignValue(b)}
-								onchange={(e) =>
-									onAssignChange(b.id, (e.currentTarget as HTMLSelectElement).value)}
-							>
-								<option value="primary">（primaryを使用）</option>
-								<option value="none">連携なし</option>
-								{#each googleAccounts as a (a.id)}
-									<option value="acct:{a.id}">{a.email || `アカウント#${a.id}`}</option>
-								{/each}
-							</select>
+								onchange={(v) => onAssignChange(b.id, v)}
+							/>
 						</div>
 					{/each}
 				{/if}
 			</div>
+			{/if}
 		</div>
 	{/if}
 </section>
@@ -577,9 +586,6 @@ async function connectGoogle() {
 <style>
 	.int-cols {
 		margin-top: 12px;
-	}
-	.int-col-note {
-		margin-bottom: 8px;
 	}
 	.int-form {
 		display: flex;
@@ -683,7 +689,7 @@ async function connectGoogle() {
 	.int-assign-name {
 		font-size: 0.85rem;
 	}
-	.int-assign-select {
+	.int-assign-row :global(.int-assign-select) {
 		min-width: 200px;
 	}
 </style>

@@ -16,7 +16,7 @@ import { ApiError } from "$lib/api/client";
 import { botApi } from "$lib/api/services";
 import type { BotView, PresetOption } from "$lib/api/types";
 import { canControlRuntime, controlRuntime } from "$lib/botRuntime";
-import { confirmDialog, Icon, Modal } from "$lib/components/ui";
+import { confirmDialog, Icon, Modal, Select } from "$lib/components/ui";
 import { navigateTo } from "$lib/router";
 import { selectBot } from "$lib/stores/activeBot";
 import { currentUser } from "$lib/stores/session";
@@ -84,6 +84,10 @@ function presetLabel(preset: string, fallback: string): string {
 	const p = presets.find((x) => x.preset === preset);
 	return p?.display_name ?? fallback;
 }
+const presetOptions = $derived([
+	{ value: "secretary", label: presetLabel("secretary", "パーソナル秘書") },
+	{ value: "mcp_assistant", label: presetLabel("mcp_assistant", "汎用モード") },
+]);
 
 // ── Bot カードの表示メタ（旧 renderBotList のステータス計算） ──
 function statusOf(bot: BotView): { dot: string; label: string } {
@@ -356,10 +360,7 @@ let sidebarOpen = $state(false);
 		</div>
 		<div class="form-group">
 			<label for="new-bot-preset">Botの種類（プリセット）</label>
-			<select id="new-bot-preset" bind:value={newBotPreset}>
-				<option value="secretary">{presetLabel("secretary", "パーソナル秘書")}</option>
-				<option value="mcp_assistant">{presetLabel("mcp_assistant", "汎用モード")}</option>
-			</select>
+			<Select id="new-bot-preset" options={presetOptions} bind:value={newBotPreset} />
 			<span class="field-sub"
 				>※パーソナル秘書: 現行のフル機能（個人向け）。汎用モード: MCP接続・ペルソナ・メモリのみのサーバー常駐Bot（Bot専用のGemini
 				APIキーが必要）。</span

@@ -3,7 +3,7 @@
 //  + :2649 taskForm submit）。editingTask が null なら新規、あれば編集。
 
 import type { TodoPriority, TodoWithSubtasks } from "$lib/api/types";
-import { Button, Modal } from "$lib/components/ui";
+import { Button, Modal, Select } from "$lib/components/ui";
 
 interface Props {
 	open?: boolean;
@@ -27,6 +27,12 @@ let description = $state("");
 let startDate = $state("");
 let dueDate = $state("");
 let priority = $state<TodoPriority | "">("");
+const PRIORITY_OPTIONS: { value: TodoPriority | ""; label: string }[] = [
+	{ value: "", label: "指定なし" },
+	{ value: "low", label: "低" },
+	{ value: "medium", label: "中" },
+	{ value: "high", label: "高" },
+];
 
 const isEdit = $derived(editingTask != null);
 
@@ -41,16 +47,6 @@ $effect(() => {
 	dueDate = (t?.due_date ?? "").slice(0, 10);
 	priority = (t?.priority as TodoPriority | null) ?? "";
 });
-
-// 日付は欄のどこを押してもブラウザ標準の日付ピッカーを開く（未対応ブラウザでは何もしない）。
-function openPicker(e: MouseEvent) {
-	const input = e.currentTarget as HTMLInputElement;
-	try {
-		input.showPicker?.();
-	} catch {
-		// ユーザー操作扱いにならない等で開けないときは、通常の入力欄のままにする
-	}
-}
 
 function submit(e: SubmitEvent) {
 	e.preventDefault();
@@ -93,9 +89,7 @@ function submit(e: SubmitEvent) {
 				<input
 					type="date"
 					id="task-start"
-					class="picker-input"
 					bind:value={startDate}
-					onclick={openPicker}
 				/>
 			</div>
 			<div class="form-group">
@@ -103,20 +97,13 @@ function submit(e: SubmitEvent) {
 				<input
 					type="date"
 					id="task-due"
-					class="picker-input"
 					bind:value={dueDate}
-					onclick={openPicker}
 				/>
 			</div>
 		</div>
 		<div class="form-group">
 			<label for="task-priority">優先度</label>
-			<select id="task-priority" bind:value={priority}>
-				<option value="">指定なし</option>
-				<option value="low">低</option>
-				<option value="medium">中</option>
-				<option value="high">高</option>
-			</select>
+			<Select id="task-priority" options={PRIORITY_OPTIONS} bind:value={priority} />
 		</div>
 		<Button type="submit" variant="primary" block>
 			{isEdit ? "更新を保存" : "タスク登録"}
@@ -124,8 +111,3 @@ function submit(e: SubmitEvent) {
 	</form>
 </Modal>
 
-<style>
-	.picker-input {
-		cursor: pointer;
-	}
-</style>

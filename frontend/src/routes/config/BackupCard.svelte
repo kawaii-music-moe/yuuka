@@ -8,6 +8,7 @@ import { ApiError } from "$lib/api/client";
 import { settingsApi } from "$lib/api/services";
 import { Button } from "$lib/components/ui";
 import { pushToast } from "$lib/stores/toast";
+import HelpTip from "../delivery/HelpTip.svelte";
 
 let loaded = $state(false);
 let enabled = $state(false);
@@ -113,7 +114,10 @@ async function trigger() {
 			<label for="backup-enable">自動バックアップを有効にする</label>
 		</div>
 		<div class="form-group">
-			<label for="backup-folder-id">バックアップ先フォルダID または フォルダURL (空の場合はマイドライブ直下に保存)</label>
+			<div class="label-row">
+				<label for="backup-folder-id">バックアップ先フォルダID または フォルダURL</label>
+				<HelpTip id="backup-folder-help" label="空の場合" text="空の場合はマイドライブ直下に保存" />
+			</div>
 			<input
 				type="text"
 				id="backup-folder-id"

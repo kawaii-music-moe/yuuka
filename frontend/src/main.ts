@@ -1,6 +1,7 @@
 import { registerSW } from "virtual:pwa-register";
 import { mount } from "svelte";
 import App from "./App.svelte";
+import { installDatePickers } from "./lib/datePicker";
 import "./styles.css";
 
 // Service Worker 登録（P1a: vite-plugin-pwa / Workbox generateSW）。
@@ -25,6 +26,9 @@ window.addEventListener("vite:preloadError", () => {
 	sessionStorage.setItem(KEY, String(now));
 	location.reload();
 });
+
+// 日付・時刻の欄は文字で打たせず、どこを押してもピッカーを開く（全画面共通）。
+installDatePickers();
 
 const target = document.getElementById("app");
 if (!target) throw new Error("#app mount target not found");

@@ -4,6 +4,7 @@
 
 import { ApiError } from "$lib/api/client";
 import { settingsApi } from "$lib/api/services";
+import { SecretInput, SecretSetMark } from "$lib/components/ui";
 import { pushToast } from "$lib/stores/toast";
 import type { DiscordTokenResponse } from "./configTypes";
 
@@ -16,6 +17,8 @@ interface Props {
 let { botId, onsaved }: Props = $props();
 
 let token = $state("");
+// DB にトークンが登録済みか（ラベル横のチェック）
+let hasToken = $state(false);
 // 読み込み時（マスク済み）／最後に保存した値。未変更なら保存ボタンを無効にする。
 let loadedToken = $state("");
 let saving = $state(false);
@@ -31,8 +34,10 @@ async function load() {
 	try {
 		const data = (await settingsApi.getDiscord()) as DiscordTokenResponse;
 		token = data.tokenMasked ?? "";
+		hasToken = data.hasToken ?? token !== "";
 	} catch {
 		token = "";
+		hasToken = false;
 	}
 	loadedToken = token;
 }
@@ -45,6 +50,7 @@ async function submit(e: SubmitEvent) {
 		const res = await settingsApi.updateDiscord({ token: token.trim() });
 		pushToast(res.message ?? "Discord 設定を保存しました。", "success");
 		loadedToken = token.trim();
+		hasToken = loadedToken !== "";
 		onsaved?.();
 	} catch (err) {
 		pushToast(
@@ -63,13 +69,11 @@ async function submit(e: SubmitEvent) {
 		<span class="badge badge-accent">任意設定</span>
 	</div>
 	<form onsubmit={submit} class="token-form plain-fields">
-		<label for="discord-token">Discord Bot Token</label>
+		<label for="discord-token">Discord Bot Token<SecretSetMark set={hasToken} /></label>
 		<div class="token-row">
-			<input
-				type="password"
+			<SecretInput
 				id="discord-token"
 				placeholder="トークンを変更・登録する場合は入力してください (マスク表示中)"
-				autocomplete="new-password"
 				bind:value={token}
 				disabled={saving}
 			/>
@@ -101,7 +105,7 @@ async function submit(e: SubmitEvent) {
 		display: flex;
 		gap: 12px;
 	}
-	.token-row input {
+	.token-row :global(input) {
 		flex: 1;
 		min-width: 0;
 	}

@@ -52,8 +52,7 @@ async function loadDesktop() {
 			downloadMeta = `${ver}${mb} MB ・ Windows (x64)`;
 			downloadAvailable = true;
 		} else {
-			downloadMeta =
-				"現在配布できるビルドがありません（デプロイ後に利用可能になります）。";
+			downloadMeta = "現在配布できるビルドがありません";
 		}
 	} catch {
 		downloadMeta = "配布情報の取得に失敗しました。";
@@ -91,9 +90,6 @@ async function revoke(id: number) {
 	<div class="view-actions-card card desktop-download-card">
 		<div class="header-title">
 			<h2 class="section-title">デスクトップアプリ</h2>
-			<p class="field-sub section-desc">
-				Yuuka デスクトップ版（Windows・常駐オーバーレイ型チャット）をダウンロードできます。起動後、デバイスログインでこのアカウントに接続してください。
-			</p>
 		</div>
 		<div class="download-row">
 			<button type="button" class="btn btn-primary" disabled={!downloadAvailable} onclick={download}>
@@ -107,7 +103,7 @@ async function revoke(id: number) {
 		<div class="header-title">
 			<h2 class="section-title">接続端末</h2>
 			<p class="field-sub section-desc">
-				デバイスログインで認可したデスクトップアプリ等のクライアント一覧です。心当たりのない端末は失効してください。
+				心当たりのない端末は失効してください
 			</p>
 		</div>
 	</div>
@@ -122,7 +118,7 @@ async function revoke(id: number) {
 		{:else if loaded}
 			<EmptyState
 				icon="devices"
-				message="接続中の端末はありません。デスクトップアプリからログインすると、ここに表示されます。"
+				message="接続中の端末はありません。"
 			/>
 		{/if}
 	</div>

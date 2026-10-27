@@ -3,7 +3,7 @@
 
 import { ApiError } from "$lib/api/client";
 import { botAttributeApi } from "$lib/api/services";
-import { confirmDialog } from "$lib/components/ui";
+import { confirmDialog, Select } from "$lib/components/ui";
 import { pushToast } from "$lib/stores/toast";
 import type {
 	AssistantGuild,
@@ -11,7 +11,7 @@ import type {
 	GuildOptionItem,
 	GuildOptionsResp,
 } from "../config/configTypes";
-import { guildLabel } from "../config/configTypes";
+import { guildLabel, guildOptions } from "../config/configTypes";
 import AddButton from "./AddButton.svelte";
 import DeleteButton from "./DeleteButton.svelte";
 import OptionCombobox from "./OptionCombobox.svelte";
@@ -138,11 +138,12 @@ async function remove(m: AssistantMember, shift: boolean) {
 	<div class="section-body">
 		<div class="add-row">
 			<div class="joined-field">
-				<select bind:value={selectedGuild} class="guild-select" aria-label="ギルド">
-					{#each guilds as g (g.guild_id)}
-						<option value={g.guild_id}>{g.guild_name ?? `ギルド ${g.guild_id}`}</option>
-					{/each}
-				</select>
+				<Select
+					class="guild-select"
+					ariaLabel="ギルド"
+					options={guildOptions(guilds)}
+					bind:value={selectedGuild}
+				/>
 				<span class="divider" aria-hidden="true"></span>
 				<OptionCombobox
 					options={memberOptions.filter(

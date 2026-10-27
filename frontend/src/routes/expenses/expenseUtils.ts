@@ -14,6 +14,12 @@ export const EXPENSE_CATEGORIES = [
 	"その他",
 ] as const;
 
+/** カテゴリーのプルダウン（Select）の選択肢 */
+export const EXPENSE_CATEGORY_OPTIONS = EXPENSE_CATEGORIES.map((c) => ({
+	value: c as string,
+	label: c as string,
+}));
+
 /** ローカルの今日 'YYYY-MM-DD'（旧 new Date().toISOString().slice(0,10)）。 */
 export function todayIso(): string {
 	return new Date().toISOString().slice(0, 10);
