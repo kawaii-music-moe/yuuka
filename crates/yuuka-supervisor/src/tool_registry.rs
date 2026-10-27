@@ -81,7 +81,7 @@ fn all_domain_tools(
     all.extend(yuuka_credential::tools(
         db.clone(),
         crypto.clone(),
-        Some(Arc::clone(&browser_manager)),
+        Some(Arc::clone(&browser_manager) as Arc<dyn yuuka_browser::SiteCredentialFiller>),
     )?);
     all.extend(yuuka_playbook::tools(db.clone(), recorder)?);
     // guild-assistant（汎用モード）ツール。露出は Tool::exposure（guild_assistant + memory 能力）で

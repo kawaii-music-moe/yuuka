@@ -16,6 +16,7 @@ use std::path::Path;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+use async_trait::async_trait;
 use chromiumoxide::{Browser, BrowserConfig, Page};
 use futures::StreamExt;
 use serde_json::{json, Value};
@@ -23,6 +24,10 @@ use std::sync::Arc;
 
 use crate::chromium::find_chrome;
 use crate::markdown::clean_markdown;
+use crate::site_fill::{
+    fill_js, origin_of, parse_fill_result, site_mismatch, url_matches_site, FillError, FillField,
+    SiteCredentialFiller,
+};
 
 const VIEWPORT_W: u32 = 1280;
 const VIEWPORT_H: u32 = 800;
@@ -30,36 +35,6 @@ const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/
     (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 const AUTO_CLOSE: Duration = Duration::from_secs(5 * 60);
 const MARKDOWN_LIMIT: usize = 30_000;
-
-/// 現在 URL が登録 URL と同じサイト（ホスト一致・https 登録なら https のまま）か。
-/// 解釈できない URL・http(s) 以外は常に不一致。
-#[must_use]
-pub fn url_matches_site(registered: &str, current: &str) -> bool {
-    let (Ok(reg), Ok(cur)) = (
-        reqwest::Url::parse(registered),
-        reqwest::Url::parse(current),
-    ) else {
-        return false;
-    };
-    if !matches!(reg.scheme(), "http" | "https") || !matches!(cur.scheme(), "http" | "https") {
-        return false;
-    }
-    if reg.scheme() == "https" && cur.scheme() != "https" {
-        return false;
-    }
-    match (reg.host_str(), cur.host_str()) {
-        (Some(a), Some(b)) => a.eq_ignore_ascii_case(b),
-        _ => false,
-    }
-}
-
-/// エラー文言用のホスト表示（パスやクエリは出さない）。
-fn host_label(url: &str) -> String {
-    reqwest::Url::parse(url)
-        .ok()
-        .and_then(|u| u.host_str().map(str::to_owned))
-        .unwrap_or_else(|| "不明".to_owned())
-}
 
 /// ユーザー 1 人ぶんの対話セッション（chromium プロセス + ページ）。
 struct Session {
@@ -255,11 +230,6 @@ impl BrowserManager {
     pub async fn type_text(&self, user: &str, selector: &str, text: &str) -> Result<Value, String> {
         let arc = self.get_or_launch(user).await?;
         let sess = arc.lock().await;
-        Self::type_text_locked(&sess, selector, text).await
-    }
-
-    /// ロック取得済みセッションへの入力本体（`type_text` / `fill_fields_for_site` 共通）。
-    async fn type_text_locked(sess: &Session, selector: &str, text: &str) -> Result<Value, String> {
         let actual = resolve_selector(selector);
 
         if wait_for_selector(&sess.page, &actual, 5000).await.is_ok() {
@@ -289,41 +259,6 @@ impl BrowserManager {
                 "要素 \"{selector}\" へのテキスト入力に失敗しました。"
             ))
         }
-    }
-
-    /// 現在ページの URL が `registered_url` と同じサイトのときだけ、各欄へ入力する
-    /// （`browserFillCredential` 用・#205）。
-    ///
-    /// 現在 URL の取得から入力までを同じセッションロックの中で行うため、照合後に別ページへ
-    /// 遷移される隙が無い。一致しなければ何も入力せず `Err((0, 理由))`。
-    /// 入力に失敗した場合は `Err((入力済みの欄数, 理由))`。
-    ///
-    /// # Errors
-    /// セッション起動失敗・ドメイン不一致・入力失敗。
-    pub async fn fill_fields_for_site(
-        &self,
-        user: &str,
-        registered_url: &str,
-        fields: &[(&str, &str)],
-    ) -> Result<(), (usize, String)> {
-        let arc = self.get_or_launch(user).await.map_err(|e| (0, e))?;
-        let sess = arc.lock().await;
-        let current = sess.page.url().await.ok().flatten().unwrap_or_default();
-        if !url_matches_site(registered_url, &current) {
-            return Err((
-                0,
-                format!(
-                    "いま開いているページ（{}）が登録済みのサイトと一致しないため、入力を拒否しました。",
-                    host_label(&current)
-                ),
-            ));
-        }
-        for (done, (selector, text)) in fields.iter().enumerate() {
-            Self::type_text_locked(&sess, selector, text)
-                .await
-                .map_err(|e| (done, e))?;
-        }
-        Ok(())
     }
 
     /// browserInteractiveStatus（Node）。注釈→スクショ→対話 markdown。
@@ -363,6 +298,48 @@ impl BrowserManager {
             "imagePath": screenshot_path.to_string_lossy(),
             "markdownContent": content,
         }))
+    }
+}
+
+#[async_trait]
+impl SiteCredentialFiller for BrowserManager {
+    /// 現在ページの URL が `registered_url` と同じサイトのときだけ、各欄へ入力する
+    /// （`browserFillCredential` 用・#205）。
+    ///
+    /// セッションロックで止められるのは他のツール呼び出しだけで、ページ自身の JS 遷移・
+    /// meta refresh・フォーカス移動は止められない。そのため Rust 側の照合に加え、入力の直前に
+    /// ページ内で `location.origin` を確かめ、同じ JS 実行の中で代入する（[`fill_js`]）。
+    async fn fill_fields_for_site(
+        &self,
+        user: &str,
+        registered_url: &str,
+        fields: &[FillField<'_>],
+    ) -> Result<(), FillError> {
+        let arc = self.get_or_launch(user).await.map_err(FillError::Launch)?;
+        let sess = arc.lock().await;
+        let current = sess.page.url().await.ok().flatten().unwrap_or_default();
+        if !url_matches_site(registered_url, &current) {
+            return Err(site_mismatch(registered_url, &current));
+        }
+        let Some(origin) = origin_of(&current) else {
+            return Err(site_mismatch(registered_url, &current));
+        };
+        let selectors: Vec<String> = fields
+            .iter()
+            .map(|f| resolve_selector(f.selector))
+            .collect();
+        // 要素の出現を待つ（見つからなくても続け、判定は fill_js に任せる）。
+        for sel in &selectors {
+            let _ = wait_for_selector(&sess.page, sel, 5000).await;
+        }
+        let result = sess
+            .page
+            .evaluate(fill_js(&origin, fields, &selectors))
+            .await
+            .map_err(|_| FillError::Script)?
+            .into_value::<String>()
+            .map_err(|_| FillError::Script)?;
+        parse_fill_result(&result)
     }
 }
 
@@ -601,65 +578,5 @@ mod tests {
         assert!(EXTRACT_INTERACTIVE_JS.trim_start().starts_with("(()"));
         assert!(EXTRACT_INTERACTIVE_JS.trim_end().ends_with(")()"));
         assert!(ANNOTATE_JS.trim_start().starts_with("(()"));
-    }
-}
-
-#[cfg(test)]
-mod site_match_tests {
-    use super::url_matches_site;
-
-    #[test]
-    fn same_host_matches_across_paths() {
-        assert!(url_matches_site(
-            "https://github.com/login",
-            "https://github.com/session?x=1"
-        ));
-        assert!(url_matches_site(
-            "https://GitHub.com/",
-            "https://github.com/login"
-        ));
-    }
-
-    #[test]
-    fn other_or_lookalike_hosts_are_rejected() {
-        assert!(!url_matches_site(
-            "https://github.com/login",
-            "https://evil.example/login"
-        ));
-        assert!(!url_matches_site(
-            "https://github.com",
-            "https://github.com.evil.example/"
-        ));
-        assert!(!url_matches_site(
-            "https://github.com",
-            "https://evil.example/github.com"
-        ));
-        assert!(!url_matches_site(
-            "https://github.com",
-            "https://github.com@evil.example/"
-        ));
-    }
-
-    #[test]
-    fn blank_unparsable_and_non_http_are_rejected() {
-        assert!(!url_matches_site("https://github.com", ""));
-        assert!(!url_matches_site("https://github.com", "about:blank"));
-        assert!(!url_matches_site("", "https://github.com"));
-        assert!(!url_matches_site(
-            "https://github.com",
-            "file:///etc/passwd"
-        ));
-    }
-
-    #[test]
-    fn https_registration_rejects_http_downgrade() {
-        assert!(!url_matches_site(
-            "https://github.com",
-            "http://github.com/login"
-        ));
-        assert!(url_matches_site(
-            "http://intranet.test",
-            "https://intranet.test/"
-        ));
     }
 }
