@@ -19,9 +19,10 @@ import type { Component } from "svelte";
 import { derived } from "svelte/store";
 import { authApi } from "$lib/api/services";
 import { botPreset, hubItemOf, SETTINGS_CHILD_TABS } from "$lib/botTabs";
-import { Icon, ScopeBadge } from "$lib/components/ui";
+import { Icon } from "$lib/components/ui";
 import { type BotTab, DEFAULT_BOT_TAB, navigateTo } from "$lib/router";
 import { activeBot, selectBot } from "$lib/stores/activeBot";
+import { disabledTabs, refreshDisabledTabs } from "$lib/stores/disabledTabs";
 import { headerExtra } from "$lib/stores/headerExtra";
 import { currentUser } from "$lib/stores/session";
 import { theme, toggleTheme } from "$lib/stores/theme";
@@ -97,9 +98,11 @@ const TAB_TITLES: Partial<Record<BotTab, string>> = {
 
 // プリセット別に絞り込んだメニュー配列（derived(activeBot)）。
 // 設定系タブの表示条件は BotSettingsHub が $lib/botTabs の同じ規約で絞り込む。
-const menuItems = derived(activeBot, ($bot) => {
+// 「有効な機能」で無効にした機能（$lib/stores/disabledTabs）も出さない。
+const menuItems = derived([activeBot, disabledTabs], ([$bot, $disabled]) => {
 	const isAssistant = botPreset($bot) === "mcp_assistant";
 	return ALL_MENU.filter((m) => {
+		if ($disabled.has(m.tab)) return false;
 		if (SECRETARY_ONLY_TABS.includes(m.tab)) return !isAssistant;
 		return true;
 	});
@@ -147,6 +150,11 @@ const title = $derived(TAB_TITLES[tab] ?? hubItem?.label ?? "ダッシュボー�
 // Bot 未選択時は App が Bot 一覧へ戻すので、ここは描画中の一瞬だけの既定値。
 const botName = $derived($activeBot?.name ?? "");
 const botId = $derived($activeBot?.id ?? "");
+
+// Bot を切り替えたら、無効な機能（サイドバーと設定ハブで隠すタブ）を取り直す。
+$effect(() => {
+	void refreshDisabledTabs(botId);
+});
 const botIdLabel = $derived(botId.startsWith("bot_") ? botId.slice(4) : botId);
 const botAvatar = $derived($activeBot?.avatar ?? "");
 const DEFAULT_AVATAR =
@@ -278,8 +286,6 @@ const themeTitle = $derived(
 				</h2>
 				{#if $headerExtra}
 					<div class="header-extra">{@render $headerExtra()}</div>
-				{:else if hubItem?.scope}
-					<div class="header-scope"><ScopeBadge scope={hubItem.scope} /></div>
 				{/if}
 			</div>
 		</header>
@@ -359,9 +365,6 @@ const themeTitle = $derived(
 	.breadcrumb-sep {
 		color: var(--text-secondary);
 		margin: 0 2px;
-	}
-	.header-scope {
-		margin-top: 6px;
 	}
 	.header-extra {
 		margin-top: 4px;

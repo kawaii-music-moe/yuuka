@@ -21,13 +21,7 @@ import type {
 	IntegratedBotView,
 	IntegratedGoogleAccountView,
 } from "$lib/api/types";
-import {
-	Button,
-	EmptyState,
-	Icon,
-	ScopeBadge,
-	TagChip,
-} from "$lib/components/ui";
+import { Button, EmptyState, Icon, TagChip } from "$lib/components/ui";
 import { withBasePath } from "$lib/router";
 import { activeBot } from "$lib/stores/activeBot";
 import { pushToast } from "$lib/stores/toast";
@@ -148,7 +142,6 @@ async function onAssignChange(value: string) {
 	<div class="config-card card">
 		<div class="column-header badge-right">
 			<h3><Icon name="hub" class="header-icon-symbol" />MCP サーバー</h3>
-			<ScopeBadge scope="bot" />
 		</div>
 		<p class="description-text">
 			このBotが会話で使う MCP サーバーです。<strong>Botを共有しているメンバー間で共通</strong
@@ -224,7 +217,6 @@ async function onAssignChange(value: string) {
 	<div class="config-card card">
 		<div class="column-header badge-right">
 			<h3><Icon name="account_circle" class="header-icon-symbol" />Google アカウント</h3>
-			<ScopeBadge scope="user_bot" />
 		</div>
 		{#if !overviewLoaded}
 			<p class="field-sub" aria-busy="true">読み込んでいます…</p>

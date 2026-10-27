@@ -2,7 +2,6 @@
 // このBotが使える認証情報カード（読み取り専用。旧 fetchCredentialsSettings）。
 // 登録・Bot別の許可は「連携サービス › 認証情報」（IntegratedOverlay）へ誘導するのみ。
 import { credentialApi } from "$lib/api/services";
-import { ScopeBadge } from "$lib/components/ui";
 import { withBasePath } from "$lib/router";
 import type { CredentialRow, CredentialsResp } from "./configTypes";
 
@@ -39,7 +38,6 @@ function updatedOf(c: CredentialRow): string {
 <section class="config-card card">
 	<div class="column-header badge-right">
 		<h3><span class="material-symbols-outlined header-icon-symbol">lock</span>認証情報</h3>
-		<ScopeBadge scope="user_bot" />
 		<span class="badge badge-accent">読み取り専用</span>
 	</div>
 

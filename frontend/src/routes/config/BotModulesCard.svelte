@@ -4,13 +4,8 @@
 
 import { ApiError } from "$lib/api/client";
 import { botAttributeApi } from "$lib/api/services";
-import {
-	Button,
-	Checkbox,
-	confirmDialog,
-	Icon,
-	ScopeBadge,
-} from "$lib/components/ui";
+import { Button, Checkbox, confirmDialog, Icon } from "$lib/components/ui";
+import { syncDisabledTabs } from "$lib/stores/disabledTabs";
 import { pushToast } from "$lib/stores/toast";
 import type { ModuleItem, ModulesResp } from "./configTypes";
 
@@ -42,6 +37,7 @@ async function load() {
 		const map: Record<string, boolean> = {};
 		for (const m of modules) map[m.id] = !!m.enabled;
 		enabledMap = map;
+		syncDisabledTabs(modules);
 		visible = true;
 	} catch {
 		visible = false;
@@ -87,7 +83,6 @@ async function resetToDefault() {
 {#if visible}
 	<section class="config-card card">
 		<div class="column-header badge-right">
-			<ScopeBadge scope="user_bot" />
 			<span class="badge badge-accent">{onCount} / {modules.length}</span>
 			<Button
 				variant="icon-sm"

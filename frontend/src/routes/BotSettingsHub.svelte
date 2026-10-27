@@ -14,6 +14,7 @@ import { botPreset, hubGroups } from "$lib/botTabs";
 import { Icon } from "$lib/components/ui";
 import { navigateTo } from "$lib/router";
 import { activeBot } from "$lib/stores/activeBot";
+import { disabledTabs } from "$lib/stores/disabledTabs";
 import { isAdmin } from "$lib/stores/session";
 import {
 	type AssistantConfigResp,
@@ -27,6 +28,7 @@ const groups = $derived(
 		defaultBot: isDefaultBot($activeBot?.id),
 		systemDefaultBot: isSystemDefaultBot($activeBot?.id),
 		isAdmin: $isAdmin,
+		disabledTabs: $disabledTabs,
 	}),
 );
 

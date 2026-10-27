@@ -48,6 +48,8 @@ export interface HubContext {
 	/** system_default（トークンは管理者だけが扱う）か。 */
 	systemDefaultBot: boolean;
 	isAdmin: boolean;
+	/** 「有効な機能」で無効にされた機能のタブ（行を出さない）。 */
+	disabledTabs?: ReadonlySet<string>;
 }
 
 export interface SettingsHubItem {
@@ -158,7 +160,10 @@ export function hubGroups(ctx: HubContext): HubGroup[] {
 			(i) => i.category === category.id,
 		);
 		const allowed = inCategory.filter((i) => !i.visible || i.visible(ctx));
-		const items = allowed.filter((i) => !i.only || i.only === ctx.preset);
+		const items = allowed.filter(
+			(i) =>
+				(!i.only || i.only === ctx.preset) && !ctx.disabledTabs?.has(i.tab),
+		);
 		if (items.length > 0) {
 			groups.push({ category, items, unavailable: false });
 		} else if (allowed.length > 0 && category.unavailableNote) {
