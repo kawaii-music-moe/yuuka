@@ -18,6 +18,7 @@ import { activeBot } from "$lib/stores/activeBot";
 import { pushToast } from "$lib/stores/toast";
 import type { StatusConfigResponse } from "./config/configTypes";
 import CronField from "./delivery/CronField.svelte";
+import TargetField from "./delivery/TargetField.svelte";
 
 import ReminderCard from "./reminders/ReminderCard.svelte";
 import { toTriggerAt } from "./reminders/reminderUtils";
@@ -30,10 +31,34 @@ let loading = $state(false);
 let message = $state("");
 let triggerAt = $state("");
 let repeatRule = $state("");
-let targetType = $state<"" | "dm" | "channel">("");
+let targetType = $state<"dm" | "channel">("dm");
 let targetId = $state("");
-let defaultTargetType = $state<"dm" | "channel" | null>(null);
+// ユーザー設定の既定送信先。送信先の初期値にし、選択肢に（既定）を付ける。
+let defaultTarget = $state<{ type: "dm" | "channel"; id: string } | null>(null);
 let submitting = $state(false);
+
+const targetOptions = $derived<{ value: "dm" | "channel"; label: string }[]>([
+	{ value: "dm", label: `DM${defaultTarget?.type === "dm" ? "（既定）" : ""}` },
+	{
+		value: "channel",
+		label: `チャンネル${defaultTarget?.type === "channel" ? "（既定）" : ""}`,
+	},
+]);
+
+function resetTarget() {
+	targetType = defaultTarget?.type ?? "dm";
+	targetId = defaultTarget?.type === "channel" ? defaultTarget.id : "";
+}
+
+// 通知日時は欄のどこを押してもブラウザ標準の日時ピッカーを開く（未対応ブラウザでは何もしない）。
+function openPicker(e: MouseEvent) {
+	const input = e.currentTarget as HTMLInputElement;
+	try {
+		input.showPicker?.();
+	} catch {
+		// ユーザー操作扱いにならない等で開けないときは、通常の入力欄のままにする
+	}
+}
 
 function reportError(e: unknown) {
 	const msg = e instanceof ApiError ? e.message : "エラーが発生しました";
@@ -54,14 +79,18 @@ async function loadReminders() {
 }
 
 async function loadDefaultTarget() {
-	defaultTargetType = null;
+	defaultTarget = null;
 	try {
 		const res = (await settingsApi.status()) as StatusConfigResponse;
-		defaultTargetType =
-			res.config?.notifyTarget?.type === "channel" ? "channel" : "dm";
+		const t = res.config?.notifyTarget;
+		defaultTarget =
+			t?.type === "channel"
+				? { type: "channel", id: t.id ?? "" }
+				: { type: "dm", id: "" };
 	} catch {
-		defaultTargetType = null;
+		defaultTarget = null;
 	}
+	resetTarget();
 }
 
 // activeBot（bot-scoped）変更 or showAll 変更で再取得。
@@ -86,7 +115,7 @@ async function onSubmit(e: SubmitEvent) {
 			message: msg,
 			trigger_at: toTriggerAt(triggerAt),
 			...(repeatRule.trim() ? { repeat_rule: repeatRule.trim() } : {}),
-			...(targetType ? { target_type: targetType } : {}),
+			target_type: targetType,
 			...(targetType === "channel" && targetId.trim()
 				? { target_id: targetId.trim() }
 				: {}),
@@ -95,8 +124,7 @@ async function onSubmit(e: SubmitEvent) {
 		message = "";
 		triggerAt = "";
 		repeatRule = "";
-		targetType = "";
-		targetId = "";
+		resetTarget();
 		pushToast("リマインダーを登録しました。", "success");
 		await loadReminders();
 	} catch (err) {
@@ -133,9 +161,6 @@ async function onCancel(id: number) {
 					>リマインダーの登録
 				</h3>
 			</div>
-			<p class="description-text">
-				指定日時にDiscordへ通知するリマインダーを登録します。cron式を指定すると繰り返しリマインドになります。
-			</p>
 			<form class="form-stack" onsubmit={onSubmit}>
 				<div class="form-group">
 					<label for="reminder-message">メッセージ *</label>
@@ -153,6 +178,8 @@ async function onCancel(id: number) {
 						type="datetime-local"
 						id="reminder-trigger-at"
 						required
+						class="picker-input"
+						onclick={openPicker}
 						bind:value={triggerAt}
 					/>
 				</div>
@@ -161,32 +188,19 @@ async function onCancel(id: number) {
 						id="reminder-repeat-rule"
 						label="繰り返し（任意）"
 						placeholder="例: 0 9 * * 1 (毎週月曜9時)"
+						help="指定すると送信後も自動で次回が予約されます。"
 						bind:value={repeatRule}
 					/>
-					<span class="field-sub">※指定すると送信後も自動で次回が予約されます。</span>
 				</div>
-				<div class="form-row">
-					<div class="form-group">
-						<label for="reminder-target-type">送信先</label>
-						<select id="reminder-target-type" bind:value={targetType}>
-							<option value="">既定（ユーザー設定に従う）</option>
-							<option value="dm">DM{defaultTargetType === "dm" ? "（既定）" : ""}</option>
-							<option value="channel">
-								チャンネル{defaultTargetType === "channel" ? "（既定）" : ""}
-							</option>
-						</select>
-					</div>
-					{#if targetType === "channel"}
-						<div class="form-group">
-							<label for="reminder-target-id">チャンネルID</label>
-							<input
-								type="text"
-								id="reminder-target-id"
-								placeholder="例: 123456789012345678"
-								bind:value={targetId}
-							/>
-						</div>
-					{/if}
+				<div class="form-group">
+					<label for="reminder-target-type">送信先</label>
+					<TargetField
+						id="reminder-target-type"
+						idInputId="reminder-target-id"
+						options={targetOptions}
+						bind:type={targetType}
+						bind:targetId
+					/>
 				</div>
 				<button type="submit" class="btn btn-primary btn-block" disabled={submitting}
 					>リマインダーを登録</button
@@ -224,6 +238,9 @@ async function onCancel(id: number) {
 </section>
 
 <style>
+	.picker-input {
+		cursor: pointer;
+	}
 	.reminders-showall-group {
 		display: flex;
 		align-items: center;
