@@ -1,13 +1,22 @@
 <script lang="ts">
+import type { Snippet } from "svelte";
 // ? アイコンのヘルプ。ホバーで説明を出し、クリックで開いたままにできる。
 interface Props {
 	id: string;
-	text: string;
+	/** 説明文（アイコンなどを混ぜるときは children で渡す） */
+	text?: string;
+	children?: Snippet;
 	label?: string;
 	/** 吹き出しの寄せ方（右端に置くときは "end" で画面外へはみ出さないようにする） */
 	align?: "center" | "end";
 }
-let { id, text, label = "説明", align = "center" }: Props = $props();
+let {
+	id,
+	text = "",
+	label = "説明",
+	align = "center",
+	children,
+}: Props = $props();
 
 let open = $state(false);
 </script>
@@ -24,7 +33,9 @@ let open = $state(false);
 	>
 		<span class="material-symbols-outlined" aria-hidden="true">help</span>
 	</button>
-	<span {id} role="tooltip" class="help-tip" class:open class:end={align === "end"}>{text}</span>
+	<span {id} role="tooltip" class="help-tip" class:open class:end={align === "end"}
+		>{#if children}{@render children()}{:else}{text}{/if}</span
+	>
 </span>
 
 <style>

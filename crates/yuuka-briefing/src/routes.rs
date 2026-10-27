@@ -1,15 +1,18 @@
-//! 配信設定 Web-API（Node `deliveryRoutes`・全て auth:user）。
+//! 定期報告の Web-API（全て auth:user・bot スコープ）。
 //!
-//! 朝報（briefing）・日報/週報（report）の設定 CRUD と、テスト配信 2 本を提供する。
+//! - `GET  /api/periodic-reports`        本人の定期報告一覧
+//! - `POST /api/periodic-reports/create` 登録（[`crate::model::ReportSettings::apply`] と同じキー）
+//! - `POST /api/periodic-reports/update` 部分更新（`id` + 変えるキーだけ・有効/無効の切替もこれ）
+//! - `POST /api/periodic-reports/delete` 削除（`id`）
+//! - `POST /api/periodic-reports/test`   テスト配信（`id`）
+//!
 //! 認可は [`AuthenticatedUser`] extractor で型強制、DB は `State<Db>`、bot スコープは共通の
-//! [`resolve_scope`]（`botId`＝body → クエリの順・未指定は 403・未アクセスは 404）で解決。
-//! レスポンス形は Node `sendJson` にバイト単位で合わせる（フラット `{success, ...}`・日本語 verbatim）。
+//! [`resolve_scope`]（`botId`＝body → クエリの順・未指定は 403・未アクセスは 404）で解決する。
+//! 他人の行は存在しない扱い（404）。
 //!
-//! **配信サービスのシーム**: `/api/briefing/test`・`/api/report-configs/test` の実配信は
-//! [`DeliveryRunner`] ポート越しに委譲する。実 runner（`yuuka_services::NotifierDeliveryRunner`＝定時配信と
-//! 同じ生成・送信経路）は supervisor が [`routes_with`] で注入する。[`routes`] の既定は
-//! [`NullDeliveryRunner`]（常に `false`＝未配信）で、route surface・検証・設定存在チェックだけが働く
-//! （admin/settings の `BotRuntime`/`NullBotRuntime` と同じ縮退方針）。
+//! **配信サービスのシーム**: `/test` の実配信は [`DeliveryRunner`] ポート越しに委譲する。実 runner
+//! （`yuuka_services::NotifierDeliveryRunner`＝定時配信と同じ生成・送信経路）は supervisor が
+//! [`routes_with`] で注入する。[`routes`] の既定は [`NullDeliveryRunner`]（常に `false`＝未配信）。
 
 use std::sync::Arc;
 
@@ -21,19 +24,19 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::{json, Value};
-use yuuka_core::{cron_util, DbError};
+use yuuka_core::DbError;
 use yuuka_web::{resolve_scope, AppState, AuthenticatedUser, Db};
 
+use crate::manage::{self, SaveError};
+use crate::model::report_view;
 use crate::repo;
-use crate::tools::is_likely_public_http_url;
 
-/// テスト配信の実行ポート（Node `runBriefingForUser` / `runReportForUser` のシーム）。
+/// テスト配信の実行ポート。
 #[async_trait]
 pub trait DeliveryRunner: Send + Sync {
-    /// 朝報をテスト配信する（成功なら `true`）。
-    async fn run_briefing(&self, user_id: &str, bot_id: &str) -> bool;
-    /// 日報/週報（`report_type`＝"daily"/"weekly"）をテスト配信する（成功なら `true`）。
-    async fn run_report(&self, user_id: &str, bot_id: &str, report_type: &str) -> bool;
+    /// 本人（`user_id` + `bot_id`）の定期報告 `report_id` を、設定した配信先へテスト配信する
+    /// （成功なら `true`）。無効にしている定期報告も送る。
+    async fn run_report(&self, user_id: &str, bot_id: &str, report_id: i64) -> bool;
 }
 
 /// 配信サービス未配線時の既定 runner（常に未配信＝`false`）。
@@ -41,17 +44,14 @@ pub struct NullDeliveryRunner;
 
 #[async_trait]
 impl DeliveryRunner for NullDeliveryRunner {
-    async fn run_briefing(&self, _user_id: &str, _bot_id: &str) -> bool {
-        false
-    }
-    async fn run_report(&self, _user_id: &str, _bot_id: &str, _report_type: &str) -> bool {
+    async fn run_report(&self, _user_id: &str, _bot_id: &str, _report_id: i64) -> bool {
         false
     }
 }
 
 /// 後から実 runner を差し込める runner（issue #136）。
 ///
-/// ツールレジストリ（`runBriefingNow`）は会話エンジンより先に組まれ、実 runner が使う Messenger は
+/// ツールレジストリ（`runPeriodicReportNow`）は会話エンジンより先に組まれ、実 runner が使う Messenger は
 /// 会話エンジンを受け取る Discord マネージャから作られる（循環）。そのためレジストリにはこれを渡し、
 /// Messenger ができた時点で [`LateDeliveryRunner::set`] する。未設定の間は [`NullDeliveryRunner`]
 /// と同じく常に未配信（`false`）。
@@ -75,15 +75,9 @@ impl LateDeliveryRunner {
 
 #[async_trait]
 impl DeliveryRunner for LateDeliveryRunner {
-    async fn run_briefing(&self, user_id: &str, bot_id: &str) -> bool {
+    async fn run_report(&self, user_id: &str, bot_id: &str, report_id: i64) -> bool {
         match self.inner.get() {
-            Some(runner) => runner.run_briefing(user_id, bot_id).await,
-            None => false,
-        }
-    }
-    async fn run_report(&self, user_id: &str, bot_id: &str, report_type: &str) -> bool {
-        match self.inner.get() {
-            Some(runner) => runner.run_report(user_id, bot_id, report_type).await,
+            Some(runner) => runner.run_report(user_id, bot_id, report_id).await,
             None => false,
         }
     }
@@ -95,30 +89,23 @@ struct BotQuery {
     bot_id: Option<String>,
 }
 
-/// 配信設定ルータ（既定 [`NullDeliveryRunner`]・`AppState` 上でマージされる）。
+/// 定期報告ルータ（既定 [`NullDeliveryRunner`]・`AppState` 上でマージされる）。
 pub fn routes() -> Router<AppState> {
     routes_with(Arc::new(NullDeliveryRunner))
 }
 
-/// 実配信 runner を注入して配信設定ルータを組む（サービス配線時に使う）。
+/// 実配信 runner を注入して定期報告ルータを組む（サービス配線時に使う）。
 pub fn routes_with(runner: Arc<dyn DeliveryRunner>) -> Router<AppState> {
     Router::new()
-        .route(
-            "/api/briefing-config",
-            get(get_briefing_config).post(post_briefing_config),
-        )
-        .route("/api/briefing/test", post(briefing_test))
-        .route(
-            "/api/report-configs",
-            get(get_report_configs).post(post_report_configs),
-        )
-        .route("/api/report-configs/test", post(report_test))
+        .route("/api/periodic-reports", get(list))
+        .route("/api/periodic-reports/create", post(create))
+        .route("/api/periodic-reports/update", post(update))
+        .route("/api/periodic-reports/delete", post(delete))
+        .route("/api/periodic-reports/test", post(test))
         .layer(Extension(runner))
 }
 
-// ─── 朝報設定 ────────────────────────────────────────────────────────────────
-
-async fn get_briefing_config(
+async fn list(
     user: AuthenticatedUser,
     State(db): State<Db>,
     Query(q): Query<BotQuery>,
@@ -127,54 +114,49 @@ async fn get_briefing_config(
         Ok(s) => s,
         Err(e) => return e.into_response(),
     };
-    let config =
-        match repo::find_briefing(&db, scope.user_id().as_str(), scope.bot_id().as_str()).await {
-            Ok(c) => c,
-            Err(e) => return server_error(&e),
-        };
-    let config_json = config.map_or(Value::Null, |c| {
-        json!({
-            "enabled": c.enabled,
-            "schedule_cron": c.schedule_cron,
-            "target_type": c.target_type,
-            "target_id": c.target_id,
-            "weather_lat": c.weather_lat,
-            "weather_lng": c.weather_lng,
-            "location_name": c.location_name,
-            "news_feeds": c.news_feeds,
-            "news_keywords": c.news_keywords,
-        })
-    });
-    json_ok(json!({ "success": true, "config": config_json }))
+    match repo::list_reports(&db, scope.user_id().as_str(), scope.bot_id().as_str()).await {
+        Ok(reports) => json_ok(json!({
+            "success": true,
+            "reports": reports.iter().map(report_view).collect::<Vec<_>>(),
+        })),
+        Err(e) => server_error(&e),
+    }
 }
 
-async fn post_briefing_config(
+async fn create(
     user: AuthenticatedUser,
     State(db): State<Db>,
     Query(q): Query<BotQuery>,
     Json(body): Json<Value>,
 ) -> Response {
-    // cron が文字列で与えられたら妥当性検証（Node `cron.validate`）。
-    if let Some(cron) = body.get("schedule_cron").and_then(Value::as_str) {
-        if !cron_util::is_valid(cron) {
-            return bad_request("cron式が不正です。");
-        }
-    }
+    save(user, db, q, body, false).await
+}
 
-    // SSRF: news_feeds 配列は http(s) 公開URLのみ（非空 trim 後に検査・Node 同順）。
-    let feeds_present = body.get("news_feeds").and_then(Value::as_array);
-    if let Some(arr) = feeds_present {
-        let bad = arr
-            .iter()
-            .map(js_string)
-            .find(|s| !s.trim().is_empty() && !is_likely_public_http_url(s));
-        if let Some(bad) = bad {
-            return bad_request(&format!(
-                "不正なフィードURLです（http(s)の公開URLのみ指定できます）: {bad}"
-            ));
-        }
-    }
+async fn update(
+    user: AuthenticatedUser,
+    State(db): State<Db>,
+    Query(q): Query<BotQuery>,
+    Json(body): Json<Value>,
+) -> Response {
+    save(user, db, q, body, true).await
+}
 
+/// 登録・更新の共通処理（`is_update` なら body の `id` の行を部分更新）。
+async fn save(
+    user: AuthenticatedUser,
+    db: Db,
+    q: BotQuery,
+    body: Value,
+    is_update: bool,
+) -> Response {
+    let id = if is_update {
+        match report_id(&body) {
+            Some(id) => Some(id),
+            None => return bad_request("id を指定してください。"),
+        }
+    } else {
+        None
+    };
     let raw_bot = body
         .get("botId")
         .and_then(Value::as_str)
@@ -183,52 +165,63 @@ async fn post_briefing_config(
         Ok(s) => s,
         Err(e) => return e.into_response(),
     };
-
-    // Node `key in body` 意味論: present なフィールドだけ patch へ載せる。
-    let patch = repo::BriefingPatch {
-        enabled: body.get("enabled").map(|v| v.as_bool() == Some(true)),
-        schedule_cron: body
-            .get("schedule_cron")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-        target_type: body
-            .get("target_type")
-            .map(|v| target_type_of(v).to_owned()),
-        target_id: body.get("target_id").map(opt_trimmed),
-        weather_lat: body.get("weather_lat").map(weather_value),
-        weather_lng: body.get("weather_lng").map(weather_value),
-        location_name: body.get("location_name").map(opt_trimmed),
-        // Node は `.map(String)` で空要素も残す（非フィルタ）。
-        news_feeds: body
-            .get("news_feeds")
-            .and_then(Value::as_array)
-            .map(|a| a.iter().map(js_string).collect()),
-        news_keywords: body
-            .get("news_keywords")
-            .and_then(Value::as_array)
-            .map(|a| a.iter().map(js_string).collect()),
-    };
-
-    if let Err(e) = repo::upsert_briefing(
+    match manage::save_report(
         &db,
         scope.user_id().as_str(),
         scope.bot_id().as_str(),
-        patch,
+        id,
+        &body,
     )
     .await
     {
-        return server_error(&e);
+        Ok(report) => {
+            let verb = if is_update { "保存" } else { "登録" };
+            json_ok(json!({
+                "success": true,
+                "message": format!("定期報告「{}」を{verb}しました。", report.settings.name),
+                "report": report_view(&report),
+            }))
+        }
+        Err(SaveError::Invalid(message)) => bad_request(&message),
+        Err(SaveError::NotFound) => not_found(),
+        Err(SaveError::Db(e)) => server_error(&e),
     }
-    ok_message("朝報の設定を保存しました。")
 }
 
-async fn briefing_test(
+async fn delete(
+    user: AuthenticatedUser,
+    State(db): State<Db>,
+    Query(q): Query<BotQuery>,
+    Json(body): Json<Value>,
+) -> Response {
+    let Some(id) = report_id(&body) else {
+        return bad_request("id を指定してください。");
+    };
+    let raw_bot = body
+        .get("botId")
+        .and_then(Value::as_str)
+        .or(q.bot_id.as_deref());
+    let scope = match resolve_scope(&user.0, &db, raw_bot).await {
+        Ok(s) => s,
+        Err(e) => return e.into_response(),
+    };
+    match repo::delete_report(&db, scope.user_id().as_str(), scope.bot_id().as_str(), id).await {
+        Ok(true) => json_ok(json!({ "success": true, "message": "定期報告を削除しました。" })),
+        Ok(false) => not_found(),
+        Err(e) => server_error(&e),
+    }
+}
+
+async fn test(
     user: AuthenticatedUser,
     State(db): State<Db>,
     Extension(runner): Extension<Arc<dyn DeliveryRunner>>,
     Query(q): Query<BotQuery>,
     Json(body): Json<Value>,
 ) -> Response {
+    let Some(id) = report_id(&body) else {
+        return bad_request("id を指定してください。");
+    };
     let raw_bot = body
         .get("botId")
         .and_then(Value::as_str)
@@ -237,198 +230,34 @@ async fn briefing_test(
         Ok(s) => s,
         Err(e) => return e.into_response(),
     };
-    let (uid, bid) = (
-        scope.user_id().as_str().to_owned(),
-        scope.bot_id().as_str().to_owned(),
-    );
-    // 設定が無ければ配信前に 400（Node parity）。
-    match repo::find_briefing(&db, &uid, &bid).await {
-        Ok(Some(_)) => {}
-        Ok(None) => {
-            return bad_request("朝報がまだ設定されていません。先に設定を保存してください。")
-        }
+    let (user_id, bot_id) = (scope.user_id().as_str(), scope.bot_id().as_str());
+    let report = match repo::find_report(&db, user_id, bot_id, id).await {
+        Ok(Some(report)) => report,
+        Ok(None) => return not_found(),
         Err(e) => return server_error(&e),
-    }
-    let sent = runner.run_briefing(&uid, &bid).await;
+    };
+    let sent = runner.run_report(user_id, bot_id, id).await;
     json_ok(json!({
         "success": sent,
         "message": if sent {
-            "朝報をテスト配信しました。Discordを確認してください。"
+            format!(
+                "定期報告「{}」をテスト配信しました。Discordを確認してください。",
+                report.settings.name
+            )
         } else {
-            "配信に失敗しました。Botが起動しているか確認してください。"
+            "配信に失敗しました。Botが起動しているか、配信先の設定を確認してください。".to_owned()
         },
-    }))
-}
-
-// ─── 日報・週報設定 ──────────────────────────────────────────────────────────
-
-async fn get_report_configs(
-    user: AuthenticatedUser,
-    State(db): State<Db>,
-    Query(q): Query<BotQuery>,
-) -> Response {
-    let scope = match resolve_scope(&user.0, &db, q.bot_id.as_deref()).await {
-        Ok(s) => s,
-        Err(e) => return e.into_response(),
-    };
-    let configs =
-        match repo::get_reports(&db, scope.user_id().as_str(), scope.bot_id().as_str()).await {
-            Ok(list) => list,
-            Err(e) => return server_error(&e),
-        };
-    let configs: Vec<Value> = configs
-        .into_iter()
-        .map(|c| {
-            json!({
-                "type": c.r#type,
-                "enabled": c.enabled,
-                "schedule_cron": c.schedule_cron,
-                "target_type": c.target_type,
-                "target_id": c.target_id,
-            })
-        })
-        .collect();
-    json_ok(json!({ "success": true, "configs": configs }))
-}
-
-async fn post_report_configs(
-    user: AuthenticatedUser,
-    State(db): State<Db>,
-    Query(q): Query<BotQuery>,
-    Json(body): Json<Value>,
-) -> Response {
-    let report_type = body.get("type").and_then(Value::as_str).unwrap_or("");
-    if report_type != "daily" && report_type != "weekly" {
-        return bad_request("type は 'daily' または 'weekly' を指定してください。");
-    }
-    if let Some(cron) = body.get("schedule_cron").and_then(Value::as_str) {
-        if !cron_util::is_valid(cron) {
-            return bad_request("cron式が不正です。");
-        }
-    }
-    let raw_bot = body
-        .get("botId")
-        .and_then(Value::as_str)
-        .or(q.bot_id.as_deref());
-    let scope = match resolve_scope(&user.0, &db, raw_bot).await {
-        Ok(s) => s,
-        Err(e) => return e.into_response(),
-    };
-
-    let patch = repo::ReportPatch {
-        enabled: body.get("enabled").map(|v| v.as_bool() == Some(true)),
-        schedule_cron: body
-            .get("schedule_cron")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-        target_type: body
-            .get("target_type")
-            .map(|v| target_type_of(v).to_owned()),
-        target_id: body.get("target_id").map(opt_trimmed),
-    };
-    if let Err(e) = repo::upsert_report(
-        &db,
-        scope.user_id().as_str(),
-        scope.bot_id().as_str(),
-        report_type,
-        patch,
-    )
-    .await
-    {
-        return server_error(&e);
-    }
-    let label = if report_type == "daily" {
-        "日報"
-    } else {
-        "週報"
-    };
-    ok_message(&format!("{label}の設定を保存しました。"))
-}
-
-async fn report_test(
-    user: AuthenticatedUser,
-    State(db): State<Db>,
-    Extension(runner): Extension<Arc<dyn DeliveryRunner>>,
-    Query(q): Query<BotQuery>,
-    Json(body): Json<Value>,
-) -> Response {
-    // Node: `type === "weekly" ? "weekly" : "daily"`（既定 daily）。
-    let report_type = if body.get("type").and_then(Value::as_str) == Some("weekly") {
-        "weekly"
-    } else {
-        "daily"
-    };
-    let raw_bot = body
-        .get("botId")
-        .and_then(Value::as_str)
-        .or(q.bot_id.as_deref());
-    let scope = match resolve_scope(&user.0, &db, raw_bot).await {
-        Ok(s) => s,
-        Err(e) => return e.into_response(),
-    };
-    let sent = runner
-        .run_report(
-            scope.user_id().as_str(),
-            scope.bot_id().as_str(),
-            report_type,
-        )
-        .await;
-    json_ok(json!({
-        "success": sent,
-        "message": if sent { "レポートをテスト配信しました。" } else { "配信に失敗しました。" },
     }))
 }
 
 // ─── ヘルパ ──────────────────────────────────────────────────────────────────
 
-/// `target_type` は "channel" のときだけ channel・それ以外は dm（Node parity）。
-fn target_type_of(v: &Value) -> &'static str {
-    if v.as_str() == Some("channel") {
-        "channel"
-    } else {
-        "dm"
-    }
-}
-
-/// `typeof x === "string" && x.trim() ? x.trim() : null` 相当（present 前提の内側値）。
-fn opt_trimmed(v: &Value) -> Option<String> {
-    v.as_str()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_owned)
-}
-
-/// weather 列の値（null/空文字は NULL へ・それ以外は数値化・Node `Number(...)`）。
-fn weather_value(v: &Value) -> Option<f64> {
-    if v.is_null() {
-        return None;
-    }
-    if let Some(s) = v.as_str() {
-        let t = s.trim();
-        return if t.is_empty() {
-            None
-        } else {
-            t.parse::<f64>().ok()
-        };
-    }
-    v.as_f64()
-}
-
-/// JS `String(x)` 相当（文字列はそのまま・null は "null"・他は JSON 表現）。フィード/キーワード用。
-fn js_string(v: &Value) -> String {
-    match v {
-        Value::String(s) => s.clone(),
-        Value::Null => "null".to_owned(),
-        other => other.to_string(),
-    }
+fn report_id(body: &Value) -> Option<i64> {
+    body.get("id").and_then(Value::as_i64)
 }
 
 fn json_ok(body: Value) -> Response {
     (StatusCode::OK, Json(body)).into_response()
-}
-
-fn ok_message(message: &str) -> Response {
-    json_ok(json!({ "success": true, "message": message }))
 }
 
 fn bad_request(message: &str) -> Response {
@@ -439,10 +268,17 @@ fn bad_request(message: &str) -> Response {
         .into_response()
 }
 
-/// DB 失敗は 500（内部エラー文字列は出さない・Node の 500 経路に対応）。
+fn not_found() -> Response {
+    (
+        StatusCode::NOT_FOUND,
+        Json(json!({ "success": false, "message": "定期報告が見つかりません。" })),
+    )
+        .into_response()
+}
+
+/// DB 失敗は 500（内部エラー文字列は応答に出さない）。
 fn server_error(err: &DbError) -> Response {
-    // ログ相当（内部詳細）は将来 tracing で。応答は定型のみ。
-    let _ = err;
+    tracing::error!(error = %err, "定期報告 API の DB 操作に失敗");
     (
         StatusCode::INTERNAL_SERVER_ERROR,
         Json(json!({ "success": false, "message": "内部エラーが発生しました。" })),
@@ -458,7 +294,7 @@ mod tests {
     use async_trait::async_trait;
     use axum::body::{to_bytes, Body};
     use axum::http::{Request, StatusCode};
-    use serde_json::Value;
+    use serde_json::{json, Value};
     use tower::ServiceExt;
     use yuuka_core::AuthError;
     use yuuka_types::{Role, SessionUser};
@@ -472,47 +308,48 @@ mod tests {
     #[async_trait]
     impl AuthBackend for FakeAuth {
         async fn session_user(&self, token: &str) -> Result<Option<SessionUser>, AuthError> {
-            Ok((token == "good").then(|| SessionUser {
-                discord_id: "u".to_owned(),
-                username: "u".to_owned(),
-                role: Role::User,
-            }))
+            Ok(match token {
+                "good" => Some(SessionUser {
+                    discord_id: "u".to_owned(),
+                    username: "u".to_owned(),
+                    role: Role::User,
+                }),
+                _ => None,
+            })
         }
         async fn desktop_user(&self, _token: &str) -> Result<Option<SessionUser>, AuthError> {
             Ok(None)
         }
     }
 
-    // 空ファイル → Db::open が V17 baseline を流す（briefing_configs/report_configs/users を含む）。
+    // 空ファイル → Db::open が実スキーマを流す（periodic_reports/users を含む）。
     fn seed_db() -> Db {
         let seq = SEQ.fetch_add(1, Ordering::Relaxed);
         let path = std::env::temp_dir().join(format!(
-            "yuuka_delivery_test_{}_{seq}.sqlite",
+            "yuuka_periodic_report_routes_{}_{seq}.sqlite",
             std::process::id()
         ));
         let _ = std::fs::remove_file(&path);
-        {
-            let conn = rusqlite::Connection::open(&path).expect("create empty db file");
-            drop(conn);
-        }
+        drop(rusqlite::Connection::open(&path).expect("create empty db file"));
         let db = Db::open(&path).expect("open db");
-        {
-            let conn = rusqlite::Connection::open(&path).expect("seed user conn");
-            conn.execute(
-                "INSERT OR IGNORE INTO users (discord_id, username, salt) \
-                 VALUES ('u', 'u', 'x')",
-                [],
-            )
-            .expect("seed user");
-        }
+        let conn = rusqlite::Connection::open(&path).expect("seed user conn");
+        conn.execute(
+            "INSERT OR IGNORE INTO users (discord_id, username, salt) VALUES ('u', 'u', 'x')",
+            [],
+        )
+        .expect("seed user");
         db
     }
 
-    async fn app() -> axum::Router {
+    async fn app_with(runner: Arc<dyn super::DeliveryRunner>) -> axum::Router {
         let db = seed_db();
         yuuka_web::test_support::seed_bot(&db, TEST_BOT_ID, "u").await;
         let state = AppState::new(Arc::new(FakeAuth), WebConfig::default(), db);
-        with_bot_query(super::routes().with_state(state), TEST_BOT_ID)
+        with_bot_query(super::routes_with(runner).with_state(state), TEST_BOT_ID)
+    }
+
+    async fn app() -> axum::Router {
+        app_with(Arc::new(super::NullDeliveryRunner)).await
     }
 
     async fn send(app: &axum::Router, method: &str, uri: &str, body: &str) -> (StatusCode, Value) {
@@ -539,193 +376,145 @@ mod tests {
         (status, json)
     }
 
-    #[tokio::test]
-    async fn briefing_get_unset_is_null_then_roundtrips() {
-        let app = app().await;
+    async fn post(app: &axum::Router, uri: &str, body: Value) -> (StatusCode, Value) {
+        send(app, "POST", uri, &body.to_string()).await
+    }
 
-        // 未設定は config: null。
-        let (st, j) = send(&app, "GET", "/api/briefing-config", "").await;
-        assert_eq!(st, StatusCode::OK);
-        assert_eq!(j["success"], true);
-        assert!(j["config"].is_null());
-
-        // 保存（enabled + cron + 地名 + 緯度 + 公開フィード）。
-        let (st, j) = send(
-            &app,
-            "POST",
-            "/api/briefing-config",
-            r#"{"enabled":true,"schedule_cron":"0 8 * * *","location_name":"東京","weather_lat":35.6,"news_feeds":["https://example.com/a.xml"]}"#,
-        )
-        .await;
-        assert_eq!(st, StatusCode::OK);
-        assert_eq!(j["message"], "朝報の設定を保存しました。");
-
-        // GET に反映。
-        let (_st, j) = send(&app, "GET", "/api/briefing-config", "").await;
-        let c = &j["config"];
-        assert_eq!(c["enabled"], true);
-        assert_eq!(c["schedule_cron"], "0 8 * * *");
-        assert_eq!(c["location_name"], "東京");
-        assert_eq!(c["weather_lat"], 35.6);
-        assert_eq!(
-            c["news_feeds"],
-            serde_json::json!(["https://example.com/a.xml"])
-        );
-
-        // 部分更新: location_name を null で明示クリア・他は保持。
-        let (_st, _j) = send(
-            &app,
-            "POST",
-            "/api/briefing-config",
-            r#"{"location_name":null}"#,
-        )
-        .await;
-        let (_st, j) = send(&app, "GET", "/api/briefing-config", "").await;
-        assert!(j["config"]["location_name"].is_null());
-        assert_eq!(j["config"]["enabled"], true); // 保持。
+    fn morning() -> Value {
+        json!({
+            "name": "朝報",
+            "schedule_cron": "0 7 * * *",
+            "sections": ["weather", "news"],
+            "location_name": "東京",
+            "news_feeds": ["https://example.com/rss"],
+            "target_type": "channel",
+            "target_id": "chan-1",
+        })
     }
 
     #[tokio::test]
-    async fn briefing_post_rejects_bad_cron_and_internal_feed() {
+    async fn create_list_update_delete_roundtrip() {
         let app = app().await;
-        let (st, j) = send(
-            &app,
-            "POST",
-            "/api/briefing-config",
-            r#"{"schedule_cron":"nope"}"#,
-        )
-        .await;
-        assert_eq!(st, StatusCode::BAD_REQUEST);
-        assert_eq!(j["message"], "cron式が不正です。");
 
-        // 5 フィールドでも実行時 parser が解釈できない式は弾く。
-        let (st, j) = send(
-            &app,
-            "POST",
-            "/api/briefing-config",
-            r#"{"schedule_cron":"0 8 32 * *"}"#,
-        )
-        .await;
-        assert_eq!(st, StatusCode::BAD_REQUEST);
-        assert_eq!(j["message"], "cron式が不正です。");
+        let (st, j) = post(&app, "/api/periodic-reports/create", morning()).await;
+        assert_eq!(st, StatusCode::OK, "{j}");
+        assert_eq!(j["message"], "定期報告「朝報」を登録しました。");
+        let id = j["report"]["id"].as_i64().unwrap();
+        assert_eq!(j["report"]["enabled"], true);
+        assert_eq!(j["report"]["private"], false);
 
-        let (st, j) = send(
+        // 同じ名前は登録できない。
+        let (st, j) = post(&app, "/api/periodic-reports/create", morning()).await;
+        assert_eq!(st, StatusCode::BAD_REQUEST);
+        assert!(j["message"].as_str().unwrap().contains("既にあります"));
+
+        // 有効/無効だけの部分更新（他の項目は保たれる）。
+        let (st, _) = post(
             &app,
-            "POST",
-            "/api/briefing-config",
-            r#"{"news_feeds":["http://169.254.169.254/latest"]}"#,
+            "/api/periodic-reports/update",
+            json!({"id": id, "enabled": false}),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK);
+        let (st, j) = send(&app, "GET", "/api/periodic-reports", "").await;
+        assert_eq!(st, StatusCode::OK);
+        let reports = j["reports"].as_array().unwrap();
+        assert_eq!(reports.len(), 1);
+        assert_eq!(reports[0]["enabled"], false);
+        assert_eq!(reports[0]["target_id"], "chan-1");
+        assert_eq!(reports[0]["sections"], json!(["weather", "news"]));
+
+        // 非公開の内容を足すならチャンネルには送れない。DM に変えれば保存できる。
+        let (st, j) = post(
+            &app,
+            "/api/periodic-reports/update",
+            json!({"id": id, "sections": ["weather", "tasks"]}),
         )
         .await;
         assert_eq!(st, StatusCode::BAD_REQUEST);
-        assert!(j["message"].as_str().unwrap().contains("不正なフィードURL"));
+        assert!(j["message"]
+            .as_str()
+            .unwrap()
+            .contains("DM にしか送れません"));
+        let (st, j) = post(
+            &app,
+            "/api/periodic-reports/update",
+            json!({"id": id, "sections": ["weather", "tasks"], "target_type": "dm"}),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK, "{j}");
+        assert_eq!(j["report"]["target_id"], Value::Null);
+        assert_eq!(j["report"]["private"], true);
+
+        let (st, _) = post(&app, "/api/periodic-reports/delete", json!({"id": id})).await;
+        assert_eq!(st, StatusCode::OK);
+        let (st, _) = post(&app, "/api/periodic-reports/delete", json!({"id": id})).await;
+        assert_eq!(st, StatusCode::NOT_FOUND);
+        let (_, j) = send(&app, "GET", "/api/periodic-reports", "").await;
+        assert_eq!(j["reports"].as_array().unwrap().len(), 0);
     }
 
     #[tokio::test]
-    async fn briefing_post_rejects_reserved_and_normalized_ip_feeds() {
+    async fn invalid_requests_are_rejected() {
         let app = app().await;
-        for feed in [
-            "http://127.1/rss",
-            "http://2130706433/rss",
-            "http://[::ffff:127.0.0.1]/rss",
-            "http://100.64.0.1/rss",
-            "http://198.18.0.1/rss",
-            "http://224.0.0.1/rss",
-            "http://[2001:db8::1]/rss",
-            "http://[fec0::1]/rss",
-            "http://[ff02::1]/rss",
-        ] {
-            let body = serde_json::json!({"news_feeds": [feed]}).to_string();
-            let (status, result) = send(&app, "POST", "/api/briefing-config", &body).await;
-            assert_eq!(status, StatusCode::BAD_REQUEST, "{feed}");
-            assert!(result["message"]
-                .as_str()
-                .unwrap()
-                .contains("不正なフィードURL"));
-        }
-        let (status, result) = send(&app, "GET", "/api/briefing-config", "").await;
-        assert_eq!(status, StatusCode::OK);
-        assert!(result["config"].is_null());
-    }
-
-    #[tokio::test]
-    async fn briefing_test_requires_config_then_null_runner_reports_failure() {
-        let app = app().await;
-        // 未設定 → 400。
-        let (st, j) = send(&app, "POST", "/api/briefing/test", "{}").await;
+        let (st, _) = post(
+            &app,
+            "/api/periodic-reports/update",
+            json!({"enabled": true}),
+        )
+        .await;
         assert_eq!(st, StatusCode::BAD_REQUEST);
-        assert_eq!(
-            j["message"],
-            "朝報がまだ設定されていません。先に設定を保存してください。"
-        );
-
-        // 設定後は 200 だが NullDeliveryRunner は未配信（success:false）。
-        send(
+        let (st, _) = post(
             &app,
-            "POST",
-            "/api/briefing-config",
-            r#"{"enabled":true,"schedule_cron":"0 8 * * *"}"#,
+            "/api/periodic-reports/update",
+            json!({"id": 999, "enabled": true}),
         )
         .await;
-        let (st, j) = send(&app, "POST", "/api/briefing/test", "{}").await;
-        assert_eq!(st, StatusCode::OK);
-        assert_eq!(j["success"], false);
-        assert!(j["message"].as_str().unwrap().contains("配信に失敗"));
-    }
-
-    #[tokio::test]
-    async fn report_configs_roundtrip_and_validation() {
-        let app = app().await;
-
-        // 不正 type → 400。
-        let (st, j) = send(&app, "POST", "/api/report-configs", r#"{"type":"monthly"}"#).await;
+        assert_eq!(st, StatusCode::NOT_FOUND);
+        let mut body = morning();
+        body["schedule_cron"] = json!("bad");
+        let (st, j) = post(&app, "/api/periodic-reports/create", body).await;
         assert_eq!(st, StatusCode::BAD_REQUEST);
-        assert_eq!(
-            j["message"],
-            "type は 'daily' または 'weekly' を指定してください。"
-        );
-
-        // daily 保存。
-        let (st, j) = send(
-            &app,
-            "POST",
-            "/api/report-configs",
-            r#"{"type":"daily","enabled":true,"schedule_cron":"0 21 * * *"}"#,
-        )
-        .await;
-        assert_eq!(st, StatusCode::OK);
-        assert_eq!(j["message"], "日報の設定を保存しました。");
-
-        // GET に反映。
-        let (st, j) = send(&app, "GET", "/api/report-configs", "").await;
-        assert_eq!(st, StatusCode::OK);
-        let configs = j["configs"].as_array().unwrap();
-        assert!(configs
-            .iter()
-            .any(|c| c["type"] == "daily" && c["enabled"] == true));
-
-        // report/test は NullDeliveryRunner で success:false（200）。
-        let (st, j) = send(
-            &app,
-            "POST",
-            "/api/report-configs/test",
-            r#"{"type":"weekly"}"#,
-        )
-        .await;
-        assert_eq!(st, StatusCode::OK);
-        assert_eq!(j["success"], false);
+        assert!(j["message"].as_str().unwrap().contains("cron"));
     }
 
-    /// 常に指定の結果を返す runner（[`super::LateDeliveryRunner`] の委譲確認用）。
-    struct FixedRunner(bool);
+    /// 呼ばれた引数を記録して指定の結果を返す runner。
+    struct FixedRunner(bool, std::sync::Mutex<Vec<(String, String, i64)>>);
 
     #[async_trait]
     impl super::DeliveryRunner for FixedRunner {
-        async fn run_briefing(&self, _user_id: &str, _bot_id: &str) -> bool {
+        async fn run_report(&self, user_id: &str, bot_id: &str, report_id: i64) -> bool {
+            self.1
+                .lock()
+                .unwrap()
+                .push((user_id.to_owned(), bot_id.to_owned(), report_id));
             self.0
         }
-        async fn run_report(&self, _user_id: &str, _bot_id: &str, _report_type: &str) -> bool {
-            self.0
-        }
+    }
+
+    #[tokio::test]
+    async fn test_delivery_uses_runner_for_own_report() {
+        let runner = Arc::new(FixedRunner(true, std::sync::Mutex::default()));
+        let app = app_with(runner.clone()).await;
+        let (_, j) = post(&app, "/api/periodic-reports/create", morning()).await;
+        let id = j["report"]["id"].as_i64().unwrap();
+
+        let (st, j) = post(&app, "/api/periodic-reports/test", json!({"id": id})).await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(j["success"], true);
+        assert!(j["message"]
+            .as_str()
+            .unwrap()
+            .contains("「朝報」をテスト配信"));
+        assert_eq!(
+            runner.1.lock().unwrap().as_slice(),
+            [("u".to_owned(), TEST_BOT_ID.to_owned(), id)]
+        );
+
+        // 無い id は runner を呼ばずに 404。
+        let (st, _) = post(&app, "/api/periodic-reports/test", json!({"id": id + 1})).await;
+        assert_eq!(st, StatusCode::NOT_FOUND);
+        assert_eq!(runner.1.lock().unwrap().len(), 1);
     }
 
     #[tokio::test]
@@ -734,16 +523,14 @@ mod tests {
 
         let late = LateDeliveryRunner::new();
         // 未設定の間は未配信。
-        assert!(!late.run_briefing("u", "b").await);
-        assert!(!late.run_report("u", "b", "daily").await);
+        assert!(!late.run_report("u", "b", 1).await);
 
         // 設定後は実 runner へ委譲する。
-        assert!(late.set(Arc::new(FixedRunner(true))));
-        assert!(late.run_briefing("u", "b").await);
-        assert!(late.run_report("u", "b", "weekly").await);
+        assert!(late.set(Arc::new(FixedRunner(true, std::sync::Mutex::default()))));
+        assert!(late.run_report("u", "b", 1).await);
 
         // 2 度目の設定は無視（最初の runner のまま）。
-        assert!(!late.set(Arc::new(FixedRunner(false))));
-        assert!(late.run_briefing("u", "b").await);
+        assert!(!late.set(Arc::new(FixedRunner(false, std::sync::Mutex::default()))));
+        assert!(late.run_report("u", "b", 1).await);
     }
 }

@@ -47,7 +47,7 @@ pub use ws::{ws_routes, ws_routes_with_interactions};
 /// `client_api_routes` は [`yuuka_client_api::routes_with`] が返す `/api/client/*` ルータ（`ChatEngine`/
 /// `RateLimiter` を `Extension` で内包済み・チャット送信 issue #41）。
 ///
-/// `briefing_routes` は [`yuuka_briefing::routes_with`] が返す配信設定ルータ（テスト配信の
+/// `briefing_routes` は [`yuuka_briefing::routes_with`] が返す定期報告ルータ（テスト配信の
 /// `DeliveryRunner` を `Extension` で内包済み・issue #99）。
 ///
 /// `member_share_routes` は利用申請 + Bot 共有招待ルータ（[`yuuka_orchestrator::member_request_routes_with`]

@@ -18,7 +18,7 @@ use yuuka_web::Db;
 ///
 /// `recorder` は操作履歴レコーダー（`getRecentActionHistory` が読む）。FC ループにも同じ Arc を渡す。
 /// `calendar` は予定の Google カレンダー同期に使う（未配線なら `None`）。
-/// `briefing_delivery` は `runBriefingNow` の `deliver: true`（設定した配信先へのテスト配信）に使う
+/// `briefing_delivery` は `runPeriodicReportNow` の `deliver: true`（設定した配信先へのテスト配信）に使う
 /// （未配線なら `None`＝常に未配信）。
 ///
 /// # Errors
@@ -87,7 +87,7 @@ fn all_domain_tools(
     // guild-assistant（汎用モード）ツール。露出は Tool::exposure（guild_assistant + memory 能力）で
     // 選別されるため、秘書経路のスナップショットには現れない。
     all.extend(yuuka_botassistant::tools(db.clone())?);
-    // runBriefingNow の `deliver: true` は /api/briefing/test と同じ配信 runner で送る（未配線なら未配信）。
+    // runPeriodicReportNow の `deliver: true` は /api/periodic-reports/test と同じ配信 runner で送る（未配線なら未配信）。
     let briefing_delivery: Arc<dyn DeliveryRunner> =
         briefing_delivery.unwrap_or_else(|| Arc::new(yuuka_briefing::NullDeliveryRunner));
     all.extend(yuuka_briefing::tools_with_aux_text(

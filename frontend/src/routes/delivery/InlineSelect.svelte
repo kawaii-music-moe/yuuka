@@ -4,7 +4,8 @@
 
 interface Props {
 	id: string;
-	options: { value: T; label: string }[];
+	/** `disabled` の選択肢は表示するが選べない */
+	options: { value: T; label: string; disabled?: boolean }[];
 	value: T;
 	class?: string;
 	/** 読み上げ名（label 要素と関連付けない場合） */
@@ -28,24 +29,59 @@ function choose(v: T) {
 
 let open = $state(false);
 let root: HTMLDivElement;
-// 下に候補を出す余白が足りなければ、上に出す
-let dropUp = $state(false);
+// 候補リストは body 直下へ出し、トリガーの位置に position: fixed で重ねる。
+// モーダル（overflow-y: auto）の中で開いても、はみ出してスクロールバーが出たり隠れたりしない。
+let listStyle = $state("");
 
-$effect(() => {
-	if (!open || !root) return;
+function place() {
+	if (!root) return;
 	const rect = root.getBoundingClientRect();
 	const listHeight = Math.min(240, options.length * 36 + 8);
 	const below = window.innerHeight - rect.bottom;
-	dropUp = below < listHeight + 8 && rect.top > below;
+	// 下に候補を出す余白が足りなければ、上に出す
+	const up = below < listHeight + 8 && rect.top > below;
+	const vertical = up
+		? `bottom: ${window.innerHeight - rect.top + 4}px;`
+		: `top: ${rect.bottom + 4}px;`;
+	listStyle = `${vertical} left: ${rect.left}px; min-width: ${rect.width}px;`;
+}
+
+$effect(() => {
+	if (!open) return;
+	place();
+	// 候補リスト自身のスクロール以外で画面が動いたら閉じる
+	const onScroll = (e: Event) => {
+		if (!(e.target instanceof Node && list?.contains(e.target))) open = false;
+	};
+	const onResize = () => (open = false);
+	window.addEventListener("scroll", onScroll, true);
+	window.addEventListener("resize", onResize);
+	return () => {
+		window.removeEventListener("scroll", onScroll, true);
+		window.removeEventListener("resize", onResize);
+	};
 });
+
+let list = $state<HTMLUListElement>();
+
+function portal(node: HTMLElement) {
+	document.body.appendChild(node);
+	return {
+		destroy() {
+			node.remove();
+		},
+	};
+}
 const listId = $derived(`${id}-list`);
 
 function onkeydown(e: KeyboardEvent) {
 	if (e.key === "ArrowDown" || e.key === "ArrowUp") {
 		e.preventDefault();
-		const i = options.findIndex((o) => o.value === value);
-		const next = i + (e.key === "ArrowDown" ? 1 : -1);
-		choose(options[Math.max(0, Math.min(options.length - 1, next))].value);
+		// 選べない選択肢は飛ばす
+		const step = e.key === "ArrowDown" ? 1 : -1;
+		let i = options.findIndex((o) => o.value === value) + step;
+		while (i >= 0 && i < options.length && options[i].disabled) i += step;
+		if (i >= 0 && i < options.length) choose(options[i].value);
 		open = true;
 	} else if ((e.key === "Escape" || e.key === "Enter") && open) {
 		e.preventDefault();
@@ -71,15 +107,25 @@ function onkeydown(e: KeyboardEvent) {
 		<span class="material-symbols-outlined chevron" aria-hidden="true">expand_more</span>
 	</button>
 	{#if open}
-		<ul class="option-list" class:up={dropUp} id={listId} role="listbox">
+		<ul
+			class="option-list"
+			style={listStyle}
+			id={listId}
+			role="listbox"
+			bind:this={list}
+			use:portal
+		>
 			{#each options as opt (opt.value)}
 				<li
 					role="option"
 					aria-selected={opt.value === value}
+					aria-disabled={opt.disabled || undefined}
 					class:highlighted={opt.value === value}
+					class:disabled={opt.disabled}
 					onmousedown={(e) => {
 						// blur より先に選択を確定する
 						e.preventDefault();
+						if (opt.disabled) return;
 						choose(opt.value);
 						open = false;
 					}}
@@ -116,11 +162,9 @@ function onkeydown(e: KeyboardEvent) {
 		color: var(--text-secondary);
 	}
 	.option-list {
-		position: absolute;
-		top: calc(100% + 4px);
-		left: 0;
-		min-width: 100%;
-		z-index: 20;
+		/* 位置・幅は place() が style で与える。モーダル（z-index: 10000）より上に出す */
+		position: fixed;
+		z-index: 10001;
 		margin: 0;
 		padding: 4px;
 		list-style: none;
@@ -130,10 +174,6 @@ function onkeydown(e: KeyboardEvent) {
 		box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18);
 		max-height: 240px;
 		overflow-y: auto;
-	}
-	.option-list.up {
-		top: auto;
-		bottom: calc(100% + 4px);
 	}
 	.option-list li {
 		padding: 8px 10px;
@@ -146,5 +186,10 @@ function onkeydown(e: KeyboardEvent) {
 	.option-list li:hover,
 	.option-list li.highlighted {
 		background: var(--surface-2dp, rgba(127, 127, 127, 0.12));
+	}
+	.option-list li.disabled {
+		color: var(--text-disabled);
+		cursor: not-allowed;
+		background: transparent;
 	}
 </style>

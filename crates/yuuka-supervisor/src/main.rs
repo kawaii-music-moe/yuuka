@@ -166,7 +166,7 @@ async fn run() -> Result<(), String> {
             Arc::new(yuuka_google::NullCalendarEvents),
         )
     };
-    // runBriefingNow（`deliver: true`）のテスト配信 runner（issue #136）。実 runner が使う Messenger は
+    // runPeriodicReportNow（`deliver: true`）のテスト配信 runner（issue #136）。実 runner が使う Messenger は
     // 会話エンジン（＝このレジストリ）を受け取る Discord マネージャから作られるため、ここでは空の
     // LateDeliveryRunner を渡し、Messenger 生成後（配信設定ルータの配線時）に同じ runner を設定する。
     let briefing_delivery = Arc::new(yuuka_briefing::LateDeliveryRunner::new());
@@ -358,7 +358,7 @@ async fn run() -> Result<(), String> {
     // schedule ルータ: 管理画面からの登録・削除もエージェントと同じく Google カレンダーへ反映する（#127）。
     let schedule_routes = yuuka_schedule::routes_with_calendar(Some(google_events.clone()));
 
-    // ユーザー本人のキーで行う補助テキスト生成（Webhook 整形・朝報ニュース要約・日報/週報まとめで共有）。
+    // ユーザー本人のキーで行う補助テキスト生成（Webhook 整形・定期報告のニュース要約と活動データのまとめで共有）。
     let aux_text: Arc<dyn yuuka_core::aux_text::AuxTextGenerator> =
         Arc::new(GeminiAuxText::new(db.clone(), crypto.clone()));
 
@@ -401,9 +401,9 @@ async fn run() -> Result<(), String> {
         discord_live,
     );
 
-    // 配信設定ルータ（issue #99）: 朝報・日報/週報のテスト配信を、定時配信と同じ生成・送信経路で
+    // 定期報告ルータ（issue #99）: 定期報告のテスト配信を、定時配信と同じ生成・送信経路で
     // Discord Messenger へ送る。REST 送信は gateway 非依存のため YUUKA_RUST_CRON/DISCORD に関わらず live。
-    // 同じ runner を runBriefingNow（`deliver: true`）にも設定する（issue #136）。
+    // 同じ runner を runPeriodicReportNow（`deliver: true`）にも設定する（issue #136）。
     let delivery_runner: Arc<dyn yuuka_briefing::DeliveryRunner> = Arc::new(
         NotifierDeliveryRunner::new(db.clone(), messenger.clone()).with_aux_text(aux_text.clone()),
     );
@@ -889,7 +889,7 @@ struct WebService {
     /// PWA クライアント API ルータ（`ChatEngine`/`RateLimiter` を `Extension` で内包済み・
     /// `/api/client/*`・チャット送信は issue #41）。
     client_api_routes: Router<AppState>,
-    /// 配信設定ルータ（`DeliveryRunner` を `Extension` で内包済み・`/api/briefing*` + `/api/report-configs*`）。
+    /// 定期報告ルータ（`DeliveryRunner` を `Extension` で内包済み・`/api/periodic-reports*`）。
     briefing_routes: Router<AppState>,
     addr: SocketAddr,
     dist_dir: Option<PathBuf>,

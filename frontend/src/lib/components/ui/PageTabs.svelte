@@ -1,9 +1,13 @@
 <script lang="ts">
+import Icon from "./Icon.svelte";
+
 // ページ内タブ。1 ページの項目が多いとき、関連するまとまりごとに切り替えて一度に出す量を減らす
 // （docs/design/settings-restructure.md「方針 3」）。中身の出し分けは呼び出し側が active で行う。
 interface Tab {
 	id: string;
 	label: string;
+	/** ラベルの前に出す Material Symbols のアイコン名 */
+	icon?: string;
 }
 
 interface Props {
@@ -44,7 +48,7 @@ function onkeydown(e: KeyboardEvent, index: number): void {
 			onclick={() => (active = tab.id)}
 			onkeydown={(e) => onkeydown(e, i)}
 		>
-			{tab.label}
+			{#if tab.icon}<Icon name={tab.icon} size={18} />{/if}{tab.label}
 		</button>
 	{/each}
 </div>
@@ -65,6 +69,9 @@ function onkeydown(e: KeyboardEvent, index: number): void {
 	}
 	.page-tab {
 		flex-shrink: 0;
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
 		padding: 10px 14px;
 		font: inherit;
 		font-weight: 600;

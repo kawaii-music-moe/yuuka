@@ -280,4 +280,134 @@ mod tests {
             .unwrap();
         assert_eq!(pending, 1);
     }
+
+    #[test]
+    fn v35_moves_briefing_and_report_configs_into_periodic_reports() {
+        // 本番と同じく V34 まで進めた DB（V27 は外部キーを切って流す）に旧設定を入れてから V35 を流す。
+        let mut conn = v26();
+        conn.execute_batch("PRAGMA foreign_keys=OFF;").unwrap();
+        embedded::migrations::runner()
+            .set_target(refinery::Target::Version(27))
+            .run(&mut conn)
+            .unwrap();
+        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+        embedded::migrations::runner()
+            .set_target(refinery::Target::Version(34))
+            .run(&mut conn)
+            .unwrap();
+        conn.execute_batch(
+            r#"INSERT INTO users (discord_id, username, salt) VALUES ('u1','u1','s'), ('u2','u2','s'), ('u3','u3','s');
+            -- 朝報: 天気+ニュース（チャンネル）/ 地点名だけ（DM）/ 何も無い / フィード JSON 破損だけ。
+            INSERT INTO briefing_configs (user_id, bot_id, enabled, schedule_cron, target_type, target_id,
+                weather_lat, weather_lng, location_name, news_feeds, news_keywords)
+              VALUES ('u1','b1',1,'0 7 * * *','channel','chan-1',35.6,139.7,'東京','["https://e.com/rss"]','["AI"]'),
+                     ('u2','b1',0,'0 6 * * *','dm',NULL,NULL,NULL,'大阪','[]','[]'),
+                     ('u3','b1',1,'0 7 * * *','dm',NULL,NULL,NULL,NULL,'[]','[]'),
+                     ('u1','b2',1,'0 7 * * *','dm',NULL,NULL,NULL,'  ','oops','[]');
+            -- 日報・週報: 未選択（全部・チャンネル指定は DM へ）/ 会話トピックだけ（チャンネルのまま）。
+            INSERT INTO report_configs (user_id, bot_id, type, enabled, schedule_cron, target_type, target_id, sections)
+              VALUES ('u1','b1','daily',1,'0 22 * * *','channel','chan-1',NULL),
+                     ('u2','b1','weekly',0,'0 21 * * 0','channel','chan-2','["topics"]'),
+                     ('u3','b1','daily',1,'0 21 * * *','channel','',NULL);"#,
+        )
+        .unwrap();
+        run_migrations(&mut conn).unwrap();
+
+        type Row = (
+            String,
+            String,
+            String,
+            i64,
+            String,
+            String,
+            Option<String>,
+            String,
+        );
+        let rows: Vec<Row> = conn
+            .prepare(
+                "SELECT user_id, bot_id, name, enabled, schedule_cron, target_type, target_id, sections \
+                 FROM periodic_reports ORDER BY user_id, bot_id, name",
+            )
+            .unwrap()
+            .query_map([], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?))
+            })
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        let all = r#"["tasks","schedules","payments","finance","topics"]"#;
+        let s = |v: &str| v.to_owned();
+        assert_eq!(
+            rows,
+            vec![
+                (
+                    s("u1"),
+                    s("b1"),
+                    s("日報"),
+                    1,
+                    s("0 22 * * *"),
+                    s("dm"),
+                    None,
+                    s(all)
+                ),
+                (
+                    s("u1"),
+                    s("b1"),
+                    s("朝報"),
+                    1,
+                    s("0 7 * * *"),
+                    s("channel"),
+                    Some(s("chan-1")),
+                    s(r#"["weather","news"]"#)
+                ),
+                (
+                    s("u2"),
+                    s("b1"),
+                    s("朝報"),
+                    0,
+                    s("0 6 * * *"),
+                    s("dm"),
+                    None,
+                    s(r#"["weather"]"#)
+                ),
+                (
+                    s("u2"),
+                    s("b1"),
+                    s("週報"),
+                    0,
+                    s("0 21 * * 0"),
+                    s("channel"),
+                    Some(s("chan-2")),
+                    s(r#"["topics"]"#)
+                ),
+                (
+                    s("u3"),
+                    s("b1"),
+                    s("日報"),
+                    1,
+                    s("0 21 * * *"),
+                    s("dm"),
+                    None,
+                    s(all)
+                ),
+            ]
+        );
+        let (location, lat, feeds, keywords): (String, f64, String, String) = conn
+            .query_row(
+                "SELECT location_name, weather_lat, news_feeds, news_keywords FROM periodic_reports \
+                 WHERE user_id = 'u1' AND name = '朝報'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(location, "東京");
+        assert!((lat - 35.6).abs() < f64::EPSILON);
+        assert_eq!(feeds, r#"["https://e.com/rss"]"#);
+        assert_eq!(keywords, r#"["AI"]"#);
+        // 旧テーブルは残す。
+        let old: i64 = conn
+            .query_row("SELECT COUNT(*) FROM briefing_configs", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(old, 4);
+    }
 }

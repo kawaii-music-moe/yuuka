@@ -17,6 +17,7 @@ import { confirmDialog, EmptyState } from "$lib/components/ui";
 import { activeBot } from "$lib/stores/activeBot";
 import { pushToast } from "$lib/stores/toast";
 import type { StatusConfigResponse } from "./config/configTypes";
+import CronField from "./delivery/CronField.svelte";
 
 import ReminderCard from "./reminders/ReminderCard.svelte";
 import { toTriggerAt } from "./reminders/reminderUtils";
@@ -156,12 +157,10 @@ async function onCancel(id: number) {
 					/>
 				</div>
 				<div class="form-group">
-					<label for="reminder-repeat-rule">繰り返し (cron式・任意)</label>
-					<input
-						type="text"
+					<CronField
 						id="reminder-repeat-rule"
+						label="繰り返し（任意）"
 						placeholder="例: 0 9 * * 1 (毎週月曜9時)"
-						class="reminder-cron-input"
 						bind:value={repeatRule}
 					/>
 					<span class="field-sub">※指定すると送信後も自動で次回が予約されます。</span>
@@ -230,9 +229,6 @@ async function onCancel(id: number) {
 		flex-direction: column;
 		gap: 12px;
 		margin-top: 8px;
-	}
-	.reminder-cron-input {
-		font-family: var(--font-family-mono);
 	}
 	.reminders-showall-group {
 		display: flex;

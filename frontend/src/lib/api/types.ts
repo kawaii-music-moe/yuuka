@@ -295,28 +295,46 @@ export type McpServersResponse = ApiResponse<{ servers: McpServerView[] }>;
 export type CredentialView = JsonWire<WireCredentialView>;
 export type CredentialsResponse = ApiResponse<JsonWire<CredentialListData>>;
 
-// ─── delivery（briefingConfig / reportConfig） ───────────────────────────────
+// ─── 定期報告（/api/periodic-reports） ───────────────────────────────────────
 
-export interface BriefingConfig {
-	enabled?: boolean;
-	schedule_cron?: string;
-	target_type?: "dm" | "channel";
-	target_id?: string;
-	location_name?: string;
-	weather_lat?: number | null;
-	weather_lng?: number | null;
-	news_keywords?: string[];
-	news_feeds?: string[];
-}
-export type BriefingConfigResponse = ApiResponse<{ config: BriefingConfig }>;
+/** 定期報告に載せる内容の区分（periodic_reports.sections の要素） */
+export type ReportSection =
+	| "weather"
+	| "news"
+	| "tasks"
+	| "schedules"
+	| "payments"
+	| "finance"
+	| "topics";
 
-export interface ReportConfig {
-	id?: number;
-	type?: "daily" | "weekly";
-	schedule_cron?: string;
-	enabled?: boolean;
+/** 登録済みの定期報告 */
+export interface PeriodicReport {
+	id: number;
+	name: string;
+	enabled: boolean;
+	schedule_cron: string;
+	target_type: "dm" | "channel";
+	target_id: string | null;
+	/** 載せる内容（表示順） */
+	sections: ReportSection[];
+	location_name: string | null;
+	weather_lat: number | null;
+	weather_lng: number | null;
+	news_feeds: string[];
+	news_keywords: string[];
+	/** 非公開の内容（タスク・予定・支払い予定・家計）を含む＝DM にだけ送る */
+	private: boolean;
 }
-export type ReportConfigsResponse = ApiResponse<{ configs: ReportConfig[] }>;
+
+/** 登録・更新で送る内容（更新は id と変えるキーだけでよい） */
+export type PeriodicReportInput = Partial<
+	Omit<PeriodicReport, "id" | "private">
+>;
+
+export type PeriodicReportsResponse = ApiResponse<{
+	reports: PeriodicReport[];
+}>;
+export type PeriodicReportResponse = ApiResponse<{ report: PeriodicReport }>;
 
 // ─── settings（userRepo / status / discord / google） ────────────────────────
 

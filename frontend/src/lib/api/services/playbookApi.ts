@@ -40,7 +40,18 @@ export const playbookApi = {
 		cronExpression: string;
 		description?: string;
 		enabled?: boolean;
-	}) => api.post<ApiResponse>("/api/playbooks/schedules/save", body, BOT),
+	}) =>
+		// Rust 側 NewSchedule は snake_case で受ける（camelCase だと 400 invalid request body）
+		api.post<ApiResponse>(
+			"/api/playbooks/schedules/save",
+			{
+				playbook_name: body.playbookName,
+				cron_expression: body.cronExpression,
+				description: body.description,
+				enabled: body.enabled,
+			},
+			BOT,
+		),
 	/** POST /api/playbooks/schedules/toggle */
 	toggleSchedule: (body: { id: number; enabled: boolean }) =>
 		api.post<ApiResponse>("/api/playbooks/schedules/toggle", body, BOT),

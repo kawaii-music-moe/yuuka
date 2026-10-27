@@ -13,16 +13,19 @@ yuuka-outbound.workspace = true
 yuuka-db.workspace = true
 yuuka-types.workspace = true
 yuuka-web.workspace = true
+yuuka-conversation.workspace = true
 axum.workspace = true
 rusqlite.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 async-trait.workspace = true
-reqwest = { workspace = true }       # runBriefingNow の天気（Open-Meteo）/ RSS 取得
+chrono.workspace = true
+tokio.workspace = true               # 天気とニュースの取得を並行させる
+reqwest = { workspace = true }       # 定期報告の天気（Open-Meteo）/ RSS 取得
 tracing.workspace = true             # RSS のリダイレクト拒否などを記録
 
 [dev-dependencies]
-tokio.workspace = true
+tempfile.workspace = true
 tower.workspace = true
 yuuka-web = { workspace = true, features = ["test-support"] }
 

@@ -1,73 +1,33 @@
 <script lang="ts">
 // cron 式の入力欄。[かんたん / cron式] の切替 + cron 式の入力。
-// 「かんたん」を選ぶと支援モーダルを開き、[毎日/毎週/毎月] + [時:分] + [曜日（毎週のみ）] から
-// cron 式を組み立てて書き込む。
+// 「かんたん」を選ぶと組み立てモーダル（CronBuilder）を開き、分/時/日/月/曜日 ごとに選んだ内容から
+// cron 式を組み立てて書き込む。今の式をビルダーで表せるときは、その内容から始める。
 import { Button, Modal } from "$lib/components/ui";
+import {
+	buildCron,
+	type CronState,
+	defaultState,
+	parseCron,
+} from "$lib/cronBuilder";
+import CronBuilder from "./CronBuilder.svelte";
 import InlineSelect from "./InlineSelect.svelte";
-import WeekdaySelect from "./WeekdaySelect.svelte";
 
 interface Props {
 	id: string;
 	value: string;
 	placeholder?: string;
+	/** 欄の見出し */
+	label?: string;
+	/** 見出しに必須の * を付ける */
+	required?: boolean;
 }
-let { id, value = $bindable(), placeholder = "" }: Props = $props();
-
-type Freq = "daily" | "weekly" | "monthly";
-type Parts = { freq: Freq; hour: string; minute: string; days: number[] };
-
-const FREQ_OPTIONS: { value: Freq; label: string }[] = [
-	{ value: "daily", label: "毎日" },
-	{ value: "weekly", label: "毎週" },
-	{ value: "monthly", label: "毎月" },
-];
-const HOUR_OPTIONS = Array.from({ length: 24 }, (_, h) => ({
-	value: String(h),
-	label: `${String(h).padStart(2, "0")}時`,
-}));
-const MINUTE_OPTIONS = Array.from({ length: 12 }, (_, i) => ({
-	value: String(i * 5),
-	label: `${String(i * 5).padStart(2, "0")}分`,
-}));
-const DAY_NAMES = ["日", "月", "火", "水", "木", "金", "土"];
-
-/** 支援で表せる形（分 時 [*|1] * [*|曜日リスト]）なら分解する。表せなければ null。 */
-function parse(cron: string): Parts | null {
-	const m = cron
-		.trim()
-		.match(/^(\d{1,2}) (\d{1,2}) (\*|1) \* (\*|[0-6](?:,[0-6])*)$/);
-	if (!m) return null;
-	const [, mi, h, dom, dow] = m;
-	if (Number(h) > 23 || Number(mi) > 59) return null;
-	const base = { hour: String(Number(h)), minute: String(Number(mi)) };
-	if (dom === "1" && dow === "*")
-		return { ...base, freq: "monthly", days: [1] };
-	if (dom === "*" && dow !== "*") {
-		const days = [...new Set(dow.split(",").map(Number))].sort((a, b) => a - b);
-		return { ...base, freq: "weekly", days };
-	}
-	if (dom === "*") return { ...base, freq: "daily", days: [1] };
-	return null;
-}
-
-function build(p: Parts): string {
-	const dow = p.freq === "weekly" && p.days.length > 0 ? p.days.join(",") : "*";
-	const dom = p.freq === "monthly" ? "1" : "*";
-	return `${p.minute} ${p.hour} ${dom} * ${dow}`;
-}
-
-function describe(p: Parts): string {
-	const time = `${p.hour.padStart(2, "0")}:${p.minute.padStart(2, "0")}`;
-	if (p.freq === "monthly") return `毎月1日 ${time}`;
-	if (p.freq === "weekly")
-		return `毎週 ${[1, 2, 3, 4, 5, 6, 0]
-			.filter((d) => p.days.includes(d))
-			.map((d) => DAY_NAMES[d])
-			.join("・")} ${time}`;
-	return `毎日 ${time}`;
-}
-
-const parsed = $derived(parse(value));
+let {
+	id,
+	value = $bindable(),
+	placeholder = "",
+	label = "配信スケジュール",
+	required = false,
+}: Props = $props();
 
 // 一番左の切替。ふだんは cron 式の直接入力で、「かんたん」を選ぶと組み立てモーダルが開き、
 // 閉じると（決定でもキャンセルでも）cron 式へ戻る。
@@ -83,19 +43,26 @@ let helpOpen = $state(false);
 
 // 組み立てモーダル。開くたびに今の式から下書きを作り、決定で書き込む。
 let builderOpen = $state(false);
-let draft = $state<Parts>({ freq: "daily", hour: "7", minute: "0", days: [1] });
+let draft = $state<CronState>(defaultState());
+// 今の式がビルダーで表せず、初期状態から始めたとき
+let unparsed = $state("");
 
 function openBuilder() {
-	draft = parsed
-		? { ...parsed, days: [...parsed.days] }
-		: { freq: "daily", hour: "7", minute: "0", days: [1] };
+	const current = value.trim();
+	const parsed = parseCron(current);
+	draft = parsed ?? defaultState();
+	unparsed = parsed || !current ? "" : current;
 	builderOpen = true;
 }
 
-function confirmBuilder() {
-	value = build(draft);
+function closeBuilder() {
 	builderOpen = false;
 	mode = "raw";
+}
+
+function confirmBuilder() {
+	value = buildCron(draft);
+	closeBuilder();
 }
 
 function onModeChange(m: Mode) {
@@ -105,7 +72,7 @@ function onModeChange(m: Mode) {
 
 <div class="cron-field">
 	<div class="cron-label">
-		<label for="{id}-mode">配信スケジュール</label>
+		<label for="{id}-mode">{label}{#if required}<span class="required"> *</span>{/if}</label>
 		<span class="help">
 			<button
 				type="button"
@@ -144,67 +111,16 @@ function onModeChange(m: Mode) {
 	</div>
 </div>
 
-<Modal bind:open={builderOpen} onclose={() => (mode = "raw")} title="配信スケジュールを組み立てる">
-	<div class="builder">
-		<div class="builder-row">
-			<span class="builder-label">頻度</span>
-			<div class="joined-field">
-				<InlineSelect
-					id="{id}-freq"
-					class="grow-select"
-					ariaLabel="頻度"
-					options={FREQ_OPTIONS}
-					bind:value={draft.freq}
-				/>
-			</div>
-		</div>
-		<div class="builder-row">
-			<span class="builder-label">時刻</span>
-			<div class="joined-field">
-				<InlineSelect
-					id="{id}-hour"
-					class="grow-select"
-					ariaLabel="時"
-					options={HOUR_OPTIONS}
-					bind:value={draft.hour}
-				/>
-				<span class="colon" aria-hidden="true">:</span>
-				<InlineSelect
-					id="{id}-minute"
-					class="grow-select"
-					ariaLabel="分"
-					options={MINUTE_OPTIONS}
-					bind:value={draft.minute}
-				/>
-			</div>
-		</div>
-		{#if draft.freq === "weekly"}
-			<div class="builder-row">
-				<span class="builder-label">曜日</span>
-				<div class="joined-field">
-					<WeekdaySelect id="{id}-days" bind:value={draft.days} />
-				</div>
-			</div>
-		{/if}
-		<p class="builder-preview">
-			{describe(draft)}<span class="mono">（{build(draft)}）</span>
+<Modal bind:open={builderOpen} wide onclose={() => (mode = "raw")} title="スケジュールを組み立てる">
+	{#if unparsed}
+		<p class="unparsed">
+			今の式 <code>{unparsed}</code> はここでは組み立てられないため、初期状態から始めます。決定すると置き換わります。
 		</p>
-	</div>
+	{/if}
+	<CronBuilder id="{id}-builder" bind:schedule={draft} />
 	{#snippet footer()}
-		<Button
-			variant="secondary"
-			onclick={() => {
-				builderOpen = false;
-				mode = "raw";
-			}}
-		>キャンセル</Button>
-		<Button
-			variant="primary"
-			disabled={draft.freq === "weekly" && draft.days.length === 0}
-			onclick={confirmBuilder}
-		>
-			決定
-		</Button>
+		<Button variant="secondary" onclick={closeBuilder}>キャンセル</Button>
+		<Button variant="primary" onclick={confirmBuilder}>決定</Button>
 	{/snippet}
 </Modal>
 
@@ -296,39 +212,16 @@ function onModeChange(m: Mode) {
 		box-shadow: none;
 		background: transparent;
 	}
-	/* 組み立てモーダル */
-	.builder {
-		display: flex;
-		flex-direction: column;
-		gap: 16px;
+	.required {
+		color: var(--color-error);
 	}
-	.builder-row {
-		display: flex;
-		flex-direction: column;
-		gap: 8px;
-	}
-	.builder-label {
-		font-size: 0.72rem;
-		font-weight: 700;
-		letter-spacing: 0.05em;
+	.unparsed {
+		margin: 0 0 16px;
+		font-size: 0.82rem;
 		color: var(--text-secondary);
 	}
-	.builder .joined-field > :global(.grow-select),
-	.builder .joined-field > :global(.inline-select) {
-		flex: 1;
-	}
-	.colon {
-		align-self: center;
-		color: var(--text-secondary);
-	}
-	.builder-preview {
-		margin: 0;
-		font-size: 0.9rem;
-		color: var(--text-primary);
-	}
-	.mono {
-		margin-left: 4px;
+	.unparsed code {
 		font-family: var(--font-family-mono);
-		color: var(--text-secondary);
+		color: var(--text-primary);
 	}
 </style>

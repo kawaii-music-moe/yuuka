@@ -1,33 +1,32 @@
-// deliveryApi — bot-scoped（scope:'bot'）。src/server/routes/deliveryRoutes.ts に対応。
-// briefing-config / report-configs。ハンドラは ctx.body.botId ?? query botId を読む（bot-scoped）。
+// deliveryApi — 定期報告（/api/periodic-reports）。bot-scoped（scope:'bot'）。
+// ハンドラは body.botId ?? query botId を読む。他人の定期報告は 404。
 import { api } from "../client";
 import type {
 	ApiResponse,
-	BriefingConfigResponse,
-	ReportConfigsResponse,
+	PeriodicReportInput,
+	PeriodicReportResponse,
+	PeriodicReportsResponse,
 } from "../types";
 
 const BOT = { scope: "bot" } as const;
 
 export const deliveryApi = {
-	// ── ブリーフィング設定 ──
-	/** GET /api/briefing-config */
-	getBriefingConfig: () =>
-		api.get<BriefingConfigResponse>("/api/briefing-config", BOT),
-	/** POST /api/briefing-config */
-	saveBriefingConfig: (body: Record<string, unknown>) =>
-		api.post<ApiResponse>("/api/briefing-config", body, BOT),
-	/** POST /api/briefing/test — テスト配信 */
-	testBriefing: () => api.post<ApiResponse>("/api/briefing/test", {}, BOT),
-
-	// ── レポート設定 ──
-	/** GET /api/report-configs */
-	reportConfigs: () =>
-		api.get<ReportConfigsResponse>("/api/report-configs", BOT),
-	/** POST /api/report-configs */
-	saveReportConfig: (body: Record<string, unknown>) =>
-		api.post<ApiResponse>("/api/report-configs", body, BOT),
-	/** POST /api/report-configs/test */
-	testReport: (body: Record<string, unknown>) =>
-		api.post<ApiResponse>("/api/report-configs/test", body, BOT),
+	/** GET /api/periodic-reports */
+	list: () => api.get<PeriodicReportsResponse>("/api/periodic-reports", BOT),
+	/** POST /api/periodic-reports/create */
+	create: (body: PeriodicReportInput) =>
+		api.post<PeriodicReportResponse>("/api/periodic-reports/create", body, BOT),
+	/** POST /api/periodic-reports/update（部分更新。有効/無効の切替もこれ） */
+	update: (id: number, body: PeriodicReportInput) =>
+		api.post<PeriodicReportResponse>(
+			"/api/periodic-reports/update",
+			{ id, ...body },
+			BOT,
+		),
+	/** POST /api/periodic-reports/delete */
+	delete: (id: number) =>
+		api.post<ApiResponse>("/api/periodic-reports/delete", { id }, BOT),
+	/** POST /api/periodic-reports/test — テスト配信 */
+	test: (id: number) =>
+		api.post<ApiResponse>("/api/periodic-reports/test", { id }, BOT),
 };

@@ -76,6 +76,7 @@ const USER_SCOPED_TABLES: &[(&str, &str)] = &[
     ("webhook_endpoints", "user_id"),
     ("webhook_deliveries", "user_id"),
     ("report_configs", "user_id"),
+    ("periodic_reports", "user_id"),
     ("mcp_servers", "user_id"),
 ];
 
@@ -119,6 +120,7 @@ const BOT_SCOPED_TABLES: &[&str] = &[
     "context_notes",
     "briefing_configs",
     "report_configs",
+    "periodic_reports",
     "tool_outcomes",
     "topic_tool_stats",
     "synapses",

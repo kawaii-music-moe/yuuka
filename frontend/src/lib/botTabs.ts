@@ -35,7 +35,7 @@ export const SETTINGS_CATEGORIES: SettingsCategory[] = [
 	{
 		id: "automation",
 		label: "自動化",
-		unavailableNote: "Playbook・定期配信・Webhook は秘書属性のBotで使えます。",
+		unavailableNote: "Playbook・定期報告・Webhook は秘書属性のBotで使えます。",
 	},
 	{ id: "discord", label: "Discord" },
 ];
@@ -107,8 +107,8 @@ export const SETTINGS_HUB_ITEMS: SettingsHubItem[] = [
 	},
 	{
 		tab: "delivery",
-		label: "定期配信",
-		desc: "朝報と、タスク・支出サマリーの配信",
+		label: "定期報告",
+		desc: "天気・ニュース・タスクなどを組み合わせた報告の配信",
 		category: "automation",
 		only: "secretary",
 	},

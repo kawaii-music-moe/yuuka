@@ -1,349 +1,60 @@
-//! briefing/report 配信設定のデータアクセス（Node `briefingConfigRepo`/`reportConfigRepo`）。
+//! 定期報告（`periodic_reports`）のデータアクセス。
 //!
-//! `briefing_configs`（PK `(user_id, bot_id)`）と `report_configs`（UNIQUE `(user_id, bot_id, type)`）。
-//! `weather_lat/lng`・feeds/keywords（JSON 配列）等の完全な briefing 更新は configureBriefing 側で
-//! 扱う（本crateは report 更新 + 設定読み取りに限定）。
+//! 行は登録したユーザー・Bot（`user_id` + `bot_id`）に属し、Web-API・ツールは本人分だけを読み書きする。
+//! 全ユーザー横断の走査は定時配信（[`list_enabled_reports`]・[`CrossUserAccess`] 証憑必須）だけ。
+//! 名前の重複と登録上限は、書き込みと同じトランザクションの中で確かめる。
 
-use rusqlite::params;
+use rusqlite::{params, OptionalExtension, Row};
 use serde_json::Value;
 use yuuka_core::{CrossUserAccess, DbError};
 use yuuka_db::map_sqlite;
 use yuuka_web::Db;
 
-/// briefing 設定の読み取りビュー（Node `getBriefingConfig` の主要フィールド）。
-#[derive(Debug, Default, Clone)]
-pub struct BriefingConfig {
-    pub enabled: bool,
-    pub schedule_cron: String,
-    pub target_type: String,
-    pub target_id: Option<String>,
-    pub weather_lat: Option<f64>,
-    pub weather_lng: Option<f64>,
-    pub location_name: Option<String>,
-    pub news_feeds: Vec<String>,
-    pub news_keywords: Vec<String>,
+use crate::model::{PeriodicReport, ReportSection, ReportSettings, TargetType, MAX_REPORTS};
+
+const COLUMNS: &str = "id, user_id, bot_id, name, enabled, schedule_cron, target_type, target_id, \
+                       sections, location_name, weather_lat, weather_lng, news_feeds, news_keywords";
+
+/// 書き込みの結果。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WriteOutcome {
+    /// 保存できた（行の id）。
+    Saved(i64),
+    /// 同じユーザー・Bot に同じ名前の定期報告がある。
+    NameTaken,
+    /// 登録上限（[`MAX_REPORTS`]）に達している。
+    LimitReached,
+    /// 更新対象の行が無い（他人の行・削除済み）。
+    NotFound,
 }
 
-/// briefing 設定の部分更新（present なフィールドのみ現在値へ重ねる・Node `key in obj` 意味論）。
-#[derive(Debug, Default)]
-pub struct BriefingPatch {
-    pub enabled: Option<bool>,
-    pub schedule_cron: Option<String>,
-    /// `Some`=配信先種別を設定（'dm'/'channel'）・`None`=触らない。
-    pub target_type: Option<String>,
-    /// `Some(inner)`=`target_id` 列を設定（`inner=None` は NULL）・`None`=触らない。
-    pub target_id: Option<Option<String>>,
-    /// `Some(inner)`=`weather_lat` 列を設定（`inner=None` は NULL）・`None`=触らない。
-    pub weather_lat: Option<Option<f64>>,
-    pub weather_lng: Option<Option<f64>>,
-    /// `Some(inner)`=`location_name` 列を設定（`inner=None` は NULL）・`None`=触らない。
-    pub location_name: Option<Option<String>>,
-    /// `Some` のときのみ `news_feeds` 列を更新する（add/remove 適用後の全体）。
-    pub news_feeds: Option<Vec<String>>,
-    pub news_keywords: Option<Vec<String>>,
-}
-
-/// report 設定 1 件（Node `ReportConfigRecord`）。
-#[derive(Debug)]
-pub struct ReportConfig {
-    pub r#type: String,
-    pub enabled: bool,
-    pub schedule_cron: String,
-    pub target_type: String,
-    pub target_id: Option<String>,
-}
-
-/// briefing 設定を返す（未設定は既定値・Node `getBriefingConfig` は行が無ければ defaults）。
-/// tool 側（configureBriefing の部分マージ・getBriefingConfig）で使う。
+/// 本人の定期報告を登録順に返す。
 ///
 /// # Errors
 /// 読み取り失敗時 [`DbError`]。
-pub async fn get_briefing(db: &Db, user_id: &str, bot_id: &str) -> Result<BriefingConfig, DbError> {
-    Ok(find_briefing(db, user_id, bot_id)
-        .await?
-        .unwrap_or_else(|| BriefingConfig {
-            schedule_cron: "0 7 * * *".to_owned(),
-            target_type: "dm".to_owned(),
-            ..BriefingConfig::default()
-        }))
-}
-
-/// briefing 設定の行を取得する（**行が無ければ `None`**・既定値へ畳まない）。
-/// Web `GET /api/briefing-config` は未設定を `config: null` で返すため生の有無が要る。
-///
-/// # Errors
-/// 読み取り失敗時 [`DbError`]。
-pub async fn find_briefing(
+pub async fn list_reports(
     db: &Db,
     user_id: &str,
     bot_id: &str,
-) -> Result<Option<BriefingConfig>, DbError> {
+) -> Result<Vec<PeriodicReport>, DbError> {
     let (u, b) = (user_id.to_owned(), bot_id.to_owned());
     db.read
         .read(move |conn| {
             let mut stmt = conn
-                .prepare(
-                    "SELECT enabled, schedule_cron, target_type, target_id, weather_lat, \
-                            weather_lng, location_name, news_feeds, news_keywords \
-                     FROM briefing_configs WHERE user_id = ?1 AND bot_id = ?2",
-                )
-                .map_err(map_sqlite)?;
-            let mut rows = stmt
-                .query_map(params![u, b], |row| {
-                    Ok(BriefingConfig {
-                        enabled: row.get::<_, i64>(0)? != 0,
-                        schedule_cron: row.get(1)?,
-                        target_type: row.get(2)?,
-                        target_id: row.get(3)?,
-                        weather_lat: row.get(4)?,
-                        weather_lng: row.get(5)?,
-                        location_name: row.get(6)?,
-                        news_feeds: parse_json_array(&row.get::<_, String>(7)?),
-                        news_keywords: parse_json_array(&row.get::<_, String>(8)?),
-                    })
-                })
-                .map_err(map_sqlite)?;
-            match rows.next() {
-                Some(v) => Ok(Some(v.map_err(map_sqlite)?)),
-                None => Ok(None),
-            }
-        })
-        .await
-}
-
-/// cron 走査用の有効 briefing 設定 1 件（所有者列 `user_id`/`bot_id` + due 判定用 `schedule_cron`）。
-///
-/// 定時配信ループはこの一覧を走査し、`schedule_cron` が現在分にマッチする設定について
-/// [`crate::build_briefing`]（`user_id`/`bot_id` で本人設定を再読込）→配信を行う。
-#[derive(Debug, Clone)]
-pub struct EnabledBriefing {
-    pub user_id: String,
-    pub bot_id: String,
-    pub schedule_cron: String,
-    /// 'dm' | 'channel'。
-    pub target_type: String,
-    pub target_id: Option<String>,
-}
-
-/// 有効な（`enabled=1`）朝報設定を**全ユーザー横断**で返す（Node `listEnabledBriefingConfigsAcrossUsers`
-/// ＝`SELECT * FROM briefing_configs WHERE enabled = 1`）。cron 式の due 判定は呼び出し側（croner 保持層）。
-///
-/// 横断アクセスは cron/バッチ起点でしか作れない（[`CrossUserAccess`] 証憑必須・§7.3）。playbook の
-/// `list_enabled_schedules` と同規律で `UserScope` 経路から隔離する。
-///
-/// # Errors
-/// クエリ失敗時 [`DbError`]。
-pub async fn list_enabled_briefings(
-    db: &Db,
-    _cross: CrossUserAccess,
-) -> Result<Vec<EnabledBriefing>, DbError> {
-    db.read
-        .read(move |conn| {
-            let mut stmt = conn
-                .prepare(
-                    "SELECT user_id, bot_id, schedule_cron, target_type, target_id \
-                     FROM briefing_configs WHERE enabled = 1 ORDER BY user_id ASC, bot_id ASC",
-                )
+                .prepare(&format!(
+                    "SELECT {COLUMNS} FROM periodic_reports \
+                     WHERE user_id = ?1 AND bot_id = ?2 ORDER BY id ASC"
+                ))
                 .map_err(map_sqlite)?;
             let rows = stmt
-                .query_map([], |row| {
-                    Ok(EnabledBriefing {
-                        user_id: row.get(0)?,
-                        bot_id: row.get(1)?,
-                        schedule_cron: row.get(2)?,
-                        target_type: row.get(3)?,
-                        target_id: row.get(4)?,
-                    })
-                })
+                .query_map(params![u, b], report_from_row)
                 .map_err(map_sqlite)?;
-            let mut out = Vec::new();
-            for row in rows {
-                out.push(row.map_err(map_sqlite)?);
-            }
-            Ok(out)
+            rows.collect::<Result<Vec<_>, _>>().map_err(map_sqlite)
         })
         .await
 }
 
-/// briefing 設定を部分更新で upsert する（Node `upsertBriefingConfig`＝現在値に patch を重ねる）。
-/// 返り値は更新後の設定。
-///
-/// # Errors
-/// 書き込み・取得失敗時 [`DbError`]。
-pub async fn upsert_briefing(
-    db: &Db,
-    user_id: &str,
-    bot_id: &str,
-    patch: BriefingPatch,
-) -> Result<BriefingConfig, DbError> {
-    // 現在値（無ければ既定）に patch を重ねる。
-    let mut cfg = get_briefing(db, user_id, bot_id).await?;
-    if let Some(v) = patch.enabled {
-        cfg.enabled = v;
-    }
-    if let Some(v) = patch.schedule_cron {
-        cfg.schedule_cron = v;
-    }
-    if let Some(v) = patch.target_type {
-        cfg.target_type = v;
-    }
-    if let Some(v) = patch.target_id {
-        cfg.target_id = v;
-    }
-    if let Some(v) = patch.weather_lat {
-        cfg.weather_lat = v;
-    }
-    if let Some(v) = patch.weather_lng {
-        cfg.weather_lng = v;
-    }
-    if let Some(v) = patch.location_name {
-        cfg.location_name = v;
-    }
-    if let Some(v) = patch.news_feeds {
-        cfg.news_feeds = v;
-    }
-    if let Some(v) = patch.news_keywords {
-        cfg.news_keywords = v;
-    }
-    let out = cfg.clone();
-
-    let (u, b) = (user_id.to_owned(), bot_id.to_owned());
-    let feeds_json = serde_json::to_string(&cfg.news_feeds).unwrap_or_else(|_| "[]".to_owned());
-    let kw_json = serde_json::to_string(&cfg.news_keywords).unwrap_or_else(|_| "[]".to_owned());
-    db.writer
-        .transaction(move |tx| {
-            tx.execute(
-                "INSERT INTO briefing_configs \
-                   (user_id, bot_id, enabled, schedule_cron, target_type, target_id, \
-                    weather_lat, weather_lng, location_name, news_feeds, news_keywords) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11) \
-                 ON CONFLICT(user_id, bot_id) DO UPDATE SET \
-                   enabled = excluded.enabled, schedule_cron = excluded.schedule_cron, \
-                   target_type = excluded.target_type, target_id = excluded.target_id, \
-                   weather_lat = excluded.weather_lat, weather_lng = excluded.weather_lng, \
-                   location_name = excluded.location_name, news_feeds = excluded.news_feeds, \
-                   news_keywords = excluded.news_keywords, \
-                   updated_at = datetime('now', 'localtime')",
-                params![
-                    u,
-                    b,
-                    i64::from(cfg.enabled),
-                    cfg.schedule_cron,
-                    cfg.target_type,
-                    cfg.target_id,
-                    cfg.weather_lat,
-                    cfg.weather_lng,
-                    cfg.location_name,
-                    feeds_json,
-                    kw_json,
-                ],
-            )
-            .map_err(map_sqlite)?;
-            Ok(())
-        })
-        .await?;
-    Ok(out)
-}
-
-/// cron 走査用の有効 report 設定 1 件（所有者列 `user_id`/`bot_id` + type + due 判定用 `schedule_cron`）。
-///
-/// 定時配信ループはこの一覧を走査し、`schedule_cron` が現在分にマッチする設定について
-/// 当該期間（daily/weekly）の活動データを集約→配信する。
-#[derive(Debug, Clone)]
-pub struct EnabledReport {
-    pub user_id: String,
-    pub bot_id: String,
-    /// 'daily' | 'weekly'。
-    pub r#type: String,
-    pub schedule_cron: String,
-    /// 'dm' | 'channel'。
-    pub target_type: String,
-    pub target_id: Option<String>,
-}
-
-/// 有効な（`enabled=1`）レポート設定を**全ユーザー横断**で返す（Node
-/// `listEnabledReportConfigsAcrossUsers` ＝`SELECT * FROM report_configs WHERE enabled = 1`）。
-/// cron 式の due 判定は呼び出し側（croner 保持層）。
-///
-/// 横断アクセスは cron/バッチ起点でしか作れない（[`CrossUserAccess`] 証憑必須・§7.3）。
-/// [`list_enabled_briefings`] と同規律で `UserScope` 経路から隔離する。
-///
-/// # Errors
-/// クエリ失敗時 [`DbError`]。
-pub async fn list_enabled_reports(
-    db: &Db,
-    _cross: CrossUserAccess,
-) -> Result<Vec<EnabledReport>, DbError> {
-    db.read
-        .read(move |conn| {
-            let mut stmt = conn
-                .prepare(
-                    "SELECT user_id, bot_id, type, schedule_cron, target_type, target_id \
-                     FROM report_configs WHERE enabled = 1 \
-                     ORDER BY user_id ASC, bot_id ASC, type ASC",
-                )
-                .map_err(map_sqlite)?;
-            let rows = stmt
-                .query_map([], |row| {
-                    Ok(EnabledReport {
-                        user_id: row.get(0)?,
-                        bot_id: row.get(1)?,
-                        r#type: row.get(2)?,
-                        schedule_cron: row.get(3)?,
-                        target_type: row.get(4)?,
-                        target_id: row.get(5)?,
-                    })
-                })
-                .map_err(map_sqlite)?;
-            let mut out = Vec::new();
-            for row in rows {
-                out.push(row.map_err(map_sqlite)?);
-            }
-            Ok(out)
-        })
-        .await
-}
-
-/// report 設定一覧を type 昇順で返す（Node `getReportConfigs`）。
-///
-/// # Errors
-/// 読み取り失敗時 [`DbError`]。
-pub async fn get_reports(
-    db: &Db,
-    user_id: &str,
-    bot_id: &str,
-) -> Result<Vec<ReportConfig>, DbError> {
-    let (u, b) = (user_id.to_owned(), bot_id.to_owned());
-    db.read
-        .read(move |conn| {
-            let mut stmt = conn
-                .prepare(
-                    "SELECT type, enabled, schedule_cron, target_type, target_id \
-                     FROM report_configs WHERE user_id = ?1 AND bot_id = ?2 ORDER BY type ASC",
-                )
-                .map_err(map_sqlite)?;
-            let rows = stmt
-                .query_map(params![u, b], |row| {
-                    Ok(ReportConfig {
-                        r#type: row.get(0)?,
-                        enabled: row.get::<_, i64>(1)? != 0,
-                        schedule_cron: row.get(2)?,
-                        target_type: row.get(3)?,
-                        target_id: row.get(4)?,
-                    })
-                })
-                .map_err(map_sqlite)?;
-            let mut out = Vec::new();
-            for row in rows {
-                out.push(row.map_err(map_sqlite)?);
-            }
-            Ok(out)
-        })
-        .await
-}
-
-/// 指定 type の report 設定を取得する（**行が無ければ `None`**・Node `getReportConfig`）。
-/// partial merge の現在値と、テスト配信（`yuuka-services` の配信ランナー）の送信先解決に使う。
+/// 本人の定期報告を 1 件返す（他人の行・無い id は `None`）。
 ///
 /// # Errors
 /// 読み取り失敗時 [`DbError`]。
@@ -351,108 +62,224 @@ pub async fn find_report(
     db: &Db,
     user_id: &str,
     bot_id: &str,
-    r#type: &str,
-) -> Result<Option<ReportConfig>, DbError> {
-    let (u, b, t) = (user_id.to_owned(), bot_id.to_owned(), r#type.to_owned());
+    id: i64,
+) -> Result<Option<PeriodicReport>, DbError> {
+    let (u, b) = (user_id.to_owned(), bot_id.to_owned());
     db.read
         .read(move |conn| {
-            let mut stmt = conn
-                .prepare(
-                    "SELECT type, enabled, schedule_cron, target_type, target_id \
-                     FROM report_configs WHERE user_id = ?1 AND bot_id = ?2 AND type = ?3",
-                )
-                .map_err(map_sqlite)?;
-            let mut rows = stmt
-                .query_map(params![u, b, t], |row| {
-                    Ok(ReportConfig {
-                        r#type: row.get(0)?,
-                        enabled: row.get::<_, i64>(1)? != 0,
-                        schedule_cron: row.get(2)?,
-                        target_type: row.get(3)?,
-                        target_id: row.get(4)?,
-                    })
-                })
-                .map_err(map_sqlite)?;
-            match rows.next() {
-                Some(v) => Ok(Some(v.map_err(map_sqlite)?)),
-                None => Ok(None),
-            }
+            conn.query_row(
+                &format!(
+                    "SELECT {COLUMNS} FROM periodic_reports \
+                     WHERE id = ?1 AND user_id = ?2 AND bot_id = ?3"
+                ),
+                params![id, u, b],
+                report_from_row,
+            )
+            .optional()
+            .map_err(map_sqlite)
         })
         .await
 }
 
-/// report 設定の部分更新（present なフィールドのみ現在値に重ねる・Node `key in obj` 意味論）。
-#[derive(Debug, Default)]
-pub struct ReportPatch {
-    pub enabled: Option<bool>,
-    pub schedule_cron: Option<String>,
-    pub target_type: Option<String>,
-    /// `Some(inner)`=列を設定（`inner=None` は NULL）・`None`=触らない。
-    pub target_id: Option<Option<String>>,
-}
-
-/// report 設定を部分更新で upsert する（Node `upsertReportConfig`＝現在値に partial を重ねる）。
-/// 返り値は更新後の設定。
+/// 有効な定期報告を**全ユーザー横断**で返す（定時配信の走査用・cron の判定は呼び出し側）。
+///
+/// 横断アクセスは cron/バッチ起点でしか作れない（[`CrossUserAccess`] 証憑必須・§7.3）。
 ///
 /// # Errors
-/// 書き込み・取得失敗時 [`DbError`]。
-pub async fn upsert_report(
+/// クエリ失敗時 [`DbError`]。
+pub async fn list_enabled_reports(
+    db: &Db,
+    _cross: CrossUserAccess,
+) -> Result<Vec<PeriodicReport>, DbError> {
+    db.read
+        .read(move |conn| {
+            let mut stmt = conn
+                .prepare(&format!(
+                    "SELECT {COLUMNS} FROM periodic_reports WHERE enabled = 1 \
+                     ORDER BY user_id ASC, bot_id ASC, id ASC"
+                ))
+                .map_err(map_sqlite)?;
+            let rows = stmt.query_map([], report_from_row).map_err(map_sqlite)?;
+            rows.collect::<Result<Vec<_>, _>>().map_err(map_sqlite)
+        })
+        .await
+}
+
+/// 検証済みの内容で新しく登録する。
+pub(crate) async fn insert_report(
     db: &Db,
     user_id: &str,
     bot_id: &str,
-    r#type: &str,
-    patch: ReportPatch,
-) -> Result<ReportConfig, DbError> {
-    // 現在値（無ければ既定）にpartialを重ねる。
-    let current = find_report(db, user_id, bot_id, r#type).await?;
-    let enabled = patch
-        .enabled
-        .unwrap_or_else(|| current.as_ref().is_some_and(|c| c.enabled));
-    let cron = patch.schedule_cron.unwrap_or_else(|| {
-        current
-            .as_ref()
-            .map_or_else(|| "0 21 * * *".to_owned(), |c| c.schedule_cron.clone())
-    });
-    let ttype = patch.target_type.unwrap_or_else(|| {
-        current
-            .as_ref()
-            .map_or_else(|| "dm".to_owned(), |c| c.target_type.clone())
-    });
-    let tid = match patch.target_id {
-        Some(v) => v,
-        None => current.as_ref().and_then(|c| c.target_id.clone()),
-    };
-
-    let (u, b, t) = (user_id.to_owned(), bot_id.to_owned(), r#type.to_owned());
-    let cron_c = cron.clone();
-    let ttype_c = ttype.clone();
-    let tid_c = tid.clone();
+    settings: ReportSettings,
+) -> Result<WriteOutcome, DbError> {
+    let (u, b) = (user_id.to_owned(), bot_id.to_owned());
     db.writer
         .transaction(move |tx| {
+            let count: i64 = tx
+                .query_row(
+                    "SELECT COUNT(*) FROM periodic_reports WHERE user_id = ?1 AND bot_id = ?2",
+                    params![u, b],
+                    |r| r.get(0),
+                )
+                .map_err(map_sqlite)?;
+            if usize::try_from(count).unwrap_or(usize::MAX) >= MAX_REPORTS {
+                return Ok(WriteOutcome::LimitReached);
+            }
+            if name_taken(tx, &u, &b, &settings.name, None)? {
+                return Ok(WriteOutcome::NameTaken);
+            }
             tx.execute(
-                "INSERT INTO report_configs \
-                   (user_id, bot_id, type, enabled, schedule_cron, target_type, target_id) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) \
-                 ON CONFLICT(user_id, bot_id, type) DO UPDATE SET \
-                   enabled = excluded.enabled, schedule_cron = excluded.schedule_cron, \
-                   target_type = excluded.target_type, target_id = excluded.target_id, \
-                   updated_at = datetime('now', 'localtime')",
-                params![u, b, t, i64::from(enabled), cron_c, ttype_c, tid_c],
+                "INSERT INTO periodic_reports \
+                   (user_id, bot_id, name, enabled, schedule_cron, target_type, target_id, sections, \
+                    location_name, weather_lat, weather_lng, news_feeds, news_keywords) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                params![
+                    u,
+                    b,
+                    settings.name,
+                    i64::from(settings.enabled),
+                    settings.schedule_cron,
+                    settings.target_type.key(),
+                    settings.target_id,
+                    sections_json(&settings.sections),
+                    settings.location_name,
+                    settings.weather_lat,
+                    settings.weather_lng,
+                    string_array_json(&settings.news_feeds),
+                    string_array_json(&settings.news_keywords),
+                ],
             )
             .map_err(map_sqlite)?;
-            Ok(())
+            Ok(WriteOutcome::Saved(tx.last_insert_rowid()))
         })
-        .await?;
-    Ok(ReportConfig {
-        r#type: r#type.to_owned(),
-        enabled,
-        schedule_cron: cron,
-        target_type: ttype,
-        target_id: tid,
+        .await
+}
+
+/// 本人の定期報告を検証済みの内容で置き換える。
+pub(crate) async fn update_report(
+    db: &Db,
+    user_id: &str,
+    bot_id: &str,
+    id: i64,
+    settings: ReportSettings,
+) -> Result<WriteOutcome, DbError> {
+    let (u, b) = (user_id.to_owned(), bot_id.to_owned());
+    db.writer
+        .transaction(move |tx| {
+            if name_taken(tx, &u, &b, &settings.name, Some(id))? {
+                return Ok(WriteOutcome::NameTaken);
+            }
+            let changed = tx
+                .execute(
+                    "UPDATE periodic_reports SET \
+                       name = ?4, enabled = ?5, schedule_cron = ?6, target_type = ?7, \
+                       target_id = ?8, sections = ?9, location_name = ?10, weather_lat = ?11, \
+                       weather_lng = ?12, news_feeds = ?13, news_keywords = ?14, \
+                       updated_at = datetime('now', 'localtime') \
+                     WHERE id = ?1 AND user_id = ?2 AND bot_id = ?3",
+                    params![
+                        id,
+                        u,
+                        b,
+                        settings.name,
+                        i64::from(settings.enabled),
+                        settings.schedule_cron,
+                        settings.target_type.key(),
+                        settings.target_id,
+                        sections_json(&settings.sections),
+                        settings.location_name,
+                        settings.weather_lat,
+                        settings.weather_lng,
+                        string_array_json(&settings.news_feeds),
+                        string_array_json(&settings.news_keywords),
+                    ],
+                )
+                .map_err(map_sqlite)?;
+            Ok(if changed == 0 {
+                WriteOutcome::NotFound
+            } else {
+                WriteOutcome::Saved(id)
+            })
+        })
+        .await
+}
+
+/// 本人の定期報告を削除する（消えたら `true`）。
+pub(crate) async fn delete_report(
+    db: &Db,
+    user_id: &str,
+    bot_id: &str,
+    id: i64,
+) -> Result<bool, DbError> {
+    let (u, b) = (user_id.to_owned(), bot_id.to_owned());
+    db.writer
+        .execute(move |conn| {
+            let deleted = conn
+                .execute(
+                    "DELETE FROM periodic_reports WHERE id = ?1 AND user_id = ?2 AND bot_id = ?3",
+                    params![id, u, b],
+                )
+                .map_err(map_sqlite)?;
+            Ok(deleted > 0)
+        })
+        .await
+}
+
+fn name_taken(
+    tx: &rusqlite::Transaction<'_>,
+    user_id: &str,
+    bot_id: &str,
+    name: &str,
+    exclude_id: Option<i64>,
+) -> Result<bool, DbError> {
+    tx.query_row(
+        "SELECT EXISTS (SELECT 1 FROM periodic_reports \
+         WHERE user_id = ?1 AND bot_id = ?2 AND name = ?3 AND id IS NOT ?4)",
+        params![user_id, bot_id, name, exclude_id],
+        |r| r.get(0),
+    )
+    .map_err(map_sqlite)
+}
+
+/// 1 行（[`COLUMNS`] の順）を読む。
+fn report_from_row(row: &Row<'_>) -> rusqlite::Result<PeriodicReport> {
+    let target_type = if row.get::<_, String>(6)? == "channel" {
+        TargetType::Channel
+    } else {
+        TargetType::Dm
+    };
+    Ok(PeriodicReport {
+        id: row.get(0)?,
+        user_id: row.get(1)?,
+        bot_id: row.get(2)?,
+        settings: ReportSettings {
+            name: row.get(3)?,
+            enabled: row.get::<_, i64>(4)? != 0,
+            schedule_cron: row.get(5)?,
+            target_type,
+            target_id: row.get(7)?,
+            sections: parse_json_array(&row.get::<_, String>(8)?)
+                .iter()
+                .filter_map(|key| ReportSection::from_key(key))
+                .collect(),
+            location_name: row.get(9)?,
+            weather_lat: row.get(10)?,
+            weather_lng: row.get(11)?,
+            news_feeds: parse_json_array(&row.get::<_, String>(12)?),
+            news_keywords: parse_json_array(&row.get::<_, String>(13)?),
+        },
     })
 }
 
-/// JSON 配列文字列を `Vec<String>` へ（破損は空・Node `parseJsonArray`）。
+fn sections_json(sections: &[ReportSection]) -> String {
+    Value::from(sections.iter().map(|s| s.key()).collect::<Vec<_>>()).to_string()
+}
+
+fn string_array_json(items: &[String]) -> String {
+    Value::from(items.to_vec()).to_string()
+}
+
+/// JSON 配列文字列を `Vec<String>` へ（破損は空）。
 fn parse_json_array(raw: &str) -> Vec<String> {
     match serde_json::from_str::<Value>(raw) {
         Ok(Value::Array(arr)) => arr

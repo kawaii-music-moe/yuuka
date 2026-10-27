@@ -1,99 +1,112 @@
-//! 朝報コンテンツ生成（Node `briefingService.runBriefingForUser` の天気/RSS 部分パリティ）。
+//! 定期報告の天気・ニュース（Node `briefingService.runBriefingForUser` の天気/RSS 部分パリティ）。
 //!
-//! 天気は **Open-Meteo（api.open-meteo.com・API キー不要）**、ニュースは登録 RSS フィード（SSRF
-//! ガード付き・個別失敗は無視）。生成した [`BriefingContent`] を `runBriefingNow` ツールがインライン
-//! Embed として返す（手動確認用）。ニュースは [`AuxTextGenerator`] ポート越しに補助 LLM へ渡し、
-//! キー未設定・生成失敗・空応答時はヘッドライン列挙へ安全に縮退する。定時配信（cron→DM/channel）は
-//! DeliveryRunner シーム（Discord live 配線時）が担い、本サービスと同じ生成ロジックを再利用できる。
+//! 天気は **Open-Meteo（api.open-meteo.com・API キー不要）**。緯度経度が無く地点名だけのときは、同じ
+//! Open-Meteo のジオコーディング（geocoding-api.open-meteo.com）で地点を探す。ニュースは登録 RSS
+//! フィード（SSRF ガード付き・個別失敗は無視）を [`AuxTextGenerator`] ポート越しに補助 LLM で要約し、
+//! キー未設定・生成失敗・空応答時はヘッドライン列挙へ安全に縮退する。
 
 use std::time::Duration;
 
-use crate::repo::find_briefing;
 use yuuka_core::aux_text::AuxTextGenerator;
-use yuuka_core::DbError;
-use yuuka_web::Db;
 
-/// 生成した朝報の中身（Embed の各フィールド）。
-pub struct BriefingContent {
-    pub fields: Vec<(String, String)>,
-    /// 天気/ニュースいずれかの実コンテンツがあるか。
-    pub has_content: bool,
+use crate::model::ReportSettings;
+
+/// 天気の Embed フィールド（名前, 本文）。地点が見つからない・取得できないときは、その旨の本文にする。
+pub(crate) async fn weather_field(settings: &ReportSettings) -> (String, String) {
+    let coords = match (settings.weather_lat, settings.weather_lng) {
+        (Some(lat), Some(lng)) => Some((lat, lng)),
+        _ => match settings.location_name.as_deref() {
+            Some(name) => geocode(name).await,
+            None => None,
+        },
+    };
+    let Some((lat, lng)) = coords else {
+        let body = match settings.location_name.as_deref() {
+            Some(name) => format!("地点「{name}」が見つかりませんでした。"),
+            None => "天気の地点が設定されていません。".to_owned(),
+        };
+        return ("🌤️ 天気".to_owned(), body);
+    };
+    match fetch_weather(lat, lng).await {
+        Some(days) if !days.is_empty() => {
+            let location = settings
+                .location_name
+                .clone()
+                .unwrap_or_else(|| format!("{lat}, {lng}"));
+            let lines: Vec<String> = days
+                .iter()
+                .enumerate()
+                .map(|(i, w)| {
+                    let day = if i == 0 { "今日" } else { "明日" };
+                    let rain = w
+                        .precipitation
+                        .map(|p| format!(" / 降水確率 {p}%"))
+                        .unwrap_or_default();
+                    format!(
+                        "**{day}**: {}　{}℃〜{}℃{rain}",
+                        w.label,
+                        w.temp_min.round() as i64,
+                        w.temp_max.round() as i64
+                    )
+                })
+                .collect();
+            (format!("🌤️ {location} の天気"), lines.join("\n"))
+        }
+        _ => (
+            "🌤️ 天気".to_owned(),
+            "天気情報の取得に失敗しました。".to_owned(),
+        ),
+    }
 }
 
-/// 設定が存在すれば朝報コンテンツを生成する（無ければ `None`）。
-///
-/// # Errors
-/// 設定読み取り失敗時 [`DbError`]。
-pub async fn build_briefing(
-    db: &Db,
+/// ニュースの Embed フィールド（名前, 本文）。RSS → 補助 LLM で 3〜5 件要約、失敗時はタイトル列挙。
+pub(crate) async fn news_field(
     aux_text: &dyn AuxTextGenerator,
     user_id: &str,
-    bot_id: &str,
-) -> Result<Option<BriefingContent>, DbError> {
-    let Some(config) = find_briefing(db, user_id, bot_id).await? else {
-        return Ok(None);
-    };
-
-    let mut fields: Vec<(String, String)> = Vec::new();
-    let mut has_content = false;
-
-    // ── 天気（Open-Meteo） ──
-    if let (Some(lat), Some(lng)) = (config.weather_lat, config.weather_lng) {
-        match fetch_weather(lat, lng).await {
-            Some(days) if !days.is_empty() => {
-                let location = config
-                    .location_name
-                    .clone()
-                    .unwrap_or_else(|| format!("{lat}, {lng}"));
-                let lines: Vec<String> = days
-                    .iter()
-                    .enumerate()
-                    .map(|(i, w)| {
-                        let day = if i == 0 { "今日" } else { "明日" };
-                        let rain = w
-                            .precipitation
-                            .map(|p| format!(" / 降水確率 {p}%"))
-                            .unwrap_or_default();
-                        format!(
-                            "**{day}**: {}　{}℃〜{}℃{rain}",
-                            w.label,
-                            w.temp_min.round() as i64,
-                            w.temp_max.round() as i64
-                        )
-                    })
-                    .collect();
-                fields.push((format!("🌤️ {location} の天気"), lines.join("\n")));
-                has_content = true;
-            }
-            _ => fields.push((
-                "🌤️ 天気".to_owned(),
-                "天気情報の取得に失敗しました。".to_owned(),
-            )),
-        }
+    settings: &ReportSettings,
+) -> (String, String) {
+    let items = fetch_news(&settings.news_feeds, &settings.news_keywords).await;
+    if items.is_empty() {
+        return (
+            "📰 ニュース".to_owned(),
+            "フィードから記事を取得できませんでした。".to_owned(),
+        );
     }
-
-    // ── ニュース（RSS → 補助 LLM で 3〜5 件要約、失敗時はタイトル列挙） ──
-    if !config.news_feeds.is_empty() {
-        let items = fetch_news(&config.news_feeds, &config.news_keywords).await;
-        if items.is_empty() {
-            fields.push((
-                "📰 ニュース".to_owned(),
-                "フィードから記事を取得できませんでした。".to_owned(),
-            ));
-        } else {
-            let text = summarize_news(aux_text, user_id, &items).await;
-            fields.push(("📰 今朝のニュース".to_owned(), text));
-            has_content = true;
-        }
-    }
-
-    Ok(Some(BriefingContent {
-        fields,
-        has_content,
-    }))
+    (
+        "📰 ニュース".to_owned(),
+        summarize_news(aux_text, user_id, &items).await,
+    )
 }
 
 // ─── 天気（Open-Meteo） ────────────────────────────────────────────────────────
+
+/// 地点名から緯度経度を探す（Open-Meteo Geocoding・日本語名で検索し先頭の候補を使う）。
+async fn geocode(name: &str) -> Option<(f64, f64)> {
+    let url = reqwest::Url::parse_with_params(
+        "https://geocoding-api.open-meteo.com/v1/search",
+        &[
+            ("name", name),
+            ("count", "1"),
+            ("language", "ja"),
+            ("format", "json"),
+        ],
+    )
+    .ok()?;
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .ok()?;
+    let resp = client.get(url).send().await.ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let json: serde_json::Value = resp.json().await.ok()?;
+    let first = json.get("results")?.as_array()?.first()?;
+    Some((
+        first.get("latitude")?.as_f64()?,
+        first.get("longitude")?.as_f64()?,
+    ))
+}
 
 struct WeatherDay {
     label: String,
@@ -206,7 +219,7 @@ async fn summarize_news(
         .collect::<Vec<_>>()
         .join("\n");
     let prompt = format!(
-        "以下はRSSフィードから取得した今朝のニュースヘッドライン一覧です。\
+        "以下はRSSフィードから取得した最新ニュースのヘッドライン一覧です。\
          重要・有用なものを3〜5件選び、それぞれ1行（「・見出し — ひとこと補足」形式）で日本語に要約してください。\
          要約のみを出力してください。\n\n{source}"
     );
@@ -417,45 +430,6 @@ fn decode_min(s: &str) -> String {
         .replace("&quot;", "\"")
         .replace("&#39;", "'")
         .replace("&apos;", "'")
-}
-
-/// 手動 briefing のフッタ + タイトル・色（Node parity・スカイブルー）。
-pub(crate) const BRIEFING_TITLE: &str = "🌅 おはようございます！今日の朝報です";
-pub(crate) const BRIEFING_COLOR: u32 = 0x0000_b0f4;
-pub(crate) const BRIEFING_FOOTER: &str = "データ提供: Open-Meteo / 登録RSSフィード";
-pub(crate) const BRIEFING_EMPTY_DESC: &str =
-    "朝報に表示する内容がまだ設定されていません。天気の地点（緯度経度）やニュースのRSSフィードを設定してください。";
-
-/// 生成した朝報を**プレーンテキスト**へ整形する（定時配信の [`crate::cron::run_due_briefings`] 用）。
-///
-/// **意図的 divergence**: Node は Embed（`{ embeds: [embed] }`）で配信するが、Rust の通知ポート
-/// （`yuuka_services::Notifier`）は現状 text 経路のみを持つ（Embed は後続拡張）。ここでは Embed の
-/// タイトル・各フィールド（`名: 値`）・フッタを Discord のマークダウンで縦に積んだ text 本文にする
-/// （runBriefingNow の「インライン Embed で返す」divergence と同系統・情報は等価）。空コンテンツ時は
-/// [`BRIEFING_EMPTY_DESC`] を本文に入れる（Node の `setDescription` と等価）。
-#[must_use]
-pub fn render_briefing_text(content: &BriefingContent) -> String {
-    let mut out = String::new();
-    out.push_str("**");
-    out.push_str(BRIEFING_TITLE);
-    out.push_str("**\n");
-    if content.has_content {
-        for (name, value) in &content.fields {
-            out.push('\n');
-            out.push_str("**");
-            out.push_str(name);
-            out.push_str("**\n");
-            out.push_str(value);
-            out.push('\n');
-        }
-    } else {
-        out.push('\n');
-        out.push_str(BRIEFING_EMPTY_DESC);
-        out.push('\n');
-    }
-    out.push('\n');
-    out.push_str(BRIEFING_FOOTER);
-    out
 }
 
 #[cfg(test)]
@@ -719,41 +693,5 @@ mod tests {
     fn parse_feed_source_uses_channel_title() {
         let xml = "<rss><channel><title>配信元 &amp; News</title><item><title>記事</title></item></channel></rss>";
         assert_eq!(parse_feed_source(xml).as_deref(), Some("配信元 & News"));
-    }
-
-    #[test]
-    fn render_text_includes_title_fields_and_footer() {
-        let content = BriefingContent {
-            fields: vec![
-                (
-                    "🌤️ 東京 の天気".to_owned(),
-                    "**今日**: 晴れ　20℃〜28℃".to_owned(),
-                ),
-                (
-                    "📰 今朝のニュース".to_owned(),
-                    "・記事A\n・記事B".to_owned(),
-                ),
-            ],
-            has_content: true,
-        };
-        let text = render_briefing_text(&content);
-        assert!(text.contains(BRIEFING_TITLE));
-        assert!(text.contains("🌤️ 東京 の天気"));
-        assert!(text.contains("**今日**: 晴れ"));
-        assert!(text.contains("・記事A"));
-        assert!(text.contains(BRIEFING_FOOTER));
-    }
-
-    #[test]
-    fn render_text_uses_empty_desc_when_no_content() {
-        let content = BriefingContent {
-            fields: vec![],
-            has_content: false,
-        };
-        let text = render_briefing_text(&content);
-        assert!(text.contains(BRIEFING_TITLE));
-        assert!(text.contains(BRIEFING_EMPTY_DESC));
-        // 本文は非空（NullNotifier 以外なら配信される）。
-        assert!(!text.trim().is_empty());
     }
 }

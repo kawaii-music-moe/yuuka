@@ -106,8 +106,8 @@ pub const SELECTABLE_MODULES: &[ModuleMeta] = &[
     ModuleMeta {
         id: "briefing",
         cap: "secretary",
-        label: "朝刊・ニュース",
-        description: "ニュース・RSS取得・朝刊",
+        label: "定期報告",
+        description: "天気・ニュース・タスクなどを組み合わせた定期報告",
         settings_key: None,
     },
     ModuleMeta {

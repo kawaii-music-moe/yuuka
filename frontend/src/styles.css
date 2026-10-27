@@ -779,11 +779,17 @@ textarea {
 	font-size: 0.9rem;
 	color: var(--text-primary);
 }
-/* Discord 設定ページの入力欄は枠線・フォーカスリングなし（Bot登録名の入力欄と同じ見た目）。 */
+/* Discord / Playbook ページの入力欄は枠線・フォーカスリングなし（Bot登録名の入力欄と同じ見た目）。 */
 .tab-view.discord-tab input,
 .tab-view.discord-tab input:focus,
 .tab-view.discord-tab select,
-.tab-view.discord-tab select:focus {
+.tab-view.discord-tab select:focus,
+.tab-view.playbooks-tab input,
+.tab-view.playbooks-tab input:focus,
+.tab-view.playbooks-tab select,
+.tab-view.playbooks-tab select:focus,
+.tab-view.playbooks-tab textarea,
+.tab-view.playbooks-tab textarea:focus {
 	border: 0;
 	outline: none;
 	box-shadow: none;

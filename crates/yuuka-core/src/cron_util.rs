@@ -35,12 +35,47 @@ pub fn next_after(expr: &str, after: DateTime<Local>) -> Option<DateTime<Local>>
     parse(expr)?.find_next_occurrence(&after, false).ok()
 }
 
+/// `before` より **厳密に前**の直近の発火ローカル時刻（前回の発火）。
+///
+/// croner は前方探索しか持たないため、さかのぼる幅を 1 時間 → 1 日 → 8 日 → 32 日 → 400 日と
+/// 広げながら、その範囲で `before` 未満の最後の発火を探す（毎分の式でも 1 時間分の走査で済む）。
+/// 400 日さかのぼっても無い・壊れた式は `None`。定期報告の集計期間（前回の配信予定から今まで）に使う。
+#[must_use]
+pub fn previous_before(expr: &str, before: DateTime<Local>) -> Option<DateTime<Local>> {
+    const MAX_STEPS: usize = 100_000;
+    let cron = parse(expr)?;
+    for lookback in [
+        Duration::hours(1),
+        Duration::days(1),
+        Duration::days(8),
+        Duration::days(32),
+        Duration::days(400),
+    ] {
+        let start = before.checked_sub_signed(lookback)?;
+        let mut last = None;
+        let mut cursor = start;
+        for _ in 0..MAX_STEPS {
+            match cron.find_next_occurrence(&cursor, false) {
+                Ok(next) if next < before => {
+                    last = Some(next);
+                    cursor = next;
+                }
+                _ => break,
+            }
+        }
+        if last.is_some() {
+            return last;
+        }
+    }
+    None
+}
+
 /// cron 式が「この 1 分」にマッチするか（Node `reportService.cronMatchesNow` パリティ）。
 ///
 /// Node と同一アルゴリズム: 60 秒前を起点に**厳密に後**の次回発火を求め、その分（年月日時分）が
 /// `now` の分と一致すれば true。壊れた式は `next_after` が `None`＝false（Node の `catch → false`）。
 /// これにより「分境界で発火する EveryMinute tick」が現在分の設定を **1 回だけ**配信できる
-/// （last_run 列を持たない briefing/report の冪等判定・croner が `*`/範囲/リストを解釈）。
+/// （last_run 列を持たない定期報告の冪等判定・croner が `*`/範囲/リストを解釈）。
 #[must_use]
 pub fn cron_matches_now(expr: &str, now: DateTime<Local>) -> bool {
     let Some(base) = now.checked_sub_signed(Duration::seconds(60)) else {
@@ -116,6 +151,35 @@ mod tests {
             .with_ymd_and_hms(y, mo, d, h, mi, 0)
             .single()
             .expect("valid local time")
+    }
+
+    #[test]
+    fn previous_before_finds_last_fire_strictly_before() {
+        // 毎朝 7 時: 7:00 ちょうどを基準にすると前日 7:00（同時刻は含まない）。
+        assert_eq!(
+            previous_before("0 7 * * *", at(2026, 10, 27, 7, 0)),
+            Some(at(2026, 10, 26, 7, 0))
+        );
+        assert_eq!(
+            previous_before("0 7 * * *", at(2026, 10, 27, 15, 23)),
+            Some(at(2026, 10, 27, 7, 0))
+        );
+        // 毎週日曜 21 時: 1 週間前まで広げて見つける。
+        assert_eq!(
+            previous_before("0 21 * * 0", at(2026, 10, 25, 21, 0)),
+            Some(at(2026, 10, 18, 21, 0))
+        );
+        // 毎月 1 日: 1 か月前まで。
+        assert_eq!(
+            previous_before("0 9 1 * *", at(2026, 10, 1, 9, 0)),
+            Some(at(2026, 9, 1, 9, 0))
+        );
+        // 毎分: 直前の分。
+        assert_eq!(
+            previous_before("* * * * *", at(2026, 10, 27, 7, 0)),
+            Some(at(2026, 10, 27, 6, 59))
+        );
+        assert_eq!(previous_before("bad", at(2026, 10, 27, 7, 0)), None);
     }
 
     #[test]

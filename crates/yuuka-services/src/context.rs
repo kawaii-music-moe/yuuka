@@ -28,8 +28,8 @@ pub struct ServiceContext {
     pub metrics: Arc<MetricsRegistry>,
     /// マクロ定期実行の秘書ターン起動ポート（未配線時は [`crate::turn::NullPlaybookRunner`]）。
     pub playbook_runner: Arc<dyn PlaybookRunner>,
-    /// ユーザー本人のキーで行う補助テキスト生成（朝報ニュースの要約・日報/週報のまとめ）。
-    /// 未配線・障害時は [`NullAuxTextGenerator`] と同じく、朝報はタイトル列挙・日報/週報は生データへ縮退する。
+    /// ユーザー本人のキーで行う補助テキスト生成（定期報告のニュース要約・活動データのまとめ）。
+    /// 未配線・障害時は [`NullAuxTextGenerator`] と同じく、ニュースはタイトル列挙・活動データは生データへ縮退する。
     pub aux_text: Arc<dyn AuxTextGenerator>,
     /// 定期バックアップの実行ポート（未配線時は [`NullBackupRunner`]・[`crate::backup::BackupService`] が使う）。
     pub backup: Arc<dyn BackupRunner>,

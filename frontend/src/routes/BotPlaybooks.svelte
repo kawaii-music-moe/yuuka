@@ -8,6 +8,7 @@
 // activeBot 変更で3本 fetch（list / schedules / runs）。playbookApi 使用（scope:'bot'）。
 // ─────────────────────────────────────────────────────────────────────────
 
+import { onDestroy } from "svelte";
 import { ApiError } from "$lib/api/client";
 import { playbookApi } from "$lib/api/services";
 import type {
@@ -16,7 +17,6 @@ import type {
 	PlaybookScheduleRecord,
 } from "$lib/api/types";
 import {
-	Badge,
 	Button,
 	confirmDialog,
 	EmptyState,
@@ -24,7 +24,9 @@ import {
 	PageTabs,
 } from "$lib/components/ui";
 import { activeBot } from "$lib/stores/activeBot";
+import { headerExtra } from "$lib/stores/headerExtra";
 import { pushToast } from "$lib/stores/toast";
+import CronField from "./delivery/CronField.svelte";
 import {
 	formatRunDuration,
 	runStatusIcon,
@@ -32,15 +34,24 @@ import {
 } from "./playbooks/playbookUtils";
 
 const VIEWS = [
-	{ id: "playbooks", label: "手順書" },
-	{ id: "schedules", label: "定期実行" },
-	{ id: "runs", label: "実行履歴" },
+	{ id: "list", label: "一覧", icon: "list_alt" },
+	{ id: "schedules", label: "定期実行", icon: "event_repeat" },
+	{ id: "runs", label: "実行履歴", icon: "history" },
 ];
-let view = $state("playbooks");
+let view = $state("list");
+// 一覧タブ内で編集フォームを出している間 true
+let editing = $state(false);
 
 let playbooks = $state<PlaybookRecord[]>([]);
 let schedules = $state<PlaybookScheduleRecord[]>([]);
 let runs = $state<PlaybookRunRecord[]>([]);
+// 実行履歴はサーバが新しい順に最大 50 件返すので、その範囲をクライアント側でページ分けする。
+const RUNS_PAGE_SIZE = 5;
+let runsPage = $state(0);
+const runsTotalPages = $derived(Math.max(1, Math.ceil(runs.length / RUNS_PAGE_SIZE)));
+const pagedRuns = $derived(
+	runs.slice(runsPage * RUNS_PAGE_SIZE, (runsPage + 1) * RUNS_PAGE_SIZE),
+);
 
 // ── Playbook フォーム ──
 let pbName = $state("");
@@ -52,19 +63,18 @@ let searchQuery = $state("");
 
 // ── スケジュール フォーム ──
 let schPlaybookName = $state("");
-let cronPreset = $state("");
 let cronExpression = $state("");
 let schDescription = $state("");
 let schEnabled = $state(true);
+// 定期実行タブで追加フォームを出している間 true
+let schAdding = $state(false);
 
-const CRON_PRESETS: { value: string; label: string }[] = [
-	{ value: "0 9 * * *", label: "毎朝9時" },
-	{ value: "0 18 * * *", label: "毎夕18時" },
-	{ value: "0 9 * * 1", label: "毎週月曜 9時" },
-	{ value: "0 9 1 * *", label: "毎月1日 9時" },
-	{ value: "*/30 * * * *", label: "30分ごと" },
-	{ value: "0 * * * *", label: "1時間ごと" },
-];
+function resetScheduleForm() {
+	schPlaybookName = "";
+	cronExpression = "";
+	schDescription = "";
+	schEnabled = true;
+}
 
 function reportError(e: unknown) {
 	pushToast(
@@ -97,6 +107,7 @@ async function loadRuns() {
 	try {
 		const res = await playbookApi.runs();
 		runs = res.runs ?? [];
+		runsPage = 0;
 	} catch (e) {
 		reportError(e);
 		runs = [];
@@ -110,13 +121,6 @@ $effect(() => {
 	void loadRuns();
 });
 
-// cron プリセット選択で式を反映（custom はそのまま手入力）。
-function onCronPreset(e: Event) {
-	const v = (e.currentTarget as HTMLSelectElement).value;
-	cronPreset = v;
-	if (v && v !== "custom") cronExpression = v;
-}
-
 function resetPlaybookForm() {
 	pbName = "";
 	pbTitle = "";
@@ -126,6 +130,7 @@ function resetPlaybookForm() {
 }
 
 function loadIntoForm(p: PlaybookRecord) {
+	editing = true;
 	pbName = p.name;
 	pbTitle = p.title;
 	pbKeywords = (p.keywords ?? []).join(", ");
@@ -153,6 +158,7 @@ async function savePlaybook(e: SubmitEvent) {
 		});
 		pushToast(res.message ?? "Playbookを保存しました。", "success");
 		resetPlaybookForm();
+		editing = false;
 		await loadPlaybooks(searchQuery.trim() || undefined);
 		await loadSchedules();
 	} catch (err) {
@@ -196,11 +202,8 @@ async function saveSchedule(e: SubmitEvent) {
 			enabled: schEnabled,
 		});
 		pushToast(res.message ?? "スケジュールを保存しました。", "success");
-		schPlaybookName = "";
-		cronPreset = "";
-		cronExpression = "";
-		schDescription = "";
-		schEnabled = true;
+		resetScheduleForm();
+		schAdding = false;
 		await loadSchedules();
 		await loadRuns();
 	} catch (err) {
@@ -209,6 +212,11 @@ async function saveSchedule(e: SubmitEvent) {
 }
 
 async function toggleSchedule(s: PlaybookScheduleRecord) {
+	const ok = await confirmDialog({
+		message: s.enabled ? "無効にしますか？" : "有効にしますか？",
+		confirmLabel: s.enabled ? "無効にする" : "有効にする",
+	});
+	if (!ok) return;
 	try {
 		await playbookApi.toggleSchedule({ id: s.id, enabled: !s.enabled });
 		await loadSchedules();
@@ -232,88 +240,120 @@ async function deleteSchedule(s: PlaybookScheduleRecord) {
 		reportError(e);
 	}
 }
+
+// タブはシェルのヘッダーに出す（Discord ページと同じ）。
+headerExtra.set(headerTabs);
+onDestroy(() => headerExtra.set(null));
 </script>
 
-<section class="tab-view">
-	<PageTabs tabs={VIEWS} bind:active={view} label="Playbook の設定" />
+{#snippet headerTabs()}
+	<PageTabs tabs={VIEWS} bind:active={view} label="Playbook の設定" flush />
+{/snippet}
 
-	{#if view === "playbooks"}
-	<div class="expense-actions-columns">
-		<!-- Playbook フォーム -->
-		<div class="action-column card">
-			<div class="column-header">
-				<h3><Icon name="edit_note" class="header-icon-symbol" />Playbook の登録・編集</h3>
-			</div>
-			<form class="pb-form" onsubmit={savePlaybook}>
-				<div class="form-row">
-					<div class="form-group">
-						<label for="playbook-name">プレイブック名 (英数字・ハイフン) *</label>
-						<input
-							type="text"
-							id="playbook-name"
-							required
-							placeholder="例: daily-sales-check"
-							pattern={"[a-zA-Z0-9\\-_\\/]+"}
-							bind:value={pbName}
-						/>
-					</div>
-					<div class="form-group">
-						<label for="playbook-title">表示タイトル *</label>
-						<input
-							type="text"
-							id="playbook-title"
-							required
-							placeholder="例: 毎日売上データ収集"
-							bind:value={pbTitle}
-						/>
-					</div>
-				</div>
-				<div class="form-group">
-					<label for="playbook-keywords">キーワード (カンマ区切り)</label>
-					<input
-						type="text"
-						id="playbook-keywords"
-						placeholder="例: 売上, スプレッドシート, 集計"
-						bind:value={pbKeywords}
-					/>
-				</div>
-				<div class="form-group">
-					<label for="playbook-description">概要説明</label>
-					<input
-						type="text"
-						id="playbook-description"
-						placeholder="例: 特定サイトから前日の売上を自動転記する"
-						bind:value={pbDescription}
-					/>
-				</div>
-				<div class="form-group">
-					<label for="playbook-steps">操作手順ステップ (Markdown形式等) *</label>
-					<textarea
-						id="playbook-steps"
-						required
-						class="pb-steps"
-						placeholder={"例:\n1. http://example.com/login にアクセスする\n2. 資格情報を使ってログインする\n3. レポートをダウンロードする"}
-						bind:value={pbSteps}
-					></textarea>
-				</div>
-				<Button type="submit" variant="primary" block>プレイブックを保存</Button>
-			</form>
+{#snippet playbookForm()}
+	<div class="action-column card">
+		<div class="column-header">
+			<h3><Icon name="edit_note" class="header-icon-symbol" />Playbook の登録・編集</h3>
 		</div>
-
-		<!-- Playbook 一覧 -->
-		<div class="action-column card">
-			<div class="column-header">
-				<h3><Icon name="list_alt" class="header-icon-symbol" />登録済み Playbook 一覧</h3>
+		<form class="pb-form" onsubmit={savePlaybook}>
+			<div class="form-row">
+				<div class="form-group">
+					<label for="playbook-name">プレイブック名 (英数字・ハイフン)<span class="pb-required"> *</span></label>
+					<input
+						type="text"
+						id="playbook-name"
+						required
+						placeholder="例: daily-sales-check"
+						pattern={"[a-zA-Z0-9\\-_\\/]+"}
+						bind:value={pbName}
+					/>
+				</div>
+				<div class="form-group">
+					<label for="playbook-title">表示タイトル<span class="pb-required"> *</span></label>
+					<input
+						type="text"
+						id="playbook-title"
+						required
+						placeholder="例: 毎日売上データ収集"
+						bind:value={pbTitle}
+					/>
+				</div>
 			</div>
-			<p class="description-text">現在このBotに登録されている自動化手順書です。</p>
+			<div class="form-group">
+				<label for="playbook-keywords">キーワード (カンマ区切り)</label>
+				<input
+					type="text"
+					id="playbook-keywords"
+					placeholder="例: 売上, スプレッドシート, 集計"
+					bind:value={pbKeywords}
+				/>
+			</div>
+			<div class="form-group">
+				<label for="playbook-description">概要説明</label>
+				<input
+					type="text"
+					id="playbook-description"
+					placeholder="例: 特定サイトから前日の売上を自動転記する"
+					bind:value={pbDescription}
+				/>
+			</div>
+			<div class="form-group">
+				<label for="playbook-steps">操作手順ステップ (Markdown形式等)<span class="pb-required"> *</span></label>
+				<textarea
+					id="playbook-steps"
+					required
+					class="pb-steps"
+					placeholder={"例:\n1. http://example.com/login にアクセスする\n2. 資格情報を使ってログインする\n3. レポートをダウンロードする"}
+					bind:value={pbSteps}
+				></textarea>
+			</div>
+			<Button type="submit" variant="primary" block>プレイブックを保存</Button>
+			{#if editing}
+				<Button
+					variant="secondary"
+					block
+					onclick={() => {
+						editing = false;
+						resetPlaybookForm();
+					}}>キャンセル</Button
+				>
+			{/if}
+		</form>
+	</div>
+{/snippet}
 
+<section class="tab-view playbooks-tab">
+
+	<!-- Playbook 一覧 -->
+	{#if view === "list"}
+	<div class="expense-actions-columns pb-grid pb-single">
+		{#if editing}
+			{@render playbookForm()}
+		{:else}
+		<div class="action-column card">
+			<div class="pb-search-row">
 			<div class="pb-search">
 				<input
 					type="text"
 					placeholder="キーワード・タイトルで検索..."
 					bind:value={searchQuery}
 				/>
-				<Button variant="secondary" onclick={runSearch}>検索</Button>
+				<button
+					type="button"
+					class="pb-search-button"
+					title="検索"
+					aria-label="検索"
+					disabled={!searchQuery.trim()}
+					onclick={runSearch}><Icon name="search" /></button
+				>
+			</div>
+				<Button
+					variant="primary"
+					onclick={() => {
+						resetPlaybookForm();
+						editing = true;
+					}}><Icon name="add" />追加</Button
+				>
 			</div>
 
 			<div class="pb-list">
@@ -337,12 +377,17 @@ async function deleteSchedule(s: PlaybookScheduleRecord) {
 								{/if}
 							</div>
 							<div class="pb-item-actions">
-								<button type="button" class="btn-mini" onclick={() => loadIntoForm(p)}>
-									<Icon name="edit" />編集
+								<button
+									type="button"
+									class="pb-icon-plain"
+									aria-label="編集"
+									onclick={() => loadIntoForm(p)}
+								>
+									<Icon name="edit" />
 								</button>
 								<button
 									type="button"
-									class="btn-trash"
+									class="pb-icon-plain pb-trash-plain"
 									aria-label="削除"
 									onclick={() => deletePlaybook(p)}
 								>
@@ -356,24 +401,22 @@ async function deleteSchedule(s: PlaybookScheduleRecord) {
 				{/if}
 			</div>
 		</div>
+		{/if}
 	</div>
-
 	{/if}
 
 	<!-- スケジュール -->
 	{#if view === "schedules"}
-	<div class="expense-actions-columns">
+	<div class="expense-actions-columns pb-grid pb-single">
+		{#if schAdding}
 		<!-- スケジュール フォーム -->
 		<div class="action-column card">
 			<div class="column-header">
 				<h3><Icon name="schedule" class="header-icon-symbol" />定期実行スケジュール設定</h3>
 			</div>
-			<p class="description-text">
-				Playbookを定期的に自動実行するスケジュールを設定します。
-			</p>
 			<form class="pb-form" onsubmit={saveSchedule}>
 				<div class="form-group">
-					<label for="schedule-playbook-select">実行するPlaybook *</label>
+					<label for="schedule-playbook-select">実行するPlaybook<span class="pb-required"> *</span></label>
 					<select id="schedule-playbook-select" required bind:value={schPlaybookName}>
 						<option value="">-- Playbookを選択 --</option>
 						{#each playbooks as p (p.name)}
@@ -382,28 +425,13 @@ async function deleteSchedule(s: PlaybookScheduleRecord) {
 					</select>
 				</div>
 				<div class="form-group">
-					<label for="schedule-cron-preset">実行頻度プリセット</label>
-					<select id="schedule-cron-preset" value={cronPreset} onchange={onCronPreset}>
-						<option value="">-- プリセットを選択 --</option>
-						{#each CRON_PRESETS as preset (preset.value)}
-							<option value={preset.value}>{preset.label}</option>
-						{/each}
-						<option value="custom">カスタム入力</option>
-					</select>
-				</div>
-				<div class="form-group">
-					<label for="schedule-cron-expression">Cron式 *</label>
-					<input
-						type="text"
+					<CronField
 						id="schedule-cron-expression"
+						label="実行スケジュール"
 						required
-						class="pb-mono"
 						placeholder="例: 0 9 * * * (毎朝9時)"
 						bind:value={cronExpression}
 					/>
-					<span class="field-sub">
-						分 時 日 月 曜日 の順。例: <code>0 9 * * 1</code> = 毎週月曜9時
-					</span>
 				</div>
 				<div class="form-group">
 					<label for="schedule-description">メモ</label>
@@ -419,15 +447,28 @@ async function deleteSchedule(s: PlaybookScheduleRecord) {
 					<span>有効</span>
 				</label>
 				<Button type="submit" variant="primary" block>スケジュールを保存</Button>
+				<Button
+					variant="secondary"
+					block
+					onclick={() => {
+						schAdding = false;
+						resetScheduleForm();
+					}}>キャンセル</Button
+				>
 			</form>
 		</div>
-
+		{:else}
 		<!-- スケジュール一覧 -->
 		<div class="action-column card">
-			<div class="column-header">
-				<h3><Icon name="event_repeat" class="header-icon-symbol" />登録済みスケジュール一覧</h3>
+			<div class="column-header pb-header-row">
+				<Button
+					variant="primary"
+					onclick={() => {
+						resetScheduleForm();
+						schAdding = true;
+					}}><Icon name="add" />追加</Button
+				>
 			</div>
-			<p class="description-text">設定されている定期実行スケジュールです。</p>
 			<div class="pb-list">
 				{#if schedules.length > 0}
 					{#each schedules as s (s.id)}
@@ -435,11 +476,6 @@ async function deleteSchedule(s: PlaybookScheduleRecord) {
 							<div class="pb-item-body">
 								<div class="pb-item-title">
 									<span class="pb-title">{s.playbook_name}</span>
-									{#if s.enabled}
-										<Badge tone="status-active">有効</Badge>
-									{:else}
-										<Badge>停止中</Badge>
-									{/if}
 								</div>
 								<div class="pb-cron">{s.cron_expression}</div>
 								{#if s.description}
@@ -450,12 +486,17 @@ async function deleteSchedule(s: PlaybookScheduleRecord) {
 								{/if}
 							</div>
 							<div class="pb-item-actions">
-								<button type="button" class="btn-mini" onclick={() => toggleSchedule(s)}>
-									{s.enabled ? "無効化" : "有効化"}
+								<button
+									type="button"
+									class="btn-mini"
+									class:pb-sch-on={s.enabled}
+									onclick={() => toggleSchedule(s)}
+								>
+									{s.enabled ? "有効" : "無効"}
 								</button>
 								<button
 									type="button"
-									class="btn-trash"
+									class="pb-icon-plain pb-trash-plain"
 									aria-label="削除"
 									onclick={() => deleteSchedule(s)}
 								>
@@ -472,6 +513,7 @@ async function deleteSchedule(s: PlaybookScheduleRecord) {
 				{/if}
 			</div>
 		</div>
+		{/if}
 	</div>
 
 	{/if}
@@ -479,13 +521,9 @@ async function deleteSchedule(s: PlaybookScheduleRecord) {
 	<!-- 実行履歴 -->
 	{#if view === "runs"}
 	<div class="card">
-		<div class="column-header">
-			<h3><Icon name="history" class="header-icon-symbol" />実行履歴</h3>
-		</div>
-		<p class="description-text">Playbookの自動実行ログです。</p>
 		<div class="pb-runs">
 			{#if runs.length > 0}
-				{#each runs as run (run.id)}
+				{#each pagedRuns as run (run.id)}
 					<div
 						class="pb-run"
 						class:pb-run-failed={run.status === "failed"}
@@ -505,6 +543,23 @@ async function deleteSchedule(s: PlaybookScheduleRecord) {
 						{/if}
 					</div>
 				{/each}
+				{#if runsTotalPages > 1}
+					<div class="pb-pager">
+						<Button
+							variant="secondary"
+							small
+							disabled={runsPage === 0}
+							onclick={() => (runsPage -= 1)}>前へ</Button
+						>
+						<span class="pb-pager-info">{runsPage + 1} / {runsTotalPages}</span>
+						<Button
+							variant="secondary"
+							small
+							disabled={runsPage + 1 >= runsTotalPages}
+							onclick={() => (runsPage += 1)}>次へ</Button
+						>
+					</div>
+				{/if}
 			{:else}
 				<EmptyState icon="history" message="実行履歴がありません。" />
 			{/if}
@@ -514,6 +569,24 @@ async function deleteSchedule(s: PlaybookScheduleRecord) {
 </section>
 
 <style>
+	.pb-grid {
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+	}
+	.pb-grid.pb-single {
+		grid-template-columns: minmax(0, 1fr);
+	}
+	@media (max-width: 768px) {
+		.pb-grid {
+			grid-template-columns: minmax(0, 1fr);
+		}
+		/* スマホでは card-item の左右余白が 0 になり右端に張り付くため戻す */
+		/* 共通の .card-item は縦積みになるため、操作 UI を同じ行に戻す。 */
+		.pb-item {
+			padding-inline: 12px;
+			flex-direction: row;
+			align-items: flex-start;
+		}
+	}
 	.pb-form {
 		display: flex;
 		flex-direction: column;
@@ -525,24 +598,68 @@ async function deleteSchedule(s: PlaybookScheduleRecord) {
 		font-family: var(--font-family-mono);
 		font-size: 0.8rem;
 	}
-	.pb-mono {
-		font-family: var(--font-family-mono);
+	.pb-required {
+		color: var(--color-error);
 	}
-	.pb-search {
+	.pb-pager {
 		display: flex;
+		align-items: center;
+		justify-content: center;
+		gap: 12px;
+		margin-top: 8px;
+	}
+	.pb-pager-info {
+		font-size: 0.85rem;
+		color: var(--text-secondary);
+	}
+	.pb-header-row {
+		display: flex;
+		align-items: center;
+		justify-content: flex-end;
+		gap: 8px;
+	}
+	.pb-search-row {
+		display: flex;
+		align-items: center;
 		gap: 8px;
 		margin-bottom: 12px;
 	}
+	.pb-search {
+		position: relative;
+		flex: 1;
+		min-width: 0;
+	}
 	.pb-search input {
-		flex-grow: 1;
+		width: 100%;
+		box-sizing: border-box;
+		padding-right: 44px;
+	}
+	.pb-search-button {
+		position: absolute;
+		right: 4px;
+		top: 50%;
+		transform: translateY(-50%);
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		width: 36px;
+		height: 32px;
+		padding: 0;
+		border: 0;
+		border-radius: 6px;
+		background: transparent;
+		color: var(--color-primary);
+		cursor: pointer;
+	}
+	.pb-search-button:disabled {
+		color: var(--text-secondary);
+		opacity: 0.4;
+		cursor: default;
 	}
 	.pb-list {
 		display: flex;
 		flex-direction: column;
 		gap: 12px;
-		max-height: 480px;
-		overflow-y: auto;
-		padding-right: 4px;
 	}
 	.pb-item {
 		display: flex;
@@ -553,6 +670,7 @@ async function deleteSchedule(s: PlaybookScheduleRecord) {
 	.pb-item-body {
 		flex: 1;
 		min-width: 0;
+		overflow-wrap: anywhere;
 	}
 	.pb-item-title {
 		display: flex;
@@ -590,6 +708,27 @@ async function deleteSchedule(s: PlaybookScheduleRecord) {
 		gap: 4px;
 		margin-top: 6px;
 	}
+	.pb-sch-on {
+		color: var(--color-primary);
+		border-color: var(--color-primary);
+	}
+	.pb-icon-plain {
+		display: inline-flex;
+		align-items: center;
+		padding: 4px;
+		appearance: none;
+		border: none;
+		box-shadow: none;
+		background: transparent;
+		color: var(--text-secondary);
+		cursor: pointer;
+	}
+	.pb-trash-plain {
+		color: var(--color-error);
+	}
+	.pb-icon-plain:hover {
+		opacity: 0.75;
+	}
 	.pb-item-actions {
 		display: flex;
 		gap: 6px;
@@ -606,9 +745,6 @@ async function deleteSchedule(s: PlaybookScheduleRecord) {
 		display: flex;
 		flex-direction: column;
 		gap: 8px;
-		max-height: 360px;
-		overflow-y: auto;
-		padding-right: 4px;
 		margin-top: 8px;
 	}
 	.pb-run {
