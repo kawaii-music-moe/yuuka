@@ -372,5 +372,13 @@ const themeTitle = $derived(
 	/* 差し込んだタブの選択下線をヘッダーの罫線に揃える */
 	.top-header.has-extra {
 		padding-bottom: 0;
+		align-items: flex-start;
+	}
+	/* ☰ はタブ行ではなくタイトル行の中央に揃える（h2 と同じ行高） */
+	.top-header.has-extra .menu-toggle {
+		height: 2.2rem;
+	}
+	.top-header.has-extra .header-title h2 {
+		line-height: 2.2rem;
 	}
 </style>
