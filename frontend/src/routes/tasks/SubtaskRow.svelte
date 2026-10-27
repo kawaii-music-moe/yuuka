@@ -43,21 +43,29 @@ const disabled = $derived(completionDisabled(sub));
 
 		<button
 			type="button"
-			class="btn-icon-sm"
+			class="icon-plain"
 			title="編集"
+			aria-label="編集"
 			onclick={() => onEdit(sub)}
 		>
 			<Icon name="edit" />
 		</button>
 		<button
 			type="button"
-			class="btn-icon-sm"
+			class="icon-plain"
 			title="サブタスクを追加"
+			aria-label="サブタスクを追加"
 			onclick={() => onAddSub(sub)}
 		>
 			<Icon name="add" />
 		</button>
-		<button type="button" class="btn-trash" onclick={() => onDelete(sub.id)}>
+		<button
+			type="button"
+			class="icon-plain danger"
+			title="削除"
+			aria-label="削除"
+			onclick={() => onDelete(sub.id)}
+		>
 			<Icon name="delete" />
 		</button>
 	</div>

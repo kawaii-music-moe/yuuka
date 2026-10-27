@@ -12,12 +12,20 @@
 //   - activeBot 変更でリロード（bot-scoped API）。
 // ─────────────────────────────────────────────────────────────────────────
 
+import { onDestroy } from "svelte";
 import { ApiError } from "$lib/api/client";
 import { taskApi } from "$lib/api/services";
 import type { TodoPriority, TodoWithSubtasks } from "$lib/api/types";
-import { Button, confirmDialog, EmptyState, Icon } from "$lib/components/ui";
+import {
+	Button,
+	confirmDialog,
+	EmptyState,
+	Icon,
+	PageTabs,
+} from "$lib/components/ui";
 import { withBasePath } from "$lib/router";
 import { activeBot } from "$lib/stores/activeBot";
+import { headerExtra } from "$lib/stores/headerExtra";
 import { pushToast } from "$lib/stores/toast";
 import GanttChart from "./tasks/GanttChart.svelte";
 import SubtaskModal from "./tasks/SubtaskModal.svelte";
@@ -25,10 +33,14 @@ import TaskCard from "./tasks/TaskCard.svelte";
 import TaskEditModal from "./tasks/TaskEditModal.svelte";
 import TaskProgressModal from "./tasks/TaskProgressModal.svelte";
 
-type ViewMode = "list" | "gantt";
 type Filter = "all" | "pending" | "done";
 
-let viewMode = $state<ViewMode>("list");
+// 一覧／ガントはヘッダーのタブで切り替える。
+const VIEWS = [
+	{ id: "list", label: "一覧", icon: "view_list" },
+	{ id: "gantt", label: "ガント", icon: "bar_chart" },
+];
+let viewMode = $state("list");
 let filter = $state<Filter>("all");
 
 let tasks = $state<TodoWithSubtasks[]>([]);
@@ -213,25 +225,40 @@ async function saveProgress(payload: {
 		reportError(e);
 	}
 }
+
+headerExtra.set(headerTabs);
+onDestroy(() => headerExtra.set(null));
 </script>
 
+{#snippet headerTabs()}
+	<PageTabs tabs={VIEWS} bind:active={viewMode} label="タスクの表示" flush />
+{/snippet}
+
 <section class="tab-view">
-	<!-- 上部アクション: 表示モード切替 + 使い方リンク + タスク追加 -->
+	<!-- 上部アクション: 状態フィルタ（一覧のみ） + 使い方リンク + タスク追加 -->
 	<div class="view-actions-card card">
-		<div class="filters-group">
-			<button
-				type="button"
-				class="btn btn-filter"
-				class:active={viewMode === "list"}
-				onclick={() => (viewMode = "list")}><Icon name="view_list" size={16} /> 一覧</button
-			>
-			<button
-				type="button"
-				class="btn btn-filter"
-				class:active={viewMode === "gantt"}
-				onclick={() => (viewMode = "gantt")}><Icon name="bar_chart" size={16} /> ガント</button
-			>
-		</div>
+		{#if viewMode === "list"}
+			<div class="filters-group">
+				<button
+					type="button"
+					class="btn btn-filter"
+					class:active={filter === "all"}
+					onclick={() => (filter = "all")}>全て</button
+				>
+				<button
+					type="button"
+					class="btn btn-filter"
+					class:active={filter === "pending"}
+					onclick={() => (filter = "pending")}>未完了</button
+				>
+				<button
+					type="button"
+					class="btn btn-filter"
+					class:active={filter === "done"}
+					onclick={() => (filter = "done")}>完了済み</button
+				>
+			</div>
+		{/if}
 		<div class="tasks-actions-right">
 			<a
 				href={withBasePath("/tasks/guide")}
@@ -245,30 +272,6 @@ async function saveProgress(payload: {
 
 	{#if viewMode === "list"}
 		<div>
-			<!-- フィルタ（all/pending/done） -->
-			<div class="view-actions-card card">
-				<div class="filters-group">
-					<button
-						type="button"
-						class="btn btn-filter"
-						class:active={filter === "all"}
-						onclick={() => (filter = "all")}>全て</button
-					>
-					<button
-						type="button"
-						class="btn btn-filter"
-						class:active={filter === "pending"}
-						onclick={() => (filter = "pending")}>未完了</button
-					>
-					<button
-						type="button"
-						class="btn btn-filter"
-						class:active={filter === "done"}
-						onclick={() => (filter = "done")}>完了済み</button
-					>
-				</div>
-			</div>
-
 			<div class="list-container">
 				{#if tasks.length > 0}
 					{#each tasks as task (task.id)}
@@ -319,6 +322,7 @@ async function saveProgress(payload: {
 	.tasks-actions-right {
 		display: flex;
 		gap: 8px;
+		margin-left: auto;
 	}
 	.tasks-guide-link {
 		display: inline-flex;

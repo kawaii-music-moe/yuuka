@@ -42,6 +42,16 @@ $effect(() => {
 	priority = (t?.priority as TodoPriority | null) ?? "";
 });
 
+// 日付は欄のどこを押してもブラウザ標準の日付ピッカーを開く（未対応ブラウザでは何もしない）。
+function openPicker(e: MouseEvent) {
+	const input = e.currentTarget as HTMLInputElement;
+	try {
+		input.showPicker?.();
+	} catch {
+		// ユーザー操作扱いにならない等で開けないときは、通常の入力欄のままにする
+	}
+}
+
 function submit(e: SubmitEvent) {
 	e.preventDefault();
 	const trimmed = title.trim();
@@ -80,11 +90,23 @@ function submit(e: SubmitEvent) {
 		<div class="form-row">
 			<div class="form-group">
 				<label for="task-start">開始日</label>
-				<input type="date" id="task-start" bind:value={startDate} />
+				<input
+					type="date"
+					id="task-start"
+					class="picker-input"
+					bind:value={startDate}
+					onclick={openPicker}
+				/>
 			</div>
 			<div class="form-group">
 				<label for="task-due">期限日</label>
-				<input type="date" id="task-due" bind:value={dueDate} />
+				<input
+					type="date"
+					id="task-due"
+					class="picker-input"
+					bind:value={dueDate}
+					onclick={openPicker}
+				/>
 			</div>
 		</div>
 		<div class="form-group">
@@ -101,3 +123,9 @@ function submit(e: SubmitEvent) {
 		</Button>
 	</form>
 </Modal>
+
+<style>
+	.picker-input {
+		cursor: pointer;
+	}
+</style>

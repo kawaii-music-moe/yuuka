@@ -77,7 +77,13 @@ let expanded = $state(true);
 			</div>
 		</div>
 		<div class="card-actions-right">
-			<button type="button" class="btn-trash" onclick={() => onDelete(task.id)}>
+			<button
+				type="button"
+				class="icon-plain danger"
+				title="削除"
+				aria-label="削除"
+				onclick={() => onDelete(task.id)}
+			>
 				<Icon name="delete" />
 			</button>
 		</div>
