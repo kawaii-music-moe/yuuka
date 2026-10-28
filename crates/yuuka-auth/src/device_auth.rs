@@ -11,12 +11,13 @@
 //! （`desktop_tokens`）へ sha256 で永続化する（[`desktop::add_desktop_token`]）。store は main で 1 度
 //! 生成して router へ注入し、web 再起動を跨いで保持する（webhook の crypto と同方式の Extension）。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
+use std::net::{IpAddr, SocketAddr};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
-use axum::extract::{Extension, State};
-use axum::http::StatusCode;
+use axum::extract::{ConnectInfo, Extension, State};
+use axum::http::{header, Extensions, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use axum::{Json, Router};
@@ -25,7 +26,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use yuuka_core::config::{DEFAULT_DESKTOP_DEVICE_CODE_TTL_SECS, DEFAULT_DESKTOP_TOKEN_TTL_DAYS};
 use yuuka_db::map_sqlite;
-use yuuka_web::{AppState, AuthenticatedUser, Db, ScopedJson};
+use yuuka_web::{client_ip, rate_limit_key, AppState, AuthenticatedUser, Db, ScopedJson};
 
 use crate::audit::add_audit_log;
 use crate::token::generate_token;
@@ -40,6 +41,26 @@ const CROCKFORD: &[u8; 32] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 /// device_name の最大長（Node `device_name.slice(0, 200)`）。
 const MAX_DEVICE_NAME: usize = 200;
 
+/// 保留中（未期限切れ）のコード数の上限（メモリ保護）。超えたら未承認のうち最も古いコードを押し出す。
+const MAX_PENDING_CODES: usize = 10_000;
+
+/// 送信元ごとの発行回数制限（`IP_WINDOW` 内に `IP_MAX_CODES` 件まで）。数える単位は
+/// [`rate_limit_key`]（IPv4 はアドレス、IPv6 は /64）。
+const IP_MAX_CODES: usize = 10;
+const IP_WINDOW: Duration = Duration::from_secs(60);
+
+/// 保留上限が承認済みコードだけで埋まっていて押し出せないときの `Retry-After`（秒）。
+const FULL_RETRY_AFTER_SECS: u64 = 30;
+
+/// `create` が発行を断った理由。
+enum CreateError {
+    /// 送信元ごとの回数制限、または承認済みコードで保留上限が埋まっている（429）。
+    TooMany {
+        retry_after_secs: u64,
+    },
+    Internal,
+}
+
 /// device_code レコード（インメモリ・Node `DeviceAuthRecord`）。
 #[derive(Clone)]
 struct DeviceRecord {
@@ -48,6 +69,8 @@ struct DeviceRecord {
     device_name: Option<String>,
     approved_user: Option<String>,
     expires_at: Instant,
+    /// 発行時刻（承認画面に「発行から何秒か」を見せる用）。
+    created_at: Instant,
     /// slow_down 判定用: 直近に token ポーリングした時刻。
     last_polled_at: Option<Instant>,
 }
@@ -56,6 +79,8 @@ struct DeviceRecord {
 struct StoreState {
     by_hash: HashMap<String, DeviceRecord>,
     by_user_code: HashMap<String, String>,
+    /// 送信元（[`rate_limit_key`]）ごとの直近の発行時刻（回数制限用・窓を過ぎたものは掃除する）。
+    recent_by_ip: HashMap<IpAddr, VecDeque<Instant>>,
 }
 
 /// device_code の一時状態を保持するインメモリ store（router へ Extension で注入・web 再起動を跨ぐ）。
@@ -92,6 +117,7 @@ impl DeviceAuthStore {
             state: Mutex::new(StoreState {
                 by_hash: HashMap::new(),
                 by_user_code: HashMap::new(),
+                recent_by_ip: HashMap::new(),
             }),
             verification_base,
             device_code_ttl_secs,
@@ -118,21 +144,74 @@ impl DeviceAuthStore {
         }
     }
 
+    /// 未承認のうち期限が最も近い（＝最も古い）コードを 1 件消す。消せたら `true`。
+    ///
+    /// 承認済み（トークン交換待ち）のコードは消さない。消すと承認したログインが完了しなくなる。
+    fn evict_oldest_pending(state: &mut StoreState) -> bool {
+        let Some(hash) = state
+            .by_hash
+            .iter()
+            .filter(|(_, r)| !r.approved)
+            .min_by_key(|(_, r)| r.expires_at)
+            .map(|(h, _)| h.clone())
+        else {
+            return false;
+        };
+        if let Some(r) = state.by_hash.remove(&hash) {
+            state.by_user_code.remove(&r.user_code);
+        }
+        true
+    }
+
     /// device_code / user_code を発行する（Node `createDeviceCode`）。
-    fn create(&self, device_name: Option<String>) -> Result<serde_json::Value, getrandom::Error> {
-        let device_code = generate_token()?;
+    fn create(
+        &self,
+        ip: Option<IpAddr>,
+        device_name: Option<String>,
+    ) -> Result<serde_json::Value, CreateError> {
+        let device_code = generate_token().map_err(|_| CreateError::Internal)?;
         let hash = sha256_hex(&device_code);
         let now = Instant::now();
         let expires_at = now + Duration::from_secs(self.device_code_ttl_secs);
 
         let mut state = self.lock();
         Self::sweep(&mut state, now);
+        state.recent_by_ip.retain(|_, q| {
+            while q
+                .front()
+                .is_some_and(|t| now.duration_since(*t) >= IP_WINDOW)
+            {
+                q.pop_front();
+            }
+            !q.is_empty()
+        });
+        // 拒否時・失敗時は何も記録しない（拒否された要求で表が増えず、回数も消費しない）。
+        let key = ip.map(rate_limit_key);
+        if let Some(q) = key.and_then(|k| state.recent_by_ip.get(&k)) {
+            if q.len() >= IP_MAX_CODES {
+                let oldest = q.front().copied().unwrap_or(now);
+                let wait = IP_WINDOW.saturating_sub(now.duration_since(oldest));
+                return Err(CreateError::TooMany {
+                    retry_after_secs: ceil_secs(wait).max(1),
+                });
+            }
+        }
         // user_code 衝突回避。空間 32^8 ≫ 生存件数なので実質 1 回で決まる。**loop-until-unique** ＝
         // 万一の衝突でも既存インデックスを上書きしない（dangling インデックスを作らない・Node の
         // break-after-5 上書きより堅牢）。
-        let mut user_code = generate_user_code()?;
+        let mut user_code = generate_user_code().map_err(|_| CreateError::Internal)?;
         while state.by_user_code.contains_key(&user_code) {
-            user_code = generate_user_code()?;
+            user_code = generate_user_code().map_err(|_| CreateError::Internal)?;
+        }
+        // 保留上限に達したら、未承認のうち最も古いコードを押し出して空ける。429 で全員を止めると、
+        // 上限を埋めるだけで正規ユーザーのログインを TTL の間妨害できてしまうため。
+        if state.by_hash.len() >= MAX_PENDING_CODES && !Self::evict_oldest_pending(&mut state) {
+            return Err(CreateError::TooMany {
+                retry_after_secs: FULL_RETRY_AFTER_SECS,
+            });
+        }
+        if let Some(k) = key {
+            state.recent_by_ip.entry(k).or_default().push_back(now);
         }
         state.by_user_code.insert(user_code.clone(), hash.clone());
         state.by_hash.insert(
@@ -143,6 +222,7 @@ impl DeviceAuthStore {
                 device_name,
                 approved_user: None,
                 expires_at,
+                created_at: now,
                 last_polled_at: None,
             },
         );
@@ -175,10 +255,39 @@ impl DeviceAuthStore {
         if rec.expires_at <= now {
             return ApproveOutcome::Expired;
         }
+        // 承認済みを上書きしない。本人の承認からアプリの次のポーリングまでの間に、コードを知った
+        // 別ユーザーが承認すると、本人の端末が相手のアカウントでログインしてしまうため。
+        if rec.approved {
+            return ApproveOutcome::AlreadyApproved;
+        }
         rec.approved = true;
         rec.approved_user = Some(approved_user.to_owned());
         ApproveOutcome::Ok {
             device_name: rec.device_name.clone(),
+        }
+    }
+
+    /// 承認前の確認用に端末名・発行からの経過秒・残り秒を返す（状態は変えない）。
+    /// 承認済みのコードは照会できない（画面で承認ボタンを有効にしないため）。
+    fn lookup(&self, user_code: &str) -> LookupOutcome {
+        let normalized = user_code.trim().to_uppercase();
+        let now = Instant::now();
+        let mut state = self.lock();
+        Self::sweep(&mut state, now);
+        let Some(rec) = state
+            .by_user_code
+            .get(&normalized)
+            .and_then(|h| state.by_hash.get(h))
+        else {
+            return LookupOutcome::NotFound;
+        };
+        if rec.approved {
+            return LookupOutcome::AlreadyApproved;
+        }
+        LookupOutcome::Found {
+            device_name: rec.device_name.clone(),
+            age_secs: now.duration_since(rec.created_at).as_secs(),
+            remaining_secs: rec.expires_at.saturating_duration_since(now).as_secs(),
         }
     }
 
@@ -227,6 +336,57 @@ enum ApproveOutcome {
     Ok { device_name: Option<String> },
     NotFound,
     Expired,
+    AlreadyApproved,
+}
+
+/// `lookup` の結果。
+enum LookupOutcome {
+    Found {
+        device_name: Option<String>,
+        age_secs: u64,
+        remaining_secs: u64,
+    },
+    NotFound,
+    AlreadyApproved,
+}
+
+/// 承認済みコードへの照会・承認の応答（409）。
+fn already_approved() -> Response {
+    (
+        StatusCode::CONFLICT,
+        Json(json!({
+            "success": false,
+            "message": "このコードは既に承認済みです。心当たりがなければ、アプリでログインをやり直してください。"
+        })),
+    )
+        .into_response()
+}
+
+/// 端末名を表示・保存できる形に整える。`device_name` は `/device/code` の呼び出し側の自己申告で、
+/// 改行・制御文字・書字方向の制御文字（表示を偽装できる）を空白にし、連続する空白をまとめる。
+fn sanitize_device_name(raw: &str) -> Option<String> {
+    let cleaned: String = raw
+        .chars()
+        .map(|c| {
+            let bidi_or_zero_width = matches!(
+                c,
+                '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}' | '\u{FEFF}'
+            );
+            if c.is_control() || bidi_or_zero_width {
+                ' '
+            } else {
+                c
+            }
+        })
+        .collect();
+    let name = cleaned
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(MAX_DEVICE_NAME)
+        .collect::<String>();
+    (!name.is_empty()).then_some(name)
 }
 
 /// `poll` の判定（トークン発行前の同期的な状態）。
@@ -281,6 +441,7 @@ async fn lookup_user(
 pub fn device_auth_routes(store: Arc<DeviceAuthStore>) -> Router<AppState> {
     Router::new()
         .route("/api/auth/device/code", post(code_handler))
+        .route("/api/auth/device/lookup", post(lookup_handler))
         .route("/api/auth/device/approve", post(approve_handler))
         .route("/api/auth/device/token", post(token_handler))
         .layer(Extension(store))
@@ -312,6 +473,11 @@ fn as_opt_string(v: Option<Value>) -> Option<String> {
     v.and_then(|x| x.as_str().map(str::to_owned))
 }
 
+/// `Duration` を秒へ切り上げる（`Retry-After` は整数秒）。
+fn ceil_secs(d: Duration) -> u64 {
+    d.as_secs() + u64::from(d.subsec_nanos() > 0)
+}
+
 fn server_error() -> Response {
     (
         StatusCode::INTERNAL_SERVER_ERROR,
@@ -323,14 +489,30 @@ fn server_error() -> Response {
 /// §1.1: device_code / user_code を発行する（auth:none）。
 async fn code_handler(
     Extension(store): Extension<Arc<DeviceAuthStore>>,
+    State(app): State<AppState>,
+    headers: HeaderMap,
+    extensions: Extensions,
     ScopedJson { value: body, .. }: ScopedJson<CodeBody>,
 ) -> Response {
-    // device_name は文字列のみ採用し先頭 200 文字に制限（Node `typeof===string ? slice(0,200)`）。
-    let device_name = as_opt_string(body.device_name)
-        .map(|s| s.chars().take(MAX_DEVICE_NAME).collect::<String>());
-    match store.create(device_name) {
+    // device_name は文字列のみ採用し、制御文字を除いて先頭 200 文字に制限（Node `slice(0,200)` +
+    // 承認画面での偽装対策・#207）。
+    let device_name = as_opt_string(body.device_name).and_then(|s| sanitize_device_name(&s));
+    let peer = extensions
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|c| c.0.ip());
+    let ip = client_ip(peer, &headers, &app.config.trusted_proxies);
+    match store.create(ip, device_name) {
         Ok(payload) => (StatusCode::OK, Json(payload)).into_response(),
-        Err(_) => server_error(),
+        Err(CreateError::TooMany { retry_after_secs }) => (
+            StatusCode::TOO_MANY_REQUESTS,
+            [(header::RETRY_AFTER, retry_after_secs.to_string())],
+            Json(json!({
+                "error": "too_many_requests",
+                "message": "リクエストが多すぎます。しばらくしてから再度お試しください。"
+            })),
+        )
+            .into_response(),
+        Err(CreateError::Internal) => server_error(),
     }
 }
 
@@ -375,6 +557,49 @@ async fn approve_handler(
         )
             .into_response(),
         ApproveOutcome::NotFound => (
+            StatusCode::NOT_FOUND,
+            Json(json!({
+                "success": false,
+                "message": "コードが見つかりません。入力を確認してください。"
+            })),
+        )
+            .into_response(),
+        ApproveOutcome::AlreadyApproved => already_approved(),
+    }
+}
+
+/// §1.1a: 承認前に端末名と発行からの経過時間を返す（auth:user・ログイン済み利用者に限定）。
+/// コードを知るだけで端末名を引けると列挙の足がかりになるため、未ログインには開かない。
+async fn lookup_handler(
+    _user: AuthenticatedUser,
+    Extension(store): Extension<Arc<DeviceAuthStore>>,
+    ScopedJson { value: body, .. }: ScopedJson<ApproveBody>,
+) -> Response {
+    let user_code = as_opt_string(body.user_code).unwrap_or_default();
+    if user_code.trim().is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "success": false, "message": "ユーザーコードが必要です。" })),
+        )
+            .into_response();
+    }
+    match store.lookup(&user_code) {
+        LookupOutcome::Found {
+            device_name,
+            age_secs,
+            remaining_secs,
+        } => (
+            StatusCode::OK,
+            Json(json!({
+                "success": true,
+                "device_name": device_name,
+                "age_secs": age_secs,
+                "expires_in": remaining_secs,
+            })),
+        )
+            .into_response(),
+        LookupOutcome::AlreadyApproved => already_approved(),
+        LookupOutcome::NotFound => (
             StatusCode::NOT_FOUND,
             Json(json!({
                 "success": false,
@@ -495,9 +720,9 @@ mod tests {
     #[async_trait::async_trait]
     impl AuthBackend for FakeAuth {
         async fn session_user(&self, token: &str) -> Result<Option<SessionUser>, AuthError> {
-            Ok((token == "owner").then(|| SessionUser {
-                discord_id: "owner".to_owned(),
-                username: "owner".to_owned(),
+            Ok(matches!(token, "owner" | "other").then(|| SessionUser {
+                discord_id: token.to_owned(),
+                username: token.to_owned(),
                 role: Role::User,
             }))
         }
@@ -536,6 +761,16 @@ mod tests {
     }
 
     async fn send(app: &axum::Router, uri: &str, token: &str, body: &str) -> (StatusCode, Value) {
+        send_from(app, uri, token, body, None).await
+    }
+
+    async fn send_raw(
+        app: &axum::Router,
+        uri: &str,
+        token: &str,
+        body: &str,
+        peer: Option<&str>,
+    ) -> axum::response::Response {
         let mut builder = Request::builder()
             .method("POST")
             .uri(uri)
@@ -543,11 +778,22 @@ mod tests {
         if !token.is_empty() {
             builder = builder.header("cookie", format!("__Host-yuuka-session={token}"));
         }
-        let resp = app
-            .clone()
-            .oneshot(builder.body(Body::from(body.to_owned())).unwrap())
-            .await
-            .unwrap();
+        let mut req = builder.body(Body::from(body.to_owned())).unwrap();
+        if let Some(p) = peer {
+            let addr: SocketAddr = SocketAddr::new(p.parse().unwrap(), 5000);
+            req.extensions_mut().insert(ConnectInfo(addr));
+        }
+        app.clone().oneshot(req).await.unwrap()
+    }
+
+    async fn send_from(
+        app: &axum::Router,
+        uri: &str,
+        token: &str,
+        body: &str,
+        peer: Option<&str>,
+    ) -> (StatusCode, Value) {
+        let resp = send_raw(app, uri, token, body, peer).await;
         let status = resp.status();
         let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
         let json = if bytes.is_empty() {
@@ -710,6 +956,105 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn lookup_shows_device_name_before_approval_for_logged_in_only() {
+        let store = DeviceAuthStore::new("https://ex.test".to_owned());
+        let app = app(store.clone());
+        let (_, j) = send(
+            &app,
+            "/api/auth/device/code",
+            "",
+            r#"{"device_name":"Evil PC"}"#,
+        )
+        .await;
+        let user_code = j["user_code"].as_str().unwrap().to_owned();
+        let body = format!(r#"{{"user_code":"{}"}}"#, user_code.to_lowercase());
+
+        // 未ログインは引けない（401）。
+        let (st, _) = send(&app, "/api/auth/device/lookup", "", &body).await;
+        assert_eq!(st, StatusCode::UNAUTHORIZED);
+        // ログイン済みは承認前に端末名・経過時間・残り時間を得る。
+        let (st, j) = send(&app, "/api/auth/device/lookup", "owner", &body).await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(j["device_name"], serde_json::json!("Evil PC"));
+        assert!(j["age_secs"].as_u64().unwrap() < 5);
+        assert!(j["expires_in"].as_u64().unwrap() <= 600);
+        // lookup は承認しない（token は pending のまま）。
+        assert!(!store.lock().by_hash.values().any(|r| r.approved));
+        // 未知コード → 404、空 → 400。
+        let (st, _) = send(
+            &app,
+            "/api/auth/device/lookup",
+            "owner",
+            r#"{"user_code":"ZZZZ-ZZZZ"}"#,
+        )
+        .await;
+        assert_eq!(st, StatusCode::NOT_FOUND);
+        let (st, _) = send(&app, "/api/auth/device/lookup", "owner", r#"{}"#).await;
+        assert_eq!(st, StatusCode::BAD_REQUEST);
+    }
+
+    /// 承認済みのコードは照会も再承認もできない（別ユーザーの承認で approved_user を上書きさせない）。
+    #[tokio::test]
+    async fn approved_code_cannot_be_looked_up_or_reapproved() {
+        let store = DeviceAuthStore::new("https://ex.test".to_owned());
+        let app = app(store.clone());
+        let (_, j) = send(&app, "/api/auth/device/code", "", "{}").await;
+        let body = format!(r#"{{"user_code":"{}"}}"#, j["user_code"].as_str().unwrap());
+
+        let (st, _) = send(&app, "/api/auth/device/approve", "owner", &body).await;
+        assert_eq!(st, StatusCode::OK);
+        let (st, j) = send(&app, "/api/auth/device/lookup", "other", &body).await;
+        assert_eq!(st, StatusCode::CONFLICT);
+        assert_eq!(j["success"], serde_json::json!(false));
+        let (st, _) = send(&app, "/api/auth/device/approve", "other", &body).await;
+        assert_eq!(st, StatusCode::CONFLICT);
+        let approved: Vec<_> = store
+            .lock()
+            .by_hash
+            .values()
+            .map(|r| r.approved_user.clone())
+            .collect();
+        assert_eq!(approved, vec![Some("owner".to_owned())]);
+    }
+
+    /// 残り時間はレコードの期限から出す（TTL からの引き算ではない）。
+    #[tokio::test]
+    async fn lookup_remaining_comes_from_record_expiry() {
+        let store = DeviceAuthStore::new("https://ex.test".to_owned());
+        let app = app(store.clone());
+        let (_, j) = send(&app, "/api/auth/device/code", "", "{}").await;
+        let body = format!(r#"{{"user_code":"{}"}}"#, j["user_code"].as_str().unwrap());
+        for r in store.lock().by_hash.values_mut() {
+            r.expires_at = Instant::now() + Duration::from_secs(42);
+        }
+        let (st, j) = send(&app, "/api/auth/device/lookup", "owner", &body).await;
+        assert_eq!(st, StatusCode::OK);
+        let remaining = j["expires_in"].as_u64().unwrap();
+        assert!((40..=42).contains(&remaining), "{remaining}");
+    }
+
+    #[test]
+    fn device_name_is_sanitized() {
+        assert_eq!(
+            sanitize_device_name("  DESKTOP-ABC\n(Windows)\t "),
+            Some("DESKTOP-ABC (Windows)".to_owned())
+        );
+        // 書字方向の上書き・ゼロ幅文字で表示を偽装できないようにする。
+        assert_eq!(
+            sanitize_device_name("abc\u{202E}gpj.exe\u{200B}x"),
+            Some("abc gpj.exe x".to_owned())
+        );
+        assert_eq!(sanitize_device_name(" \r\n\u{0007} "), None);
+        assert_eq!(
+            sanitize_device_name(&"a".repeat(MAX_DEVICE_NAME + 10))
+                .unwrap()
+                .chars()
+                .count(),
+            MAX_DEVICE_NAME
+        );
+    }
+
+    #[tokio::test]
     async fn rapid_poll_returns_slow_down() {
         let store = DeviceAuthStore::new("https://ex.test".to_owned());
         let app = app(store);
@@ -734,6 +1079,108 @@ mod tests {
         .await;
         assert_eq!(st, StatusCode::OK);
         assert_eq!(j2["error"], serde_json::json!("slow_down"));
+    }
+
+    #[tokio::test]
+    async fn per_ip_rate_limit_returns_429_without_growing_store() {
+        let store = DeviceAuthStore::new("https://ex.test".to_owned());
+        let app = app(store.clone());
+        for _ in 0..IP_MAX_CODES {
+            let (st, _) =
+                send_from(&app, "/api/auth/device/code", "", "{}", Some("203.0.113.1")).await;
+            assert_eq!(st, StatusCode::OK);
+        }
+        let resp = send_raw(&app, "/api/auth/device/code", "", "{}", Some("203.0.113.1")).await;
+        assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
+        let retry_after: u64 = resp.headers()[header::RETRY_AFTER]
+            .to_str()
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert!((1..=IP_WINDOW.as_secs()).contains(&retry_after));
+        assert_eq!(store.lock().by_hash.len(), IP_MAX_CODES);
+        // 別 IP は影響を受けない。
+        let (st, _) = send_from(&app, "/api/auth/device/code", "", "{}", Some("203.0.113.2")).await;
+        assert_eq!(st, StatusCode::OK);
+    }
+
+    fn create_ok(store: &DeviceAuthStore, ip: &str) -> bool {
+        store.create(Some(ip.parse().unwrap()), None).is_ok()
+    }
+
+    /// 窓を過ぎた発行は数えない（`retain` の条件が反転していないこと）。
+    #[test]
+    fn per_ip_rate_limit_resets_after_window() {
+        let store = DeviceAuthStore::new("https://ex.test".to_owned());
+        for _ in 0..IP_MAX_CODES {
+            assert!(create_ok(&store, "203.0.113.1"));
+        }
+        assert!(!create_ok(&store, "203.0.113.1"));
+        let past = Instant::now().checked_sub(IP_WINDOW).unwrap();
+        for q in store.lock().recent_by_ip.values_mut() {
+            q.iter_mut().for_each(|t| *t = past);
+        }
+        assert!(create_ok(&store, "203.0.113.1"));
+        assert_eq!(
+            store
+                .lock()
+                .recent_by_ip
+                .values()
+                .map(VecDeque::len)
+                .sum::<usize>(),
+            1
+        );
+    }
+
+    /// IPv6 は /64 単位で数える。IPv4-mapped IPv6 は IPv4 と同じ送信元として数える。
+    #[test]
+    fn per_ip_rate_limit_groups_ipv6_by_64_and_canonicalizes_mapped() {
+        let store = DeviceAuthStore::new("https://ex.test".to_owned());
+        for i in 1..=IP_MAX_CODES {
+            assert!(create_ok(&store, &format!("2001:db8::{i:x}")));
+        }
+        assert!(!create_ok(&store, "2001:db8::ffff:1"));
+        assert!(create_ok(&store, "2001:db8:0:1::1"));
+
+        for _ in 0..IP_MAX_CODES {
+            assert!(create_ok(&store, "198.51.100.7"));
+        }
+        assert!(!create_ok(&store, "::ffff:198.51.100.7"));
+    }
+
+    /// 保留上限では 429 にせず、未承認のうち最も古いコードを押し出す。承認済みは押し出さない。
+    #[tokio::test]
+    async fn pending_cap_evicts_oldest_unapproved_code() {
+        let store = DeviceAuthStore::new("https://ex.test".to_owned());
+        let app = app(store.clone());
+        let first = store.create(None, None).ok().unwrap();
+        let first_hash = sha256_hex(first["device_code"].as_str().unwrap());
+        for _ in 1..MAX_PENDING_CODES {
+            assert!(store.create(None, None).is_ok());
+        }
+        let (st, _) = send(&app, "/api/auth/device/code", "", "{}").await;
+        assert_eq!(st, StatusCode::OK);
+        {
+            let state = store.lock();
+            assert_eq!(state.by_hash.len(), MAX_PENDING_CODES);
+            assert_eq!(state.by_user_code.len(), MAX_PENDING_CODES);
+            assert!(!state.by_hash.contains_key(&first_hash));
+            assert!(!state
+                .by_user_code
+                .contains_key(first["user_code"].as_str().unwrap()));
+        }
+
+        // 承認済みだけで埋まっていれば押し出さずに 429。
+        for r in store.lock().by_hash.values_mut() {
+            r.approved = true;
+        }
+        let resp = send_raw(&app, "/api/auth/device/code", "", "{}", None).await;
+        assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(
+            resp.headers()[header::RETRY_AFTER],
+            FULL_RETRY_AFTER_SECS.to_string().as_str()
+        );
+        assert_eq!(store.lock().by_hash.len(), MAX_PENDING_CODES);
     }
 
     /// config の TTL（`DESKTOP_DEVICE_CODE_TTL_SEC`・`DESKTOP_TOKEN_TTL_DAYS`）が code 応答・レコード期限・

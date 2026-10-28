@@ -15,8 +15,15 @@ use std::sync::{Arc, RwLock};
 use async_trait::async_trait;
 use secrecy::SecretString;
 use twilight_http::Client;
-use twilight_model::id::marker::{ChannelMarker, MessageMarker, UserMarker};
+use twilight_model::channel::message::AllowedMentions;
+use twilight_model::channel::permission_overwrite::PermissionOverwrite;
+use twilight_model::channel::{Channel, ChannelType};
+use twilight_model::guild::{Permissions, Role};
+use twilight_model::id::marker::{
+    ChannelMarker, GuildMarker, MessageMarker, RoleMarker, UserMarker,
+};
 use twilight_model::id::Id;
+use twilight_util::permission_calculator::PermissionCalculator;
 use yuuka_core::{BotId, DiscordError, UserId};
 
 use crate::idempotent::{MessageDedup, GUIDANCE_TTL};
@@ -276,8 +283,8 @@ impl DiscordMessenger {
         }
     }
 
-    /// 送信先を twilight channel id へ解決する。ギルドチャンネル宛は対象ユーザーの在籍を検証し、
-    /// 未在籍/検証失敗なら `None`（呼び出し側が DM へフォールバック）。
+    /// 送信先を twilight channel id へ解決する。ギルドチャンネル宛は対象ユーザーがそのチャンネルに
+    /// 投稿できるか（閲覧＋送信権限）を検証し、不可/検証失敗なら `None`（呼び出し側が DM へフォールバック）。
     async fn resolve_channel(
         client: &Client,
         user_id: &UserId,
@@ -288,7 +295,7 @@ impl DiscordMessenger {
                 let channel_id = id.parse::<Id<ChannelMarker>>().ok()?;
                 // 現行 notifier.ts の第三者チャンネル露出ガード: 共有/デフォルト Bot を踏み台に、
                 // 対象ユーザーが見られないチャンネルへその人のデータを流し込むのを防ぐ。
-                if Self::user_can_view_channel(client, channel_id, user_id).await {
+                if Self::user_can_post_in_channel(client, channel_id, user_id).await {
                     Some(channel_id)
                 } else {
                     None
@@ -301,13 +308,14 @@ impl DiscordMessenger {
         }
     }
 
-    /// 対象ユーザーがこのチャンネルを閲覧してよいか（現行 notifier.ts の membership + ViewChannel）。
+    /// 対象ユーザーがこのチャンネルに投稿してよいか（`VIEW_CHANNEL` + 送信権限）。
     ///
-    /// チャンネルを引いて guild を判定し、ギルドチャンネルなら対象ユーザーがそのギルドのメンバーで
-    /// あることを REST で確認する（在籍＝第一次ガード）。厳密な per-channel ViewChannel overwrite 判定は
-    /// twilight-util の権限計算で精緻化予定（services が任意チャンネル宛を注入する Phase 4）。ギルド外
-    /// （DM/グループ）チャンネルはガード対象外。検証失敗は安全側（不可）に倒し DM フォールバックさせる。
-    async fn user_can_view_channel(
+    /// ギルドチャンネルなら、ギルド所有者・ロール・チャンネル上書きから twilight-util の権限計算で
+    /// 判定する（在籍だけでは非公開チャンネルに投稿できてしまうため）。スレッドは親チャンネルの
+    /// 上書きを使い、非公開スレッドはスレッドのメンバーかも確かめる。タイムアウト中の利用者と
+    /// ロック中のスレッドも判定に入れる。ギルド外（DM/グループ）チャンネルはガード対象外。
+    /// 取得・判定に失敗したら安全側（不可）に倒し DM フォールバックさせる。
+    async fn user_can_post_in_channel(
         client: &Client,
         channel_id: Id<ChannelMarker>,
         user_id: &UserId,
@@ -315,19 +323,59 @@ impl DiscordMessenger {
         let Ok(uid) = user_id.as_str().parse::<Id<UserMarker>>() else {
             return false;
         };
-        let channel = match client.channel(channel_id).await {
-            Ok(resp) => resp.model().await.ok(),
-            Err(_) => None,
-        };
-        let Some(channel) = channel else {
+        let Some(channel) = Self::fetch_channel(client, channel_id).await else {
             return false;
         };
-        match channel.guild_id {
-            // ギルド外チャンネル（DM 等）は露出ガードの対象外。
-            None => true,
-            // ギルドチャンネル: 対象ユーザーが在籍していれば許可（member fetch 成功＝在籍）。
-            Some(guild_id) => client.guild_member(guild_id, uid).await.is_ok(),
-        }
+        // ギルド外チャンネル（DM 等）は露出ガードの対象外。
+        let Some(guild_id) = channel.guild_id else {
+            return true;
+        };
+        let channel_type = channel.kind;
+        let overwrites = if channel_type.is_thread() {
+            let Some(parent_id) = channel.parent_id else {
+                return false;
+            };
+            let Some(parent) = Self::fetch_channel(client, parent_id).await else {
+                return false;
+            };
+            parent.permission_overwrites.unwrap_or_default()
+        } else {
+            channel.permission_overwrites.unwrap_or_default()
+        };
+        let Ok(member) = client.guild_member(guild_id, uid).await else {
+            return false;
+        };
+        let Ok(member) = member.model().await else {
+            return false;
+        };
+        let Ok(guild) = client.guild(guild_id).await else {
+            return false;
+        };
+        let Ok(guild) = guild.model().await else {
+            return false;
+        };
+        // 非公開スレッドはメンバー（か MANAGE_THREADS 持ち）しか見られない。非メンバーは 404 が返る。
+        let private_thread_member = channel_type == ChannelType::PrivateThread
+            && client.thread_member(channel_id, uid).await.is_ok();
+        let timed_out = member
+            .communication_disabled_until
+            .is_some_and(|until| until.as_micros() > now_micros());
+        can_post_in_channel(&PostCheck {
+            guild_id,
+            owner_id: guild.owner_id,
+            user_id: uid,
+            member_role_ids: &member.roles,
+            guild_roles: &guild.roles,
+            channel_type,
+            overwrites: &overwrites,
+            timed_out,
+            thread_locked: channel.thread_metadata.is_some_and(|m| m.locked),
+            private_thread_member,
+        })
+    }
+
+    async fn fetch_channel(client: &Client, id: Id<ChannelMarker>) -> Option<Channel> {
+        client.channel(id).await.ok()?.model().await.ok()
     }
 
     /// オーナー宛の DM を、デフォルト（共有）クライアントからボタン付きで送る（DM 招待系の共通）。
@@ -555,15 +603,107 @@ pub(crate) fn share_invite_components(share_id: i64) -> Vec<ActionRow> {
     }]
 }
 
+/// 投稿可否の判定に使う、ギルド・チャンネル・利用者の状態（REST で集めた値）。
+struct PostCheck<'a> {
+    guild_id: Id<GuildMarker>,
+    owner_id: Id<UserMarker>,
+    user_id: Id<UserMarker>,
+    member_role_ids: &'a [Id<RoleMarker>],
+    guild_roles: &'a [Role],
+    channel_type: ChannelType,
+    /// チャンネルの上書き（スレッドなら親チャンネルの上書き）。
+    overwrites: &'a [PermissionOverwrite],
+    /// タイムアウト中か（`communication_disabled_until` が未来）。
+    timed_out: bool,
+    /// ロック中のスレッドか（送信には `MANAGE_THREADS` が要る）。
+    thread_locked: bool,
+    /// 非公開スレッドのメンバーか（非公開スレッド以外では見ない）。
+    private_thread_member: bool,
+}
+
+/// ギルドチャンネルでユーザーが閲覧・送信できるか（権限計算のみ・I/O なし）。
+fn can_post_in_channel(c: &PostCheck<'_>) -> bool {
+    // @everyone ロールの ID はギルド ID と同じ。
+    let everyone = c
+        .guild_roles
+        .iter()
+        .find(|r| r.id.get() == c.guild_id.get())
+        .map_or(Permissions::empty(), |r| r.permissions);
+    let member_roles: Vec<(Id<RoleMarker>, Permissions)> = c
+        .guild_roles
+        .iter()
+        .filter(|r| c.member_role_ids.contains(&r.id))
+        .map(|r| (r.id, r.permissions))
+        .collect();
+    // twilight の `in_channel` はボイス/ステージで SEND_MESSAGES などを外す（ボイスチャンネルの
+    // テキストチャットを考慮していない）。上書きの計算自体は種別に依存しないので、テキストとして計算する。
+    let calc_type = match c.channel_type {
+        ChannelType::GuildVoice | ChannelType::GuildStageVoice => ChannelType::GuildText,
+        other => other,
+    };
+    let perms = PermissionCalculator::new(c.guild_id, c.user_id, everyone, &member_roles)
+        .owner_id(c.owner_id)
+        .in_channel(calc_type, c.overwrites);
+    let send = if c.channel_type.is_thread() {
+        Permissions::SEND_MESSAGES_IN_THREADS
+    } else {
+        Permissions::SEND_MESSAGES
+    };
+    if !perms.contains(Permissions::VIEW_CHANNEL | send) {
+        return false;
+    }
+    // タイムアウト中は閲覧以外できない（管理者・所有者はタイムアウトの対象外）。
+    if c.timed_out && !perms.contains(Permissions::ADMINISTRATOR) {
+        return false;
+    }
+    let manage_threads = perms.contains(Permissions::MANAGE_THREADS);
+    if c.thread_locked && !manage_threads {
+        return false;
+    }
+    // 非公開スレッドはメンバーか MANAGE_THREADS 持ちしか見られない（親の上書きだけでは決まらない）。
+    if c.channel_type == ChannelType::PrivateThread && !c.private_thread_member && !manage_threads {
+        return false;
+    }
+    true
+}
+
+/// 現在時刻（UNIX マイクロ秒）。タイムアウト期限との比較用（取れなければ 0＝タイムアウト中とみなす側）。
+fn now_micros() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .and_then(|d| i64::try_from(d.as_micros()).ok())
+        .unwrap_or(0)
+}
+
 /// テナント別 http クライアントを作る（トークン別・レート bucket 別・§8.1.3 案 (a)）。
 fn new_client(token: &SecretString) -> Client {
     use secrecy::ExposeSecret as _;
-    Client::new(token.expose_secret().to_owned())
+    Client::builder()
+        .token(token.expose_secret().to_owned())
+        .default_allowed_mentions(default_allowed_mentions())
+        .build()
+}
+
+/// 全送信の既定 `allowed_mentions`。`parse` を空にして、本文中の `@everyone`・`@here`・
+/// ロール・ユーザーのメンションを通知させない（LLM 返答経由のメンション注入対策）。
+/// 返信先ユーザーへの通知（`replied_user`）だけは残す。
+///
+/// クライアントの既定は `create_message` / `create_followup` / `update_response` などに効くが、
+/// `InteractionClient::create_response` には効かない。そちらは `interaction::respond` で明示する。
+pub(crate) fn default_allowed_mentions() -> AllowedMentions {
+    AllowedMentions {
+        parse: Vec::new(),
+        replied_user: true,
+        roles: Vec::new(),
+        users: Vec::new(),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use twilight_model::channel::permission_overwrite::PermissionOverwriteType;
 
     fn messenger_with(clients: &[&str], default: Option<&str>) -> DiscordMessenger {
         let map: HashMap<BotId, Arc<Client>> = clients
@@ -574,6 +714,247 @@ mod tests {
             default_client: RwLock::new(default.and_then(|d| map.get(&BotId::new(d)).cloned())),
             clients: RwLock::new(map),
             directory: Arc::new(NoopDirectory),
+        }
+    }
+
+    // 送信は `create_message` 等が `default_allowed_mentions` を継承する。クライアントに既定が
+    // 付いていること（parse が空）を確かめる。
+    #[tokio::test]
+    async fn new_client_denies_all_mentions_by_default() {
+        let client = new_client(&SecretString::from("token".to_owned()));
+        let am = client
+            .default_allowed_mentions()
+            .expect("既定の allowed_mentions が必要");
+        assert!(am.parse.is_empty());
+        assert!(am.roles.is_empty() && am.users.is_empty());
+        assert!(am.replied_user, "返信先ユーザーへの通知は維持する");
+    }
+
+    fn role(id: u64, perms: Permissions) -> Role {
+        #[allow(deprecated)]
+        Role {
+            colors: twilight_model::guild::RoleColors {
+                primary_color: 0,
+                secondary_color: None,
+                tertiary_color: None,
+            },
+            color: 0,
+            hoist: false,
+            icon: None,
+            id: Id::new(id),
+            managed: false,
+            mentionable: false,
+            name: String::new(),
+            permissions: perms,
+            position: 0,
+            flags: twilight_model::guild::RoleFlags::empty(),
+            tags: None,
+            unicode_emoji: None,
+        }
+    }
+
+    fn overwrite(id: u64, allow: Permissions, deny: Permissions) -> PermissionOverwrite {
+        PermissionOverwrite {
+            allow,
+            deny,
+            id: Id::new(id),
+            kind: PermissionOverwriteType::Role,
+        }
+    }
+
+    const GUILD: u64 = 1;
+    const OWNER: u64 = 99;
+    const USER: u64 = 5;
+    const ROLE: u64 = 7;
+
+    fn base() -> Permissions {
+        Permissions::VIEW_CHANNEL
+            | Permissions::SEND_MESSAGES
+            | Permissions::SEND_MESSAGES_IN_THREADS
+    }
+
+    /// 既定は「@everyone に base()・利用者はロール ROLE 持ち・GuildText・上書きなし」。
+    fn check<'a>(
+        roles: &'a [Role],
+        member_roles: &'a [Id<RoleMarker>],
+        channel_type: ChannelType,
+        overwrites: &'a [PermissionOverwrite],
+    ) -> PostCheck<'a> {
+        PostCheck {
+            guild_id: Id::new(GUILD),
+            owner_id: Id::new(OWNER),
+            user_id: Id::new(USER),
+            member_role_ids: member_roles,
+            guild_roles: roles,
+            channel_type,
+            overwrites,
+            timed_out: false,
+            thread_locked: false,
+            private_thread_member: false,
+        }
+    }
+
+    #[test]
+    fn can_post_requires_view_and_send_per_channel() {
+        let roles = [role(GUILD, base()), role(ROLE, Permissions::empty())];
+        let text = ChannelType::GuildText;
+        assert!(can_post_in_channel(&check(&roles, &[], text, &[])));
+        // @everyone の閲覧拒否（非公開チャンネル）→ 不可（DM フォールバック対象）。
+        let private = overwrite(GUILD, Permissions::empty(), Permissions::VIEW_CHANNEL);
+        let only_private = std::slice::from_ref(&private);
+        assert!(!can_post_in_channel(&check(
+            &roles,
+            &[],
+            text,
+            only_private
+        )));
+        // ロールの許可上書きで閲覧可能になる。
+        let allow = overwrite(ROLE, Permissions::VIEW_CHANNEL, Permissions::empty());
+        let member_roles = [Id::new(ROLE)];
+        let ows = [private, allow];
+        assert!(can_post_in_channel(&check(
+            &roles,
+            &member_roles,
+            text,
+            &ows
+        )));
+        // 送信拒否も不可。
+        let no_send = [overwrite(
+            GUILD,
+            Permissions::empty(),
+            Permissions::SEND_MESSAGES,
+        )];
+        assert!(!can_post_in_channel(&check(&roles, &[], text, &no_send)));
+        // 所有者は常に許可。
+        let mut owner = check(&roles, &[], text, only_private);
+        owner.user_id = Id::new(OWNER);
+        assert!(can_post_in_channel(&owner));
+    }
+
+    #[test]
+    fn member_overwrite_and_administrator() {
+        let roles = [role(GUILD, base()), role(ROLE, Permissions::ADMINISTRATOR)];
+        let text = ChannelType::GuildText;
+        // メンバー単位の上書きは、ロールの許可より強い。
+        let member_deny = PermissionOverwrite {
+            allow: Permissions::empty(),
+            deny: Permissions::VIEW_CHANNEL,
+            id: Id::new(USER),
+            kind: PermissionOverwriteType::Member,
+        };
+        assert!(!can_post_in_channel(&check(
+            &roles,
+            &[],
+            text,
+            std::slice::from_ref(&member_deny)
+        )));
+        let private = overwrite(GUILD, Permissions::empty(), Permissions::VIEW_CHANNEL);
+        let member_allow = PermissionOverwrite {
+            allow: Permissions::VIEW_CHANNEL,
+            deny: Permissions::empty(),
+            id: Id::new(USER),
+            kind: PermissionOverwriteType::Member,
+        };
+        assert!(can_post_in_channel(&check(
+            &roles,
+            &[],
+            text,
+            &[private, member_allow]
+        )));
+        // ADMINISTRATOR ロールは上書きに関係なく可。
+        let admin = [Id::new(ROLE)];
+        assert!(can_post_in_channel(&check(
+            &roles,
+            &admin,
+            text,
+            &[private, member_deny]
+        )));
+    }
+
+    #[test]
+    fn threads_use_send_messages_in_threads() {
+        let roles = [role(GUILD, base())];
+        // 親で SEND_MESSAGES だけ拒否されていても、スレッドへは送れる。
+        let no_send = [overwrite(
+            GUILD,
+            Permissions::empty(),
+            Permissions::SEND_MESSAGES,
+        )];
+        assert!(can_post_in_channel(&check(
+            &roles,
+            &[],
+            ChannelType::PublicThread,
+            &no_send
+        )));
+        // SEND_MESSAGES_IN_THREADS が拒否されていれば不可。
+        let no_thread_send = [overwrite(
+            GUILD,
+            Permissions::empty(),
+            Permissions::SEND_MESSAGES_IN_THREADS,
+        )];
+        assert!(!can_post_in_channel(&check(
+            &roles,
+            &[],
+            ChannelType::PublicThread,
+            &no_thread_send
+        )));
+    }
+
+    #[test]
+    fn private_thread_requires_membership_or_manage_threads() {
+        let roles = [role(GUILD, base()), role(ROLE, Permissions::MANAGE_THREADS)];
+        let t = ChannelType::PrivateThread;
+        // 親を見られても、スレッドのメンバーでなければ不可。
+        assert!(!can_post_in_channel(&check(&roles, &[], t, &[])));
+        let mut member = check(&roles, &[], t, &[]);
+        member.private_thread_member = true;
+        assert!(can_post_in_channel(&member));
+        // MANAGE_THREADS 持ちはメンバーでなくても可。
+        assert!(can_post_in_channel(&check(
+            &roles,
+            &[Id::new(ROLE)],
+            t,
+            &[]
+        )));
+    }
+
+    #[test]
+    fn locked_thread_requires_manage_threads() {
+        let roles = [role(GUILD, base()), role(ROLE, Permissions::MANAGE_THREADS)];
+        let manager = [Id::new(ROLE)];
+        let mut locked = check(&roles, &[], ChannelType::PublicThread, &[]);
+        locked.thread_locked = true;
+        assert!(!can_post_in_channel(&locked));
+        locked.member_role_ids = &manager;
+        assert!(can_post_in_channel(&locked));
+    }
+
+    #[test]
+    fn timed_out_member_cannot_post_unless_admin() {
+        let roles = [role(GUILD, base()), role(ROLE, Permissions::ADMINISTRATOR)];
+        let mut c = check(&roles, &[], ChannelType::GuildText, &[]);
+        c.timed_out = true;
+        assert!(!can_post_in_channel(&c));
+        let admin = [Id::new(ROLE)];
+        c.member_role_ids = &admin;
+        assert!(can_post_in_channel(&c));
+    }
+
+    /// twilight はボイス/ステージで SEND_MESSAGES を外すが、テキストチャットへは送れる。
+    #[test]
+    fn voice_and_stage_channels_keep_send_messages() {
+        let roles = [role(GUILD, base())];
+        for t in [ChannelType::GuildVoice, ChannelType::GuildStageVoice] {
+            assert!(can_post_in_channel(&check(&roles, &[], t, &[])), "{t:?}");
+            let no_send = [overwrite(
+                GUILD,
+                Permissions::empty(),
+                Permissions::SEND_MESSAGES,
+            )];
+            assert!(
+                !can_post_in_channel(&check(&roles, &[], t, &no_send)),
+                "{t:?}"
+            );
         }
     }
 

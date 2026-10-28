@@ -15,6 +15,7 @@ use twilight_model::http::interaction::{InteractionResponse, InteractionResponse
 use twilight_util::builder::InteractionResponseDataBuilder;
 use yuuka_core::{BotId, UserId};
 
+use crate::manager::default_allowed_mentions;
 use crate::ports::{
     self, BotDirectory, MemberDecision, MemberDmSender, MembershipService, RichEmbed,
 };
@@ -339,6 +340,7 @@ pub async fn respond(deps: &InteractionDeps, interaction: &Interaction, plan: In
             let data = InteractionResponseDataBuilder::new()
                 .content(content)
                 .flags(MessageFlags::EPHEMERAL)
+                .allowed_mentions(default_allowed_mentions())
                 .build();
             let resp = InteractionResponse {
                 kind: InteractionResponseType::ChannelMessageWithSource,
@@ -357,9 +359,11 @@ pub async fn respond(deps: &InteractionDeps, interaction: &Interaction, plan: In
             followup,
         } => {
             // 元メッセージを更新し、ボタンを消す（components を空で送る）。埋め込みは指定時だけ置き換える。
+            // `create_response` にはクライアントの既定 allowed_mentions が効かないので明示する。
             let mut data = InteractionResponseDataBuilder::new()
                 .content(content)
-                .components(std::iter::empty());
+                .components(std::iter::empty())
+                .allowed_mentions(default_allowed_mentions());
             if !embeds.is_empty() {
                 data = data.embeds(to_twilight_embeds(&embeds));
             }

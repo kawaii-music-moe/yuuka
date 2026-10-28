@@ -4,15 +4,20 @@
 //   deviceCodeInput / btnDeviceApprove / btnDeviceDone / btnDeviceCancel
 //   + index.html #device-overlay を移植）。
 //
-//   ?code= は URL（router の page ストア）から取得。承認は deviceApi.approve。
-//   入力は formatDeviceCode で XXXX-XXXX に自動整形。ログイン中ユーザー名は session ストア。
+//   フィッシング対策（RFC 8628 §5.4・#207）: URL の ?code= では入力済みにしない。利用者がアプリ
+//   画面のコードを手で入力し、deviceApi.lookup の照会結果（端末名・発行からの経過時間）を確認して
+//   から deviceApi.approve で承認する。入力は formatDeviceCode で XXXX-XXXX に自動整形。
 // ─────────────────────────────────────────────────────────────────────────
 
 import { ApiError } from "$lib/api/client";
 import { deviceApi } from "$lib/api/services";
-import { goto, page } from "$lib/router";
+import { goto } from "$lib/router";
 import { currentUser } from "$lib/stores/session";
-import { formatDeviceCode } from "./deviceUtils";
+import {
+	displayDeviceName,
+	formatDeviceCode,
+	formatElapsed,
+} from "./deviceUtils";
 
 let code = $state("");
 let errorMsg = $state("");
@@ -22,14 +27,34 @@ let successText = $state<string | null>(null);
 
 const userDisplay = $derived($currentUser?.username ?? "—");
 
-// URL の ?code= を初期プリフィル（旧 sessionStorage 退避は router の URL 真実に集約）。
-$effect(() => {
-	const c = $page.searchParams.get("code") ?? "";
-	if (c) code = formatDeviceCode(c);
-});
+// 照会結果（入力中のコードに対応するものだけ有効）。
+let info = $state<{ code: string; name: string; ageSecs: number } | null>(null);
+let lookupSeq = 0;
 
-function onInput() {
+async function onInput() {
 	code = formatDeviceCode(code);
+	errorMsg = "";
+	if (info?.code !== code) info = null;
+	if (code.length !== 9) return;
+	const seq = ++lookupSeq;
+	const target = code;
+	try {
+		const res = await deviceApi.lookup(target);
+		if (seq !== lookupSeq || code !== target) return;
+		if (res.success) {
+			info = {
+				code: target,
+				name: displayDeviceName(res.device_name),
+				ageSecs: res.age_secs ?? 0,
+			};
+		} else {
+			errorMsg = res.message ?? "コードが無効か、有効期限が切れています。";
+		}
+	} catch (err) {
+		if (seq !== lookupSeq) return;
+		errorMsg =
+			err instanceof ApiError ? err.message : "サーバー接続に失敗しました。";
+	}
 }
 
 async function approve() {
@@ -39,11 +64,16 @@ async function approve() {
 		errorMsg = "コードは XXXX-XXXX 形式で入力してください。";
 		return;
 	}
+	if (info?.code !== userCode) {
+		errorMsg =
+			"端末名を確認できるまで承認できません。コードを入力し直してください。";
+		return;
+	}
 	approving = true;
 	try {
 		const res = await deviceApi.approve(userCode);
 		if (res.success) {
-			successText = `${res.device_name || "端末"} を許可しました。アプリに戻ってください。`;
+			successText = `${res.device_name ? displayDeviceName(res.device_name) : "端末"} を許可しました。アプリに戻ってください。`;
 		} else {
 			errorMsg = res.message ?? "コードが無効か、有効期限が切れています。";
 		}
@@ -98,11 +128,24 @@ async function approve() {
 						oninput={onInput}
 					/>
 				</div>
+				<p class="field-sub device-hint">
+					ご自身で起動したアプリの画面に表示されているコードを入力してください（リンクからは自動入力されません）。
+				</p>
+				{#if info}
+					<div class="card device-info">
+						<p class="field-sub">アプリが申告した端末名</p>
+						<p class="device-info-name"><strong>{info.name}</strong></p>
+						<p class="field-sub">コード発行: {formatElapsed(info.ageSecs)}</p>
+						<p class="field-sub device-warn">
+							端末名はアプリ側が自由に付けられるため、名前だけで判断しないでください。ご自身で起動したアプリにこのコードが表示されている場合のみ許可してください。
+						</p>
+					</div>
+				{/if}
 				{#if errorMsg}
 					<div class="error-msg device-error">{errorMsg}</div>
 				{/if}
 				<div class="device-actions">
-					<button type="button" class="btn btn-primary device-btn" onclick={approve} disabled={approving}>
+					<button type="button" class="btn btn-primary device-btn" onclick={approve} disabled={approving || !info || info.code !== code}>
 						この端末を許可
 					</button>
 					<button type="button" class="btn btn-secondary device-btn" onclick={() => goto("/")}>
@@ -175,6 +218,17 @@ async function approve() {
 	}
 	.device-btn {
 		flex: 1;
+	}
+	.device-info {
+		padding: 12px 16px;
+		margin-top: 12px;
+	}
+	.device-info-name {
+		margin: 4px 0;
+		word-break: break-all;
+	}
+	.device-hint {
+		margin-top: 8px;
 	}
 	.device-warn {
 		margin-top: 16px;

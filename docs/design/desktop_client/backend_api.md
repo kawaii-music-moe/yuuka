@@ -50,6 +50,20 @@
 
 - 保存先: Redis `device_auth:{sha256(device_code)}` に `{ user_code, status:"pending", device_name, created_at }`、TTL=`expires_in`。Redis 不通時は in-memory フォールバック（セッションと同様）。
 - `user_code` はレート制限つきで衝突回避・総当り耐性のため十分な空間（例 8 文字 Crockford Base32）。
+- 回数制限: 送信元ごとに 60 秒あたり 10 件まで。送信元は IPv4 ならアドレス、IPv6 なら /64 単位で数える。`X-Forwarded-For` は直前の接続元が `TRUSTED_PROXIES` のときだけ使う。
+- 保留中のコードは 10,000 件まで。超えたら、未承認のうち最も古いコードを失効させて新しいコードを発行する（承認済みでトークン交換待ちのコードは失効させない）。
+
+```
+レスポンス 429（回数制限、または承認済みコードだけで保留上限が埋まっている）:
+Retry-After: <秒>                           // 回数制限なら窓が空くまでの秒数、上限なら 30
+{ "error": "too_many_requests", "message": "リクエストが多すぎます。しばらくしてから再度お試しください。" }
+```
+
+### 1.1a `POST /api/auth/device/lookup`（auth: user・Rust 追加）
+
+body `{ user_code }` → `{ success, device_name, age_secs, expires_in }`（不明は 404、承認済みは 409）。承認前に端末名と発行からの経過時間を見せるための照会で、状態は変えない。`expires_in` はレコードの失効時刻までの残り秒。コードを知るだけで端末名を引けないようログイン済み利用者に限定する。承認画面は `?code=` を入力済みにせず、利用者が手入力したコードの照会結果を確認してから承認する（RFC 8628 §5.4 対策・#207）。
+
+- `device_name` は `/device/code` を呼んだ側の自己申告。サーバは発行時に制御文字・書字方向の制御文字・ゼロ幅文字を空白にして保存し、画面では「アプリが申告した端末名」として表示する。
 
 ### 1.2 `POST /api/auth/device/approve`（auth: user）
 
@@ -60,6 +74,7 @@
 処理: user_code から device_auth レコードを引き、status を "approved" にし approved_user = ctx.user.discordId を記録
 レスポンス 200: { success: true, device_name }   // 画面に「(端末名) を許可しました」
 失効/不一致: { success:false, message } （404/410）
+承認済み:   { success:false, message } （409）  // 承認を上書きしない（別ユーザーによる乗っ取り防止）
 ```
 
 - **必ず `auth:"user"`**。承認はログイン済みユーザー本人の操作。CSRF は既存の Origin チェック（[routeRegistry](../../../src/server/routeRegistry.ts)）が効く。

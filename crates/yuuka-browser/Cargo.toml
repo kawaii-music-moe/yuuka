@@ -18,6 +18,7 @@ reqwest = { workspace = true, features = ["gzip", "brotli", "deflate"] }  # 検�
 chromiumoxide = { version = "0.9", default-features = false }
 futures = "0.3"                      # chromiumoxide の Handler ストリーム駆動（StreamExt::next）
 tokio.workspace = true
+tracing.workspace = true             # フィルタプロキシの accept 失敗などのログ
 serde.workspace = true
 serde_json.workspace = true
 async-trait.workspace = true

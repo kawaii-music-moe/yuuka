@@ -25,11 +25,81 @@ pub async fn assert_safe_outbound_url(raw: &str) -> Result<(), String> {
     .await
 }
 
+/// [`assert_safe_outbound_url`] のうち DNS を引かない部分（scheme・認証情報・IP リテラル・localhost）。
+///
+/// 接続時に解決先を検査する仕組み（検証付きリゾルバなど）を持つ呼び出し元が、操作のたびに DNS を
+/// 引かずに済ませるためのもの。それ以外の呼び出し元は [`assert_safe_outbound_url`] を使う。
+///
+/// # Errors
+/// 形式不正・非 http(s)・認証情報付き・localhost・内部レンジの IP リテラルのとき。
+pub fn assert_safe_outbound_url_without_dns(raw: &str) -> Result<(), String> {
+    check_without_dns(raw).map(|_| ())
+}
+
+/// ホスト名（または IP リテラル）を解決し、全アドレスが公開レンジのときだけ返す。
+///
+/// 接続側がここで返したアドレスへ直接つなぐ（再解決しない）ことで、検査と接続の間の
+/// DNS rebinding を防ぐ。`reqwest` の DNS リゾルバや Chromium 用フィルタプロキシが使う。
+///
+/// # Errors
+/// localhost・内部/予約レンジ・解決不能時に日本語文言を返す。
+pub async fn resolve_public_addrs(host: &str, port: u16) -> Result<Vec<SocketAddr>, String> {
+    let host = host.trim_matches(['[', ']']).to_ascii_lowercase();
+    if host.is_empty() || host == "localhost" || host.ends_with(".localhost") {
+        return Err("ローカルホストへの接続は許可されていません。".to_owned());
+    }
+    let addrs: Vec<SocketAddr> = if let Ok(ip) = host.parse::<IpAddr>() {
+        vec![SocketAddr::new(ip, port)]
+    } else {
+        tokio::net::lookup_host((host.as_str(), port))
+            .await
+            .map_err(|_| format!("ホスト名を解決できませんでした: {host}"))?
+            .collect()
+    };
+    if addrs.is_empty() {
+        return Err(format!("ホスト名を解決できませんでした: {host}"));
+    }
+    for addr in &addrs {
+        if is_blocked_ip(addr.ip()) {
+            return Err(format!(
+                "内部/予約済みアドレスへの接続は許可されていません: {host} -> {}",
+                addr.ip()
+            ));
+        }
+    }
+    Ok(addrs)
+}
+
 async fn assert_safe_outbound_url_with_lookup<F, Fut>(raw: &str, lookup: F) -> Result<(), String>
 where
     F: FnOnce(String, u16) -> Fut,
     Fut: std::future::Future<Output = std::io::Result<Vec<SocketAddr>>>,
 {
+    let Some((host, port)) = check_without_dns(raw)? else {
+        return Ok(());
+    };
+    let addrs = lookup(host.clone(), port)
+        .await
+        .map_err(|_| format!("ホスト名を解決できませんでした: {host}"))?;
+    let mut resolved = false;
+    for addr in addrs {
+        resolved = true;
+        let ip = addr.ip();
+        if is_blocked_ip(ip) {
+            return Err(format!(
+                "内部/予約済みアドレスに解決されるホストへの接続は許可されていません: {host} -> {ip}"
+            ));
+        }
+    }
+    if resolved {
+        Ok(())
+    } else {
+        Err(format!("ホスト名を解決できませんでした: {host}"))
+    }
+}
+
+/// DNS を引く前の検査。ホスト名なら解決して確かめるべき `(host, port)` を返す（IP リテラルは `None`）。
+fn check_without_dns(raw: &str) -> Result<Option<(String, u16)>, String> {
     let url = url::Url::parse(raw).map_err(|_| "URLの形式が不正です。".to_owned())?;
 
     let scheme = url.scheme();
@@ -49,7 +119,7 @@ where
                     "内部/予約済みアドレスへの接続は許可されていません: {ip}"
                 ));
             }
-            Ok(())
+            Ok(None)
         }
         Some(url::Host::Ipv6(ip)) => {
             if is_blocked_ipv6(ip) {
@@ -57,7 +127,7 @@ where
                     "内部/予約済みアドレスへの接続は許可されていません: {ip}"
                 ));
             }
-            Ok(())
+            Ok(None)
         }
         Some(url::Host::Domain(domain)) => {
             let host = domain.to_ascii_lowercase();
@@ -65,31 +135,14 @@ where
                 return Err("ローカルホストへの接続は許可されていません。".to_owned());
             }
             let port = url.port_or_known_default().unwrap_or(80);
-            let addrs = lookup(host.clone(), port)
-                .await
-                .map_err(|_| format!("ホスト名を解決できませんでした: {host}"))?;
-            let mut resolved = false;
-            for addr in addrs {
-                resolved = true;
-                let ip = addr.ip();
-                if is_blocked_ip(ip) {
-                    return Err(format!(
-                        "内部/予約済みアドレスに解決されるホストへの接続は許可されていません: {host} -> {ip}"
-                    ));
-                }
-            }
-            if resolved {
-                Ok(())
-            } else {
-                Err(format!("ホスト名を解決できませんでした: {host}"))
-            }
+            Ok(Some((host, port)))
         }
         None => Err("ローカルホストへの接続は許可されていません。".to_owned()),
     }
 }
 
-/// IP が内部/予約レンジかを判定する（`true` = ブロック）。
-fn is_blocked_ip(ip: IpAddr) -> bool {
+/// IP が内部/予約レンジかを判定する（`true` = ブロック）。接続時の DNS 解決結果検査にも使う。
+pub fn is_blocked_ip(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => is_blocked_ipv4(v4),
         IpAddr::V6(v6) => is_blocked_ipv6(v6),
@@ -167,6 +220,21 @@ pub fn is_likely_public_http_url(raw: &str, policy: RegistrationPolicy) -> bool 
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    /// DNS を引かない検査は、形式・scheme・認証情報・IP リテラル・localhost だけを見る。
+    #[test]
+    fn without_dns_checks_everything_but_resolution() {
+        assert!(assert_safe_outbound_url_without_dns("ftp://example.com").is_err());
+        assert!(assert_safe_outbound_url_without_dns("https://u:p@example.com/").is_err());
+        assert!(assert_safe_outbound_url_without_dns("http://127.0.0.1/").is_err());
+        assert!(assert_safe_outbound_url_without_dns("http://[::1]/").is_err());
+        assert!(assert_safe_outbound_url_without_dns("http://localhost:3000/").is_err());
+        assert!(assert_safe_outbound_url_without_dns("http://a.localhost/").is_err());
+        assert!(assert_safe_outbound_url_without_dns("not a url").is_err());
+        // 解決できない名前でも、DNS を引かないので通る（解決先は接続時に検査する）。
+        assert!(assert_safe_outbound_url_without_dns("https://mcp.example.invalid/mcp").is_ok());
+        assert!(assert_safe_outbound_url_without_dns("https://93.184.216.34/").is_ok());
+    }
 
     #[tokio::test]
     async fn rejects_non_http_scheme() {
@@ -439,5 +507,30 @@ mod tests {
         ] {
             assert!(is_likely_public_http_url(raw, policy), "{raw}");
         }
+    }
+}
+
+#[cfg(test)]
+mod resolve_tests {
+    use super::resolve_public_addrs;
+
+    #[tokio::test]
+    async fn rejects_internal_literals_and_localhost() {
+        for host in [
+            "127.0.0.1",
+            "10.0.0.5",
+            "169.254.169.254",
+            "[::1]",
+            "localhost",
+            "foo.localhost",
+        ] {
+            assert!(resolve_public_addrs(host, 80).await.is_err(), "{host}");
+        }
+    }
+
+    #[tokio::test]
+    async fn accepts_public_literal() {
+        let addrs = resolve_public_addrs("93.184.216.34", 443).await.unwrap();
+        assert_eq!(addrs.len(), 1);
     }
 }

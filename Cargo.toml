@@ -101,7 +101,8 @@ refinery                 = { version = "0.9", features = ["rusqlite"] }
 backon                   = "1.6"                                                # backoff は RUSTSEC-2025-0012 で禁止
 tokio-graceful-shutdown  = "0.19"
 recloser                 = "1.4"
-twilight-gateway         = "0.17"
+# 圧縮は zstd ではなく zlib。既定の zstd は zstd-safe 7.x 固定で RUSTSEC-2026-0398/0403 を解消できないため
+twilight-gateway         = { version = "0.17", default-features = false, features = ["rustls-platform-verifier", "twilight-http", "zlib"] }
 twilight-http            = "0.17"
 twilight-model           = "0.17"
 twilight-cache-inmemory  = "0.17"
