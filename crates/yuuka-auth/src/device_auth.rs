@@ -11,12 +11,13 @@
 //! （`desktop_tokens`）へ sha256 で永続化する（[`desktop::add_desktop_token`]）。store は main で 1 度
 //! 生成して router へ注入し、web 再起動を跨いで保持する（webhook の crypto と同方式の Extension）。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
+use std::net::{IpAddr, SocketAddr};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
-use axum::extract::{Extension, State};
-use axum::http::StatusCode;
+use axum::extract::{ConnectInfo, Extension, State};
+use axum::http::{header, Extensions, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use axum::{Json, Router};
@@ -25,7 +26,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use yuuka_core::config::{DEFAULT_DESKTOP_DEVICE_CODE_TTL_SECS, DEFAULT_DESKTOP_TOKEN_TTL_DAYS};
 use yuuka_db::map_sqlite;
-use yuuka_web::{AppState, AuthenticatedUser, Db, ScopedJson};
+use yuuka_web::{client_ip, rate_limit_key, AppState, AuthenticatedUser, Db, ScopedJson};
 
 use crate::audit::add_audit_log;
 use crate::token::generate_token;
@@ -39,6 +40,26 @@ const CROCKFORD: &[u8; 32] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 
 /// device_name の最大長（Node `device_name.slice(0, 200)`）。
 const MAX_DEVICE_NAME: usize = 200;
+
+/// 保留中（未期限切れ）のコード数の上限（メモリ保護）。超えたら未承認のうち最も古いコードを押し出す。
+const MAX_PENDING_CODES: usize = 10_000;
+
+/// 送信元ごとの発行回数制限（`IP_WINDOW` 内に `IP_MAX_CODES` 件まで）。数える単位は
+/// [`rate_limit_key`]（IPv4 はアドレス、IPv6 は /64）。
+const IP_MAX_CODES: usize = 10;
+const IP_WINDOW: Duration = Duration::from_secs(60);
+
+/// 保留上限が承認済みコードだけで埋まっていて押し出せないときの `Retry-After`（秒）。
+const FULL_RETRY_AFTER_SECS: u64 = 30;
+
+/// `create` が発行を断った理由。
+enum CreateError {
+    /// 送信元ごとの回数制限、または承認済みコードで保留上限が埋まっている（429）。
+    TooMany {
+        retry_after_secs: u64,
+    },
+    Internal,
+}
 
 /// device_code レコード（インメモリ・Node `DeviceAuthRecord`）。
 #[derive(Clone)]
@@ -56,6 +77,8 @@ struct DeviceRecord {
 struct StoreState {
     by_hash: HashMap<String, DeviceRecord>,
     by_user_code: HashMap<String, String>,
+    /// 送信元（[`rate_limit_key`]）ごとの直近の発行時刻（回数制限用・窓を過ぎたものは掃除する）。
+    recent_by_ip: HashMap<IpAddr, VecDeque<Instant>>,
 }
 
 /// device_code の一時状態を保持するインメモリ store（router へ Extension で注入・web 再起動を跨ぐ）。
@@ -92,6 +115,7 @@ impl DeviceAuthStore {
             state: Mutex::new(StoreState {
                 by_hash: HashMap::new(),
                 by_user_code: HashMap::new(),
+                recent_by_ip: HashMap::new(),
             }),
             verification_base,
             device_code_ttl_secs,
@@ -118,21 +142,74 @@ impl DeviceAuthStore {
         }
     }
 
+    /// 未承認のうち期限が最も近い（＝最も古い）コードを 1 件消す。消せたら `true`。
+    ///
+    /// 承認済み（トークン交換待ち）のコードは消さない。消すと承認したログインが完了しなくなる。
+    fn evict_oldest_pending(state: &mut StoreState) -> bool {
+        let Some(hash) = state
+            .by_hash
+            .iter()
+            .filter(|(_, r)| !r.approved)
+            .min_by_key(|(_, r)| r.expires_at)
+            .map(|(h, _)| h.clone())
+        else {
+            return false;
+        };
+        if let Some(r) = state.by_hash.remove(&hash) {
+            state.by_user_code.remove(&r.user_code);
+        }
+        true
+    }
+
     /// device_code / user_code を発行する（Node `createDeviceCode`）。
-    fn create(&self, device_name: Option<String>) -> Result<serde_json::Value, getrandom::Error> {
-        let device_code = generate_token()?;
+    fn create(
+        &self,
+        ip: Option<IpAddr>,
+        device_name: Option<String>,
+    ) -> Result<serde_json::Value, CreateError> {
+        let device_code = generate_token().map_err(|_| CreateError::Internal)?;
         let hash = sha256_hex(&device_code);
         let now = Instant::now();
         let expires_at = now + Duration::from_secs(self.device_code_ttl_secs);
 
         let mut state = self.lock();
         Self::sweep(&mut state, now);
+        state.recent_by_ip.retain(|_, q| {
+            while q
+                .front()
+                .is_some_and(|t| now.duration_since(*t) >= IP_WINDOW)
+            {
+                q.pop_front();
+            }
+            !q.is_empty()
+        });
+        // 拒否時・失敗時は何も記録しない（拒否された要求で表が増えず、回数も消費しない）。
+        let key = ip.map(rate_limit_key);
+        if let Some(q) = key.and_then(|k| state.recent_by_ip.get(&k)) {
+            if q.len() >= IP_MAX_CODES {
+                let oldest = q.front().copied().unwrap_or(now);
+                let wait = IP_WINDOW.saturating_sub(now.duration_since(oldest));
+                return Err(CreateError::TooMany {
+                    retry_after_secs: ceil_secs(wait).max(1),
+                });
+            }
+        }
         // user_code 衝突回避。空間 32^8 ≫ 生存件数なので実質 1 回で決まる。**loop-until-unique** ＝
         // 万一の衝突でも既存インデックスを上書きしない（dangling インデックスを作らない・Node の
         // break-after-5 上書きより堅牢）。
-        let mut user_code = generate_user_code()?;
+        let mut user_code = generate_user_code().map_err(|_| CreateError::Internal)?;
         while state.by_user_code.contains_key(&user_code) {
-            user_code = generate_user_code()?;
+            user_code = generate_user_code().map_err(|_| CreateError::Internal)?;
+        }
+        // 保留上限に達したら、未承認のうち最も古いコードを押し出して空ける。429 で全員を止めると、
+        // 上限を埋めるだけで正規ユーザーのログインを TTL の間妨害できてしまうため。
+        if state.by_hash.len() >= MAX_PENDING_CODES && !Self::evict_oldest_pending(&mut state) {
+            return Err(CreateError::TooMany {
+                retry_after_secs: FULL_RETRY_AFTER_SECS,
+            });
+        }
+        if let Some(k) = key {
+            state.recent_by_ip.entry(k).or_default().push_back(now);
         }
         state.by_user_code.insert(user_code.clone(), hash.clone());
         state.by_hash.insert(
@@ -312,6 +389,11 @@ fn as_opt_string(v: Option<Value>) -> Option<String> {
     v.and_then(|x| x.as_str().map(str::to_owned))
 }
 
+/// `Duration` を秒へ切り上げる（`Retry-After` は整数秒）。
+fn ceil_secs(d: Duration) -> u64 {
+    d.as_secs() + u64::from(d.subsec_nanos() > 0)
+}
+
 fn server_error() -> Response {
     (
         StatusCode::INTERNAL_SERVER_ERROR,
@@ -323,14 +405,30 @@ fn server_error() -> Response {
 /// §1.1: device_code / user_code を発行する（auth:none）。
 async fn code_handler(
     Extension(store): Extension<Arc<DeviceAuthStore>>,
+    State(app): State<AppState>,
+    headers: HeaderMap,
+    extensions: Extensions,
     ScopedJson { value: body, .. }: ScopedJson<CodeBody>,
 ) -> Response {
     // device_name は文字列のみ採用し先頭 200 文字に制限（Node `typeof===string ? slice(0,200)`）。
     let device_name = as_opt_string(body.device_name)
         .map(|s| s.chars().take(MAX_DEVICE_NAME).collect::<String>());
-    match store.create(device_name) {
+    let peer = extensions
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|c| c.0.ip());
+    let ip = client_ip(peer, &headers, &app.config.trusted_proxies);
+    match store.create(ip, device_name) {
         Ok(payload) => (StatusCode::OK, Json(payload)).into_response(),
-        Err(_) => server_error(),
+        Err(CreateError::TooMany { retry_after_secs }) => (
+            StatusCode::TOO_MANY_REQUESTS,
+            [(header::RETRY_AFTER, retry_after_secs.to_string())],
+            Json(json!({
+                "error": "too_many_requests",
+                "message": "リクエストが多すぎます。しばらくしてから再度お試しください。"
+            })),
+        )
+            .into_response(),
+        Err(CreateError::Internal) => server_error(),
     }
 }
 
@@ -536,6 +634,16 @@ mod tests {
     }
 
     async fn send(app: &axum::Router, uri: &str, token: &str, body: &str) -> (StatusCode, Value) {
+        send_from(app, uri, token, body, None).await
+    }
+
+    async fn send_raw(
+        app: &axum::Router,
+        uri: &str,
+        token: &str,
+        body: &str,
+        peer: Option<&str>,
+    ) -> axum::response::Response {
         let mut builder = Request::builder()
             .method("POST")
             .uri(uri)
@@ -543,11 +651,22 @@ mod tests {
         if !token.is_empty() {
             builder = builder.header("cookie", format!("__Host-yuuka-session={token}"));
         }
-        let resp = app
-            .clone()
-            .oneshot(builder.body(Body::from(body.to_owned())).unwrap())
-            .await
-            .unwrap();
+        let mut req = builder.body(Body::from(body.to_owned())).unwrap();
+        if let Some(p) = peer {
+            let addr: SocketAddr = SocketAddr::new(p.parse().unwrap(), 5000);
+            req.extensions_mut().insert(ConnectInfo(addr));
+        }
+        app.clone().oneshot(req).await.unwrap()
+    }
+
+    async fn send_from(
+        app: &axum::Router,
+        uri: &str,
+        token: &str,
+        body: &str,
+        peer: Option<&str>,
+    ) -> (StatusCode, Value) {
+        let resp = send_raw(app, uri, token, body, peer).await;
         let status = resp.status();
         let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
         let json = if bytes.is_empty() {
@@ -734,6 +853,108 @@ mod tests {
         .await;
         assert_eq!(st, StatusCode::OK);
         assert_eq!(j2["error"], serde_json::json!("slow_down"));
+    }
+
+    #[tokio::test]
+    async fn per_ip_rate_limit_returns_429_without_growing_store() {
+        let store = DeviceAuthStore::new("https://ex.test".to_owned());
+        let app = app(store.clone());
+        for _ in 0..IP_MAX_CODES {
+            let (st, _) =
+                send_from(&app, "/api/auth/device/code", "", "{}", Some("203.0.113.1")).await;
+            assert_eq!(st, StatusCode::OK);
+        }
+        let resp = send_raw(&app, "/api/auth/device/code", "", "{}", Some("203.0.113.1")).await;
+        assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
+        let retry_after: u64 = resp.headers()[header::RETRY_AFTER]
+            .to_str()
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert!((1..=IP_WINDOW.as_secs()).contains(&retry_after));
+        assert_eq!(store.lock().by_hash.len(), IP_MAX_CODES);
+        // 別 IP は影響を受けない。
+        let (st, _) = send_from(&app, "/api/auth/device/code", "", "{}", Some("203.0.113.2")).await;
+        assert_eq!(st, StatusCode::OK);
+    }
+
+    fn create_ok(store: &DeviceAuthStore, ip: &str) -> bool {
+        store.create(Some(ip.parse().unwrap()), None).is_ok()
+    }
+
+    /// 窓を過ぎた発行は数えない（`retain` の条件が反転していないこと）。
+    #[test]
+    fn per_ip_rate_limit_resets_after_window() {
+        let store = DeviceAuthStore::new("https://ex.test".to_owned());
+        for _ in 0..IP_MAX_CODES {
+            assert!(create_ok(&store, "203.0.113.1"));
+        }
+        assert!(!create_ok(&store, "203.0.113.1"));
+        let past = Instant::now().checked_sub(IP_WINDOW).unwrap();
+        for q in store.lock().recent_by_ip.values_mut() {
+            q.iter_mut().for_each(|t| *t = past);
+        }
+        assert!(create_ok(&store, "203.0.113.1"));
+        assert_eq!(
+            store
+                .lock()
+                .recent_by_ip
+                .values()
+                .map(VecDeque::len)
+                .sum::<usize>(),
+            1
+        );
+    }
+
+    /// IPv6 は /64 単位で数える。IPv4-mapped IPv6 は IPv4 と同じ送信元として数える。
+    #[test]
+    fn per_ip_rate_limit_groups_ipv6_by_64_and_canonicalizes_mapped() {
+        let store = DeviceAuthStore::new("https://ex.test".to_owned());
+        for i in 1..=IP_MAX_CODES {
+            assert!(create_ok(&store, &format!("2001:db8::{i:x}")));
+        }
+        assert!(!create_ok(&store, "2001:db8::ffff:1"));
+        assert!(create_ok(&store, "2001:db8:0:1::1"));
+
+        for _ in 0..IP_MAX_CODES {
+            assert!(create_ok(&store, "198.51.100.7"));
+        }
+        assert!(!create_ok(&store, "::ffff:198.51.100.7"));
+    }
+
+    /// 保留上限では 429 にせず、未承認のうち最も古いコードを押し出す。承認済みは押し出さない。
+    #[tokio::test]
+    async fn pending_cap_evicts_oldest_unapproved_code() {
+        let store = DeviceAuthStore::new("https://ex.test".to_owned());
+        let app = app(store.clone());
+        let first = store.create(None, None).ok().unwrap();
+        let first_hash = sha256_hex(first["device_code"].as_str().unwrap());
+        for _ in 1..MAX_PENDING_CODES {
+            assert!(store.create(None, None).is_ok());
+        }
+        let (st, _) = send(&app, "/api/auth/device/code", "", "{}").await;
+        assert_eq!(st, StatusCode::OK);
+        {
+            let state = store.lock();
+            assert_eq!(state.by_hash.len(), MAX_PENDING_CODES);
+            assert_eq!(state.by_user_code.len(), MAX_PENDING_CODES);
+            assert!(!state.by_hash.contains_key(&first_hash));
+            assert!(!state
+                .by_user_code
+                .contains_key(first["user_code"].as_str().unwrap()));
+        }
+
+        // 承認済みだけで埋まっていれば押し出さずに 429。
+        for r in store.lock().by_hash.values_mut() {
+            r.approved = true;
+        }
+        let resp = send_raw(&app, "/api/auth/device/code", "", "{}", None).await;
+        assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(
+            resp.headers()[header::RETRY_AFTER],
+            FULL_RETRY_AFTER_SECS.to_string().as_str()
+        );
+        assert_eq!(store.lock().by_hash.len(), MAX_PENDING_CODES);
     }
 
     /// config の TTL（`DESKTOP_DEVICE_CODE_TTL_SEC`・`DESKTOP_TOKEN_TTL_DAYS`）が code 応答・レコード期限・

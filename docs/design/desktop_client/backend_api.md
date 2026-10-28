@@ -50,6 +50,14 @@
 
 - 保存先: Redis `device_auth:{sha256(device_code)}` に `{ user_code, status:"pending", device_name, created_at }`、TTL=`expires_in`。Redis 不通時は in-memory フォールバック（セッションと同様）。
 - `user_code` はレート制限つきで衝突回避・総当り耐性のため十分な空間（例 8 文字 Crockford Base32）。
+- 回数制限: 送信元ごとに 60 秒あたり 10 件まで。送信元は IPv4 ならアドレス、IPv6 なら /64 単位で数える。`X-Forwarded-For` は直前の接続元が `TRUSTED_PROXIES` のときだけ使う。
+- 保留中のコードは 10,000 件まで。超えたら、未承認のうち最も古いコードを失効させて新しいコードを発行する（承認済みでトークン交換待ちのコードは失効させない）。
+
+```
+レスポンス 429（回数制限、または承認済みコードだけで保留上限が埋まっている）:
+Retry-After: <秒>                           // 回数制限なら窓が空くまでの秒数、上限なら 30
+{ "error": "too_many_requests", "message": "リクエストが多すぎます。しばらくしてから再度お試しください。" }
+```
 
 ### 1.2 `POST /api/auth/device/approve`（auth: user）
 
