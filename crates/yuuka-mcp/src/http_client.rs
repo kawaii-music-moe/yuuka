@@ -1,42 +1,36 @@
-//! 実 MCP HTTP クライアント（Node `src/services/mcpClient.ts` パリティ）。
+//! ダッシュボード取得・プロキシ中継用の素の HTTP クライアント（Node `src/services/mcpClient.ts` の
+//! MCP 以外の部分）。
 //!
-//! [`HttpMcpClient`] は [`McpClient`](crate::McpClient) ポートを `reqwest` 背後で実装する。
-//! MCP Streamable HTTP トランスポート（JSON-RPC 2.0 over HTTP POST）の最小実装で、
-//! `tools/list` 取得（`initialize` → `notifications/initialized` → `tools/list`）・ダッシュボード
-//! 判定/取得・エンドポイント中継を担う。応答が SSE（`text/event-stream`）のときは `data:` 行から
-//! JSON-RPC を抽出し、`Mcp-Session-Id` 応答ヘッダをサーバー単位でプロセス内保持（次リクエストへ透過）
-//! する。セッション由来エラー（4xx/session）は一度だけ再初期化して再試行する。
+//! MCP プロトコル（`initialize` / `tools/list` / `tools/call`・SSE・セッション管理）は公式 SDK `rmcp`
+//! で実装した [`RmcpClient`](crate::RmcpClient) が担う。ここに残るのは MCP ではない通常の HTTP だけ:
+//! `GET <origin>/dashboard[/enable]` と、ダッシュボード SPA の JSON-RPC をそのまま上流へ中継する
+//! `proxy`（`Mcp-Session-Id` はクライアントとの透過のためにだけプロセス内保持する）。
 //!
-//! **SSRF ガード**: すべての外向き取得（refresh/probe/fetch/proxy）の直前に宛先 URL を再検証する
-//! （DNS 解決先の全アドレスを検査）。共通 `yuuka-outbound` を利用する。
-//! 検査後の接続 IP 固定・自動リダイレクト先の再検査は行っていない。
+//! **SSRF ガード**: すべての外向き取得の直前に宛先 URL を再検証する（DNS 解決先の全アドレスを検査）。
+//! 共通 `yuuka-outbound` を利用する。検査後の接続 IP 固定・自動リダイレクト先の再検査は行っていない
+//! （MCP 経路は [`RmcpClient`](crate::RmcpClient) 側で解決時検査 + リダイレクト無効化を行う）。
 //!
 //! **認証情報の復号**: `auth_credential_encrypted/iv/tag` を [`SystemCrypto::decrypt_text`] で復号し
 //! `Authorization: Bearer {cred}` を付ける。復号失敗はログして認証なしで続行する（Node パリティ）。
 //!
-//! **live 検証は実環境へ延期**: 実 MCP サーバーへの HTTP（tools/list 往復・SSE ストリーム・
-//! ダッシュボード HTTP・プロキシ中継・DNS 解決を伴う SSRF）はネットワーク到達を要するため、ここでは
-//! ユニットテスト対象外（実環境疎通で検証）。ユニットテストは純ロジック
-//! （SSE `data:` パース→JSON-RPC 抽出・`tools/list` 結果パース・origin 抽出・session-id セッション
-//! エラー判定・SSRF の IP レンジ判定）に限定する。
+//! **live 検証は実環境へ延期**: ダッシュボード HTTP・プロキシ中継・DNS 解決を伴う SSRF は
+//! ネットワーク到達を要するためユニットテスト対象外。
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
-use async_trait::async_trait;
 use axum::body::Bytes;
-use serde_json::{json, Value};
 use yuuka_crypto::SystemCrypto;
 use yuuka_outbound::assert_safe_outbound_url;
 
 use crate::repo::McpServerRecord;
-use crate::{McpClient, McpTool, ProxyResponse};
+use crate::ProxyResponse;
 
-/// MCP プロトコルバージョン（Node `PROTOCOL_VERSION`）。
-const PROTOCOL_VERSION: &str = "2025-03-26";
+/// プロキシ中継時に付ける MCP プロトコルバージョン。
+const PROTOCOL_VERSION: &str = "2025-11-25";
 /// 1 リクエストのタイムアウト（Node `REQUEST_TIMEOUT_MS`）。
-const REQUEST_TIMEOUT: Duration = Duration::from_millis(15_000);
+pub(crate) const REQUEST_TIMEOUT: Duration = Duration::from_millis(15_000);
 /// ダッシュボード有効判定パス（Node `DASHBOARD_ENABLE_PATH`）。
 const DASHBOARD_ENABLE_PATH: &str = "/dashboard/enable";
 /// ダッシュボード本体パス（Node `DASHBOARD_PATH`）。
@@ -44,30 +38,25 @@ const DASHBOARD_PATH: &str = "/dashboard";
 /// プロキシ既定 Accept（Node の proxy 既定）。
 const DEFAULT_ACCEPT: &str = "application/json, text/event-stream";
 
-/// 実 MCP HTTP クライアント（`reqwest` 背後で Node `mcpClient.ts` を移植）。
+/// ダッシュボード/プロキシ用 HTTP クライアント。
 ///
 /// `crypto` が `None` のときは認証情報の復号を行わない（Bearer 非注入）。`sessions` は
-/// サーバー ID → `Mcp-Session-Id` のプロセス内キャッシュ、`initialized` は初期化済みサーバー ID 集合。
-pub struct HttpMcpClient {
+/// プロキシ中継の `Mcp-Session-Id` 透過用（サーバー ID → セッション ID）。
+pub(crate) struct DashboardHttpClient {
     /// 認証情報（`auth_credential`）の復号鍵（`None` なら認証なしで続行）。
     crypto: Option<Arc<SystemCrypto>>,
     /// 外部 MCP サーバーへの HTTP クライアント（main.rs で構築して注入）。
     http: reqwest::Client,
-    /// サーバー ID → `Mcp-Session-Id`（initialize 応答で発行された場合のみ保持）。
+    /// サーバー ID → `Mcp-Session-Id`（プロキシ中継で上流が発行した場合のみ保持）。
     sessions: Mutex<HashMap<i64, String>>,
-    /// 初期化済みサーバー ID 集合（Node `initializedServers`）。
-    initialized: Mutex<std::collections::HashSet<i64>>,
 }
 
-impl HttpMcpClient {
-    /// 実クライアントを構築する。`crypto` は認証情報復号鍵（`None` = 認証なし・main.rs で配線）。
-    #[must_use]
-    pub fn new(crypto: Option<Arc<SystemCrypto>>, http: reqwest::Client) -> Self {
+impl DashboardHttpClient {
+    pub(crate) fn new(crypto: Option<Arc<SystemCrypto>>, http: reqwest::Client) -> Self {
         Self {
             crypto,
             http,
             sessions: Mutex::new(HashMap::new()),
-            initialized: Mutex::new(std::collections::HashSet::new()),
         }
     }
 
@@ -88,37 +77,17 @@ impl HttpMcpClient {
             .insert(server_id, sid.to_owned());
     }
 
-    /// session-id と初期化済みフラグを破棄する（セッションエラー時の再初期化前）。
-    fn forget_session(&self, server_id: i64) {
+    /// プロキシ用 session-id を破棄する（サーバー無効化・削除・認証情報変更時）。
+    pub(crate) fn forget_session(&self, server_id: i64) {
         self.sessions
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .remove(&server_id);
-        self.initialized
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .remove(&server_id);
-    }
-
-    /// 初期化済みか。
-    fn is_initialized(&self, server_id: i64) -> bool {
-        self.initialized
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .contains(&server_id)
-    }
-
-    /// 初期化済みフラグを立てる。
-    fn mark_initialized(&self, server_id: i64) {
-        self.initialized
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .insert(server_id);
     }
 
     /// サーバーの `Authorization: Bearer` 値を組み立てる（Node `buildAuthHeader`）。
     /// 復号失敗はログして `None`（認証なしで続行）。暗号鍵未設定/認証情報無しも `None`。
-    fn bearer_token(&self, server: &McpServerRecord) -> Option<String> {
+    pub(crate) fn bearer_token(&self, server: &McpServerRecord) -> Option<String> {
         let (Some(enc), Some(iv), Some(tag)) = (
             server.auth_credential_encrypted.as_deref(),
             server.auth_credential_iv.as_deref(),
@@ -140,178 +109,6 @@ impl HttpMcpClient {
         }
     }
 
-    /// 1 回の JSON-RPC リクエストを送る（Node `rpcRequest`）。`is_notification` のときは応答ボディ非期待。
-    ///
-    /// 成功時は解析済み JSON-RPC 応答（通知は `None`）。上流エラー・SSRF・接続失敗・RPC error は `Err`。
-    async fn rpc_request(
-        &self,
-        server: &McpServerRecord,
-        method: &str,
-        params: Option<Value>,
-        is_notification: bool,
-        request_id: Option<i64>,
-    ) -> Result<Option<Value>, String> {
-        // 送信ペイロード（Node: params は指定時のみ・id は非通知時のみ）。
-        let mut payload = serde_json::Map::new();
-        payload.insert("jsonrpc".to_owned(), json!("2.0"));
-        payload.insert("method".to_owned(), json!(method));
-        if let Some(p) = params {
-            payload.insert("params".to_owned(), p);
-        }
-        if let Some(id) = request_id {
-            payload.insert("id".to_owned(), json!(id));
-        }
-
-        // SSRF 対策: 利用直前に宛先を再検証（DNS リバインディング含む内部到達を遮断）。
-        assert_safe_outbound_url(&server.endpoint_url).await?;
-
-        let mut req = self
-            .http
-            .post(&server.endpoint_url)
-            .timeout(REQUEST_TIMEOUT)
-            .header("Content-Type", "application/json")
-            .header("Accept", DEFAULT_ACCEPT)
-            .header("MCP-Protocol-Version", PROTOCOL_VERSION);
-        if let Some(token) = self.bearer_token(server) {
-            req = req.header("Authorization", format!("Bearer {token}"));
-        }
-        if let Some(sid) = self.session_id(server.id) {
-            req = req.header("Mcp-Session-Id", sid);
-        }
-        let resp = req
-            .json(&Value::Object(payload))
-            .send()
-            .await
-            .map_err(|e| format!("{e}"))?;
-
-        // セッション ID の保持（initialize 応答で発行される場合がある）。
-        if let Some(sid) = resp
-            .headers()
-            .get("mcp-session-id")
-            .and_then(|v| v.to_str().ok())
-            .filter(|s| !s.is_empty())
-        {
-            self.store_session_id(server.id, sid);
-        }
-
-        if is_notification {
-            return Ok(None); // 通知は応答ボディを期待しない（202 等）。
-        }
-
-        let status = resp.status();
-        let content_type = resp
-            .headers()
-            .get(reqwest::header::CONTENT_TYPE)
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or_default()
-            .to_ascii_lowercase();
-
-        if !status.is_success() {
-            let text = resp.text().await.unwrap_or_default();
-            let snippet: String = text.chars().take(200).collect();
-            return Err(format!("HTTP {}: {snippet}", status.as_u16()));
-        }
-
-        let body_text = resp.text().await.map_err(|e| format!("{e}"))?;
-
-        let rpc = if content_type.contains("text/event-stream") {
-            parse_sse_body(&body_text, request_id)
-        } else if body_text.is_empty() {
-            None
-        } else {
-            serde_json::from_str::<Value>(&body_text)
-                .map_err(|e| format!("JSON パースに失敗しました: {e}"))
-                .map(Some)?
-        };
-
-        // RPC error は Err に写像（Node `MCP error {code}: {message}`）。
-        if let Some(v) = rpc.as_ref() {
-            if let Some(err) = v.get("error") {
-                let code = err.get("code").and_then(Value::as_i64).unwrap_or(0);
-                let message = err
-                    .get("message")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default();
-                return Err(format!("MCP error {code}: {message}"));
-            }
-        }
-        Ok(rpc)
-    }
-
-    /// initialize ハンドシェイクを実行する（未初期化のときのみ・Node `ensureInitialized`）。
-    ///
-    /// `notifications/initialized` の失敗は致命的でないため握る（Node と同じ）。
-    async fn ensure_initialized(&self, server: &McpServerRecord) -> Result<(), String> {
-        if self.is_initialized(server.id) {
-            return Ok(());
-        }
-        let id = self.next_request_id();
-        self.rpc_request(
-            server,
-            "initialize",
-            Some(json!({
-                "protocolVersion": PROTOCOL_VERSION,
-                "capabilities": {},
-                "clientInfo": { "name": "yuuka", "version": "2.0" },
-            })),
-            false,
-            Some(id),
-        )
-        .await?;
-        // initialized 通知（失敗は握る）。
-        let _ = self
-            .rpc_request(
-                server,
-                "notifications/initialized",
-                Some(json!({})),
-                true,
-                None,
-            )
-            .await;
-        self.mark_initialized(server.id);
-        Ok(())
-    }
-
-    /// リクエスト ID を採番する（プロセス単調増加・Node `nextRequestId++`）。
-    fn next_request_id(&self) -> i64 {
-        use std::sync::atomic::{AtomicI64, Ordering};
-        static NEXT: AtomicI64 = AtomicI64::new(1);
-        NEXT.fetch_add(1, Ordering::Relaxed)
-    }
-
-    /// `tools/list` を 1 回だけ実行して結果を整形する（`refresh_tools` の 1 試行分）。
-    async fn tools_list_once(&self, server: &McpServerRecord) -> Result<Vec<McpTool>, String> {
-        let id = self.next_request_id();
-        let rpc = self
-            .rpc_request(server, "tools/list", Some(json!({})), false, Some(id))
-            .await?;
-        Ok(parse_tools_result(rpc.as_ref()))
-    }
-
-    /// `tools/call` を 1 回だけ実行して結果を整形する（`call_tool` の 1 試行分）。
-    ///
-    /// `Err(ToolCallError::Tool)` はツール側エラー（再試行不可）、`Err(ToolCallError::Transport)` は
-    /// RPC/接続/セッションエラー（セッション由来なら 1 度だけ再試行対象）。
-    async fn tools_call_once(
-        &self,
-        server: &McpServerRecord,
-        tool_name: &str,
-        arguments: &Value,
-    ) -> Result<String, ToolCallError> {
-        let id = self.next_request_id();
-        let rpc = self
-            .rpc_request(
-                server,
-                "tools/call",
-                Some(json!({ "name": tool_name, "arguments": arguments })),
-                false,
-                Some(id),
-            )
-            .await
-            .map_err(ToolCallError::Transport)?;
-        parse_tool_call_result(rpc.as_ref())
-    }
-
     /// Bearer 付き GET を送る（Node `authedGet`）。SSRF 再検証・タイムアウト付き。
     async fn authed_get(
         &self,
@@ -325,160 +122,9 @@ impl HttpMcpClient {
         }
         req.send().await.map_err(|e| format!("{e}"))
     }
-}
 
-/// SSE 応答ボディから当該リクエストの JSON-RPC 応答を抽出する（Node `parseSseBody`）。
-///
-/// `expected_id` 指定時は id 一致応答を優先（バッチ/サーバー発リクエストとの取り違え防止）、
-/// 無ければ最後の result/error 応答へフォールバックする。通知・サーバー発リクエストはスキップ。
-fn parse_sse_body(body: &str, expected_id: Option<i64>) -> Option<Value> {
-    let mut last: Option<Value> = None;
-    let mut matched: Option<Value> = None;
-    for raw_line in body.split('\n') {
-        let line = raw_line.trim();
-        let Some(rest) = line.strip_prefix("data:") else {
-            continue;
-        };
-        let data = rest.trim();
-        if data.is_empty() || data == "[DONE]" {
-            continue;
-        }
-        let Ok(parsed) = serde_json::from_str::<Value>(data) else {
-            continue; // 部分的な data 行は無視。
-        };
-        // 応答（result/error 持ち）のみ対象。
-        if parsed.get("result").is_some() || parsed.get("error").is_some() {
-            if let Some(want) = expected_id {
-                if parsed.get("id").and_then(Value::as_i64) == Some(want) {
-                    matched = Some(parsed.clone());
-                }
-            }
-            last = Some(parsed);
-        }
-    }
-    matched.or(last)
-}
-
-/// JSON-RPC `tools/list` の `result.tools[]` を [`McpTool`] へ整形する（Node `listTools` の map）。
-///
-/// 非 object 要素・name 空は落とす。description は文字列のときのみ採用（Node `t.description ? String(...) : undefined`）。
-fn parse_tools_result(rpc: Option<&Value>) -> Vec<McpTool> {
-    let Some(Value::Array(items)) = rpc
-        .and_then(|v| v.get("result"))
-        .and_then(|r| r.get("tools"))
-    else {
-        return Vec::new();
-    };
-    items
-        .iter()
-        .filter_map(|t| {
-            let obj = t.as_object()?;
-            let name = obj.get("name").and_then(Value::as_str).unwrap_or_default();
-            if name.is_empty() {
-                return None;
-            }
-            let description = obj
-                .get("description")
-                .and_then(Value::as_str)
-                .filter(|s| !s.is_empty())
-                .map(str::to_owned);
-            // inputSchema は object のときのみ採用（Node `t.inputSchema && typeof === "object"`）。
-            let input_schema = obj.get("inputSchema").filter(|s| s.is_object()).cloned();
-            Some(McpTool {
-                name: name.to_owned(),
-                description,
-                input_schema,
-            })
-        })
-        .collect()
-}
-
-/// `tools/call` の `content[]` から text 部分を連結する（Node `callTool` の texts.join）。
-///
-/// `Err(joined)` はツール側エラー（`isError:true`）を表す（トランスポート/セッション障害ではない）。
-/// Node の `McpToolError` に対応し、呼び出し側は再試行しない（副作用の二重実行を避ける）。
-fn parse_tool_call_result(rpc: Option<&Value>) -> Result<String, ToolCallError> {
-    let Some(result) = rpc.and_then(|v| v.get("result")) else {
-        // result 欠落は空文字（Node `if (!result) return ""`）。
-        return Ok(String::new());
-    };
-    let texts: Vec<String> = result
-        .get("content")
-        .and_then(Value::as_array)
-        .map(|arr| {
-            arr.iter()
-                .filter(|c| {
-                    // type === "text" もしくは text フィールドを持つ（Node のフィルタ）。
-                    c.get("type").and_then(Value::as_str) == Some("text") || c.get("text").is_some()
-                })
-                .filter_map(|c| c.get("text").and_then(Value::as_str))
-                .filter(|t| !t.is_empty())
-                .map(str::to_owned)
-                .collect()
-        })
-        .unwrap_or_default();
-    let joined = texts.join("\n");
-    if result.get("isError").and_then(Value::as_bool) == Some(true) {
-        // ツール側のエラー（Node は McpToolError を throw・callRpc は再試行しない）。
-        let msg = if joined.is_empty() {
-            "MCP Tool がエラーを返しました".to_owned()
-        } else {
-            joined
-        };
-        return Err(ToolCallError::Tool(msg));
-    }
-    Ok(joined)
-}
-
-/// `call_tool` 内部のエラー種別（再試行可否の判定に使う）。
-#[derive(Debug)]
-enum ToolCallError {
-    /// ツール側エラー（`isError:true`）。再試行しない。
-    Tool(String),
-    /// トランスポート/RPC/セッションエラー（メッセージ）。セッション由来なら 1 度だけ再試行する。
-    Transport(String),
-}
-
-impl ToolCallError {
-    fn into_message(self) -> String {
-        match self {
-            ToolCallError::Tool(m) | ToolCallError::Transport(m) => m,
-        }
-    }
-}
-
-/// セッション未確立/失効由来のエラーか（Node `isSessionError`）。
-///
-/// `HTTP 400`/`HTTP 404` または `session`/`not initialized`/`initializ` を含むメッセージのみ真。
-/// タイムアウト・ネットワーク断・ツールエラーは含めない（副作用のある呼び出しを二重実行しないため）。
-fn is_session_error(msg: &str) -> bool {
-    let has_http_40x = msg.contains("HTTP 400") || msg.contains("HTTP 404");
-    let lower = msg.to_ascii_lowercase();
-    has_http_40x
-        || lower.contains("session")
-        || lower.contains("not initialized")
-        || lower.contains("initializ")
-}
-
-/// `endpoint_url` の origin（`scheme://host[:port]`）を返す（Node `mcpOrigin` = `new URL(...).origin`）。
-///
-/// # Errors
-/// URL パース不能時に日本語メッセージ。
-fn mcp_origin(endpoint_url: &str) -> Result<String, String> {
-    let url = url::Url::parse(endpoint_url).map_err(|_| "URLの形式が不正です。".to_owned())?;
-    let scheme = url.scheme();
-    let Some(host) = url.host_str() else {
-        return Err("URLの形式が不正です。".to_owned());
-    };
-    match url.port() {
-        Some(port) => Ok(format!("{scheme}://{host}:{port}")),
-        None => Ok(format!("{scheme}://{host}")),
-    }
-}
-
-#[async_trait]
-impl McpClient for HttpMcpClient {
-    async fn probe_dashboard(&self, server: &McpServerRecord) -> bool {
+    /// `GET <origin>/dashboard/enable` が 200 か。
+    pub(crate) async fn probe_dashboard(&self, server: &McpServerRecord) -> bool {
         let Ok(origin) = mcp_origin(&server.endpoint_url) else {
             return false;
         };
@@ -490,7 +136,7 @@ impl McpClient for HttpMcpClient {
         }
     }
 
-    async fn fetch_dashboard_html(
+    pub(crate) async fn fetch_dashboard_html(
         &self,
         server: &McpServerRecord,
     ) -> Result<(u16, String), String> {
@@ -502,43 +148,7 @@ impl McpClient for HttpMcpClient {
         Ok((status, html))
     }
 
-    async fn refresh_tools(&self, server: &McpServerRecord) -> Result<Vec<McpTool>, String> {
-        // Node `callRpc`: まず直接実行し、セッションエラーに限り一度だけ再初期化して再試行する。
-        match self.tools_list_once(server).await {
-            Ok(tools) => Ok(tools),
-            Err(e) if is_session_error(&e) => {
-                // ステートフルサーバーのセッション未確立/失効。再初期化して一度だけ再試行する。
-                self.forget_session(server.id);
-                self.ensure_initialized(server).await?;
-                self.tools_list_once(server).await
-            }
-            Err(e) => Err(e),
-        }
-    }
-
-    async fn call_tool(
-        &self,
-        server: &McpServerRecord,
-        tool_name: &str,
-        arguments: Value,
-    ) -> Result<String, String> {
-        // Node `callRpc`: まず直接実行し、セッションエラーに限り一度だけ再初期化して再試行する。
-        // ツール側エラー（`isError`）・タイムアウト・ネットワーク断は再試行しない（副作用の二重実行回避）。
-        match self.tools_call_once(server, tool_name, &arguments).await {
-            Ok(text) => Ok(text),
-            Err(ToolCallError::Tool(m)) => Err(m),
-            Err(ToolCallError::Transport(e)) if is_session_error(&e) => {
-                self.forget_session(server.id);
-                self.ensure_initialized(server).await?;
-                self.tools_call_once(server, tool_name, &arguments)
-                    .await
-                    .map_err(ToolCallError::into_message)
-            }
-            Err(e) => Err(e.into_message()),
-        }
-    }
-
-    async fn proxy(
+    pub(crate) async fn proxy(
         &self,
         server: &McpServerRecord,
         body: Bytes,
@@ -593,6 +203,22 @@ impl McpClient for HttpMcpClient {
     }
 }
 
+/// `endpoint_url` の origin（`scheme://host[:port]`）を返す（Node `mcpOrigin` = `new URL(...).origin`）。
+///
+/// # Errors
+/// URL パース不能時に日本語メッセージ。
+fn mcp_origin(endpoint_url: &str) -> Result<String, String> {
+    let url = url::Url::parse(endpoint_url).map_err(|_| "URLの形式が不正です。".to_owned())?;
+    let scheme = url.scheme();
+    let Some(host) = url.host_str() else {
+        return Err("URLの形式が不正です。".to_owned());
+    };
+    match url.port() {
+        Some(port) => Ok(format!("{scheme}://{host}:{port}")),
+        None => Ok(format!("{scheme}://{host}")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -613,160 +239,6 @@ mod tests {
             created_at: "now".to_owned(),
         }
     }
-
-    // ── SSE data: 行パース → JSON-RPC 抽出 ─────────────────────────────────────
-
-    #[test]
-    fn sse_extracts_matching_id() {
-        let body = concat!(
-            "event: message\n",
-            "data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/x\"}\n",
-            "\n",
-            "data: {\"jsonrpc\":\"2.0\",\"id\":7,\"result\":{\"tools\":[]}}\n",
-            "data: {\"jsonrpc\":\"2.0\",\"id\":8,\"result\":{\"ok\":true}}\n",
-        );
-        // id 一致を優先して返す。
-        let v = parse_sse_body(body, Some(7)).expect("some");
-        assert_eq!(v.get("id").and_then(Value::as_i64), Some(7));
-    }
-
-    #[test]
-    fn sse_falls_back_to_last_when_no_id_match() {
-        let body = concat!(
-            "data: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"a\":1}}\n",
-            "data: {\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"b\":2}}\n",
-        );
-        // 期待 id が無ければ最後の result 応答。
-        let v = parse_sse_body(body, Some(99)).expect("some");
-        assert_eq!(v.get("id").and_then(Value::as_i64), Some(2));
-    }
-
-    #[test]
-    fn sse_skips_notifications_done_and_bad_lines() {
-        let body = concat!(
-            "data: [DONE]\n",
-            "data: not-json\n",
-            "data: {\"jsonrpc\":\"2.0\",\"method\":\"notify\"}\n", // result/error 無しはスキップ
-            ": comment line\n",
-            "data:{\"jsonrpc\":\"2.0\",\"id\":3,\"error\":{\"code\":-1,\"message\":\"boom\"}}\n", // 空白無し data:
-        );
-        let v = parse_sse_body(body, None).expect("some");
-        assert!(v.get("error").is_some());
-        assert_eq!(v.get("id").and_then(Value::as_i64), Some(3));
-    }
-
-    #[test]
-    fn sse_empty_returns_none() {
-        assert!(parse_sse_body("", None).is_none());
-        assert!(parse_sse_body("data: [DONE]\n", None).is_none());
-    }
-
-    // ── tools/list 結果パース ─────────────────────────────────────────────────
-
-    #[test]
-    fn tools_result_parses_and_filters() {
-        let rpc = json!({
-            "jsonrpc": "2.0",
-            "id": 1,
-            "result": {
-                "tools": [
-                    { "name": "echo", "description": "repeat" },
-                    { "name": "noop" },                       // description 欠落 → None
-                    { "name": "", "description": "skip" },    // name 空 → 落とす
-                    { "description": "no-name" },             // name 無し → 落とす
-                    "not-an-object",                          // 非 object → 落とす
-                    { "name": "empty-desc", "description": "" } // 空 description → None
-                ]
-            }
-        });
-        let tools = parse_tools_result(Some(&rpc));
-        assert_eq!(tools.len(), 3);
-        assert_eq!(tools.first().unwrap().name, "echo");
-        assert_eq!(
-            tools.first().unwrap().description.as_deref(),
-            Some("repeat")
-        );
-        assert_eq!(tools.get(1).unwrap().name, "noop");
-        assert_eq!(tools.get(1).unwrap().description, None);
-        assert_eq!(tools.get(2).unwrap().name, "empty-desc");
-        assert_eq!(tools.get(2).unwrap().description, None);
-    }
-
-    #[test]
-    fn tools_result_captures_input_schema() {
-        let rpc = json!({
-            "result": {
-                "tools": [
-                    { "name": "with_schema", "inputSchema": { "type": "object", "properties": { "x": { "type": "string" } } } },
-                    { "name": "no_schema" },
-                    { "name": "bad_schema", "inputSchema": "not-an-object" }, // 非 object → None
-                ]
-            }
-        });
-        let tools = parse_tools_result(Some(&rpc));
-        assert_eq!(tools.len(), 3);
-        assert!(tools[0].input_schema.as_ref().unwrap().is_object());
-        assert_eq!(
-            tools[0].input_schema.as_ref().unwrap()["type"],
-            json!("object")
-        );
-        assert_eq!(tools[1].input_schema, None);
-        assert_eq!(tools[2].input_schema, None);
-    }
-
-    // ── tools/call 結果パース（text 連結・isError 判定） ─────────────────────────
-
-    #[test]
-    fn tool_call_joins_text_and_skips_non_text() {
-        let rpc = json!({
-            "result": {
-                "content": [
-                    { "type": "text", "text": "line1" },
-                    { "type": "image", "data": "..." },        // text 無し → 落とす
-                    { "text": "line2" },                        // type 無しでも text あり → 拾う
-                    { "type": "text", "text": "" },             // 空 text → 落とす
-                ]
-            }
-        });
-        let out = parse_tool_call_result(Some(&rpc)).expect("ok");
-        assert_eq!(out, "line1\nline2");
-    }
-
-    #[test]
-    fn tool_call_missing_result_is_empty() {
-        assert_eq!(parse_tool_call_result(None).unwrap(), "");
-        assert_eq!(parse_tool_call_result(Some(&json!({}))).unwrap(), "");
-        // content 欠落は空文字。
-        assert_eq!(
-            parse_tool_call_result(Some(&json!({ "result": {} }))).unwrap(),
-            ""
-        );
-    }
-
-    #[test]
-    fn tool_call_is_error_maps_to_tool_error() {
-        let rpc = json!({
-            "result": { "isError": true, "content": [{ "type": "text", "text": "boom" }] }
-        });
-        let err = parse_tool_call_result(Some(&rpc)).unwrap_err();
-        assert!(matches!(err, ToolCallError::Tool(ref m) if m == "boom"));
-        // Transport とは区別される（再試行しない側）。
-        assert!(!is_session_error(&err.into_message()));
-        // 空 content の isError は既定文言。
-        let rpc2 = json!({ "result": { "isError": true, "content": [] } });
-        let err2 = parse_tool_call_result(Some(&rpc2)).unwrap_err();
-        assert!(matches!(err2, ToolCallError::Tool(ref m) if m.contains("エラー")));
-    }
-
-    #[test]
-    fn tools_result_non_array_is_empty() {
-        assert!(parse_tools_result(None).is_empty());
-        assert!(parse_tools_result(Some(&json!({ "result": {} }))).is_empty());
-        assert!(parse_tools_result(Some(&json!({ "result": { "tools": "x" } }))).is_empty());
-        assert!(parse_tools_result(Some(&json!({}))).is_empty());
-    }
-
-    // ── origin 抽出 ───────────────────────────────────────────────────────────
 
     #[test]
     fn origin_extraction() {
@@ -789,38 +261,20 @@ mod tests {
     // ── session-id / セッションエラー判定 ────────────────────────────────────
 
     #[test]
-    fn session_error_classification() {
-        assert!(is_session_error("HTTP 400: bad request"));
-        assert!(is_session_error("HTTP 404: not found"));
-        assert!(is_session_error("Session expired"));
-        assert!(is_session_error("server not initialized"));
-        assert!(is_session_error("failed to initialize"));
-        // タイムアウト・断・500 は再試行対象外。
-        assert!(!is_session_error("HTTP 500: internal"));
-        assert!(!is_session_error("connection reset"));
-        assert!(!is_session_error("operation timed out"));
-    }
-
-    #[test]
-    fn session_id_cache_roundtrip() {
-        let client = HttpMcpClient::new(None, reqwest::Client::new());
+    fn proxy_session_id_cache_roundtrip() {
+        let client = DashboardHttpClient::new(None, reqwest::Client::new());
         assert_eq!(client.session_id(1), None);
         client.store_session_id(1, "sess-abc");
         assert_eq!(client.session_id(1).as_deref(), Some("sess-abc"));
-        // 上書き。
         client.store_session_id(1, "sess-def");
         assert_eq!(client.session_id(1).as_deref(), Some("sess-def"));
-        // forget で session と initialized を破棄。
-        client.mark_initialized(1);
-        assert!(client.is_initialized(1));
         client.forget_session(1);
         assert_eq!(client.session_id(1), None);
-        assert!(!client.is_initialized(1));
     }
 
     #[test]
     fn bearer_token_none_without_crypto_or_creds() {
-        let client = HttpMcpClient::new(None, reqwest::Client::new());
+        let client = DashboardHttpClient::new(None, reqwest::Client::new());
         // 認証情報無し → None。
         assert_eq!(client.bearer_token(&server("https://x/mcp")), None);
         // 暗号鍵無しだが認証情報あり → None（復号不能で認証なし続行）。
@@ -857,37 +311,5 @@ mod tests {
             .await
             .unwrap_err()
             .contains("URLの形式"));
-    }
-
-    #[tokio::test]
-    async fn all_mcp_http_entries_keep_common_guard_and_error_contract() {
-        let client = HttpMcpClient::new(None, reqwest::Client::new());
-        let server = server("http://2130706433/mcp");
-        let expected = "内部/予約済みアドレスへの接続は許可されていません: 127.0.0.1";
-        assert!(!client.probe_dashboard(&server).await);
-        assert_eq!(
-            client.fetch_dashboard_html(&server).await.err().as_deref(),
-            Some(expected)
-        );
-        assert_eq!(
-            client.refresh_tools(&server).await.err().as_deref(),
-            Some(expected)
-        );
-        assert_eq!(
-            client
-                .call_tool(&server, "echo", json!({}))
-                .await
-                .err()
-                .as_deref(),
-            Some(expected)
-        );
-        assert_eq!(
-            client
-                .proxy(&server, Bytes::new(), None)
-                .await
-                .err()
-                .as_deref(),
-            Some(expected)
-        );
     }
 }

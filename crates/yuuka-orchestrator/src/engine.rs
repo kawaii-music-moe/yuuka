@@ -172,7 +172,7 @@ pub struct ChatEngine {
     /// 読む）。`None` なら記録しない（ツール側は「履歴なし」として振る舞う）。
     recorder: Option<Arc<ActionRecorder>>,
     /// MCP 動的ツール用の外部 MCP クライアント（秘書ターンで [`McpProvider`] を探索するのに使う）。
-    /// main.rs で MCP ルートと同一の [`yuuka_mcp::HttpMcpClient`] を共有注入する（セッションキャッシュ統一）。
+    /// main.rs で MCP ルートと同一の [`yuuka_mcp::RmcpClient`] を共有注入する（セッションキャッシュ統一）。
     /// 未配線時は [`yuuka_mcp::NullMcpClient`]（探索は空・tools/call は失敗）へ縮退する。
     mcp_client: Arc<dyn McpClient>,
     /// シナプス認知エンジン（in-process・唯一の RAM 索引）。想起（read）と索引化（write）で共有する。
