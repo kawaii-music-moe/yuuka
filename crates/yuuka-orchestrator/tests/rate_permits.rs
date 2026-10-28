@@ -14,6 +14,7 @@ fn engine(minute: u32, day: u32, guild: u32) -> ChatEngine {
         guild
     ));
     let _ = std::fs::remove_file(&path);
+    drop(rusqlite::Connection::open(&path).expect("seed file"));
     let db = yuuka_web::Db::open(&path).expect("db");
     let conn = rusqlite::Connection::open(&path).unwrap();
     for (key, value) in [

@@ -285,7 +285,7 @@ impl reqwest::dns::Resolve for PublicOnlyResolver {
         Box::pin(async move {
             let addrs = yuuka_outbound::resolve_public_addrs(name.as_str(), 0)
                 .await
-                .map_err(|e| Box::new(BlockedByResolver(e)) as Box<_>)?;
+                .map_err(BlockedByResolver)?;
             Ok(Box::new(addrs.into_iter()) as reqwest::dns::Addrs)
         })
     }
