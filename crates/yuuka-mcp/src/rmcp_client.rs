@@ -22,7 +22,6 @@
 //! **live 検証は実環境へ延期**: 実 MCP サーバーとの往復はユニットテスト対象外。
 
 use std::collections::HashMap;
-use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -40,7 +39,7 @@ use serde_json::Value;
 use tokio::sync::Mutex;
 use yuuka_crypto::SystemCrypto;
 use yuuka_outbound::{
-    assert_safe_outbound_url, assert_safe_outbound_url_without_dns, is_blocked_ip,
+    assert_safe_outbound_url, assert_safe_outbound_url_without_dns, resolve_public_addrs,
 };
 use yuuka_web::Db;
 
@@ -49,25 +48,15 @@ use crate::provider::tools_to_cache_json;
 use crate::repo::{self, McpServerRecord};
 use crate::{McpClient, McpTool, ProxyResponse};
 
-/// 接続時に DNS 解決結果を検査するリゾルバ。内部/予約レンジが 1 つでも含まれれば接続を拒否する。
+/// 接続時に DNS 解決結果を検査するリゾルバ。内部/予約レンジが 1 つでも含まれれば接続を拒否する
+/// （判定はブラウザの取得・フィルタプロキシと同じ [`resolve_public_addrs`]）。
 struct GuardedResolver;
 
 impl Resolve for GuardedResolver {
     fn resolve(&self, name: Name) -> Resolving {
         let host = name.as_str().to_owned();
         Box::pin(async move {
-            let addrs: Vec<SocketAddr> =
-                tokio::net::lookup_host((host.as_str(), 0)).await?.collect();
-            if addrs.is_empty() {
-                return Err(format!("ホスト名を解決できませんでした: {host}").into());
-            }
-            if let Some(blocked) = addrs.iter().find(|a| is_blocked_ip(a.ip())) {
-                return Err(format!(
-                    "内部/予約済みアドレスに解決されるホストへの接続は許可されていません: {host} -> {}",
-                    blocked.ip()
-                )
-                .into());
-            }
+            let addrs = resolve_public_addrs(&host, 0).await?;
             Ok(Box::new(addrs.into_iter()) as Addrs)
         })
     }
@@ -459,8 +448,11 @@ mod tests {
 
     #[tokio::test]
     async fn resolver_rejects_loopback_and_allows_nothing_blocked() {
-        // localhost は 127.0.0.1/::1 に解決されるためリゾルバが拒否する。
+        // localhost は解決する前に、内部アドレスの IP リテラルは解決結果の検査で拒否する。
         let name: Name = "localhost".parse().expect("name");
+        let err = GuardedResolver.resolve(name).await.err().expect("blocked");
+        assert!(err.to_string().contains("ローカルホスト"));
+        let name: Name = "127.0.0.1".parse().expect("name");
         let err = GuardedResolver.resolve(name).await.err().expect("blocked");
         assert!(err.to_string().contains("内部/予約済み"));
     }
