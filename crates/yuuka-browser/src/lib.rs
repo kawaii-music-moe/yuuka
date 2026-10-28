@@ -11,11 +11,16 @@ mod chromium;
 mod interactive;
 mod markdown;
 mod search;
+mod site_fill;
 mod tools;
 
 /// 対話ブラウザの per-user セッション管理。supervisor が 1 つ生成し、対話 6 ツールと
 /// `browserFillCredential`（yuuka-credential）へ同じ Arc を注入する。
 pub use interactive::BrowserManager;
+/// `browserFillCredential` の照合つき入力（`BrowserManager` が実装・テストでは差し替える）。
+pub use site_fill::{
+    url_matches_site, CredentialField, FillError, FillField, SiteCredentialFiller,
+};
 pub use tools::tools;
 /// 外向き URL の SSRF 検査。既存利用者向けに共通クレートの API を再公開する。
 pub use yuuka_outbound::assert_safe_outbound_url;

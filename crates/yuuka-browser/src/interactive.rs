@@ -16,6 +16,7 @@ use std::path::Path;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+use async_trait::async_trait;
 use chromiumoxide::{Browser, BrowserConfig, Page};
 use futures::StreamExt;
 use serde_json::{json, Value};
@@ -23,6 +24,10 @@ use std::sync::Arc;
 
 use crate::chromium::find_chrome;
 use crate::markdown::clean_markdown;
+use crate::site_fill::{
+    fill_js, origin_of, parse_fill_result, site_mismatch, url_matches_site, FillError, FillField,
+    SiteCredentialFiller,
+};
 
 const VIEWPORT_W: u32 = 1280;
 const VIEWPORT_H: u32 = 800;
@@ -293,6 +298,48 @@ impl BrowserManager {
             "imagePath": screenshot_path.to_string_lossy(),
             "markdownContent": content,
         }))
+    }
+}
+
+#[async_trait]
+impl SiteCredentialFiller for BrowserManager {
+    /// 現在ページの URL が `registered_url` と同じサイトのときだけ、各欄へ入力する
+    /// （`browserFillCredential` 用・#205）。
+    ///
+    /// セッションロックで止められるのは他のツール呼び出しだけで、ページ自身の JS 遷移・
+    /// meta refresh・フォーカス移動は止められない。そのため Rust 側の照合に加え、入力の直前に
+    /// ページ内で `location.origin` を確かめ、同じ JS 実行の中で代入する（[`fill_js`]）。
+    async fn fill_fields_for_site(
+        &self,
+        user: &str,
+        registered_url: &str,
+        fields: &[FillField<'_>],
+    ) -> Result<(), FillError> {
+        let arc = self.get_or_launch(user).await.map_err(FillError::Launch)?;
+        let sess = arc.lock().await;
+        let current = sess.page.url().await.ok().flatten().unwrap_or_default();
+        if !url_matches_site(registered_url, &current) {
+            return Err(site_mismatch(registered_url, &current));
+        }
+        let Some(origin) = origin_of(&current) else {
+            return Err(site_mismatch(registered_url, &current));
+        };
+        let selectors: Vec<String> = fields
+            .iter()
+            .map(|f| resolve_selector(f.selector))
+            .collect();
+        // 要素の出現を待つ（見つからなくても続け、判定は fill_js に任せる）。
+        for sel in &selectors {
+            let _ = wait_for_selector(&sess.page, sel, 5000).await;
+        }
+        let result = sess
+            .page
+            .evaluate(fill_js(&origin, fields, &selectors))
+            .await
+            .map_err(|_| FillError::Script)?
+            .into_value::<String>()
+            .map_err(|_| FillError::Script)?;
+        parse_fill_result(&result)
     }
 }
 
