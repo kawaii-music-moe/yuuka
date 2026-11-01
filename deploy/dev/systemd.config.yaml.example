@@ -5,5 +5,8 @@ PORT: 3403
 DB_PATH: "./data/yuuka.db"
 REDIS_URL: "redis://127.0.0.1:6379/15"
 BASE_URL: "https://yuuka-dev.sk-9.net"
-SK_ACCOUNT_URL: "https://account.sk-9.net"
-SK_ACCOUNT_INTERNAL_URL: "http://127.0.0.1:3100"
+# Login: the standard sk-account over OIDC (client "yuuka-dev"). Put the secret from
+# `sk-account oidc new-secret` here and register the client in sk-account's oidc-clients.toml.
+OIDC_INTERNAL_URL: "http://127.0.0.1:3100"
+OIDC_CLIENT_ID: "yuuka-dev"
+OIDC_CLIENT_SECRET: ""

@@ -76,8 +76,8 @@ createServer(async (req, res) => {
   if (req.method === 'OPTIONS') { res.writeHead(204, { 'access-control-allow-origin': '*', 'access-control-allow-methods': 'GET,POST,PUT,PATCH,OPTIONS', 'access-control-allow-headers': 'content-type' }); return res.end() }
   const url = new URL(req.url ?? '/', 'http://localhost:8787')
   const hasSession = req.headers.cookie?.includes('yuuka-mock-session=admin') ?? false
-  // ログインは sk-account に一本化されている。モックでは認可画面を挟まず、そのまま admin でログイン済みにして戻す。
-  if (req.method === 'GET' && url.pathname === '/api/auth/sk/start') {
+  // ログインは OIDC プロバイダーに一本化されている。モックでは認可画面を挟まず、そのまま admin でログイン済みにして戻す。
+  if (req.method === 'GET' && url.pathname === '/api/auth/oidc/start') {
     res.writeHead(302, { location: '/', 'Set-Cookie': 'yuuka-mock-session=admin; Path=/; SameSite=Lax' })
     return res.end()
   }

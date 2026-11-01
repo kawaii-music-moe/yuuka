@@ -1,6 +1,6 @@
 //! `users` テーブルの認証向け CRUD（Node `src/db/userRepo.ts` パリティ）。
 //!
-//! 本人認証は sk-account だけが担い、Yuuka は認証情報（パスワード等）を一切持たない。
+//! 本人認証は OIDC プロバイダー（標準は sk-account）だけが担い、Yuuka は認証情報（パスワード等）を一切持たない。
 //! `users.salt` は Argon2id ユーザー鍵導出用の **16 バイト CSPRNG hex**
 //! （[`yuuka_crypto::generate_user_salt`]）を生成時に一度だけ設定し、以後変更しない。
 
@@ -68,7 +68,32 @@ pub async fn get_user_by_discord_id(
         .await
 }
 
-/// sk-account の確定済みIDを Yuuka のローカル権限・データ所有者へ結び付ける。
+/// OIDC の `sub`（`users.sk_account_id`）から Discord ID を引く。不在は `Ok(None)`。
+///
+/// # Errors
+/// 読み取り失敗時 [`DbError`]。
+pub async fn discord_id_by_sk_account(
+    db: &Db,
+    sk_account_id: &str,
+) -> Result<Option<String>, DbError> {
+    let id = sk_account_id.to_owned();
+    db.read
+        .read(move |conn| {
+            conn.query_row(
+                "SELECT discord_id FROM users WHERE sk_account_id = ?1",
+                params![id],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(map_sqlite)
+        })
+        .await
+}
+
+/// OIDC プロバイダーが確定した利用者（`sub`）を Yuuka のローカル権限・データ所有者へ結び付ける。
+///
+/// 列名は sk-account 時代のまま `sk_account_id` で、OIDC の `sub` を入れる。標準の sk-account では
+/// `sub` が従来の sk-account ID と同じなので、既存の紐付けはそのまま使える。
 ///
 /// 利用者は sk-account ID で引き当て、Discord ID との組み合わせも一致する場合だけプロフィール名を
 /// 同期する。sk-account に未紐付けのデータ行（旧環境から移した行）は、sk-account が確認した Discord ID

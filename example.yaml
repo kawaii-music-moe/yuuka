@@ -69,13 +69,26 @@ PORT: 7854
 HOST: "127.0.0.1"
 
 # ==============================================================================
-# ログイン (sk-account)
+# ログイン (OIDC)
 # ==============================================================================
-# 本人認証は sk-account（パスキー）だけで行います。Yuuka はパスワードを持ちません。
-# SK_ACCOUNT_URL はブラウザを送る公開 URL、SK_ACCOUNT_INTERNAL_URL は Yuuka サーバーから
-# 認可コードを交換する内部 URL です。
-SK_ACCOUNT_URL: "https://account.sk-9.net"
-SK_ACCOUNT_INTERNAL_URL: "http://127.0.0.1:3100"
+# 本人認証は OIDC プロバイダーだけで行います。Yuuka はパスワードを持ちません。
+# OIDC_ISSUER を省略すると標準の sk-account (https://account.sk-9.net) を使います。
+# 別の OIDC プロバイダーを使う場合は OIDC_ISSUER を指定してください。Yuuka は利用者を
+# Discord ID で識別するため、ID トークンの OIDC_DISCORD_ID_CLAIM に Discord ID が必要です。
+#
+# プロバイダーには次を登録します（BASE_URL が https://example.com の場合）。
+#   redirect_uri:           https://example.com/api/auth/oidc/callback
+#   backchannel_logout_uri: http://<Yuuka のホスト>:<PORT>/api/auth/oidc/backchannel-logout（任意）
+# OIDC_ISSUER: "https://account.sk-9.net"
+# サーバーからプロバイダーへ問い合わせる内部 URL（同じマシンなら。省略時は OIDC_ISSUER）
+# OIDC_INTERNAL_URL: "http://127.0.0.1:3100"
+OIDC_CLIENT_ID: "yuuka"
+# クライアントシークレット（未設定だとログインできません）
+OIDC_CLIENT_SECRET: ""
+# OIDC_SCOPE: "openid profile discord"
+# OIDC_DISCORD_ID_CLAIM: "discord_id"
+# ログインボタンの表示名（省略時は標準なら "sk-9 Account"、それ以外は issuer のホスト名）
+# OIDC_LABEL: "sk-9 Account"
 # 初回ログイン時に Admin として作成する Discord ID（任意。未設定なら最初のログイン者が Admin）
 # ADMIN_DISCORD_IDS:
 #   - "123456789012345678"

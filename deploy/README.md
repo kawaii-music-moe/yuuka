@@ -139,12 +139,18 @@ HMR を使うブラウザやリバースプロキシは 5173 番へ接続する�
 トンネルの転送先は `http://127.0.0.1:5173` にする（API の 3403 番へ直接向けない）。
 このホストでは `suki-tunnel add yuuka-dev.sk-9.net http://127.0.0.1:5173` で変更できる。
 
-sk-account は認可リクエストの `redirect_uri` に
-`https://yuuka-dev.sk-9.net/api/auth/sk/callback` を許可する必要がある。
-Yuuka は `BASE_URL` から戻り先を組み立て、認可開始と認可コード交換の両方で送る。
-sk-account は本番・dev の完全一致の戻り先だけを許可し、コードの交換先も分離する。
-古い sk-account の本番固定 callback では dev ログインに失敗するため、両側を更新する。
-設定変更後は dev API を再起動し、公開 URL でログインを最初からやり直す。
+ログインは sk-account の OIDC で行う。dev は本番と別のクライアント `yuuka-dev` として、
+sk-account の `oidc-clients.toml` に次を登録する（シークレットは `sk-account oidc new-secret` で作り、
+ハッシュを sk-account に、シークレットを dev の `config.yaml` の `OIDC_CLIENT_SECRET` に置く）。
+
+| 項目 | 本番（`yuuka`） | dev（`yuuka-dev`） |
+|---|---|---|
+| `redirect_uris` | `https://yuuka.sk-9.net/api/auth/oidc/callback` | `https://yuuka-dev.sk-9.net/api/auth/oidc/callback` |
+| `backchannel_logout_uri` | `http://127.0.0.1:3402/api/auth/oidc/backchannel-logout` | `http://127.0.0.1:3403/api/auth/oidc/backchannel-logout` |
+| `scopes` | `openid profile discord` | 同左 |
+
+Yuuka は `BASE_URL` から戻り先を組み立てる。設定変更後は dev API を再起動し、
+公開 URL でログインを最初からやり直す。
 
 
 ### 更新・停止・ログ

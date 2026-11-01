@@ -38,10 +38,8 @@ pub struct Config {
     pub session_ttl_days: u32,
     /// Redis 接続 URL（`REDIS_URL`・既定 `redis://127.0.0.1:6379`）。
     pub redis_url: String,
-    /// sk-account のブラウザ向け公開URL。
-    pub sk_account_url: String,
-    /// Yuuka サーバーから認可コードを交換する内部URL。
-    pub sk_account_internal_url: String,
+    /// ログインに使う OIDC プロバイダーの設定（`OIDC_*`）。
+    pub oidc: OidcSettings,
     /// XFF 信頼判定に使う信頼プロキシ（`TRUSTED_PROXIES`・カンマ/YAML 配列）。
     pub trusted_proxies: Vec<IpAddr>,
     /// index.html へ差し込む google-site-verification 値（`GOOGLE_SITE_VERIFICATION`）。
@@ -127,10 +125,7 @@ impl Config {
             db_path,
             session_ttl_days,
             redis_url,
-            sk_account_url: get("SK_ACCOUNT_URL")
-                .unwrap_or_else(|| "https://account.sk-9.net".to_owned()),
-            sk_account_internal_url: get("SK_ACCOUNT_INTERNAL_URL")
-                .unwrap_or_else(|| "http://127.0.0.1:3100".to_owned()),
+            oidc: OidcSettings::from_lookup(&get),
             trusted_proxies,
             google_site_verification: non_empty(get("GOOGLE_SITE_VERIFICATION")),
             privacy_policy_url: get("PRIVACY_POLICY_URL").unwrap_or_default(),
@@ -225,6 +220,72 @@ impl Config {
             .as_deref()
             .is_some_and(|u| u.to_ascii_lowercase().starts_with("https://"))
     }
+}
+
+/// 標準のログイン先（sk-account）。`OIDC_ISSUER` 未設定のときに使う。
+pub const DEFAULT_OIDC_ISSUER: &str = "https://account.sk-9.net";
+/// 標準のログイン先の表示名。
+const DEFAULT_OIDC_LABEL: &str = "sk-9 Account";
+
+/// ログインに使う OIDC プロバイダー（`OIDC_*`）。
+///
+/// 本人認証は OIDC プロバイダーだけが担い、Yuuka はパスワードもパスキーも持たない。
+/// `OIDC_ISSUER` を省略すると標準の sk-account を使い、指定すれば任意の OIDC プロバイダーに替えられる。
+/// Yuuka は利用者を Discord ID で識別するので、プロバイダーは ID トークンの
+/// `OIDC_DISCORD_ID_CLAIM`（既定 `discord_id`）に Discord ID を入れる必要がある。
+#[derive(Debug, Clone)]
+pub struct OidcSettings {
+    /// issuer（`OIDC_ISSUER`・末尾の `/` は除く）。ブラウザはここの認可エンドポイントへ送る。
+    pub issuer: String,
+    /// サーバーからプロバイダーへ問い合わせる先（`OIDC_INTERNAL_URL`）。discovery の
+    /// サーバー向けエンドポイントのうち issuer で始まるものを、この URL へ置き換えて呼ぶ。未設定は issuer。
+    pub internal_url: Option<String>,
+    /// クライアント ID（`OIDC_CLIENT_ID`・既定 `yuuka`）。
+    pub client_id: String,
+    /// クライアントシークレット（`OIDC_CLIENT_SECRET`・`client_secret_basic`）。未設定ならログインできない。
+    pub client_secret: Option<SecretString>,
+    /// 要求する scope（`OIDC_SCOPE`・既定 `openid profile discord`）。
+    pub scope: String,
+    /// Discord ID を入れた claim の名前（`OIDC_DISCORD_ID_CLAIM`・既定 `discord_id`）。
+    pub discord_id_claim: String,
+    /// ログインボタンに出す名前（`OIDC_LABEL`）。既定は標準なら `sk-9 Account`、それ以外は issuer のホスト名。
+    pub label: String,
+}
+
+impl OidcSettings {
+    fn from_lookup(get: &impl Fn(&str) -> Option<String>) -> Self {
+        let get = |key: &str| non_empty(get(key)).map(|v| v.trim().to_owned());
+        let issuer = get("OIDC_ISSUER").map_or_else(
+            || DEFAULT_OIDC_ISSUER.to_owned(),
+            |v| v.trim_end_matches('/').to_owned(),
+        );
+        let label = get("OIDC_LABEL").unwrap_or_else(|| {
+            if issuer == DEFAULT_OIDC_ISSUER {
+                DEFAULT_OIDC_LABEL.to_owned()
+            } else {
+                issuer_host(&issuer).to_owned()
+            }
+        });
+        Self {
+            internal_url: get("OIDC_INTERNAL_URL").map(|v| v.trim_end_matches('/').to_owned()),
+            client_id: get("OIDC_CLIENT_ID").unwrap_or_else(|| "yuuka".to_owned()),
+            client_secret: get("OIDC_CLIENT_SECRET").map(SecretString::from),
+            scope: get("OIDC_SCOPE").unwrap_or_else(|| "openid profile discord".to_owned()),
+            discord_id_claim: get("OIDC_DISCORD_ID_CLAIM")
+                .unwrap_or_else(|| "discord_id".to_owned()),
+            label,
+            issuer,
+        }
+    }
+}
+
+/// `https://host[:port]/path` のホスト部分（表示名の既定用。解釈できなければ全体）。
+fn issuer_host(issuer: &str) -> &str {
+    let rest = issuer.split_once("://").map_or(issuer, |(_, rest)| rest);
+    rest.split(['/', ':'])
+        .next()
+        .filter(|h| !h.is_empty())
+        .unwrap_or(issuer)
 }
 
 /// `REMINDER_CRON` の既定（毎分・Node `config.reminderCron` 既定）。
@@ -397,6 +458,53 @@ mod tests {
         assert_eq!(cfg.host.to_string(), "127.0.0.1");
         assert_eq!(cfg.session_ttl_days, 7);
         assert_eq!(cfg.redis_url, "redis://127.0.0.1:6379");
+    }
+
+    #[test]
+    fn oidc_defaults_to_the_standard_sk_account() {
+        let f = write_yaml("PORT: 7854\n");
+        let oidc = Config::load_and_validate(f.path()).expect("load").oidc;
+        assert_eq!(oidc.issuer, "https://account.sk-9.net");
+        assert_eq!(oidc.internal_url, None);
+        assert_eq!(oidc.client_id, "yuuka");
+        assert!(
+            oidc.client_secret.is_none(),
+            "シークレットが無ければログインを止める"
+        );
+        assert_eq!(oidc.scope, "openid profile discord");
+        assert_eq!(oidc.discord_id_claim, "discord_id");
+        assert_eq!(oidc.label, "sk-9 Account");
+    }
+
+    #[test]
+    fn oidc_can_point_to_another_provider() {
+        let f = write_yaml(
+            "OIDC_ISSUER: \"https://id.example.com:8443/realms/main/\"\n\
+             OIDC_INTERNAL_URL: \"http://127.0.0.1:8080/realms/main/\"\n\
+             OIDC_CLIENT_ID: \"yuuka-dev\"\n\
+             OIDC_CLIENT_SECRET: \" s3cret \"\n\
+             OIDC_SCOPE: \"openid profile\"\n\
+             OIDC_DISCORD_ID_CLAIM: \"discord_user_id\"\n",
+        );
+        let oidc = Config::load_and_validate(f.path()).expect("load").oidc;
+        assert_eq!(oidc.issuer, "https://id.example.com:8443/realms/main");
+        assert_eq!(
+            oidc.internal_url.as_deref(),
+            Some("http://127.0.0.1:8080/realms/main")
+        );
+        assert_eq!(oidc.client_id, "yuuka-dev");
+        assert_eq!(
+            oidc.client_secret
+                .as_ref()
+                .map(crate::secrets::ExposeSecret::expose_secret),
+            Some("s3cret")
+        );
+        assert_eq!(oidc.scope, "openid profile");
+        assert_eq!(oidc.discord_id_claim, "discord_user_id");
+        assert_eq!(
+            oidc.label, "id.example.com",
+            "表示名の既定は issuer のホスト名"
+        );
     }
 
     // ---- 運用チューニング設定（R26・Node と同じキー名と既定値） ----

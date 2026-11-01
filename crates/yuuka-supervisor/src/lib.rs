@@ -197,9 +197,8 @@ mod tests {
         let runtime = std::sync::Arc::new(yuuka_auth::AuthRuntime::new(
             yuuka_auth::SessionStore::in_memory(),
             7,
-            "https://account.sk-9.net".to_owned(),
-            "http://127.0.0.1:3100".to_owned(),
             Vec::new(),
+            None,
         ));
         // 管理ルータ（in-memory セッション・NullBotRuntime・暗号なし）を組んで merge を検証する。
         let admin_runtime = std::sync::Arc::new(yuuka_admin::AdminRuntime::new(

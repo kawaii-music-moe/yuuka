@@ -1,18 +1,21 @@
-//! sk-account を唯一の本人認証元として使う認証ルート。
+//! OIDC プロバイダーを唯一の本人認証元として使う認証ルート（標準は sk-account）。
 //!
-//! Yuuka と sk-account は親ドメインが異なるため Cookie は共有しない。ブラウザを
-//! sk-account の認可入口へ送り、一回限り・短命の code をバックチャネルで交換した後、
-//! Yuuka 自身のホスト専用 Cookie セッションを発行する。
+//! ブラウザをプロバイダーの認可エンドポイントへ送り、戻ってきた一回限りの code をバックチャネルで
+//! 交換して ID トークンを検証した後、Yuuka 自身のホスト専用 Cookie セッションを発行する。
+//! 流れと検証は [`crate::oidc`] に置き、ここは HTTP の入口と Cookie だけを扱う。
 //!
 //! ログイン CSRF（攻撃者自身の code を持つ callback へ被害者を送り込み、攻撃者の
 //! アカウントでログインさせる）を防ぐため、`start` で発行した `state` を短命 Cookie と
 //! 認可 URL の両方に載せ、`callback` で一致を確かめてから code を交換する。
+//!
+//! プロバイダーでログアウトすると `POST /api/auth/oidc/backchannel-logout` に logout_token が届くので、
+//! 同じプロバイダーのセッション（`sid`）から作った Yuuka のセッションを消す。
 
 use std::convert::Infallible;
 use std::sync::Arc;
 
-use axum::extract::{Extension, FromRequestParts, Query, State};
-use axum::http::header::{LOCATION, SET_COOKIE};
+use axum::extract::{Extension, Form, FromRequestParts, Query, State};
+use axum::http::header::{CACHE_CONTROL, LOCATION, SET_COOKIE};
 use axum::http::request::Parts;
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
@@ -23,84 +26,85 @@ use serde_json::json;
 use yuuka_types::SessionUser;
 use yuuka_web::{ApiError, AppState, AuthenticatedUser};
 
+use crate::oidc::{LoginError, LogoutTarget, OidcClient};
 use crate::{users, SessionStore};
 
 const COOKIE_HOST: &str = "__Host-yuuka-session";
 const COOKIE_DEV: &str = "yuuka-session";
-const STATE_COOKIE_HOST: &str = "__Host-yuuka-sk-state";
-const STATE_COOKIE_DEV: &str = "yuuka-sk-state";
-/// sk-account でのログイン・登録に掛かる時間を見込んだ `state` の有効期間。
-const STATE_TTL_SECS: i64 = 10 * 60;
+const STATE_COOKIE_HOST: &str = "__Host-yuuka-oidc-state";
+const STATE_COOKIE_DEV: &str = "yuuka-oidc-state";
 
 pub struct AuthRuntime {
     sessions: SessionStore,
     session_ttl_secs: u64,
-    sk_account_public_url: String,
-    sk_account_internal_url: String,
     admin_discord_ids: Vec<String>,
-    http: reqwest::Client,
+    oidc: Option<Arc<OidcClient>>,
 }
 
 impl AuthRuntime {
+    /// `oidc` が `None`（`OIDC_CLIENT_SECRET` 未設定）ならログインできない。
     #[must_use]
     pub fn new(
         sessions: SessionStore,
         session_ttl_days: u32,
-        sk_account_public_url: String,
-        sk_account_internal_url: String,
         admin_discord_ids: Vec<String>,
+        oidc: Option<Arc<OidcClient>>,
     ) -> Self {
         Self {
             sessions,
             session_ttl_secs: u64::from(session_ttl_days) * 24 * 60 * 60,
-            sk_account_public_url: sk_account_public_url.trim_end_matches('/').to_owned(),
-            sk_account_internal_url: sk_account_internal_url.trim_end_matches('/').to_owned(),
             admin_discord_ids,
-            http: reqwest::Client::new(),
+            oidc,
         }
     }
 }
 
 pub fn routes(runtime: Arc<AuthRuntime>) -> Router<AppState> {
     Router::new()
-        .route("/api/auth/sk/start", get(start))
-        .route("/api/auth/sk/callback", get(callback))
+        .route("/api/auth/oidc/provider", get(provider))
+        .route("/api/auth/oidc/start", get(start))
+        .route("/api/auth/oidc/callback", get(callback))
+        .route(
+            "/api/auth/oidc/backchannel-logout",
+            post(backchannel_logout),
+        )
         .route("/api/logout", post(logout))
         .route("/api/users", get(users_route))
         .layer(Extension(runtime))
+}
+
+/// ログイン画面向け: ログイン先の表示名と、ログインできる状態か。
+async fn provider(Extension(rt): Extension<Arc<AuthRuntime>>) -> Response {
+    Json(json!({
+        "success": true,
+        "enabled": rt.oidc.is_some(),
+        "label": rt.oidc.as_ref().map(|oidc| oidc.label()),
+    }))
+    .into_response()
 }
 
 async fn start(
     State(state): State<AppState>,
     Extension(rt): Extension<Arc<AuthRuntime>>,
 ) -> Response {
-    let Ok(login_state) = crate::token::generate_token() else {
+    let Some(oidc) = &rt.oidc else {
         return error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "ログインを開始できません。",
+            StatusCode::SERVICE_UNAVAILABLE,
+            "ログインが設定されていません。",
         );
     };
-    let Ok(mut authorize_url) = reqwest::Url::parse(&format!(
-        "{}/api/services/yuuka/authorize",
-        rt.sk_account_public_url
-    )) else {
-        return error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "認証先の設定が不正です。",
-        );
+    let (authorize_url, login_state) = match oidc.start_login().await {
+        Ok(started) => started,
+        Err(e) => {
+            tracing::error!(error = %e.0, "OIDC のログインを開始できない");
+            return error(StatusCode::BAD_GATEWAY, "ログイン先に接続できません。");
+        }
     };
-    authorize_url
-        .query_pairs_mut()
-        .append_pair("state", &login_state);
-    if let Some(callback) = callback_url(&state) {
-        authorize_url
-            .query_pairs_mut()
-            .append_pair("redirect_uri", &callback);
-    }
-    let mut response = redirect(authorize_url.as_str());
+    let mut response = redirect(&authorize_url);
+    let max_age = i64::try_from(crate::oidc::LOGIN_TTL.as_secs()).unwrap_or(i64::MAX);
     response.headers_mut().insert(
         SET_COOKIE,
-        build_state_cookie(state.config.https, &login_state, STATE_TTL_SECS),
+        build_state_cookie(state.config.https, &login_state, max_age),
     );
     response
 }
@@ -109,19 +113,8 @@ async fn start(
 struct CallbackQuery {
     code: Option<String>,
     state: Option<String>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct SkAccount {
-    id: String,
-    discord_user_id: String,
-    display_name: String,
-}
-
-#[derive(Deserialize)]
-struct ExchangeResponse {
-    account: SkAccount,
+    iss: Option<String>,
+    error: Option<String>,
 }
 
 async fn callback(
@@ -145,59 +138,50 @@ async fn exchange_and_login(
     query: CallbackQuery,
     headers: &HeaderMap,
 ) -> Response {
-    let expected = cookie_value(headers, state_cookie_name(state.config.https));
-    let state_matches = match (expected, query.state.as_deref()) {
-        (Some(expected), Some(actual)) => constant_time_eq(expected.as_bytes(), actual.as_bytes()),
-        _ => false,
-    };
-    if !state_matches {
+    let Some(oidc) = &rt.oidc else {
         return error(
-            StatusCode::BAD_REQUEST,
-            "ログインの確認に失敗しました。もう一度ログインしてください。",
+            StatusCode::SERVICE_UNAVAILABLE,
+            "ログインが設定されていません。",
         );
-    }
-    let Some(code) = query.code.filter(|v| !v.is_empty()) else {
-        return error(StatusCode::BAD_REQUEST, "認証コードがありません。");
     };
-    let exchange_body = match callback_url(state) {
-        Some(callback) => json!({ "code": code, "redirect_uri": callback }),
-        None => json!({ "code": code }),
-    };
-    let response = match rt
-        .http
-        .post(format!(
-            "{}/api/services/yuuka/exchange",
-            rt.sk_account_internal_url
-        ))
-        .json(&exchange_body)
-        .send()
-        .await
-    {
-        Ok(response) if response.status().is_success() => response,
-        Ok(_) => {
+    let expected = cookie_value(headers, state_cookie_name(state.config.https));
+    let login_state = match (expected, query.state.as_deref()) {
+        (Some(expected), Some(actual))
+            if constant_time_eq(expected.as_bytes(), actual.as_bytes()) =>
+        {
+            expected
+        }
+        _ => {
             return error(
-                StatusCode::UNAUTHORIZED,
-                "認証コードが無効または期限切れです。",
+                StatusCode::BAD_REQUEST,
+                "ログインの確認に失敗しました。もう一度ログインしてください。",
             )
         }
-        Err(e) => {
-            tracing::error!(error = %e, "sk-account code exchange failed");
-            return error(StatusCode::BAD_GATEWAY, "sk-accountに接続できません。");
+    };
+    let Some(code) = query.code.filter(|v| !v.is_empty()) else {
+        if let Some(e) = query.error {
+            tracing::warn!(error = %e, "OIDC プロバイダーがログインを拒否した");
+        }
+        return error(StatusCode::BAD_REQUEST, "認証コードがありません。");
+    };
+    let outcome = match oidc
+        .finish_login(&login_state, &code, query.iss.as_deref())
+        .await
+    {
+        Ok(outcome) => outcome,
+        Err(LoginError::Rejected(message)) => return error(StatusCode::UNAUTHORIZED, message),
+        Err(LoginError::Unavailable(e)) => {
+            tracing::error!(error = %e.0, "OIDC のログインを完了できない");
+            return error(StatusCode::BAD_GATEWAY, "ログイン先に接続できません。");
         }
     };
-    let exchange = match response.json::<ExchangeResponse>().await {
-        Ok(value) => value,
-        Err(e) => {
-            tracing::error!(error = %e, "invalid sk-account exchange response");
-            return error(StatusCode::BAD_GATEWAY, "sk-accountの応答が不正です。");
-        }
-    };
+    let identity = outcome.identity;
 
     let role = match users::upsert_from_sk_account(
         &state.db,
-        &exchange.account.id,
-        &exchange.account.discord_user_id,
-        &exchange.account.display_name,
+        &identity.subject,
+        &identity.discord_id,
+        &identity.display_name,
         &rt.admin_discord_ids,
     )
     .await
@@ -206,8 +190,8 @@ async fn exchange_and_login(
         Err(e) => return ApiError::from(e).into_response(),
     };
     let user = SessionUser {
-        discord_id: exchange.account.discord_user_id,
-        username: exchange.account.display_name,
+        discord_id: identity.discord_id,
+        username: identity.display_name,
         role,
     };
     let token = match rt.sessions.create(&user, rt.session_ttl_secs).await {
@@ -219,9 +203,55 @@ async fn exchange_and_login(
             )
         }
     };
+    rt.sessions
+        .put_oidc_link(
+            &crate::sha256_hex(&token),
+            &outcome.link,
+            rt.session_ttl_secs,
+        )
+        .await;
     let cookie = build_session_cookie(state.config.https, &token, ttl_max_age(rt.session_ttl_secs));
     let mut response = redirect("/");
     response.headers_mut().insert(SET_COOKIE, cookie);
+    response
+}
+
+#[derive(Deserialize)]
+struct BackchannelLogoutForm {
+    logout_token: Option<String>,
+}
+
+/// OIDC Back-Channel Logout: プロバイダーでログアウトしたセッションを消す。
+async fn backchannel_logout(
+    State(state): State<AppState>,
+    Extension(rt): Extension<Arc<AuthRuntime>>,
+    Form(form): Form<BackchannelLogoutForm>,
+) -> Response {
+    let status = match (&rt.oidc, form.logout_token) {
+        (None, _) => StatusCode::NOT_IMPLEMENTED,
+        (Some(_), None) => StatusCode::BAD_REQUEST,
+        (Some(oidc), Some(logout_token)) => match oidc.verify_logout_token(&logout_token).await {
+            None => StatusCode::BAD_REQUEST,
+            Some(LogoutTarget::Session(sid)) => {
+                rt.sessions.destroy_by_sid(&sid).await;
+                StatusCode::OK
+            }
+            Some(LogoutTarget::Subject(sub)) => {
+                match users::discord_id_by_sk_account(&state.db, &sub).await {
+                    Ok(Some(discord_id)) => {
+                        rt.sessions.destroy_all_for_user(&discord_id).await;
+                        StatusCode::OK
+                    }
+                    Ok(None) => StatusCode::OK,
+                    Err(e) => return ApiError::from(e).into_response(),
+                }
+            }
+        },
+    };
+    let mut response = status.into_response();
+    response
+        .headers_mut()
+        .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
     response
 }
 
@@ -231,7 +261,13 @@ async fn logout(
     token: SessionCookieToken,
 ) -> Response {
     if let Some(token) = token.0 {
-        rt.sessions.destroy(&token).await;
+        let hash = crate::sha256_hex(&token);
+        let link = rt.sessions.oidc_link(&hash, rt.session_ttl_secs).await;
+        rt.sessions.destroy_hash(&hash).await;
+        // プロバイダー側のリフレッシュトークンも失効させる（応答は待たない）。
+        if let (Some(oidc), Some(link)) = (rt.oidc.clone(), link) {
+            tokio::spawn(async move { oidc.revoke(&link).await });
+        }
     }
     let mut response = Json(json!({ "success": true })).into_response();
     response
@@ -250,15 +286,6 @@ async fn users_route(user: AuthenticatedUser, State(state): State<AppState>) -> 
         Ok(None) => error(StatusCode::NOT_FOUND, "ユーザーが見つかりません。"),
         Err(e) => ApiError::from(e).into_response(),
     }
-}
-
-// Host/Origin ヘッダではなく、運用設定を認可コードの戻り先・対象に使う。
-fn callback_url(state: &AppState) -> Option<String> {
-    state
-        .config
-        .base_url
-        .as_ref()
-        .map(|base| format!("{}/api/auth/sk/callback", base.trim_end_matches('/')))
 }
 
 fn redirect(location: &str) -> Response {

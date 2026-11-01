@@ -8,6 +8,10 @@
 //!
 //! キー書式・ハッシュ・シリアライズ（camelCase `{discordId,username,role}`）は既存 Node と一致させ、
 //! 移行期は Node/Rust が同一 Redis を共有できる（strangler）。
+//!
+//! OIDC でログインしたセッションには [`OidcLink`]（`oidc_session:{hash}`）を並べて持つ。セッション本体の
+//! JSON には入れない（リフレッシュトークンを `SessionUser` と一緒に持ち回らないため）。プロバイダーの
+//! `sid` ごとの集合 `oidc_sid:{sid}` は Back-Channel Logout で該当セッションを引くのに使う。
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -15,11 +19,29 @@ use std::time::{Duration, Instant};
 
 use redis::aio::ConnectionManager;
 use redis::AsyncCommands;
+use serde::{Deserialize, Serialize};
 use yuuka_core::AuthError;
 use yuuka_types::SessionUser;
 
 /// 起動時の初期 Redis 接続に許す上限時間（Redis 障害で起動をハングさせない）。
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// OIDC でログインしたセッションと、プロバイダー側のログイン状態の結び付き。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OidcLink {
+    /// ID トークンの `sub`（`users.sk_account_id`）。
+    pub sub: String,
+    /// ID トークンの `sid`（プロバイダー側のセッション）。Back-Channel Logout の照合に使う。
+    pub sid: Option<String>,
+    /// リフレッシュトークン。無ければプロバイダーへの再確認はしない。
+    pub refresh_token: Option<String>,
+    /// アクセストークンの期限（UNIX 秒）。過ぎたらリフレッシュしてログイン状態を確かめ直す。
+    pub access_expires_at: u64,
+    /// プロバイダーに届かなかったとき、次に確かめ直す時刻（UNIX 秒）。
+    #[serde(default)]
+    pub retry_after: u64,
+}
 
 /// in-memory セッション（Redis 縮退時のフォールバック）。
 struct MemSession {
@@ -34,6 +56,10 @@ struct MemoryStore {
     sessions: HashMap<String, MemSession>,
     /// `discord_id → 発行済み token_hash 集合`（将来の一括失効用）。
     user_sessions: HashMap<String, HashSet<String>>,
+    /// `token_hash → OIDC の結び付き`（セッション本体とは別に縮退することがあるので別に持つ）。
+    oidc_links: HashMap<String, (OidcLink, Instant)>,
+    /// `sid → token_hash 集合`。
+    oidc_sids: HashMap<String, HashSet<String>>,
 }
 
 /// セッションの発行・検証を担う共有ストア（Redis + in-memory フォールバック）。
@@ -168,22 +194,93 @@ impl SessionStore {
 
     /// セッションを失効させる（Node `destroySession`）。Redis と in-memory の両方から削除する。
     pub async fn destroy(&self, token: &str) {
-        let hash = crate::sha256_hex(token);
+        self.destroy_hash(&crate::sha256_hex(token)).await;
+    }
+
+    /// ハッシュ済みトークンのセッションを失効させる。OIDC の結び付きも消す。
+    pub async fn destroy_hash(&self, hash: &str) {
         let session_key = format!("session:{hash}");
+        let link_key = format!("oidc_session:{hash}");
 
         if let Some(cm) = &self.redis {
             let mut cm = cm.clone();
             // 発行済みセットからも除くため先にユーザーを特定する。
             let raw: Option<String> = cm.get(&session_key).await.unwrap_or(None);
-            let _: Result<i64, _> = cm.del(&session_key).await;
+            let _: Result<i64, _> = cm.del(&[&session_key, &link_key]).await;
             if let Some(json) = raw {
                 if let Ok(user) = serde_json::from_str::<SessionUser>(&json) {
                     let user_key = format!("user_sessions:{}", user.discord_id);
-                    let _: Result<i64, _> = cm.srem(&user_key, &hash).await;
+                    let _: Result<i64, _> = cm.srem(&user_key, hash).await;
                 }
             }
         }
-        self.memory_remove(&hash);
+        self.memory_remove(hash);
+    }
+
+    /// セッションに OIDC の結び付きを保存する（セッションと同じ TTL）。
+    ///
+    /// Redis に書けなければ in-memory へ縮退する（セッション本体と同じ扱い）。
+    pub async fn put_oidc_link(&self, hash: &str, link: &OidcLink, ttl_secs: u64) {
+        if let Some(cm) = &self.redis {
+            let mut cm = cm.clone();
+            match redis_put_link(&mut cm, hash, link, ttl_secs).await {
+                Ok(()) => return,
+                Err(e) => {
+                    tracing::warn!(error = %e, "Redis への OIDC 情報の保存に失敗。in-memory へフォールバック");
+                }
+            }
+        }
+        let mut mem = self.memory();
+        mem.oidc_links.insert(
+            hash.to_owned(),
+            (link.clone(), Instant::now() + Duration::from_secs(ttl_secs)),
+        );
+        if let Some(sid) = &link.sid {
+            mem.oidc_sids
+                .entry(sid.clone())
+                .or_default()
+                .insert(hash.to_owned());
+        }
+    }
+
+    /// セッションの OIDC の結び付きを引き、TTL をセッションに合わせて延長する。無ければ `None`。
+    pub async fn oidc_link(&self, hash: &str, ttl_secs: u64) -> Option<OidcLink> {
+        if let Some(cm) = &self.redis {
+            let mut cm = cm.clone();
+            let key = format!("oidc_session:{hash}");
+            if let Ok(Some(json)) = cm.get::<_, Option<String>>(&key).await {
+                let ttl = i64::try_from(ttl_secs).unwrap_or(i64::MAX);
+                let _: Result<i64, _> = cm.expire(&key, ttl).await;
+                return serde_json::from_str(&json).ok();
+            }
+        }
+        let now = Instant::now();
+        let mut mem = self.memory();
+        let (link, expires_at) = mem.oidc_links.get_mut(hash)?;
+        if *expires_at <= now {
+            return None;
+        }
+        *expires_at = now + Duration::from_secs(ttl_secs);
+        Some(link.clone())
+    }
+
+    /// プロバイダーの `sid` に結び付いたセッションをすべて失効させ、失効させた数を返す（Back-Channel Logout）。
+    pub async fn destroy_by_sid(&self, sid: &str) -> usize {
+        let sid_key = format!("oidc_sid:{sid}");
+        let mut hashes: HashSet<String> = HashSet::new();
+        if let Some(cm) = &self.redis {
+            let mut cm = cm.clone();
+            match cm.smembers::<_, Vec<String>>(&sid_key).await {
+                Ok(found) => hashes.extend(found),
+                Err(e) => tracing::warn!(error = %e, "Redis の sid 集合の取得に失敗"),
+            }
+            let _: Result<i64, _> = cm.del(&sid_key).await;
+        }
+        hashes.extend(self.memory().oidc_sids.remove(sid).unwrap_or_default());
+        for hash in &hashes {
+            self.destroy_hash(hash).await;
+        }
+        hashes.len()
     }
 
     /// あるユーザーの発行済み全セッションを失効させる（Node `destroyAllSessionsForUser`）。
@@ -198,8 +295,10 @@ impl SessionStore {
             match cm.smembers::<_, Vec<String>>(&user_key).await {
                 Ok(hashes) => {
                     if !hashes.is_empty() {
-                        let keys: Vec<String> =
-                            hashes.iter().map(|h| format!("session:{h}")).collect();
+                        let keys: Vec<String> = hashes
+                            .iter()
+                            .flat_map(|h| [format!("session:{h}"), format!("oidc_session:{h}")])
+                            .collect();
                         let _: Result<i64, _> = cm.del(keys).await;
                     }
                     let _: Result<i64, _> = cm.del(&user_key).await;
@@ -214,6 +313,7 @@ impl SessionStore {
         if let Some(set) = mem.user_sessions.remove(discord_id) {
             for hash in set {
                 mem.sessions.remove(&hash);
+                remove_link_locked(&mut mem, &hash);
             }
         }
     }
@@ -260,7 +360,7 @@ impl SessionStore {
         self.remove_locked(&mut mem, hash);
     }
 
-    /// ロック保持中に session + user_sessions 両方から token_hash を除く。
+    /// ロック保持中に session + user_sessions 両方から token_hash を除く（OIDC の結び付きも除く）。
     fn remove_locked(&self, mem: &mut MemoryStore, hash: &str) {
         if let Some(e) = mem.sessions.remove(hash) {
             let uid = e.user.discord_id;
@@ -271,7 +371,45 @@ impl SessionStore {
                 }
             }
         }
+        remove_link_locked(mem, hash);
     }
+}
+
+/// ロック保持中に in-memory の OIDC の結び付きと sid 集合から token_hash を除く。
+fn remove_link_locked(mem: &mut MemoryStore, hash: &str) {
+    let Some((link, _)) = mem.oidc_links.remove(hash) else {
+        return;
+    };
+    if let Some(sid) = link.sid {
+        if let Some(set) = mem.oidc_sids.get_mut(&sid) {
+            set.remove(hash);
+            if set.is_empty() {
+                mem.oidc_sids.remove(&sid);
+            }
+        }
+    }
+}
+
+/// Redis へ OIDC の結び付きを書く（`SET oidc_session:{hash}` EX + `SADD oidc_sid:{sid}` + EXPIRE）。
+async fn redis_put_link(
+    cm: &mut ConnectionManager,
+    hash: &str,
+    link: &OidcLink,
+    ttl_secs: u64,
+) -> redis::RedisResult<()> {
+    // OidcLink は固定形状で serialize は失敗し得ない。
+    let payload = serde_json::to_string(link).unwrap_or_default();
+    let _: () = cm
+        .set_ex(format!("oidc_session:{hash}"), payload, ttl_secs)
+        .await?;
+    if let Some(sid) = &link.sid {
+        let sid_key = format!("oidc_sid:{sid}");
+        let _: () = cm.sadd(&sid_key, hash).await?;
+        let _: () = cm
+            .expire(&sid_key, i64::try_from(ttl_secs).unwrap_or(i64::MAX))
+            .await?;
+    }
+    Ok(())
 }
 
 /// Redis へセッションを書く（`SET session:{hash}` EX + `SADD user_sessions:{id}` + EXPIRE）。
@@ -294,7 +432,7 @@ async fn redis_create(
 
 #[cfg(test)]
 mod tests {
-    use super::SessionStore;
+    use super::{OidcLink, SessionStore};
     use yuuka_types::{Role, SessionUser};
 
     /// Redis 未接続（in-memory のみ）のストアを作る。
@@ -352,6 +490,67 @@ mod tests {
         store.destroy_all_for_user("123").await;
         let hash = crate::sha256_hex(&t3);
         assert!(store.get(&hash, 3600).await.expect("no err").is_some());
+    }
+
+    fn link(sid: &str) -> OidcLink {
+        OidcLink {
+            sub: "acc-1".to_owned(),
+            sid: Some(sid.to_owned()),
+            refresh_token: Some("rt".to_owned()),
+            access_expires_at: 1,
+            retry_after: 0,
+        }
+    }
+
+    #[tokio::test]
+    async fn oidc_link_lives_and_dies_with_the_session() {
+        let store = memory_only();
+        let token = store.create(&user(), 3600).await.expect("issued");
+        let hash = crate::sha256_hex(&token);
+        store.put_oidc_link(&hash, &link("sid-1"), 3600).await;
+        assert_eq!(store.oidc_link(&hash, 3600).await, Some(link("sid-1")));
+
+        store.destroy(&token).await;
+        assert_eq!(store.oidc_link(&hash, 3600).await, None);
+        assert_eq!(
+            store.destroy_by_sid("sid-1").await,
+            0,
+            "sid 集合からも外れる"
+        );
+    }
+
+    #[tokio::test]
+    async fn destroy_by_sid_ends_only_sessions_of_that_sid() {
+        let store = memory_only();
+        let a = store.create(&user(), 3600).await.expect("a");
+        let b = store.create(&user(), 3600).await.expect("b");
+        let c = store.create(&user(), 3600).await.expect("c");
+        let (ha, hb, hc) = (
+            crate::sha256_hex(&a),
+            crate::sha256_hex(&b),
+            crate::sha256_hex(&c),
+        );
+        store.put_oidc_link(&ha, &link("sid-1"), 3600).await;
+        store.put_oidc_link(&hb, &link("sid-1"), 3600).await;
+        store.put_oidc_link(&hc, &link("sid-2"), 3600).await;
+
+        assert_eq!(store.destroy_by_sid("sid-1").await, 2);
+        for hash in [&ha, &hb] {
+            assert!(store.get(hash, 3600).await.expect("no err").is_none());
+            assert!(store.oidc_link(hash, 3600).await.is_none());
+        }
+        assert!(store.get(&hc, 3600).await.expect("no err").is_some());
+        assert_eq!(store.oidc_link(&hc, 3600).await, Some(link("sid-2")));
+    }
+
+    #[tokio::test]
+    async fn destroy_all_for_user_also_drops_oidc_links() {
+        let store = memory_only();
+        let token = store.create(&user(), 3600).await.expect("issued");
+        let hash = crate::sha256_hex(&token);
+        store.put_oidc_link(&hash, &link("sid-1"), 3600).await;
+        store.destroy_all_for_user("123").await;
+        assert!(store.oidc_link(&hash, 3600).await.is_none());
     }
 
     #[tokio::test]
