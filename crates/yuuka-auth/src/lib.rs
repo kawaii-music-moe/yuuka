@@ -2,6 +2,8 @@
 //!
 //! - **Cookie セッション**: 共有 Redis の不透明トークン（Node が発行、Rust は**検証のみ**）。
 //!   `session:{sha256hex(token)}` の JSON `{discordId,username,role}` を引き、TTL をスライディング更新。
+//!   OIDC でログインしたセッションは、アクセストークンの期限が切れるとプロバイダーで確かめ直す
+//!   （[`oidc`]・プロバイダーでログアウト済みなら無効）。
 //! - **Bearer デスクトップトークン**: SQLite `desktop_tokens`（sha256hex・失効/TTL 判定・`users` JOIN・
 //!   `last_used_at` touch）。
 //!
@@ -15,14 +17,18 @@ mod device_auth;
 mod session;
 
 pub mod audit;
+pub mod oidc;
 pub mod routes;
 pub mod token;
 pub mod users;
 
 pub use device::routes as device_routes;
 pub use device_auth::{device_auth_routes, DeviceAuthStore};
+pub use oidc::OidcClient;
 pub use routes::{build_session_cookie, routes, AuthRuntime, SessionCookieToken};
-pub use session::SessionStore;
+pub use session::{OidcLink, SessionStore};
+
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use sha2::{Digest, Sha256};
@@ -47,6 +53,8 @@ pub struct CompositeAuth {
     session_ttl_secs: u64,
     /// デスクトップトークンの TTL（日・config `DESKTOP_TOKEN_TTL_DAYS`・既定 90）。
     desktop_token_ttl_days: u32,
+    /// ログインに使う OIDC プロバイダー。あればセッションごとにプロバイダー側の状態を確かめる。
+    oidc: Option<Arc<OidcClient>>,
 }
 
 impl CompositeAuth {
@@ -58,6 +66,56 @@ impl CompositeAuth {
             sessions,
             session_ttl_secs: u64::from(session_ttl_days) * 24 * 60 * 60,
             desktop_token_ttl_days: DEFAULT_DESKTOP_TOKEN_TTL_DAYS,
+            oidc: None,
+        }
+    }
+
+    /// ログインに使う OIDC プロバイダーを設定する。
+    ///
+    /// 設定すると、OIDC の結び付きが無いセッション（OIDC 導入前の sk-account 方式で発行したもの）は
+    /// 無効になる。アクセストークンの期限が切れたセッションはリフレッシュで確かめ直し、プロバイダーで
+    /// ログアウト済みなら終える。プロバイダーに届かないときはセッションを残して後で確かめ直す。
+    #[must_use]
+    pub fn with_oidc(mut self, oidc: Option<Arc<OidcClient>>) -> Self {
+        self.oidc = oidc;
+        self
+    }
+
+    /// OIDC のセッションがまだ有効か確かめる（必要ならリフレッシュする）。
+    async fn oidc_session_alive(&self, oidc: &OidcClient, hash: &str) -> bool {
+        let Some(link) = self.sessions.oidc_link(hash, self.session_ttl_secs).await else {
+            self.sessions.destroy_hash(hash).await;
+            return false;
+        };
+        if !OidcClient::needs_refresh(&link) {
+            return true;
+        }
+        let _guard = oidc.lock_refresh(hash).await;
+        // 待っている間に別のリクエストがリフレッシュしたかもしれないので読み直す。
+        let Some(link) = self.sessions.oidc_link(hash, self.session_ttl_secs).await else {
+            return false;
+        };
+        if !OidcClient::needs_refresh(&link) {
+            return true;
+        }
+        match oidc.refresh(&link).await {
+            Ok(oidc::RefreshOutcome::Active(next)) => {
+                self.sessions
+                    .put_oidc_link(hash, &next, self.session_ttl_secs)
+                    .await;
+                true
+            }
+            Ok(oidc::RefreshOutcome::Ended) => {
+                self.sessions.destroy_hash(hash).await;
+                false
+            }
+            Err(e) => {
+                tracing::warn!(error = %e.0, "OIDC プロバイダーで確かめ直せなかった（セッションは残す）");
+                self.sessions
+                    .put_oidc_link(hash, &OidcClient::postpone(&link), self.session_ttl_secs)
+                    .await;
+                true
+            }
         }
     }
 
@@ -73,7 +131,13 @@ impl CompositeAuth {
 impl AuthBackend for CompositeAuth {
     async fn session_user(&self, cookie_token: &str) -> Result<Option<SessionUser>, AuthError> {
         let hash = sha256_hex(cookie_token);
-        self.sessions.get(&hash, self.session_ttl_secs).await
+        let Some(user) = self.sessions.get(&hash, self.session_ttl_secs).await? else {
+            return Ok(None);
+        };
+        match &self.oidc {
+            Some(oidc) if !self.oidc_session_alive(oidc, &hash).await => Ok(None),
+            _ => Ok(Some(user)),
+        }
     }
 
     async fn desktop_user(&self, bearer_token: &str) -> Result<Option<SessionUser>, AuthError> {

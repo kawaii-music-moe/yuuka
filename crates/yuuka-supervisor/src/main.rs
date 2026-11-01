@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use axum::Router;
-use yuuka_auth::{AuthRuntime, CompositeAuth, SessionStore};
+use yuuka_auth::{AuthRuntime, CompositeAuth, OidcClient, SessionStore};
 use yuuka_core::secrets::ExposeSecret;
 use yuuka_core::telemetry::init_telemetry;
 use yuuka_core::{Config, DbError};
@@ -113,10 +113,26 @@ async fn run() -> Result<(), String> {
     //    （CompositeAuth）で同一ストアを共有する（同じ clone を両者へ渡す）。
     let sessions = SessionStore::connect(&cfg.redis_url).await;
 
+    // 3.5) ログインに使う OIDC プロバイダー（標準は sk-account）。シークレット未設定ならログインできない
+    //      （既存のセッションはそのまま使える）。ログインのルートとセッション検証で同じものを共有する。
+    let public_base = cfg
+        .base_url
+        .as_deref()
+        .map(|b| b.trim_end_matches('/').to_owned())
+        .unwrap_or_else(|| format!("http://{}:{}", cfg.host, cfg.port));
+    let oidc = OidcClient::from_settings(&cfg.oidc, &public_base).map(Arc::new);
+    if oidc.is_none() {
+        tracing::warn!(
+            issuer = %cfg.oidc.issuer,
+            "OIDC_CLIENT_SECRET が未設定のためログインできません"
+        );
+    }
+
     // 4) 実 AuthBackend（Cookie=Redis / Bearer=SQLite）。
     let auth = Arc::new(
         CompositeAuth::new(db.clone(), sessions.clone(), cfg.session_ttl_days)
-            .with_desktop_token_ttl_days(cfg.desktop_token_ttl_days),
+            .with_desktop_token_ttl_days(cfg.desktop_token_ttl_days)
+            .with_oidc(oidc.clone()),
     );
     let web_config = WebConfig::from_core(&cfg);
     let state = AppState::new(auth, web_config, db.clone());
@@ -425,15 +441,10 @@ async fn run() -> Result<(), String> {
         .merge(yuuka_orchestrator::bot_share_routes_with(messenger.clone()));
 
     // デバイスフロー（RFC 8628）ルータ。device_code の一時状態はインメモリ store（web 再起動を跨ぐよう
-    // main で 1 度だけ生成し注入）。承認 URL ベースは base_url（末尾スラッシュ除去）or http://host:port。
-    let verification_base = cfg
-        .base_url
-        .as_deref()
-        .map(|b| b.trim_end_matches('/').to_owned())
-        .unwrap_or_else(|| format!("http://{}:{}", cfg.host, cfg.port));
+    // main で 1 度だけ生成し注入）。承認 URL ベースは公開 URL（3.5 の public_base）。
     let device_auth_routes =
         yuuka_auth::device_auth_routes(yuuka_auth::DeviceAuthStore::with_ttls(
-            verification_base,
+            public_base,
             cfg.desktop_device_code_ttl_secs,
             cfg.desktop_token_ttl_days,
         ));
@@ -441,9 +452,8 @@ async fn run() -> Result<(), String> {
     let auth_runtime = Arc::new(AuthRuntime::new(
         sessions,
         cfg.session_ttl_days,
-        cfg.sk_account_url.clone(),
-        cfg.sk_account_internal_url.clone(),
         cfg.admin_discord_ids.clone(),
+        oidc,
     ));
     let auth_routes = yuuka_auth::routes(auth_runtime);
 

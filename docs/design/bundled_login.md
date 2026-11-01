@@ -1,6 +1,7 @@
 # 同梱ログイン（sk-account 互換）実装方針
 
 - ステータス: 提案（[#185](https://github.com/kawaii-music-moe/yuuka/issues/185)）。**実装は保留中。着手前に必ずオーナーに確認し、了承を得てから始めること。**
+- 2026-11-01 追記: Yuuka のログインは OIDC に置き換えた（`OIDC_*` の設定・[setup.md](../guide/setup.md)）。sk-account 専用の code 交換（`/api/auth/sk/*`・`SK_ACCOUNT_*`）は廃止したため、本書の「現行」の記述は古い。セルフホストでは任意の OIDC プロバイダーを `OIDC_ISSUER` に指定できる。
 - 作成日: 2026-10-20
 - 雛形: sk-account（`/home/suki/web/sk-9.net/sk-account`、特に `AUTHENTICATION_SPEC.md`＝移植仕様書）
 - 関連: `crates/yuuka-auth/src/routes.rs`（現行の sk-account ログイン）、`crates/yuuka-auth/src/users.rs`（`upsert_from_sk_account`）、`crates/yuuka-core/src/config.rs`、`crates/yuuka-db/migrations/V23__sk_account_auth.sql`・`V25__sk_account_only.sql`、`frontend/src/overlays/Login.svelte`

@@ -118,6 +118,8 @@ extism                   = "1.30"
 redis                    = { version = "0.27", features = ["tokio-comp", "connection-manager"] }  # or fred（tokio-comp + 自動再接続）
 sha2                     = "0.10"                                               # セッション/デスクトップトークンの sha256hex
 hmac                     = "0.12"                                               # Webhook 受信の HMAC-SHA256 署名検証（Node webhookSignature.ts パリティ・既存の推移依存と同版）
+jsonwebtoken             = { version = "9.3", default-features = false }        # OIDC の ID トークン・logout_token の検証（JWKS・ES256/RS256）。暗号は ring（rustls と同じ）に任せる
+ring                     = "0.17"                                               # テストで OIDC プロバイダーの署名鍵を作る（rustls の推移依存と同版）
 base64                   = "0.22"                                               # Discord 添付 → Gemini inlineData 用 base64
 # ── 保存時暗号化（yuuka-crypto・Node src/utils/crypto.ts パリティ・P1-5） ──
 aes-gcm                  = "0.10"                                               # AES-256-GCM（Node createCipheriv aes-256-gcm 相当・12B IV / 16B tag）

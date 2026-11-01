@@ -42,7 +42,12 @@ cp example.yaml config.yaml
 - **`PORT` / `HOST`**: バックエンドサーバーがリスンするポートとホスト名。デフォルトはローカル接続のみ (`127.0.0.1` / `7854`)。リバースプロキシ経由で公開する場合は `HOST` を `"0.0.0.0"` に変更します。
 - **`GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`**: Google OAuth 認証情報（カレンダー/Drive 連携用のシステム共通設定、任意）。
 - **`BASE_URL`**: 外部公開 HTTPS ベース URL（OAuth リダイレクト・Cookie ハードニング判定に使用）。
-- **`SK_ACCOUNT_URL` / `SK_ACCOUNT_INTERNAL_URL`**: ログインに使う sk-account の公開 URL（ブラウザの遷移先・既定 `https://account.sk-9.net`）と、サーバーから認可コードを交換する内部 URL（既定 `http://127.0.0.1:3100`）。Yuuka はパスワードを持たず、本人認証は sk-account のパスキーだけで行う。
+- **`OIDC_*`**: ログインに使う OIDC プロバイダー。Yuuka はパスワードを持たず、本人認証は OIDC プロバイダーだけで行う。
+  - `OIDC_ISSUER`: issuer（省略時は標準の sk-account `https://account.sk-9.net`）。discovery（`/.well-known/openid-configuration`）からエンドポイントを取る。
+  - `OIDC_INTERNAL_URL`: サーバーからプロバイダーへ問い合わせる内部 URL（任意。同じマシンで動かすとき）。
+  - `OIDC_CLIENT_ID`（既定 `yuuka`）/ `OIDC_CLIENT_SECRET`（必須。未設定だとログインできない）: プロバイダーに登録したクライアント。戻り先は `{BASE_URL}/api/auth/oidc/callback`、Back-Channel Logout の受け口は `/api/auth/oidc/backchannel-logout`。
+  - `OIDC_SCOPE`（既定 `openid profile discord`）/ `OIDC_DISCORD_ID_CLAIM`（既定 `discord_id`）: Yuuka は利用者を Discord ID で識別するので、ID トークンのこの claim に Discord ID が必要。
+  - `OIDC_LABEL`: ログインボタンの表示名（省略時は標準なら `sk-9 Account`、それ以外は issuer のホスト名）。
 - **`ADMIN_DISCORD_IDS`**: 初回ログイン時に Admin として作成する Discord ユーザー ID（任意。未設定なら最初のログイン者が Admin）。
 
 ### 環境変数（機密設定）
