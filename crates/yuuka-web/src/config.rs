@@ -33,6 +33,8 @@ pub struct WebConfig {
     pub google_site_verification: Option<String>,
     /// サーバーでの音声生成の URL（`config.tts_server_url`・`/api/client/tts/*` の中継先）。`None` は中継しない。
     pub tts_server_url: Option<String>,
+    /// 音声生成サーバーへの要求に付ける署名の秘密鍵（`config.tts_signing_key`・検証済み）。`None` は署名しない。
+    pub tts_signing_key: Option<yuuka_core::secrets::SecretString>,
 }
 
 impl WebConfig {
@@ -51,6 +53,7 @@ impl WebConfig {
             reminder_cron: cfg.reminder_cron.clone(),
             google_site_verification: cfg.google_site_verification.clone(),
             tts_server_url: cfg.tts_server_url.clone(),
+            tts_signing_key: cfg.tts_signing_key.clone(),
         }
     }
 }
