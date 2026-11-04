@@ -21,7 +21,7 @@ pub use yaml::YamlError;
 use yaml::{Mapping, Value};
 
 use crate::error::ConfigError;
-use crate::secrets::SecretString;
+use crate::secrets::{ExposeSecret, SecretString};
 
 /// 起動時に検証済みの型付き設定。以後サービスループへ不変で渡す。
 #[derive(Debug, Clone)]
@@ -47,6 +47,10 @@ pub struct Config {
     /// サーバーでの音声生成（GPU の無い端末向け・`client/pwa/server/tts`）の URL（`TTS_SERVER_URL`・
     /// 例 `http://127.0.0.1:3410`）。未設定なら `/api/client/tts/*` は 404 で、PWA は標準の読み上げを使う。
     pub tts_server_url: Option<String>,
+    /// 音声生成サーバーへの要求に付ける Ed25519 署名の秘密鍵（`TTS_SIGNING_KEY`・32 バイトの seed を base64）。
+    /// 音声生成サーバーは対応する公開鍵（`TTS_VERIFY_KEYS`）で確かめる。未設定なら署名を付けない
+    /// （音声生成サーバーが同じホストの 127.0.0.1 で待ち受けるときだけ使える）。
+    pub tts_signing_key: Option<SecretString>,
     /// プライバシーポリシー URL（`PRIVACY_POLICY_URL`・`/api/me` で返す）。
     pub privacy_policy_url: String,
     /// 利用規約 URL（`TERMS_URL`・同上）。
@@ -132,6 +136,7 @@ impl Config {
             trusted_proxies,
             google_site_verification: non_empty(get("GOOGLE_SITE_VERIFICATION")),
             tts_server_url: non_empty(get("TTS_SERVER_URL")),
+            tts_signing_key: non_empty(get("TTS_SIGNING_KEY")).map(SecretString::from),
             privacy_policy_url: get("PRIVACY_POLICY_URL").unwrap_or_default(),
             terms_url: get("TERMS_URL").unwrap_or_default(),
             encryption_secret: non_empty(get("YUUKA_ENCRYPTION_SECRET")).map(SecretString::from),
@@ -213,6 +218,20 @@ impl Config {
                 field: "session_ttl_days",
                 reason: "session TTL must be at least 1 day".to_owned(),
             });
+        }
+        if let Some(key) = &self.tts_signing_key {
+            let seed = base64::Engine::decode(
+                &base64::engine::general_purpose::STANDARD,
+                key.expose_secret().trim(),
+            );
+            if seed.map_or(true, |s| s.len() != 32) {
+                return Err(ConfigError::InvalidValue {
+                    field: "TTS_SIGNING_KEY",
+                    reason:
+                        "must be a 32-byte Ed25519 seed in base64 (client/pwa/server/tts/keygen.ts)"
+                            .to_owned(),
+                });
+            }
         }
         Ok(())
     }
@@ -462,6 +481,19 @@ mod tests {
         assert_eq!(cfg.host.to_string(), "127.0.0.1");
         assert_eq!(cfg.session_ttl_days, 7);
         assert_eq!(cfg.redis_url, "redis://127.0.0.1:6379");
+    }
+
+    #[test]
+    fn tts_signing_key_must_be_a_32_byte_seed() {
+        let ok = write_yaml("TTS_SIGNING_KEY: \"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=\"\n");
+        assert!(Config::load_and_validate(ok.path())
+            .expect("load")
+            .tts_signing_key
+            .is_some());
+        for bad in ["\"AAECAwQ=\"", "\"not base64!\""] {
+            let f = write_yaml(&format!("TTS_SIGNING_KEY: {bad}\n"));
+            assert!(Config::load_and_validate(f.path()).is_err(), "{bad}");
+        }
     }
 
     #[test]

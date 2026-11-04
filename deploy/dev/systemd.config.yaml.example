@@ -12,3 +12,5 @@ OIDC_CLIENT_ID: "yuuka-dev"
 OIDC_CLIENT_SECRET: ""
 # Server-side TTS for devices without WebGPU (deploy/tts/yuuka-tts.service, shared with production).
 TTS_SERVER_URL: "http://127.0.0.1:3410"
+# Ed25519 key that signs requests to the TTS server (client/pwa/server/tts/keygen.ts; use a different key than production).
+# TTS_SIGNING_KEY: ""
