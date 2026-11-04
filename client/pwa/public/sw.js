@@ -1,7 +1,7 @@
 // キャッシュ名にバージョンを含める。デプロイでハッシュ付き資産の中身が変わったときは
 // このバージョンを上げる（activate で旧キャッシュを削除する）。#40: 固定キャッシュ名
 // のままだと古いキャッシュが永久に残り、白画面の原因になっていた。
-const VERSION = 'v2';
+const VERSION = 'v3';
 const CACHE = `agent-desk-${VERSION}`;
 // '/' はここに含めない。ナビゲーションは常にネットワーク優先（下の fetch ハンドラ）
 // なので、事前キャッシュすると逆に古い index.html を掴む危険がある。
@@ -38,7 +38,8 @@ self.addEventListener('fetch', (event) => {
   // may be stricter than the page's img-src/font-src/style-src policies.
   if (url.origin !== self.location.origin) return;
   const { pathname } = url;
-  if (pathname.startsWith('/api/') || isAdminPath(pathname)) return;
+  // 音声モデル（/tts-models/・1 ファイル数百 MB）は Cache Storage に入れない。ページ側が OPFS に保存する。
+  if (pathname.startsWith('/api/') || pathname.startsWith('/tts-models/') || isAdminPath(pathname)) return;
 
   if (request.mode === 'navigate') {
     // ナビゲーションはネットワーク優先。デプロイで資産のハッシュ名が変わっても、

@@ -32,3 +32,17 @@ it('returns a receipt draft without registering a transaction', async () => {
   assert.equal(fetch.mock.calls.length, 1)
   assert.equal(fetch.mock.calls[0].arguments[0], '/api/client/finance/receipt?botId=shared-bot')
 })
+
+it('keeps voices per user (no botId), returns raw state bytes and accepts 204 on delete', async () => {
+  selectAgent('shared-bot')
+  const fetch = mock.fn(async (input: string | URL | Request, init?: RequestInit) => {
+    if (String(input).endsWith('/state')) return new Response(new Float32Array([1, 2]).buffer)
+    if (init?.method === 'DELETE') return new Response(null, { status: 204 })
+    return Response.json([])
+  })
+  globalThis.fetch = fetch
+  assert.deepEqual(await httpAgentGateway.listVoices(), [])
+  assert.deepEqual([...new Float32Array(await httpAgentGateway.getVoiceState('7'))], [1, 2])
+  await httpAgentGateway.deleteVoice('7')
+  assert.deepEqual(fetch.mock.calls.map((call) => String(call.arguments[0])), ['/api/client/voices', '/api/client/voices/7/state', '/api/client/voices/7'])
+})

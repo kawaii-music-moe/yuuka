@@ -9,6 +9,7 @@ export default createRouter({
     { path: '/finance', component: () => import('./pages/FinancePage.vue'), meta: { title: '家計' } },
     { path: '/notes', component: () => import('./pages/NotesPage.vue'), meta: { title: '共有ノート' } },
     { path: '/chat', component: () => import('./pages/ChatPage.vue'), meta: { title: 'チャット' } },
+    { path: '/voice', component: () => import('./pages/VoicePage.vue'), meta: { title: '音声で話す' } },
     { path: '/settings', component: () => import('./pages/SettingsPage.vue'), meta: { title: '設定' } },
   ],
 })
