@@ -1,0 +1,25 @@
+# サーバーでの音声生成（GPU の無い端末向け・client/pwa/server/tts）。本番と dev で 1 つを共有する
+# （CPU を 1 生成で使い切るため）。~/.config/systemd/user/ に置いて有効にする:
+#   cp deploy/tts/yuuka-tts.service ~/.config/systemd/user/ && systemctl --user daemon-reload
+#   systemctl --user enable --now yuuka-tts.service
+# yuuka（本番・dev）の config.yaml に TTS_SERVER_URL: "http://127.0.0.1:3410" を書くと中継が有効になる。
+[Unit]
+Description=Yuuka server-side TTS (Irodori-TTS on CPU)
+After=network.target
+
+[Service]
+WorkingDirectory=/home/suki/apps/yuuka/client/pwa
+Environment=PATH=/home/suki/.nix-profile/bin:/run/current-system/sw/bin
+Environment=TTS_MODEL_DIR=/home/suki/apps/yuuka/data/tts-models/irodori-v41-mf-fp16-3
+Environment=TTS_PORT=3410
+# yuuka 本体のために 1 コア残す。10 分使われなければモデル（約 3.7 GB）を解放する。
+Environment=TTS_THREADS=3
+Environment=TTS_IDLE_MINUTES=10
+ExecStart=/home/suki/.nix-profile/bin/node --import tsx server/tts/server.ts
+Restart=on-failure
+RestartSec=5
+# 生成中のピークは 5 GB 前後。超えたら止めて再起動する（ホストのメモリを守る）。
+MemoryMax=6G
+
+[Install]
+WantedBy=default.target

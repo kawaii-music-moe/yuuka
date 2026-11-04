@@ -27,6 +27,7 @@ base64.workspace = true
 chrono.workspace = true                # JST 日境界・startsAt/endsAt の UTC ISO8601 変換
 tracing.workspace = true
 tokio.workspace = true                 # チャット送信のターン全体タイムアウト（issue #41・§チャット送信の設計）
+reqwest = { workspace = true }         # サーバーでの音声生成への中継（`/api/client/tts/*`・ストリーム応答）
 
 [dev-dependencies]
 yuuka-timeline.workspace = true        # R13: real conversation-save integration

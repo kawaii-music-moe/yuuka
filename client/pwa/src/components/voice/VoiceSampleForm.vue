@@ -28,7 +28,7 @@ function accept(next: VoiceSample, label: string, blob: Blob) {
   source.value = label
   if (sampleUrl) URL.revokeObjectURL(sampleUrl)
   sampleUrl = URL.createObjectURL(blob)
-  if (!name.value) name.value = label.replace(/\.[^.]+$/, '')
+  if (!name.value) name.value = [...label.replace(/\.[^.]+$/, '')].slice(0, 40).join('')
 }
 
 async function onFile(event: Event) {

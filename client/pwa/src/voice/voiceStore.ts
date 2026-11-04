@@ -26,18 +26,24 @@ async function cacheDir(): Promise<FileSystemDirectoryHandle | undefined> {
   }
 }
 
-async function readCache(id: string, bytes: number): Promise<Float32Array | undefined> {
+/**
+ * キャッシュのファイル名。id だけだと、サーバーの DB を作り直したときなどに別の声の id と重なり、
+ * 違う声を読んでしまう。作成日時も含めて、同じ声のときだけ当たるようにする。
+ */
+const cacheName = (voice: Pick<SavedVoice, 'id' | 'createdAt'>) => `${voice.id}-${voice.createdAt.replace(/[^0-9A-Za-z]/g, '')}.f32`
+
+async function readCache(name: string, bytes: number): Promise<Float32Array | undefined> {
   try {
-    const file = await (await (await cacheDir())?.getFileHandle(`${id}.f32`))?.getFile()
+    const file = await (await (await cacheDir())?.getFileHandle(name))?.getFile()
     return file && file.size === bytes ? new Float32Array(await file.arrayBuffer()) : undefined
   } catch {
     return undefined
   }
 }
 
-async function writeCache(id: string, state: Float32Array) {
+async function writeCache(name: string, state: Float32Array) {
   try {
-    const handle = await (await cacheDir())?.getFileHandle(`${id}.f32`, { create: true })
+    const handle = await (await cacheDir())?.getFileHandle(name, { create: true })
     const writable = await handle?.createWritable()
     await writable?.write(new Blob([state as Float32Array<ArrayBuffer>]))
     await writable?.close()
@@ -64,26 +70,39 @@ export async function listVoices(): Promise<SavedVoice[]> {
 /** 声の話者条件（端末にあればそれを、無ければサーバーから取ってキャッシュする）。 */
 export async function loadSpeaker(voice: SavedVoice): Promise<SpeakerCondition> {
   const bytes = voice.tokens * SPEAKER_DIM * 4
-  let state = await readCache(voice.id, bytes)
+  let state = await readCache(cacheName(voice), bytes)
   if (!state) {
     state = new Float32Array(await agentGateway.getVoiceState(voice.id))
     if (state.byteLength !== bytes) throw new Error(`声「${voice.name}」のデータが壊れています`)
-    await writeCache(voice.id, state)
+    await writeCache(cacheName(voice), state)
   }
   return { state, mask: voice.mask }
 }
 
+/** サーバーの上限（`crates/yuuka-client-api/src/voices.rs`）。 */
+export const VOICE_NAME_MAX = 40
+export const VOICE_CAPTION_MAX = 200
+const clip = (text: string, max: number) => [...text.trim()].slice(0, max).join('')
+
 export async function saveVoice(meta: Pick<SavedVoice, 'name' | 'caption' | 'source' | 'seconds'>, speaker: SpeakerCondition): Promise<SavedVoice> {
-  const voice = await agentGateway.createVoice({ ...meta, speakerModel: SPEAKER_MODEL, mask: speaker.mask, stateBase64: toBase64(speaker.state) })
-  await writeCache(voice.id, speaker.state)
+  const voice = await agentGateway.createVoice({
+    ...meta,
+    // ファイル名から付けた既定の名前などが上限を超えると 400 になるので、ここで切る。
+    name: clip(meta.name, VOICE_NAME_MAX) || '新しい声',
+    caption: clip(meta.caption, VOICE_CAPTION_MAX),
+    speakerModel: SPEAKER_MODEL,
+    mask: speaker.mask,
+    stateBase64: toBase64(speaker.state),
+  })
+  await writeCache(cacheName(voice), speaker.state)
   return voice
 }
 
 export const updateVoice = (id: string, patch: Partial<Pick<SavedVoice, 'name' | 'caption'>>) => agentGateway.updateVoice(id, patch)
 
-export async function deleteVoice(id: string): Promise<void> {
-  await agentGateway.deleteVoice(id)
-  await (await cacheDir())?.removeEntry(`${id}.f32`).catch(() => undefined)
+export async function deleteVoice(voice: SavedVoice): Promise<void> {
+  await agentGateway.deleteVoice(voice.id)
+  await (await cacheDir())?.removeEntry(cacheName(voice)).catch(() => undefined)
 }
 
 type LegacyVoice = { id: string; name: string; caption: string; seconds: number; mask: boolean[] }

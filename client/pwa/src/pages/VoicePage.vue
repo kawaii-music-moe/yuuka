@@ -6,6 +6,7 @@ import MarkdownContent from '@/components/MarkdownContent.vue'
 import UiButton from '@/components/UiButton.vue'
 import VoiceSampleForm from '@/components/voice/VoiceSampleForm.vue'
 import { speechSentences } from '@/voice/replyText'
+import { serverClone, serverDesign, ServerSpeaker, serverTtsAvailable } from '@/voice/serverTts'
 import { BrowserSpeaker, ChunkPlayer, IrodoriSpeaker, type ReplySpeaker, type SpeechStats } from '@/voice/speaker'
 import { listenOnce, speechInputAvailable } from '@/voice/speechInput'
 import { irodoriClient } from '@/voice/tts/client'
@@ -22,6 +23,8 @@ type Engine =
   | { kind: 'needs-download'; totalBytes: number }
   | { kind: 'loading'; loaded: number; total: number }
   | { kind: 'ready'; adapter: string }
+  /** サーバーで Irodori-TTS を動かす（この端末の GPU で作れない・設定でサーバーを選んだ）。 */
+  | { kind: 'server'; reason: string }
   /** `retry` は読み込みの失敗（端末が非対応なのではない）で、やり直せる。 */
   | { kind: 'browser'; reason: string; retry?: boolean }
   | { kind: 'none'; reason: string }
@@ -31,6 +34,7 @@ const VOICE_SEED_KEY = 'agent-desk:voice-seed'
 const HANDS_FREE_KEY = 'agent-desk:voice-hands-free'
 const SELECTED_VOICE_KEY = 'agent-desk:voice-selected'
 const SPEED_KEY = 'agent-desk:voice-speed'
+const USE_SERVER_KEY = 'agent-desk:voice-use-server'
 /** 特徴（キャプション）から作る声を選んでいるときの値。それ以外は保存した声の id。 */
 const DESIGNED = 'designed'
 /** 話す速さ（上流の duration_scale。大きいほどゆっくり）。 */
@@ -50,6 +54,10 @@ const selectedVoice = ref(readStorage(SELECTED_VOICE_KEY) ?? DESIGNED)
 const savedVoices = ref<SavedVoice[]>([])
 const speakers = new Map<string, SpeakerCondition>()
 const speed = ref(Number(readStorage(SPEED_KEY) ?? 1) || 1)
+/** この端末の GPU を使わず、サーバーで作る（GPU が弱い・電池を減らしたくない端末向け）。 */
+const useServer = ref(readStorage(USE_SERVER_KEY) === '1')
+/** サーバーでの音声生成が使えるか（設定されていて、動いているか）。 */
+const serverAvailable = ref(false)
 const cloning = ref(false)
 const savingDesigned = ref(false)
 const previewing = ref(false)
@@ -69,10 +77,12 @@ const player = new ChunkPlayer()
 function voiceSpec(): VoiceSpec {
   const saved = savedVoices.value.find((v) => v.id === selectedVoice.value)
   const speaker = saved && speakers.get(saved.id)
-  if (saved && speaker) return { kind: 'clone', caption: saved.caption, state: speaker.state, mask: speaker.mask }
+  // key はサーバーでの生成が話者条件を覚えておくため（同じ声なら毎回送らない）。
+  if (saved && speaker) return { kind: 'clone', caption: saved.caption, state: speaker.state, mask: speaker.mask, key: `${saved.id}-${saved.createdAt}` }
   return { kind: 'design', caption: caption.value.trim() || DEFAULT_CAPTION, voiceSeed: voiceSeed.value }
 }
 const irodori = new IrodoriSpeaker(client, player, () => ({ voice: voiceSpec(), durationScale: speed.value }))
+const onServer = new ServerSpeaker(player, () => ({ voice: voiceSpec(), durationScale: speed.value }))
 const browser = BrowserSpeaker.available ? new BrowserSpeaker(() => 1 / speed.value) : undefined
 let speaker: ReplySpeaker | undefined
 let listening: AbortController | undefined
@@ -87,6 +97,7 @@ const engineText = computed(() => {
     case 'needs-download': return `この端末で声を作るには、音声モデル（約 ${gb(e.totalBytes)} GB）を一度ダウンロードします。準備ができるまでは標準の読み上げを使います。`
     case 'loading': return `音声モデルを準備しています（${Math.floor((e.loaded / Math.max(e.total, 1)) * 100)}%）。準備ができるまでは標準の読み上げを使います。`
     case 'ready': return `この端末で声を作ります（${e.adapter}）。`
+    case 'server': return `サーバーで声を作ります（${e.reason}）。しばらく使わなかったあとの最初の 1 回は、準備に 10〜20 秒かかります。`
     case 'browser': return `ブラウザ標準の読み上げを使います（${e.reason}）。`
     case 'none': return `読み上げは使えません。返答は画面に表示します（${e.reason}）。`
   }
@@ -101,12 +112,25 @@ const currentVoiceLabel = computed(() => {
   if (e === 'none') return '読み上げなし（返答は画面に表示します）'
   const saved = savedVoices.value.find((v) => v.id === selectedVoice.value)
   const name = saved ? saved.name : `特徴から作る声（声 ${voiceSeed.value + 1}）`
-  return e === 'ready' ? `声: ${name}` : `声: ${name}（準備ができるまでは標準の読み上げ）`
+  if (e === 'ready') return `声: ${name}`
+  if (e === 'server') return `声: ${name}（サーバーで生成）`
+  return `声: ${name}（準備ができるまでは${serverAvailable.value ? 'サーバーで生成' : '標準の読み上げ'}）`
 })
-const canPreview = computed(() => engine.value.kind === 'ready' && !previewing.value && phase.value === 'idle')
+/** Irodori-TTS の声で読める（この端末かサーバーで）。 */
+const canUseIrodori = computed(() => engine.value.kind === 'ready' || engine.value.kind === 'server')
+const canPreview = computed(() => canUseIrodori.value && !previewing.value && phase.value === 'idle')
 
 function currentSpeaker(): ReplySpeaker | undefined {
-  return engine.value.kind === 'ready' ? irodori : browser
+  if (engine.value.kind === 'ready') return irodori
+  // この端末のモデルを準備している間も、サーバーが使えればそちらで読む。
+  if (engine.value.kind === 'server' || serverAvailable.value) return onServer
+  return browser
+}
+
+/** この端末で作れないときの行き先（サーバーが使えればサーバー、無ければ標準の読み上げ）。 */
+function fallBack(reason: string, retry = false) {
+  if (serverAvailable.value) engine.value = { kind: 'server', reason }
+  else engine.value = browser ? { kind: 'browser', reason, retry } : { kind: 'none', reason }
 }
 
 async function prepareModel() {
@@ -118,15 +142,19 @@ async function prepareModel() {
     void client.prepareVoice(voiceSpec()).catch(() => undefined)
   } catch (cause) {
     const reason = cause instanceof Error ? cause.message : String(cause)
-    engine.value = browser ? { kind: 'browser', reason: `音声モデルを読み込めませんでした: ${reason}`, retry: true } : { kind: 'none', reason }
+    fallBack(`この端末で音声モデルを読み込めませんでした: ${reason}`, true)
   }
 }
 
 async function checkEngine() {
-  const probe = await client.probe()
+  const [probe, server] = await Promise.all([client.probe(), serverTtsAvailable()])
+  serverAvailable.value = server
+  if (useServer.value && server) {
+    engine.value = { kind: 'server', reason: '設定で、サーバーで作るようにしています' }
+    return
+  }
   if (!probe.supported) {
-    const reason = probe.reason ?? 'この端末では声を作れません'
-    engine.value = browser ? { kind: 'browser', reason } : { kind: 'none', reason }
+    fallBack(probe.reason ?? 'この端末では声を作れません')
     return
   }
   if (probe.stored) await prepareModel()
@@ -239,6 +267,11 @@ async function selectVoice() {
   if (engine.value.kind === 'ready') void client.prepareVoice(voiceSpec()).catch(() => undefined)
 }
 function saveSpeed() { writeStorage(SPEED_KEY, String(speed.value)) }
+async function saveUseServer() {
+  writeStorage(USE_SERVER_KEY, useServer.value ? '1' : '0')
+  speaker?.stop()
+  await checkEngine()
+}
 
 async function loadSavedVoices() {
   voicesError.value = ''
@@ -273,7 +306,7 @@ async function addVoice({ name, caption: style, sample }: { name: string; captio
   error.value = ''
   try {
     // 送ると Worker に移るので、やり直せるよう複製を渡す。
-    const speaker = await client.clone(sample.audio.slice())
+    const speaker = engine.value.kind === 'ready' ? await client.clone(sample.audio.slice()) : await serverClone(sample.audio)
     const saved = await saveVoice({ name, caption: style, source: 'sample', seconds: Math.round(sample.seconds * 10) / 10 }, speaker)
     sampleForm.value?.reset()
     await adopt(saved, speaker)
@@ -290,7 +323,7 @@ async function saveDesigned() {
   error.value = ''
   try {
     const style = caption.value.trim() || DEFAULT_CAPTION
-    const speaker = await client.design(style, voiceSeed.value)
+    const speaker = engine.value.kind === 'ready' ? await client.design(style, voiceSeed.value) : await serverDesign(style, voiceSeed.value)
     const name = `${[...style].slice(0, 16).join('')}（声 ${voiceSeed.value + 1}）`
     await adopt(await saveVoice({ name, caption: style, source: 'design', seconds: 0 }, speaker), speaker)
   } catch (cause) {
@@ -323,7 +356,7 @@ async function saveVoiceStyle(voice: SavedVoice) {
 async function removeVoice(voice: SavedVoice) {
   if (!window.confirm(`「${voice.name}」を削除しますか？（ほかの端末からも消えます）`)) return
   try {
-    await deleteVoice(voice.id)
+    await deleteVoice(voice)
   } catch (cause) {
     voicesError.value = saveError(cause, '声を削除できませんでした')
     return
@@ -377,7 +410,7 @@ onBeforeUnmount(() => {
     <div class="voice-intro"><span class="muted">話しかけると、返答を声で読み上げます。</span><RouterLink to="/chat" class="text-link">チャットの履歴</RouterLink></div>
 
     <!-- 読み上げの準備（準備ができていないときだけ目立たせる） -->
-    <section v-if="engine.kind !== 'ready'" class="notice surface" :class="engine.kind" role="status">
+    <section v-if="engine.kind !== 'ready' && engine.kind !== 'server'" class="notice surface" :class="engine.kind" role="status">
       <AppIcon :name="engine.kind === 'loading' || engine.kind === 'checking' ? 'downloading' : engine.kind === 'needs-download' ? 'download' : 'info'" />
       <div class="notice-body">
         <p>{{ engineText }}</p>
@@ -421,7 +454,7 @@ onBeforeUnmount(() => {
           <div class="row">
             <UiButton variant="secondary" icon="play_arrow" :disabled="!canPreview" @click="preview">試しに聞く</UiButton>
             <UiButton variant="secondary" icon="refresh" :disabled="!canPreview" @click="nextVoice">別の声にする</UiButton>
-            <UiButton variant="secondary" icon="bookmark_add" :disabled="engine.kind !== 'ready' || savingDesigned" @click="saveDesigned">{{ savingDesigned ? '保存しています…' : 'この声を保存' }}</UiButton>
+            <UiButton variant="secondary" icon="bookmark_add" :disabled="!canUseIrodori || savingDesigned" @click="saveDesigned">{{ savingDesigned ? '保存しています…' : 'この声を保存' }}</UiButton>
           </div>
         </template>
       </div>
@@ -442,7 +475,7 @@ onBeforeUnmount(() => {
 
       <details class="more">
         <summary><AppIcon name="add" />声のサンプルから追加</summary>
-        <VoiceSampleForm ref="sampleForm" :disabled="engine.kind !== 'ready'" :busy="cloning" @create="addVoice" />
+        <VoiceSampleForm ref="sampleForm" :disabled="!canUseIrodori" :busy="cloning" @create="addVoice" />
       </details>
     </section>
 
@@ -454,6 +487,7 @@ onBeforeUnmount(() => {
         <summary><AppIcon name="tune" />詳しい情報</summary>
         <div class="details-body">
           <p class="muted">{{ engineText }}</p>
+          <label v-if="serverAvailable" class="toggle"><input v-model="useServer" type="checkbox" @change="saveUseServer" /><span>この端末の GPU を使わず、サーバーで声を作る</span></label>
           <p v-if="stats" class="muted">前回の読み上げ: 最初の音まで {{ (stats.firstAudioMs / 1000).toFixed(1) }} 秒・途切れ {{ (stats.stallMs / 1000).toFixed(1) }} 秒・音声 {{ stats.audioSec.toFixed(1) }} 秒</p>
           <div v-if="engine.kind === 'ready'" class="row"><UiButton variant="text" icon="delete" @click="clearModel">この端末に保存した音声モデルを削除</UiButton></div>
         </div>

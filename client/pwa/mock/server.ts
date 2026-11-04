@@ -1,6 +1,6 @@
 import { createReadStream } from 'node:fs'
 import { stat } from 'node:fs/promises'
-import { createServer } from 'node:http'
+import { createServer, request as httpRequest } from 'node:http'
 import path from 'node:path'
 import { deflateSync } from 'node:zlib'
 import type { ChatMessage, NewVoice, Voice } from '../src/api/contracts'
@@ -82,6 +82,15 @@ async function serveTtsModel(res: import('node:http').ServerResponse, pathname: 
   res.writeHead(200, { 'content-type': file.endsWith('.json') ? 'application/json' : 'application/octet-stream', 'content-length': String(info.size) })
   createReadStream(file).pipe(res)
 }
+function proxyTts(req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse, path: string) {
+  const target = new URL(path, process.env.MOCK_TTS_SERVER ?? 'http://127.0.0.1:3410')
+  const upstream = httpRequest(target, { method: req.method, headers: { 'content-type': req.headers['content-type'] ?? 'application/json' } }, (r) => {
+    res.writeHead(r.statusCode ?? 502, { 'content-type': r.headers['content-type'] ?? 'application/octet-stream', ...(r.headers['x-sample-rate'] ? { 'x-sample-rate': r.headers['x-sample-rate'] } : {}) })
+    r.pipe(res)
+  })
+  upstream.on('error', () => { if (!res.headersSent) json(res, { message: 'サーバーでの音声生成を使えません（音声生成サーバーが動いていません）' }, 503) })
+  req.pipe(upstream)
+}
 type MockVoice = Omit<Voice, 'id'> & { id: string; state: Buffer }
 const voices: MockVoice[] = []
 let voiceSeq = 0
@@ -158,6 +167,9 @@ createServer(async (req, res) => {
   // this mock useful for the existing administration UI during its migration.
   const apiPath = url.pathname.replace(/^\/api\/(?:pwa|client)(?=\/|$)/, '/api')
   if (req.method === 'GET' && apiPath === '/api/status') return json(res, { status: 'ok', service: 'agent-mock', checkedAt: new Date().toISOString() })
+  // サーバーでの音声生成（本番は Rust が TTS_SERVER_URL へ中継する）。MOCK_TTS_SERVER（既定 127.0.0.1:3410）の
+  // `npm run tts-server` へそのまま流す。動いていなければ 503（PWA は標準の読み上げにする）。
+  if (url.pathname.startsWith('/api/client/tts/')) return proxyTts(req, res, url.pathname.slice('/api/client/tts'.length))
   // 音声チャットの声（本番と同じく botId を取らない・本人のもの）。モックではメモリに置く。
   if (url.pathname === '/api/client/voices' || url.pathname.startsWith('/api/client/voices/')) return handleVoices(req, res, url.pathname)
   // 本番と同じく、`/api/client/*` はエージェント（botId）必須。未指定・システム Bot は 403（モックのデータは Bot で分けない）。

@@ -10,7 +10,8 @@
     "preview": "vite preview",
     "mock": "tsx mock/server.ts",
     "check": "vue-tsc --noEmit",
-    "test": "tsx --test \"src/**/*.test.ts\""
+    "test": "tsx --test \"src/**/*.test.ts\" \"server/**/*.test.ts\"",
+    "tts-server": "tsx server/tts/server.ts"
   },
   "dependencies": {
     "dompurify": "^3.4.13",
@@ -27,6 +28,7 @@
     "@types/markdown-it": "^14.1.2",
     "@types/node": "^26.2.0",
     "@vitejs/plugin-vue": "^5.2.1",
+    "onnxruntime-node": "1.23.2",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",
     "vite": "^6.0.5",

@@ -8,7 +8,7 @@ import type { StageTimings } from './pipeline'
  */
 export type VoiceSpec =
   | { kind: 'design'; caption: string; voiceSeed: number }
-  | { kind: 'clone'; caption: string; state: Float32Array; mask: boolean[] }
+  | { kind: 'clone'; caption: string; state: Float32Array; mask: boolean[]; key?: string }
 
 export type WorkerRequest =
   /** 端末が対応しているか・モデルが保存済みかを調べる（ダウンロードはしない）。 */

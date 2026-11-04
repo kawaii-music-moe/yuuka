@@ -148,16 +148,21 @@ export class IrodoriTts {
     const spLen = opts.speaker.mask.length
     const spState = this.tensor('float32', opts.speaker.state, [1, spLen, cfg.speaker_dim])
     const spMask = this.tensor('bool', Uint8Array.from(opts.speaker.mask, Number), [1, spLen])
-    const hasSpeaker = opts.speaker.mask.some(Boolean)
     const encode = now() - t0
     if (opts.isCancelled()) return undefined
 
     t0 = now()
+    // 長さは参照音声なし（キャプションだけ）の条件で予測する。v4.1-MF の長さ予測は参照音声を渡すと文の長さに
+    // ほぼ依らず 3.2〜3.6 秒前後を返し（上流の PyTorch でも同じ）、「はい。」が 3 秒になって余った時間に別の
+    // 言葉を話したり、長い文が早口になったりする。参照なしの予測は文の長さに沿う（はい。1.0 秒・了解です。1.4 秒）。
+    const noRefLen = this.noReference.mask.length
     const { log_frames } = await this.sessions.duration.run({
-      text_state, text_mask: textMask, speaker_state: spState, speaker_mask: spMask,
+      text_state, text_mask: textMask,
+      speaker_state: this.tensor('float32', this.noReference.state, [1, noRefLen, cfg.speaker_dim]),
+      speaker_mask: this.tensor('bool', Uint8Array.from(this.noReference.mask, Number), [1, noRefLen]),
       caption_state: cap.state, caption_mask: cap.mask,
-      duration_features: this.tensor('float32', durationFeatures(norm, ids.length, cfg.max_text_len, hasSpeaker), [1, cfg.duration_aux_dim]),
-      has_speaker: this.tensor('bool', Uint8Array.of(hasSpeaker ? 1 : 0), [1]),
+      duration_features: this.tensor('float32', durationFeatures(norm, ids.length, cfg.max_text_len, false), [1, cfg.duration_aux_dim]),
+      has_speaker: this.tensor('bool', Uint8Array.of(0), [1]),
       has_caption: this.tensor('bool', Uint8Array.of(cap.has ? 1 : 0), [1]),
     })
     const fps = cfg.sample_rate / cfg.hop_length

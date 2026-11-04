@@ -95,6 +95,12 @@ PWA はブラウザ標準の読み上げに切り替える）。作り方と配�
 利用者が作った声（話者条件。サンプルの音声そのものではない）は DB の `client_voices`（V36）に本人のものとして
 保存され、`/api/client/voices` で本人だけが読み書きする。
 
+GPU（WebGPU）の無い端末のために、サーバーでも音声を生成できる（`client/pwa/server/tts`・onnxruntime-node の CPU で
+同じ推論コードを動かす）。音声生成サーバー `yuuka-tts.service`（[deploy/tts/yuuka-tts.service](tts/yuuka-tts.service)）を
+本番と dev で 1 つ動かし、両方の config.yaml に `TTS_SERVER_URL: "http://127.0.0.1:3410"` を書くと、yuuka が
+`/api/client/tts/*` をログイン済みの要求だけ中継する（未設定なら PWA は標準の読み上げ）。生成中は約 3.7 GB を使い、
+10 分使われなければモデルを解放する。要求は 1 件ずつ順に処理する（1 文の生成で CPU をほぼ使い切るため）。
+
 ### cron を回すプロセスは厳密に 1 つ（P0-2）
 `Dockerfile` は `ENV YUUKA_RUST_CRON=1` を焼き込むため、**コンテナ内 Rust が cron の所有者**になる。
 同一 `data/` に対する writer は 1 つでなければならない（SQLite WAL 単一ライター）。同じ `DATA_DIR` を
