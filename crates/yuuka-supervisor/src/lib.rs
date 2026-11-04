@@ -9,7 +9,9 @@
 use std::path::Path;
 
 use axum::Router;
-use yuuka_web::{apply_common_layers, framework_routes, mount_pwa, mount_static, AppState};
+use yuuka_web::{
+    apply_common_layers, framework_routes, mount_pwa, mount_static, mount_tts_models, AppState,
+};
 
 pub mod desktop_dist;
 pub mod discord;
@@ -56,6 +58,10 @@ pub use ws::{ws_routes, ws_routes_with_interactions};
 /// `pwa_dist_dir` を渡すと PWA（issue #33・`client/pwa`）を [`mount_pwa`] で明示ルート群として
 /// 載せる。`dist_dir`（admin SPA・`fallback_service`）とは独立に効くため、両方 `Some` でも
 /// 互いを横取りしない（[`yuuka_web::mount_pwa`] のドキュメント参照）。
+/// 音声モデル（Irodori-TTS の ONNX 一式・`<version>/` ごと）の配置先（作業ディレクトリ基準）。
+/// 配置手順は `deploy/README.md` を参照。
+pub const TTS_MODELS_DIR: &str = "data/tts-models";
+
 #[allow(clippy::too_many_arguments)]
 pub fn build_app(
     state: AppState,
@@ -107,6 +113,13 @@ pub fn build_app(
     let routes = match pwa_dist_dir {
         Some(dir) => mount_pwa(routes, dir, site_verification),
         None => routes,
+    };
+    // 音声モデル（PWA の音声チャット）。置いてあるときだけ配信する（無ければ PWA は標準の読み上げに切り替える）。
+    let tts_models = Path::new(TTS_MODELS_DIR);
+    let routes = if tts_models.is_dir() {
+        mount_tts_models(routes, tts_models)
+    } else {
+        routes
     };
     let routes = match dist_dir {
         Some(dir) => mount_static(routes, dir, site_verification),

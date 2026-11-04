@@ -1,6 +1,9 @@
+import { createReadStream } from 'node:fs'
+import { stat } from 'node:fs/promises'
 import { createServer } from 'node:http'
+import path from 'node:path'
 import { deflateSync } from 'node:zlib'
-import type { ChatMessage } from '../src/api/contracts'
+import type { ChatMessage, NewVoice, Voice } from '../src/api/contracts'
 import { DEFAULT_GEMINI_MODEL, GEMINI_MODELS } from '../src/api/models'
 
 let settings = { googleConnected: true, googleAccount: 'agent@example.com', model: DEFAULT_GEMINI_MODEL as string, persona: '簡潔で、先回りして支援するパーソナルエージェント。' }
@@ -69,12 +72,50 @@ function buildReply(content: string): Omit<ChatMessage, 'id' | 'createdAt'> {
   }
   return { role: 'agent', content: '承知しました。必要に応じて、関連する記録を下の参照カードから確認できます。', references: [{ type: 'note', title: '共有ノート', description: 'エージェントと共通の前提を編集', href: '/notes', meta: 'ノート' }] }
 }
+// 音声モデル（本番は Rust が data/tts-models を配信する）。MOCK_TTS_MODELS_DIR に
+// tools/irodori-onnx/package.py の出力先を指定すると、モックでも音声画面で読み上げを試せる。
+async function serveTtsModel(res: import('node:http').ServerResponse, pathname: string) {
+  const root = process.env.MOCK_TTS_MODELS_DIR ? path.resolve(process.env.MOCK_TTS_MODELS_DIR) : undefined
+  const file = root && path.resolve(root, decodeURIComponent(pathname.slice('/tts-models/'.length)))
+  const info = file && file.startsWith(root + path.sep) ? await stat(file).catch(() => undefined) : undefined
+  if (!file || !info?.isFile()) { res.writeHead(404); return res.end() }
+  res.writeHead(200, { 'content-type': file.endsWith('.json') ? 'application/json' : 'application/octet-stream', 'content-length': String(info.size) })
+  createReadStream(file).pipe(res)
+}
+type MockVoice = Omit<Voice, 'id'> & { id: string; state: Buffer }
+const voices: MockVoice[] = []
+let voiceSeq = 0
+const voiceView = ({ state: _state, ...view }: MockVoice) => view
+async function handleVoices(req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse, pathname: string) {
+  const [, id, sub] = pathname.match(/^\/api\/client\/voices(?:\/([^/]+))?(?:\/(state))?$/) ?? []
+  const voice = id ? voices.find((v) => v.id === id) : undefined
+  if (!id && req.method === 'GET') return json(res, voices.map(voiceView))
+  if (!id && req.method === 'POST') {
+    const { stateBase64, ...meta } = await read(req) as NewVoice
+    const state = Buffer.from(stateBase64, 'base64')
+    if (!meta.name?.trim() || state.length !== meta.mask.length * 768 * 4) return json(res, { message: '声のデータが不正です' }, 400)
+    const now = new Date().toISOString()
+    const created: MockVoice = { ...meta, name: meta.name.trim(), id: String(++voiceSeq), tokens: meta.mask.length, createdAt: now, updatedAt: now, state }
+    voices.push(created)
+    return json(res, voiceView(created), 201)
+  }
+  if (!voice) return json(res, { message: 'voice not found' }, 404)
+  if (sub === 'state' && req.method === 'GET') { res.writeHead(200, { 'content-type': 'application/octet-stream' }); return res.end(voice.state) }
+  if (req.method === 'PATCH') {
+    const patch = await read(req) as Partial<Pick<Voice, 'name' | 'caption'>>
+    Object.assign(voice, patch.name !== undefined ? { name: patch.name.trim() } : {}, patch.caption !== undefined ? { caption: patch.caption.trim() } : {}, { updatedAt: new Date().toISOString() })
+    return json(res, voiceView(voice))
+  }
+  if (req.method === 'DELETE') { voices.splice(voices.indexOf(voice), 1); res.writeHead(204); return res.end() }
+  return json(res, { message: 'Not found' }, 404)
+}
 const json = (res: import('node:http').ServerResponse, body: unknown, status = 200, headers: Record<string, string> = {}) => { res.writeHead(status, { 'content-type': 'application/json', 'access-control-allow-origin': '*', ...headers }); res.end(JSON.stringify(body)) }
 const read = async (req: import('node:http').IncomingMessage) => { let body = ''; for await (const c of req) body += c; return body ? JSON.parse(body) : {} }
 
 createServer(async (req, res) => {
   if (req.method === 'OPTIONS') { res.writeHead(204, { 'access-control-allow-origin': '*', 'access-control-allow-methods': 'GET,POST,PUT,PATCH,OPTIONS', 'access-control-allow-headers': 'content-type' }); return res.end() }
   const url = new URL(req.url ?? '/', 'http://localhost:8787')
+  if (req.method === 'GET' && url.pathname.startsWith('/tts-models/')) return serveTtsModel(res, url.pathname)
   const hasSession = req.headers.cookie?.includes('yuuka-mock-session=admin') ?? false
   // ログインは OIDC プロバイダーに一本化されている。モックでは認可画面を挟まず、そのまま admin でログイン済みにして戻す。
   if (req.method === 'GET' && url.pathname === '/api/auth/oidc/start') {
@@ -117,6 +158,8 @@ createServer(async (req, res) => {
   // this mock useful for the existing administration UI during its migration.
   const apiPath = url.pathname.replace(/^\/api\/(?:pwa|client)(?=\/|$)/, '/api')
   if (req.method === 'GET' && apiPath === '/api/status') return json(res, { status: 'ok', service: 'agent-mock', checkedAt: new Date().toISOString() })
+  // 音声チャットの声（本番と同じく botId を取らない・本人のもの）。モックではメモリに置く。
+  if (url.pathname === '/api/client/voices' || url.pathname.startsWith('/api/client/voices/')) return handleVoices(req, res, url.pathname)
   // 本番と同じく、`/api/client/*` はエージェント（botId）必須。未指定・システム Bot は 403（モックのデータは Bot で分けない）。
   if (url.pathname.startsWith('/api/client/') && !url.pathname.startsWith('/api/client/chat/attachments/')) {
     const botId = url.searchParams.get('botId')?.trim()

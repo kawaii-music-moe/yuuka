@@ -20,6 +20,7 @@ pub mod recovery;
 pub mod references;
 pub mod routes;
 pub mod users;
+pub mod voices;
 
 pub use recovery::recover_orphaned_chat_turns;
 pub use routes::routes_with;

@@ -287,3 +287,47 @@ impl MessageBody {
         }
     }
 }
+
+/// `GET /api/client/voices` の 1 件（音声チャットの声。話者条件の本体は含めない）。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VoiceView {
+    pub id: String,
+    pub name: String,
+    /// 話し方の指定（Irodori-TTS のキャプション）。空なら指定なし。
+    pub caption: String,
+    /// `sample`（声のサンプルから）か `design`（キャプションと声の番号から）。
+    pub source: String,
+    /// 元にした音声の長さ（秒）。
+    pub seconds: f64,
+    /// 話者条件を作ったモデルの系統（モデルを差し替えたら一致しない声は使えない）。
+    pub speaker_model: String,
+    pub tokens: i64,
+    pub mask: Vec<bool>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+/// `POST /api/client/voices` の body。`stateBase64` は f32（リトルエンディアン）の tokens × 768。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VoiceCreateInput {
+    pub name: String,
+    #[serde(default)]
+    pub caption: String,
+    pub source: String,
+    #[serde(default)]
+    pub seconds: f64,
+    pub speaker_model: String,
+    pub mask: Vec<bool>,
+    pub state_base64: String,
+}
+
+/// `PATCH /api/client/voices/{id}` の body（指定した項目だけ変える）。
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct VoicePatch {
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub caption: Option<String>,
+}

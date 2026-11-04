@@ -1,8 +1,8 @@
 import type { AgentGateway } from './gateway'
-import type { AgentSettings, ChatAttachment, ChatMessage, ChatSendAccepted, NewCalendarEvent, SharedNote, Todo, Transaction } from './contracts'
+import type { AgentSettings, ChatAttachment, ChatMessage, ChatSendAccepted, NewCalendarEvent, NewVoice, SharedNote, Todo, Transaction, Voice } from './contracts'
 import { pollForChatReply, type ChatPollOptions } from './chatPolling'
 import { withSelectedAgent } from './agents'
-import { request } from './http'
+import { request, requestBytes, requestEmpty } from './http'
 import type { ReceiptImage } from '../utils/receiptImage'
 
 // `/api/client/*` は選択中エージェント（Bot）のデータを読み書きする（`?botId=`・`agents.ts`）。
@@ -37,4 +37,10 @@ export const httpAgentGateway: AgentGateway = {
     return pollForChatReply({ listMessages: listChatMessages, sinceId: accepted.sinceId, ...options })
   },
   waitForChatReply: (sinceId: string, options?: Pick<ChatPollOptions, 'onTick' | 'signal'>) => pollForChatReply({ listMessages: listChatMessages, sinceId, ...options }),
+  // 声はユーザー本人のもの（`?botId=` を付けない）。
+  listVoices: () => request<Voice[]>('/api/client/voices'),
+  getVoiceState: (id: string) => requestBytes(`/api/client/voices/${encodeURIComponent(id)}/state`),
+  createVoice: (voice: NewVoice) => request<Voice>('/api/client/voices', { method: 'POST', body: JSON.stringify(voice) }),
+  updateVoice: (id: string, patch: Partial<Pick<Voice, 'name' | 'caption'>>) => request<Voice>(`/api/client/voices/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(patch) }),
+  deleteVoice: (id: string) => requestEmpty(`/api/client/voices/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 }

@@ -57,3 +57,25 @@ export type ChatMessage = {
  * に現れたら完了（失敗・タイムアウト時もサーバーが終端のエラー応答を保存するため必ず現れる）。
  */
 export type ChatSendAccepted = { status: 'pending'; sinceId: string }
+/**
+ * 音声チャットの声（`GET /api/client/voices`・Irodori-TTS の話者条件）。ユーザー本人のもので、エージェントには
+ * 依らない。話者条件の本体（f32 の tokens × 768）は `GET /api/client/voices/:id/state` で取得する。
+ */
+export type Voice = {
+  id: string
+  name: string
+  /** 話し方の指定（キャプション）。空なら指定なし。 */
+  caption: string
+  /** `sample` は声のサンプルから、`design` はキャプションと声の番号から作った声。 */
+  source: 'sample' | 'design'
+  /** 元にした音声の長さ（秒）。 */
+  seconds: number
+  /** 話者条件を作ったモデルの系統。今のモデルと違えば使えない。 */
+  speakerModel: string
+  tokens: number
+  mask: boolean[]
+  createdAt: string
+  updatedAt: string
+}
+/** `POST /api/client/voices`。`stateBase64` は話者条件（f32 リトルエンディアン）の base64。 */
+export type NewVoice = Pick<Voice, 'name' | 'caption' | 'source' | 'seconds' | 'speakerModel' | 'mask'> & { stateBase64: string }

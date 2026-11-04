@@ -114,6 +114,7 @@ pub fn routes_with(
             get(chat_history).post(chat_send),
         )
         .route("/api/client/chat/attachments/{id}", get(chat_attachment))
+        .merge(crate::voices::routes())
         .layer(Extension(engine))
         .layer(Extension(InFlightTurns::default()))
 }

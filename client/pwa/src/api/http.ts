@@ -15,7 +15,7 @@ async function readServerMessage(response: Response): Promise<string | undefined
   return undefined
 }
 
-export async function request<T>(path: string, init?: RequestInit): Promise<T> {
+async function send(path: string, init?: RequestInit): Promise<Response> {
   const response = await fetch(path, {
     ...init,
     // `include` keeps the session cookie working both through Vite's dev
@@ -24,5 +24,19 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
     headers: { 'content-type': 'application/json', ...init?.headers },
   })
   if (!response.ok) throw new ApiError(`Request failed: ${response.status}`, response.status, await readServerMessage(response))
-  return response.json() as Promise<T>
+  return response
+}
+
+export async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  return (await send(path, init)).json() as Promise<T>
+}
+
+/** 本文の無い応答（204 No Content など）を返す API。 */
+export async function requestEmpty(path: string, init?: RequestInit): Promise<void> {
+  await send(path, init)
+}
+
+/** バイナリを返す API。 */
+export async function requestBytes(path: string, init?: RequestInit): Promise<ArrayBuffer> {
+  return (await send(path, init)).arrayBuffer()
 }

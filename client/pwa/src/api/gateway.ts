@@ -1,6 +1,6 @@
 import type { ChatPollOptions } from './chatPolling'
 import type { ReceiptImage } from '../utils/receiptImage'
-import type { AgentSettings, CalendarEvent, ChatAttachment, ChatMessage, NewCalendarEvent, FinanceSummary, HealthStatus, ReceiptDraft, SharedNote, Todo, Transaction } from './contracts'
+import type { AgentSettings, CalendarEvent, ChatAttachment, ChatMessage, NewCalendarEvent, FinanceSummary, HealthStatus, NewVoice, ReceiptDraft, SharedNote, Todo, Transaction, Voice } from './contracts'
 
 /** UI が依存する唯一の API 契約。バックエンド仕様変更時は adapter だけを変更する。 */
 export interface AgentGateway {
@@ -34,4 +34,12 @@ export interface AgentGateway {
   sendChatMessage(content: string, attachments: ChatAttachment[], options?: Pick<ChatPollOptions, 'onTick' | 'signal'>): Promise<ChatMessage>
   /** 送信済みだが応答待ちのターン（リロード後など）の応答を待つ。`sinceId` は最後に見えた id。 */
   waitForChatReply(sinceId: string, options?: Pick<ChatPollOptions, 'onTick' | 'signal'>): Promise<ChatMessage>
+  /** 音声チャットの声（ユーザー本人のもの・エージェントに依らない）。 */
+  listVoices(): Promise<Voice[]>
+  /** 声の話者条件の本体（f32 リトルエンディアン）。 */
+  getVoiceState(id: string): Promise<ArrayBuffer>
+  /** 声を保存する。保存数の上限（409）・`users` 行が無い（404）などは `ApiError`。 */
+  createVoice(voice: NewVoice): Promise<Voice>
+  updateVoice(id: string, patch: Partial<Pick<Voice, 'name' | 'caption'>>): Promise<Voice>
+  deleteVoice(id: string): Promise<void>
 }

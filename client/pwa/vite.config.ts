@@ -43,7 +43,17 @@ function adminLoginRedirectPlugin(): Plugin {
 export default defineConfig({
   base: '/',
   plugins: [adminLoginRedirectPlugin(), vue()],
-  resolve: { alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) } },
+  resolve: {
+    alias: {
+      '@': fileURLToPath(new URL('./src', import.meta.url)),
+      // onnxruntime-web の WASM 本体（package の exports に無いのでパスで参照する）。音声合成 Worker が ?url で読む。
+      'onnxruntime-web-dist': fileURLToPath(new URL('./node_modules/onnxruntime-web/dist', import.meta.url)),
+    },
+  },
+  // 音声合成 Worker（src/voice/tts/worker.ts）は ES module で出力する（onnxruntime-web が動的 import を使う）。
+  worker: { format: 'es' },
+  // 事前バンドルすると onnxruntime-web が自分の WASM の場所を見失う。
+  optimizeDeps: { exclude: ['onnxruntime-web'] },
   server: {
     // dev を Cloudflare Tunnel 経由の公開ホスト名（https）で開くため Host ヘッダ検証を外す。
     // ホスト名をハードコードしないよう true にしている（dev server 専用・本番ビルドには影響しない）。
@@ -56,6 +66,8 @@ export default defineConfig({
       // すべて `/admin/` 配下になり、この Client のモジュールグラフとは衝突しない。
       '^/admin(/|$)': { target: adminDevServer, changeOrigin: true, ws: true },
       '/api': { target: process.env.VITE_API_PROXY_TARGET ?? 'http://localhost:3000', changeOrigin: true },
+      // 音声モデルは本番と同じく API サーバー（data/tts-models）から配信する。
+      '/tts-models': { target: process.env.VITE_API_PROXY_TARGET ?? 'http://localhost:3000', changeOrigin: true },
     },
   },
 })

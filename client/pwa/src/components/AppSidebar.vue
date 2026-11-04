@@ -13,6 +13,7 @@ const props = defineProps<{ user: SessionUser | null }>()
 const items = [
   { to: '/', icon: 'home', label: 'ホーム' },
   { to: '/chat', icon: 'chat', label: 'チャット' },
+  { to: '/voice', icon: 'mic', label: '音声' },
   { to: '/todo', icon: 'check_circle', label: 'タスク' },
   { to: '/calendar', icon: 'calendar_month', label: '予定' },
   { to: '/finance', icon: 'account_balance_wallet', label: '家計' },
