@@ -96,7 +96,7 @@ const engineText = computed(() => {
     case 'checking': return '読み上げの準備を確認しています。'
     case 'needs-download': return `この端末で声を作るには、音声モデル（約 ${gb(e.totalBytes)} GB）を一度ダウンロードします。準備ができるまでは標準の読み上げを使います。`
     case 'loading': return `音声モデルを準備しています（${Math.floor((e.loaded / Math.max(e.total, 1)) * 100)}%）。準備ができるまでは標準の読み上げを使います。`
-    case 'ready': return `この端末で声を作ります（${e.adapter}）。`
+    case 'ready': return ''
     case 'server': return `サーバーで声を作ります（${e.reason}）。しばらく使わなかったあとの最初の 1 回は、準備に 10〜20 秒かかります。`
     case 'browser': return `ブラウザ標準の読み上げを使います（${e.reason}）。`
     case 'none': return `読み上げは使えません。返答は画面に表示します（${e.reason}）。`
@@ -407,7 +407,7 @@ onBeforeUnmount(() => {
 
 <template>
   <section class="voice-page">
-    <div class="voice-intro"><span class="muted">話しかけると、返答を声で読み上げます。</span><RouterLink to="/chat" class="text-link">チャットの履歴</RouterLink></div>
+    <div class="voice-intro"><RouterLink to="/chat" class="text-link">チャットの履歴</RouterLink></div>
 
     <!-- 読み上げの準備（準備ができていないときだけ目立たせる） -->
     <section v-if="engine.kind !== 'ready' && engine.kind !== 'server'" class="notice surface" :class="engine.kind" role="status">
@@ -430,7 +430,7 @@ onBeforeUnmount(() => {
       </button>
       <p class="phase-text" role="status">{{ phaseText }}</p>
       <p class="voice-line muted"><AppIcon name="record_voice_over" />{{ currentVoiceLabel }}</p>
-      <label class="toggle"><input v-model="handsFree" type="checkbox" @change="saveHandsFree" /><span>ハンズフリー（読み終えたら続けて聞く）</span></label>
+      <label class="toggle"><input v-model="handsFree" type="checkbox" @change="saveHandsFree" /><span>ハンズフリー</span></label>
       <p v-if="error" class="error">{{ error }}</p>
     </div>
 
@@ -450,7 +450,7 @@ onBeforeUnmount(() => {
       <div class="voice" :class="{ active: selectedVoice === DESIGNED }">
         <label class="voice-head"><input v-model="selectedVoice" type="radio" :value="DESIGNED" @change="selectVoice" /><span class="voice-name">特徴から作る声</span><span class="muted">声 {{ voiceSeed + 1 }}</span></label>
         <template v-if="selectedVoice === DESIGNED">
-          <label class="field"><span>どんな声にするか（例: 落ち着いた、近い距離感の若い女性話者）</span><input v-model="caption" type="text" maxlength="200" @change="saveCaption" /></label>
+          <label class="field"><span>どんな声にするか</span><input v-model="caption" type="text" maxlength="200" @change="saveCaption" /></label>
           <div class="row">
             <UiButton variant="secondary" icon="play_arrow" :disabled="!canPreview" @click="preview">試しに聞く</UiButton>
             <UiButton variant="secondary" icon="refresh" :disabled="!canPreview" @click="nextVoice">別の声にする</UiButton>
@@ -486,7 +486,7 @@ onBeforeUnmount(() => {
       <details class="more">
         <summary><AppIcon name="tune" />詳しい情報</summary>
         <div class="details-body">
-          <p class="muted">{{ engineText }}</p>
+          <p v-if="engineText" class="muted">{{ engineText }}</p>
           <label v-if="serverAvailable" class="toggle"><input v-model="useServer" type="checkbox" @change="saveUseServer" /><span>この端末の GPU を使わず、サーバーで声を作る</span></label>
           <p v-if="stats" class="muted">前回の読み上げ: 最初の音まで {{ (stats.firstAudioMs / 1000).toFixed(1) }} 秒・途切れ {{ (stats.stallMs / 1000).toFixed(1) }} 秒・音声 {{ stats.audioSec.toFixed(1) }} 秒</p>
           <div v-if="engine.kind === 'ready'" class="row"><UiButton variant="text" icon="delete" @click="clearModel">この端末に保存した音声モデルを削除</UiButton></div>
@@ -498,7 +498,7 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .voice-page{max-width:720px;margin:0 auto;display:flex;flex-direction:column;gap:16px}
-.voice-intro{display:flex;justify-content:space-between;gap:12px;align-items:end;border-bottom:1px solid var(--line);padding-bottom:15px}.voice-intro .muted{margin:0}.text-link{font-size:13px;color:var(--primary);white-space:nowrap}
+.voice-intro{display:flex;justify-content:flex-end;gap:12px;align-items:end;border-bottom:1px solid var(--line);padding-bottom:15px}.text-link{font-size:13px;color:var(--primary);white-space:nowrap}
 .notice{display:flex;gap:12px;padding:14px 16px;align-items:flex-start}.notice>.app-icon{color:var(--primary);margin-top:2px}.notice.browser>.app-icon,.notice.none>.app-icon{color:var(--text-medium)}.notice-body{flex:1;min-width:0;display:flex;flex-direction:column;gap:10px}.notice-body p{margin:0;font-size:14px}.notice-body .muted{font-size:12px}
 .stage{display:flex;flex-direction:column;align-items:center;gap:8px;padding:24px 0 8px;text-align:center}
 .mic{width:112px;height:112px;border-radius:50%;border:2px solid var(--primary-border);background:var(--primary-soft);color:var(--primary);display:grid;place-items:center;transition:transform .15s ease,background .15s ease}.mic .app-icon{font-size:48px}.mic:hover:not(:disabled){background:rgba(187,134,252,.2)}.mic:disabled{opacity:.6;cursor:default}
@@ -519,5 +519,5 @@ onBeforeUnmount(() => {
 .more{border-top:1px solid var(--line);padding-top:10px}.more>summary{display:flex;align-items:center;gap:6px;cursor:pointer;font-size:13px;font-weight:600;color:var(--primary);list-style:none}.more>summary::-webkit-details-marker{display:none}.more[open]>summary{margin-bottom:10px}
 .details-body{display:flex;flex-direction:column;gap:8px}.details-body .muted{margin:0}
 .progress{height:4px;background:var(--line);border-radius:2px;overflow:hidden;position:relative}.progress::after{content:'';position:absolute;inset:0 auto 0 0;width:var(--p);background:var(--primary);transition:width .2s ease}
-@media(max-width:640px){.stage{padding:16px 0 4px}.mic{width:96px;height:96px}.voice-intro .muted{display:none}}
+@media(max-width:640px){.stage{padding:16px 0 4px}.mic{width:96px;height:96px}}
 </style>
