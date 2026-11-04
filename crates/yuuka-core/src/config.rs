@@ -44,6 +44,9 @@ pub struct Config {
     pub trusted_proxies: Vec<IpAddr>,
     /// index.html へ差し込む google-site-verification 値（`GOOGLE_SITE_VERIFICATION`）。
     pub google_site_verification: Option<String>,
+    /// サーバーでの音声生成（GPU の無い端末向け・`client/pwa/server/tts`）の URL（`TTS_SERVER_URL`・
+    /// 例 `http://127.0.0.1:3410`）。未設定なら `/api/client/tts/*` は 404 で、PWA は標準の読み上げを使う。
+    pub tts_server_url: Option<String>,
     /// プライバシーポリシー URL（`PRIVACY_POLICY_URL`・`/api/me` で返す）。
     pub privacy_policy_url: String,
     /// 利用規約 URL（`TERMS_URL`・同上）。
@@ -128,6 +131,7 @@ impl Config {
             oidc: OidcSettings::from_lookup(&get),
             trusted_proxies,
             google_site_verification: non_empty(get("GOOGLE_SITE_VERIFICATION")),
+            tts_server_url: non_empty(get("TTS_SERVER_URL")),
             privacy_policy_url: get("PRIVACY_POLICY_URL").unwrap_or_default(),
             terms_url: get("TERMS_URL").unwrap_or_default(),
             encryption_secret: non_empty(get("YUUKA_ENCRYPTION_SECRET")).map(SecretString::from),

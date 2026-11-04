@@ -38,3 +38,5 @@ BASE_URL: "https://yuuka.example.com"
 PRIVACY_POLICY_URL: "/privacy"
 TERMS_URL: "/terms"
 GOOGLE_SITE_VERIFICATION: ""
+# サーバーでの音声生成（GPU の無い端末向け・deploy/tts/yuuka-tts.service）。未設定なら標準の読み上げになる。
+TTS_SERVER_URL: "http://127.0.0.1:3410"

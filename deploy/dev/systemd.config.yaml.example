@@ -10,3 +10,5 @@ BASE_URL: "https://yuuka-dev.sk-9.net"
 OIDC_INTERNAL_URL: "http://127.0.0.1:3100"
 OIDC_CLIENT_ID: "yuuka-dev"
 OIDC_CLIENT_SECRET: ""
+# Server-side TTS for devices without WebGPU (deploy/tts/yuuka-tts.service, shared with production).
+TTS_SERVER_URL: "http://127.0.0.1:3410"

@@ -31,6 +31,8 @@ pub struct WebConfig {
     /// index.html へ差し込む google-site-verification 値（`config.google_site_verification`・
     /// [`crate::mount_pwa`]/[`crate::mount_static`] へ渡す・#124）。`None` は差し込まない。
     pub google_site_verification: Option<String>,
+    /// サーバーでの音声生成の URL（`config.tts_server_url`・`/api/client/tts/*` の中継先）。`None` は中継しない。
+    pub tts_server_url: Option<String>,
 }
 
 impl WebConfig {
@@ -48,6 +50,7 @@ impl WebConfig {
             db_path: cfg.db_path.to_string_lossy().into_owned(),
             reminder_cron: cfg.reminder_cron.clone(),
             google_site_verification: cfg.google_site_verification.clone(),
+            tts_server_url: cfg.tts_server_url.clone(),
         }
     }
 }

@@ -19,6 +19,7 @@ pub mod error;
 pub mod recovery;
 pub mod references;
 pub mod routes;
+pub mod tts_proxy;
 pub mod users;
 pub mod voices;
 
