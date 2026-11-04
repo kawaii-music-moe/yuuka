@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { agentGateway, ApiError, ChatReplyTimeoutError, type ChatMessage } from '@/api'
 import AppIcon from '@/components/AppIcon.vue'
 import MarkdownContent from '@/components/MarkdownContent.vue'
@@ -63,6 +63,11 @@ const savingDesigned = ref(false)
 const previewing = ref(false)
 const voicesError = ref('')
 const sampleForm = ref<InstanceType<typeof VoiceSampleForm>>()
+/** 声を作るモーダル（特徴から・サンプルから）。 */
+const createDialog = ref<HTMLDialogElement>()
+const createOpen = ref(false)
+const createMode = ref<'design' | 'sample'>('design')
+const createError = ref('')
 const heard = ref('')
 const reply = ref<ChatMessage>()
 const typed = ref('')
@@ -73,9 +78,13 @@ const canListen = speechInputAvailable()
 
 const client = irodoriClient()
 const player = new ChunkPlayer()
-/** 今選んでいる声。保存した声の話者条件がまだ読めていなければ、特徴から作る声にする。 */
+/**
+ * 今選んでいる声。保存した声の話者条件がまだ読めていなければ、特徴から作る声にする。
+ * 声を作るモーダルで特徴から作っている間は、選んでいる声によらず、その声を試す。
+ */
 function voiceSpec(): VoiceSpec {
-  const saved = savedVoices.value.find((v) => v.id === selectedVoice.value)
+  const designing = createOpen.value && createMode.value === 'design'
+  const saved = designing ? undefined : savedVoices.value.find((v) => v.id === selectedVoice.value)
   const speaker = saved && speakers.get(saved.id)
   // key はサーバーでの生成が話者条件を覚えておくため（同じ声なら毎回送らない）。
   if (saved && speaker) return { kind: 'clone', caption: saved.caption, state: speaker.state, mask: speaker.mask, key: `${saved.id}-${saved.createdAt}` }
@@ -96,7 +105,7 @@ const engineText = computed(() => {
     case 'checking': return '読み上げの準備を確認しています。'
     case 'needs-download': return `この端末で声を作るには、音声モデル（約 ${gb(e.totalBytes)} GB）を一度ダウンロードします。準備ができるまでは標準の読み上げを使います。`
     case 'loading': return `音声モデルを準備しています（${Math.floor((e.loaded / Math.max(e.total, 1)) * 100)}%）。準備ができるまでは標準の読み上げを使います。`
-    case 'ready': return `この端末で声を作ります（${e.adapter}）。`
+    case 'ready': return ''
     case 'server': return `サーバーで声を作ります（${e.reason}）。しばらく使わなかったあとの最初の 1 回は、準備に 10〜20 秒かかります。`
     case 'browser': return `ブラウザ標準の読み上げを使います（${e.reason}）。`
     case 'none': return `読み上げは使えません。返答は画面に表示します（${e.reason}）。`
@@ -288,6 +297,7 @@ async function loadSavedVoices() {
 
 /** 作った声を一覧に加えて選び、試しに読む。 */
 async function adopt(saved: SavedVoice, speaker: SpeakerCondition) {
+  closeCreate()
   speakers.set(saved.id, speaker)
   savedVoices.value = [...savedVoices.value, saved]
   selectedVoice.value = saved.id
@@ -303,7 +313,7 @@ function saveError(cause: unknown, what: string): string {
 /** 声のサンプルから声を作ってサーバーに保存し、その声に切り替えて試しに読む。 */
 async function addVoice({ name, caption: style, sample }: { name: string; caption: string; sample: VoiceSample }) {
   cloning.value = true
-  error.value = ''
+  createError.value = ''
   try {
     // 送ると Worker に移るので、やり直せるよう複製を渡す。
     const speaker = engine.value.kind === 'ready' ? await client.clone(sample.audio.slice()) : await serverClone(sample.audio)
@@ -311,7 +321,7 @@ async function addVoice({ name, caption: style, sample }: { name: string; captio
     sampleForm.value?.reset()
     await adopt(saved, speaker)
   } catch (cause) {
-    error.value = saveError(cause, '声を作れませんでした')
+    createError.value = saveError(cause, '声を作れませんでした')
   } finally {
     cloning.value = false
   }
@@ -320,14 +330,14 @@ async function addVoice({ name, caption: style, sample }: { name: string; captio
 /** 特徴から作った今の声を保存する（どの端末でも同じ声で読める）。 */
 async function saveDesigned() {
   savingDesigned.value = true
-  error.value = ''
+  createError.value = ''
   try {
     const style = caption.value.trim() || DEFAULT_CAPTION
     const speaker = engine.value.kind === 'ready' ? await client.design(style, voiceSeed.value) : await serverDesign(style, voiceSeed.value)
     const name = `${[...style].slice(0, 16).join('')}（声 ${voiceSeed.value + 1}）`
     await adopt(await saveVoice({ name, caption: style, source: 'design', seconds: 0 }, speaker), speaker)
   } catch (cause) {
-    error.value = saveError(cause, '声を保存できませんでした')
+    createError.value = saveError(cause, '声を保存できませんでした')
   } finally {
     savingDesigned.value = false
   }
@@ -370,12 +380,14 @@ async function preview() {
   if (phase.value !== 'idle' || previewing.value) return
   await player.unlock().catch(() => undefined)
   previewing.value = true
-  error.value = ''
+  // モーダルの中で試したときは、エラーもモーダルに出す。
+  const report = createOpen.value ? createError : error
+  report.value = ''
   try {
     speaker = currentSpeaker()
     await speaker?.speak([PREVIEW_TEXT])
   } catch (cause) {
-    error.value = describeError(cause)
+    report.value = describeError(cause)
   } finally {
     previewing.value = false
   }
@@ -386,6 +398,22 @@ async function nextVoice() {
   writeStorage(VOICE_SEED_KEY, String(voiceSeed.value))
   await preview()
 }
+async function openCreate() {
+  createMode.value = 'design'
+  createError.value = ''
+  createOpen.value = true
+  await nextTick()
+  if (!createDialog.value?.open) createDialog.value?.showModal()
+}
+/** モーダルを閉じる（Esc・背景・閉じるボタン、声を保存したとき）。試している声は止め、選んでいる声に戻す。 */
+function closeCreate() {
+  if (!createOpen.value) return
+  if (previewing.value) speaker?.stop()
+  createOpen.value = false
+  if (createDialog.value?.open) createDialog.value.close()
+  if (engine.value.kind === 'ready') void client.prepareVoice(voiceSpec()).catch(() => undefined)
+}
+function onCreateBackdrop(event: MouseEvent) { if (event.target === createDialog.value) closeCreate() }
 function saveHandsFree() { writeStorage(HANDS_FREE_KEY, handsFree.value ? '1' : '0') }
 async function clearModel() {
   speaker?.stop()
@@ -407,7 +435,7 @@ onBeforeUnmount(() => {
 
 <template>
   <section class="voice-page">
-    <div class="voice-intro"><span class="muted">話しかけると、返答を声で読み上げます。</span><RouterLink to="/chat" class="text-link">チャットの履歴</RouterLink></div>
+    <div class="voice-intro"><RouterLink to="/chat" class="text-link">チャットの履歴</RouterLink></div>
 
     <!-- 読み上げの準備（準備ができていないときだけ目立たせる） -->
     <section v-if="engine.kind !== 'ready' && engine.kind !== 'server'" class="notice surface" :class="engine.kind" role="status">
@@ -430,7 +458,7 @@ onBeforeUnmount(() => {
       </button>
       <p class="phase-text" role="status">{{ phaseText }}</p>
       <p class="voice-line muted"><AppIcon name="record_voice_over" />{{ currentVoiceLabel }}</p>
-      <label class="toggle"><input v-model="handsFree" type="checkbox" @change="saveHandsFree" /><span>ハンズフリー（読み終えたら続けて聞く）</span></label>
+      <label class="toggle"><input v-model="handsFree" type="checkbox" @change="saveHandsFree" /><span>ハンズフリー</span></label>
       <p v-if="error" class="error">{{ error }}</p>
     </div>
 
@@ -446,17 +474,10 @@ onBeforeUnmount(() => {
 
     <!-- 声 -->
     <section v-if="engine.kind !== 'browser' && engine.kind !== 'none'" class="panel surface">
-      <h2 class="section-title">声</h2>
+      <div class="panel-head"><h2 class="section-title">声</h2><UiButton variant="secondary" icon="add" @click="openCreate">声を作る</UiButton></div>
       <div class="voice" :class="{ active: selectedVoice === DESIGNED }">
-        <label class="voice-head"><input v-model="selectedVoice" type="radio" :value="DESIGNED" @change="selectVoice" /><span class="voice-name">特徴から作る声</span><span class="muted">声 {{ voiceSeed + 1 }}</span></label>
-        <template v-if="selectedVoice === DESIGNED">
-          <label class="field"><span>どんな声にするか（例: 落ち着いた、近い距離感の若い女性話者）</span><input v-model="caption" type="text" maxlength="200" @change="saveCaption" /></label>
-          <div class="row">
-            <UiButton variant="secondary" icon="play_arrow" :disabled="!canPreview" @click="preview">試しに聞く</UiButton>
-            <UiButton variant="secondary" icon="refresh" :disabled="!canPreview" @click="nextVoice">別の声にする</UiButton>
-            <UiButton variant="secondary" icon="bookmark_add" :disabled="!canUseIrodori || savingDesigned" @click="saveDesigned">{{ savingDesigned ? '保存しています…' : 'この声を保存' }}</UiButton>
-          </div>
-        </template>
+        <label class="voice-head"><input v-model="selectedVoice" type="radio" :value="DESIGNED" @change="selectVoice" /><span class="voice-name">特徴から作る声</span><span class="muted">{{ caption.trim() || DEFAULT_CAPTION }}・声 {{ voiceSeed + 1 }}</span></label>
+        <div v-if="selectedVoice === DESIGNED" class="row"><UiButton variant="secondary" icon="play_arrow" :disabled="!canPreview" @click="preview">試しに聞く</UiButton></div>
       </div>
 
       <p v-if="savedVoices.length > 0" class="group-title">保存した声<span class="muted">（あなただけが、ほかの端末からも使えます）</span></p>
@@ -472,12 +493,31 @@ onBeforeUnmount(() => {
         </template>
       </div>
       <p v-if="voicesError" class="error">{{ voicesError }}</p>
-
-      <details class="more">
-        <summary><AppIcon name="add" />声のサンプルから追加</summary>
-        <VoiceSampleForm ref="sampleForm" :disabled="!canUseIrodori" :busy="cloning" @create="addVoice" />
-      </details>
     </section>
+
+    <!-- 声を作る（閉じると中身を捨てる。録音中なら止まる） -->
+    <dialog ref="createDialog" class="create-modal" aria-labelledby="create-title" @close="closeCreate" @click="onCreateBackdrop">
+      <div v-if="createOpen" class="create-body">
+        <h2 id="create-title">声を作る</h2>
+        <div class="tabs" role="tablist">
+          <button type="button" role="tab" :aria-selected="createMode === 'design'" :class="{ active: createMode === 'design' }" @click="createMode = 'design'; createError = ''">特徴から作る</button>
+          <button type="button" role="tab" :aria-selected="createMode === 'sample'" :class="{ active: createMode === 'sample' }" @click="createMode = 'sample'; createError = ''">声のサンプルから作る</button>
+        </div>
+        <div v-if="createMode === 'design'" class="design-form" role="tabpanel">
+          <label class="field"><span>どんな声にするか</span><input v-model="caption" type="text" maxlength="200" autofocus @change="saveCaption" /></label>
+          <div class="row">
+            <UiButton variant="secondary" icon="play_arrow" :disabled="!canPreview" @click="preview">試しに聞く</UiButton>
+            <UiButton variant="secondary" icon="refresh" :disabled="!canPreview" @click="nextVoice">別の声にする</UiButton>
+            <span class="muted seed">声 {{ voiceSeed + 1 }}</span>
+          </div>
+          <div class="row"><UiButton icon="bookmark_add" :disabled="!canUseIrodori || savingDesigned" @click="saveDesigned">{{ savingDesigned ? '保存しています…' : 'この声を保存' }}</UiButton></div>
+        </div>
+        <VoiceSampleForm v-else ref="sampleForm" role="tabpanel" :disabled="!canUseIrodori" :busy="cloning" @create="addVoice" />
+        <p v-if="!canUseIrodori" class="muted">音声モデルの準備ができると、声を作れます。</p>
+        <p v-if="createError" class="error">{{ createError }}</p>
+        <div class="create-actions"><UiButton variant="secondary" @click="closeCreate">閉じる</UiButton></div>
+      </div>
+    </dialog>
 
     <!-- 読み上げの設定 -->
     <section class="panel surface">
@@ -486,7 +526,7 @@ onBeforeUnmount(() => {
       <details class="more">
         <summary><AppIcon name="tune" />詳しい情報</summary>
         <div class="details-body">
-          <p class="muted">{{ engineText }}</p>
+          <p v-if="engineText" class="muted">{{ engineText }}</p>
           <label v-if="serverAvailable" class="toggle"><input v-model="useServer" type="checkbox" @change="saveUseServer" /><span>この端末の GPU を使わず、サーバーで声を作る</span></label>
           <p v-if="stats" class="muted">前回の読み上げ: 最初の音まで {{ (stats.firstAudioMs / 1000).toFixed(1) }} 秒・途切れ {{ (stats.stallMs / 1000).toFixed(1) }} 秒・音声 {{ stats.audioSec.toFixed(1) }} 秒</p>
           <div v-if="engine.kind === 'ready'" class="row"><UiButton variant="text" icon="delete" @click="clearModel">この端末に保存した音声モデルを削除</UiButton></div>
@@ -498,7 +538,7 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .voice-page{max-width:720px;margin:0 auto;display:flex;flex-direction:column;gap:16px}
-.voice-intro{display:flex;justify-content:space-between;gap:12px;align-items:end;border-bottom:1px solid var(--line);padding-bottom:15px}.voice-intro .muted{margin:0}.text-link{font-size:13px;color:var(--primary);white-space:nowrap}
+.voice-intro{display:flex;justify-content:flex-end;gap:12px;align-items:end;border-bottom:1px solid var(--line);padding-bottom:15px}.text-link{font-size:13px;color:var(--primary);white-space:nowrap}
 .notice{display:flex;gap:12px;padding:14px 16px;align-items:flex-start}.notice>.app-icon{color:var(--primary);margin-top:2px}.notice.browser>.app-icon,.notice.none>.app-icon{color:var(--text-medium)}.notice-body{flex:1;min-width:0;display:flex;flex-direction:column;gap:10px}.notice-body p{margin:0;font-size:14px}.notice-body .muted{font-size:12px}
 .stage{display:flex;flex-direction:column;align-items:center;gap:8px;padding:24px 0 8px;text-align:center}
 .mic{width:112px;height:112px;border-radius:50%;border:2px solid var(--primary-border);background:var(--primary-soft);color:var(--primary);display:grid;place-items:center;transition:transform .15s ease,background .15s ease}.mic .app-icon{font-size:48px}.mic:hover:not(:disabled){background:rgba(187,134,252,.2)}.mic:disabled{opacity:.6;cursor:default}
@@ -511,6 +551,7 @@ onBeforeUnmount(() => {
 .exchange{display:flex;flex-direction:column;gap:10px}.bubble{padding:10px 14px;border-radius:4px;overflow-wrap:anywhere}.bubble p{margin:0}.bubble .who{display:block;font-size:11px;font-weight:700;color:var(--text-medium);margin-bottom:4px}
 .bubble.user{align-self:flex-end;max-width:85%;background:var(--primary-soft);border-left:3px solid var(--primary)}.bubble.agent{border:1px solid var(--line);border-left:2px solid var(--line)}
 .panel{padding:14px 16px;display:flex;flex-direction:column;gap:10px}.panel .section-title{margin:0 0 2px;font-size:15px}
+.panel-head{display:flex;justify-content:space-between;align-items:center;gap:8px}.panel-head .section-title{margin:0}
 .group-title{margin:8px 0 0;font-size:13px;font-weight:600}.group-title .muted{font-weight:400;margin-left:4px}
 .voice{display:flex;flex-direction:column;gap:10px;padding:10px 12px;border:1px solid var(--line);border-radius:4px}.voice.active{border-color:var(--primary-border);background:var(--primary-soft)}.voice.unusable{opacity:.6}
 .voice-head{display:flex;gap:8px;align-items:center;flex-wrap:wrap;cursor:pointer}.voice-name{font-weight:600;font-size:14px}.voice-head .muted{font-size:12px}
@@ -518,6 +559,11 @@ onBeforeUnmount(() => {
 .field{display:flex;flex-direction:column;gap:5px;font-size:12px;color:var(--text-medium)}.field input{padding:9px 10px;border:1px solid var(--field);border-radius:4px;font-size:14px}.field select{padding:9px 10px;border:1px solid var(--field);border-radius:4px;font-size:14px;max-width:220px}
 .more{border-top:1px solid var(--line);padding-top:10px}.more>summary{display:flex;align-items:center;gap:6px;cursor:pointer;font-size:13px;font-weight:600;color:var(--primary);list-style:none}.more>summary::-webkit-details-marker{display:none}.more[open]>summary{margin-bottom:10px}
 .details-body{display:flex;flex-direction:column;gap:8px}.details-body .muted{margin:0}
+.create-modal{width:min(520px,calc(100vw - 32px));padding:0;border:1px solid var(--line);border-radius:6px;background:var(--surface-2);color:var(--text-high)}.create-modal::backdrop{background:rgba(0,0,0,.6)}
+.create-body{padding:20px;display:flex;flex-direction:column;gap:14px}.create-body h2{margin:0;font-size:16px}.create-body>.muted,.create-body>.error{margin:0;font-size:13px}
+.tabs{display:flex;border-bottom:1px solid var(--line)}.tabs button{flex:1;padding:8px 10px;border:0;border-bottom:2px solid transparent;margin-bottom:-1px;background:transparent;color:var(--text-medium);font:inherit;font-size:13px;font-weight:600;cursor:pointer}.tabs button.active{color:var(--primary);border-bottom-color:var(--primary)}.tabs button:focus{outline:0}.tabs button:focus-visible{outline:2px solid var(--primary-border);outline-offset:-2px}
+.design-form{display:flex;flex-direction:column;gap:10px}.seed{font-size:12px}
+.create-actions{display:flex;justify-content:flex-end}
 .progress{height:4px;background:var(--line);border-radius:2px;overflow:hidden;position:relative}.progress::after{content:'';position:absolute;inset:0 auto 0 0;width:var(--p);background:var(--primary);transition:width .2s ease}
-@media(max-width:640px){.stage{padding:16px 0 4px}.mic{width:96px;height:96px}.voice-intro .muted{display:none}}
+@media(max-width:640px){.stage{padding:16px 0 4px}.mic{width:96px;height:96px}}
 </style>
