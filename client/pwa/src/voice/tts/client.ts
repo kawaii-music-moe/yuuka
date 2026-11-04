@@ -8,16 +8,20 @@ export type ChunkHandler = (chunk: { audio: Float32Array; sampleRate: number; fi
 type Pending = { onChunk: ChunkHandler; resolve: () => void; reject: (error: Error) => void }
 
 export class IrodoriClient {
-  private worker: Worker
+  private readonly worker: Worker
   private nextId = 1
   private readonly pending = new Map<number, Pending>()
   private readonly speakers = new Map<number, { resolve: (speaker: SpeakerCondition) => void; reject: (error: Error) => void }>()
-  private onProbe?: (result: ProbeResult) => void
-  private loadWaiter?: { resolve: (adapter: string) => void; reject: (error: Error) => void; onProgress: (loaded: number, total: number) => void }
-  private clearWaiter?: () => void
+  // 画面を開き直す・素早く行き来するなどで、同じ要求が重なることがある。どれも取りこぼさないよう配列で待つ。
+  /** probe は 1 要求につき 1 応答なので、届いた順に返す。 */
+  private readonly probeWaiters: ((result: ProbeResult) => void)[] = []
+  /** 読み込みは 1 つしか走らないので、ready / エラーで待っている全員に返す。 */
+  private loadWaiters: { resolve: (adapter: string) => void; reject: (error: Error) => void; onProgress: (loaded: number, total: number) => void }[] = []
+  private clearWaiters: (() => void)[] = []
 
-  constructor() {
-    this.worker = new Worker(new URL('./worker.ts', import.meta.url), { type: 'module' })
+  /** `worker` はテスト用に差し替えられる。 */
+  constructor(worker?: Worker) {
+    this.worker = worker ?? new Worker(new URL('./worker.ts', import.meta.url), { type: 'module' })
     this.worker.onmessage = (event: MessageEvent<WorkerResponse>) => this.handle(event.data)
   }
 
@@ -25,35 +29,40 @@ export class IrodoriClient {
 
   private handle(message: WorkerResponse) {
     switch (message.type) {
-      case 'probe': this.onProbe?.(message); this.onProbe = undefined; break
-      case 'progress': this.loadWaiter?.onProgress(message.loaded, message.total); break
-      case 'ready': this.loadWaiter?.resolve(message.adapter); this.loadWaiter = undefined; break
+      case 'probe': this.probeWaiters.shift()?.(message); break
+      case 'progress': this.loadWaiters.forEach((w) => w.onProgress(message.loaded, message.total)); break
+      case 'ready': this.takeLoadWaiters().forEach((w) => w.resolve(message.adapter)); break
       case 'chunk': this.pending.get(message.id)?.onChunk(message); break
       case 'done': this.pending.get(message.id)?.resolve(); this.pending.delete(message.id); break
       case 'speaker': this.speakers.get(message.id)?.resolve({ state: message.state, mask: message.mask }); this.speakers.delete(message.id); break
-      case 'cleared': this.clearWaiter?.(); this.clearWaiter = undefined; break
+      case 'cleared': this.clearWaiters.shift()?.(); break
       case 'error':
         if (message.id !== undefined) {
           this.pending.get(message.id)?.reject(new Error(message.message))
           this.pending.delete(message.id)
           this.speakers.get(message.id)?.reject(new Error(message.message))
           this.speakers.delete(message.id)
-        } else if (this.loadWaiter) {
-          this.loadWaiter.reject(new Error(message.message))
-          this.loadWaiter = undefined
+        } else {
+          this.takeLoadWaiters().forEach((w) => w.reject(new Error(message.message)))
         }
         break
     }
   }
 
-  /** WebGPU 対応かどうかと、モデルが保存済みかを調べる。 */
-  probe(): Promise<ProbeResult> {
-    return new Promise((resolve) => { this.onProbe = resolve; this.send({ type: 'probe' }) })
+  private takeLoadWaiters() {
+    const waiters = this.loadWaiters
+    this.loadWaiters = []
+    return waiters
   }
 
-  /** モデルを読み込む（未保存なら取得する）。読み込めたら GPU の名前を返す。 */
+  /** WebGPU 対応かどうかと、モデルが保存済みかを調べる。 */
+  probe(): Promise<ProbeResult> {
+    return new Promise((resolve) => { this.probeWaiters.push(resolve); this.send({ type: 'probe' }) })
+  }
+
+  /** モデルを読み込む（未保存なら取得する）。読み込み済みならすぐに、GPU の名前を返す。 */
   load(onProgress: (loaded: number, total: number) => void): Promise<string> {
-    return new Promise((resolve, reject) => { this.loadWaiter = { resolve, reject, onProgress }; this.send({ type: 'load' }) })
+    return new Promise((resolve, reject) => { this.loadWaiters.push({ resolve, reject, onProgress }); this.send({ type: 'load' }) })
   }
 
   /**
@@ -95,7 +104,7 @@ export class IrodoriClient {
   cancel() { this.send({ type: 'cancel' }) }
 
   clearStored(): Promise<void> {
-    return new Promise((resolve) => { this.clearWaiter = resolve; this.send({ type: 'clear' }) })
+    return new Promise((resolve) => { this.clearWaiters.push(resolve); this.send({ type: 'clear' }) })
   }
 }
 

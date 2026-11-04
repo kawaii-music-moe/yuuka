@@ -25,7 +25,13 @@ const SESSIONS = { cond: 'cond_encoder', duration: 'duration', dit: 'dit_step', 
 
 let manifest: ModelManifest | undefined
 let tts: IrodoriTts | undefined
-let loading: Promise<void> | undefined
+/** 読み込み済みのセッション（モデルを消すときに GPU メモリを解放する）。 */
+let loadedSessions: ort.InferenceSession[] = []
+/**
+ * 読み込み（成功したら GPU の名前）。成功後も持ち続け、画面を開き直すなどで届く 2 回目以降の
+ * `load` には、読み込み中なら完了を待って、読み込み済みならすぐに `ready` を返す。失敗したら捨てる。
+ */
+let loading: Promise<string> | undefined
 /** cancel のたびに進める。古い世代の合成は打ち切る。 */
 let epoch = 0
 type Job =
@@ -93,7 +99,7 @@ async function probe() {
   post({ type: 'probe', supported: support.ok, reason: support.ok ? undefined : support.reason, stored: await isStored(manifest), totalBytes })
 }
 
-async function load() {
+async function load(): Promise<string> {
   const support = await gpuSupport()
   if (!support.ok) throw new Error(support.reason)
   manifest ??= await fetchManifest()
@@ -140,7 +146,23 @@ async function load() {
     tts = undefined
     throw error
   }
-  post({ type: 'ready', adapter: support.adapter })
+  loadedSessions = Object.values(sessions)
+  return support.adapter
+}
+
+/** 読み込んだモデルを捨てる（GPU メモリを解放する）。次の `load` で読み込み直す。 */
+async function unload() {
+  epoch++
+  queue.length = 0
+  const pending = loading
+  loading = undefined
+  await pending?.catch(() => undefined)
+  const sessions = [...loadedSessions, ...(encoder ? [await encoder.catch(() => undefined)] : [])]
+  loadedSessions = []
+  encoder = undefined
+  tts = undefined
+  designed.clear()
+  await Promise.all(sessions.map((session) => session?.release().catch(() => undefined)))
 }
 
 async function drain() {
@@ -188,9 +210,17 @@ scope.onmessage = (event) => {
     case 'probe':
       probe().catch((error) => post({ type: 'error', message: errorMessage(error) }))
       break
-    case 'load':
-      loading ??= load().catch((error) => { loading = undefined; post({ type: 'error', message: errorMessage(error) }) })
+    case 'load': {
+      const current = (loading ??= load())
+      current.then(
+        (adapter) => post({ type: 'ready', adapter }),
+        (error) => {
+          if (loading === current) loading = undefined
+          post({ type: 'error', message: errorMessage(error) })
+        },
+      )
       break
+    }
     case 'speak':
       queue.push({ ...message, kind: 'speak', epoch })
       void drain()
@@ -207,7 +237,8 @@ scope.onmessage = (event) => {
       epoch++
       break
     case 'clear':
-      clearStoredModels().then(() => post({ type: 'cleared' }), (error) => post({ type: 'error', message: errorMessage(error) }))
+      // 端末の保存を消すなら、読み込み済みのモデルも捨てる（準備し直すと取得からやり直す）。
+      unload().then(clearStoredModels).then(() => post({ type: 'cleared' }), (error) => post({ type: 'error', message: errorMessage(error) }))
       break
   }
 }
