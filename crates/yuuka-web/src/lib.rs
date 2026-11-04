@@ -30,7 +30,9 @@ pub use extract::ScopedJson;
 pub use scope::{has_bot_access, resolve_scope, ScopeError};
 pub use settings::{get_system_setting, public_legal_urls};
 pub use state::{AppState, Db};
-pub use static_files::{mount_pwa, mount_static, ADMIN_PREFIX};
+pub use static_files::{
+    mount_pwa, mount_static, mount_tts_models, ADMIN_PREFIX, TTS_MODELS_PREFIX,
+};
 
 use axum::extract::{DefaultBodyLimit, Request};
 use axum::http::header::{
@@ -50,7 +52,10 @@ pub const MAX_BODY_BYTES: usize = 10 * 1024 * 1024;
 /// `script-src` から `'unsafe-inline'` を除外した実効的 XSS 多層防御。`style-src` の
 /// `'unsafe-inline'` はテンプレート内 `style=` のため維持（Node 踏襲）。インライン JS を
 /// 足す場合は nonce/hash 方式へ移行すること。
-const CSP: &str = "default-src 'self'; script-src 'self' https://static.cloudflareinsights.com; \
+///
+/// `'wasm-unsafe-eval'` は PWA の音声チャット（端末内で Irodori-TTS を動かす onnxruntime-web）が
+/// WebAssembly をコンパイルするため。JS の `eval` は許可しない（`'unsafe-eval'` とは別物）。
+const CSP: &str = "default-src 'self'; script-src 'self' 'wasm-unsafe-eval' https://static.cloudflareinsights.com; \
 style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://fonts.gstatic.com; \
 font-src 'self' https://fonts.gstatic.com https://fonts.googleapis.com; \
 img-src 'self' data: https://assets-global.website-files.com https://cdn.discordapp.com; \
@@ -644,8 +649,11 @@ mod tests {
             Some(super::CSP.as_bytes())
         );
         // CSP は script-src から unsafe-inline を除外している（XSS 多層防御の核）。
-        assert!(super::CSP.contains("script-src 'self' https://static.cloudflareinsights.com;"));
-        assert!(!super::CSP.contains("script-src 'self' 'unsafe-inline'"));
+        assert!(super::CSP.contains(
+            "script-src 'self' 'wasm-unsafe-eval' https://static.cloudflareinsights.com;"
+        ));
+        assert!(!super::CSP.contains("'unsafe-inline' https://static.cloudflareinsights.com"));
+        assert!(!super::CSP.contains("'unsafe-eval'"));
         assert_eq!(
             h.get("referrer-policy").map(|v| v.as_bytes()),
             Some(&b"strict-origin-when-cross-origin"[..])

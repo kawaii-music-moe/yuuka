@@ -284,7 +284,8 @@ fn inject_site_verification(bytes: Vec<u8>, meta: Option<&str>) -> Vec<u8> {
 }
 
 /// Node `isHashedAsset`（`server.ts`）の写像: `/assets/` 配下 かつ ファイル名末尾が
-/// `-{8文字以上の [A-Za-z0-9_-]}.{js|css|woff|woff2|png|jpg|jpeg|svg|webp}`。
+/// `-{8文字以上の [A-Za-z0-9_-]}.{js|css|woff|woff2|png|jpg|jpeg|svg|webp|wasm}`（`wasm` は PWA の
+/// 音声チャットが読む onnxruntime-web 本体・25 MB 級なので毎回取り直さない）。
 ///
 /// 「最初の `-`」起点で判定するのは Node 正規表現 `-[A-Za-z0-9_-]{8,}\.ext$` の貪欲マッチ
 /// （charset に `-` を含む）と一致させるため。
@@ -299,7 +300,7 @@ fn is_hashed_asset(path: &str) -> bool {
     };
     if !matches!(
         ext,
-        "js" | "css" | "woff" | "woff2" | "png" | "jpg" | "jpeg" | "svg" | "webp"
+        "js" | "css" | "woff" | "woff2" | "png" | "jpg" | "jpeg" | "svg" | "webp" | "wasm"
     ) {
         return false;
     }
@@ -316,9 +317,10 @@ fn is_hashed_asset(path: &str) -> bool {
 }
 
 /// PWA（`client/pwa`）のクライアントサイドルート（Node `CLIENT_ROUTES`・`src/server.ts`）。
-const PWA_SHELL_ROUTES: [&str; 7] = [
+const PWA_SHELL_ROUTES: [&str; 8] = [
     "/",
     "/chat",
+    "/voice",
     "/todo",
     "/calendar",
     "/finance",
@@ -450,6 +452,45 @@ async fn serve_pwa_assets(dist: &Path, req: Request) -> Response {
     };
     let mut resp = served;
     let cache = if resp.status() == StatusCode::OK && is_hashed_asset(&full_path) {
+        IMMUTABLE
+    } else {
+        NO_CACHE
+    };
+    resp.headers_mut()
+        .insert(CACHE_CONTROL, HeaderValue::from_static(cache));
+    resp
+}
+
+/// 音声モデルの配信パス（PWA の音声チャットが端末内で動かす Irodori-TTS の ONNX 一式）。
+pub const TTS_MODELS_PREFIX: &str = "/tts-models";
+
+/// 音声モデルを `dir`（例: `data/tts-models`）から [`TTS_MODELS_PREFIX`] 配下に配信する。
+///
+/// モデルは `dir/<version>/…` に置き、差し替えるときはバージョン（フォルダ名）を変える運用なので、
+/// `manifest.json`（ファイル一覧とサイズ）以外は `immutable` で長期キャッシュさせる。モデルは
+/// 公開済みの重み（MIT）の変換物なのでログインは要求しない。PWA はこれを OPFS に保存して使う
+/// （Service Worker の Cache Storage には入れない・`client/pwa/public/sw.js`）。
+pub fn mount_tts_models<S>(router: Router<S>, dir: &Path) -> Router<S>
+where
+    S: Clone + Send + Sync + 'static,
+{
+    let dir = dir.to_path_buf();
+    router.nest_service(
+        TTS_MODELS_PREFIX,
+        service_fn(move |req: Request| {
+            let dir = dir.clone();
+            async move { Ok::<Response, Infallible>(serve_tts_models(&dir, req).await) }
+        }),
+    )
+}
+
+async fn serve_tts_models(dir: &Path, req: Request) -> Response {
+    let is_manifest = req.uri().path().ends_with("/manifest.json");
+    let mut resp = match ServeDir::new(dir).oneshot(req).await {
+        Ok(resp) => resp.into_response(),
+        Err(never) => match never {},
+    };
+    let cache = if resp.status() == StatusCode::OK && !is_manifest {
         IMMUTABLE
     } else {
         NO_CACHE
@@ -811,6 +852,7 @@ mod pwa_tests {
         for uri in [
             "/",
             "/chat",
+            "/voice",
             "/todo",
             "/calendar",
             "/finance",
@@ -884,6 +926,41 @@ mod pwa_tests {
         let api_resp = get_resp(pwa.path(), admin.path(), "/api/me").await;
         assert_eq!(api_resp.status(), StatusCode::OK);
         assert_eq!(body_text(api_resp).await, "me");
+    }
+
+    #[tokio::test]
+    async fn tts_models_are_immutable_except_manifest() {
+        let models = tempfile::tempdir().expect("tmp");
+        fs::create_dir_all(models.path().join("v1")).expect("version dir");
+        fs::write(models.path().join("v1/manifest.json"), "{}").expect("manifest");
+        fs::write(models.path().join("v1/dit_step.onnx"), "onnx").expect("model");
+        let app = super::mount_tts_models(Router::new(), models.path());
+        let get = |uri: &'static str| {
+            app.clone()
+                .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+        };
+
+        let model = get("/tts-models/v1/dit_step.onnx").await.unwrap();
+        assert_eq!(model.status(), StatusCode::OK);
+        assert_eq!(
+            cache_control(&model).as_deref(),
+            Some("public, max-age=31536000, immutable")
+        );
+        assert_eq!(body_text(model).await, "onnx");
+
+        let manifest = get("/tts-models/v1/manifest.json").await.unwrap();
+        assert_eq!(manifest.status(), StatusCode::OK);
+        assert_eq!(
+            cache_control(&manifest).as_deref(),
+            Some("no-cache, no-store, must-revalidate")
+        );
+
+        let missing = get("/tts-models/v1/missing.onnx").await.unwrap();
+        assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+        assert_eq!(
+            cache_control(&missing).as_deref(),
+            Some("no-cache, no-store, must-revalidate")
+        );
     }
 
     #[tokio::test]

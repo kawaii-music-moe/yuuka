@@ -86,6 +86,15 @@ Rust は**既定では存在しない DB を作らない**（`open_conn` は `SQ
   起動確認後は `instance.env` から `YUUKA_INIT_DB` を外して次回以降の起動に戻す（誤ってパスを
   変更した場合に空 DB を再生成させないため）。
 
+### 音声モデル（PWA の音声チャット）
+PWA の「音声」画面は、返答の読み上げを端末の GPU で Irodori-TTS を動かして生成する。モデル一式（約 1.7 GB）は
+作業ディレクトリの `data/tts-models/<バージョン>/` に置くと `/tts-models/*` として配信される（無ければ配信せず、
+PWA はブラウザ標準の読み上げに切り替える）。作り方と配置は [tools/irodori-onnx/README.md](../tools/irodori-onnx/README.md)
+の `package.py` を参照（`--dest <実行ディレクトリ>/data/tts-models`）。リポジトリにもイメージにも含めないので、
+インスタンスごとに配置する。既存バージョンのファイルは書き換えない（`immutable` で配信している）。
+利用者が作った声（話者条件。サンプルの音声そのものではない）は DB の `client_voices`（V36）に本人のものとして
+保存され、`/api/client/voices` で本人だけが読み書きする。
+
 ### cron を回すプロセスは厳密に 1 つ（P0-2）
 `Dockerfile` は `ENV YUUKA_RUST_CRON=1` を焼き込むため、**コンテナ内 Rust が cron の所有者**になる。
 同一 `data/` に対する writer は 1 つでなければならない（SQLite WAL 単一ライター）。同じ `DATA_DIR` を
