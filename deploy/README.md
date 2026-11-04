@@ -44,6 +44,25 @@ pnpm run deploy:down       # 本番停止・撤去
 ```
 > 注: `pnpm deploy`（`run` 無し）は pnpm 組込みコマンドと衝突するため、必ず `pnpm run deploy` を使う。
 
+### 現在のホスト（systemd・develop から直接デプロイ）
+
+このホストの本番は Docker ではなく systemd ユーザーサービス `yuuka.service`（作業ディレクトリは本体の
+チェックアウト `/home/suki/apps/yuuka`・`deploy/prod/run-yuuka.sh` → `deploy/prod/bin/yuuka`）で動いている。
+main には出さず、develop の最新版を次のスクリプトで本番へ反映する。
+
+```bash
+deploy/prod/deploy-develop.sh                    # origin/develop を fast-forward して本番へ
+deploy/prod/deploy-develop.sh verify             # 確認だけ（画面・音声・CSP・マイグレーション・Discord）
+deploy/prod/deploy-develop.sh rollback <退避先>  # 退避した状態へ戻す（DB も戻る）
+```
+
+- 本体のチェックアウトが develop で、追跡中のファイルに未コミットの変更が無いこと。
+- ビルド（Rust・管理画面・PWA）は配信中の `dist/public` に書かず別の場所で作り、サービスを止めている数秒の
+  間に入れ替える。止めている間に、それまでのバイナリ・画面・DB（WAL ごと）・設定を
+  `deploy/prod/backups/<時刻>-develop-<sha>/` へ退避し、`deployment.json` に記録する。
+- 確認に失敗しても自動では戻さない（マイグレーション後に古いバイナリへ戻すには DB も戻す必要があり、デプロイ後の
+  書き込みが消えるため）。表示される `rollback` コマンドで戻すかを判断する。
+
 ## 使い方（個別コマンド）
 
 ```bash
