@@ -65,8 +65,8 @@
 
 | 区分 | 対象 | 扱い |
 |---|---|---|
-| **無改修で再利用** | [`processMessage()`](../../../src/gemini.ts) / `gemini.ts` 全体 / `turnPlanner.ts` / `llmClient.ts` / `functions/*` / `mcpClient` / `message_logs` / synapse / Redis ctx | そのまま呼ぶ。チャンネルに依存しない |
-| **既存型を再利用** | `ChatMessage`・`ProcessResult`・`TurnAsyncDelivery`（[`src/types/contracts.ts`](../../../src/types/contracts.ts)） | WS ハンドラが組み立て/受け取る |
+| **無改修で再利用** | `processMessage()` / `gemini.ts` 全体 / `turnPlanner.ts` / `llmClient.ts` / `functions/*` / `mcpClient` / `message_logs` / synapse / Redis ctx | そのまま呼ぶ。チャンネルに依存しない |
+| **既存型を再利用** | `ChatMessage`・`ProcessResult`・`TurnAsyncDelivery`（`src/types/contracts.ts`） | WS ハンドラが組み立て/受け取る |
 | **新設（薄いアダプタ）** | `/ws/chat` ハンドラ / OAuth デバイスフロー / `desktop_tokens` 表・Repo / 端末管理ルート | [backend_api.md](backend_api.md) |
 | **新設（サーバ基盤）** | `node:http` の `upgrade` 受け口（WebSocket） | [backend_api.md §2](backend_api.md) |
 | **新設（Web）** | `/device` 承認ページ / 端末管理 UI / ダウンロード導線（`src/public/*`） | 統合フェーズ |

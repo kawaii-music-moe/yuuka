@@ -136,7 +136,7 @@ eframe の `mouse_passthrough` で大半が足りるが、不足時のみ:
   → base64 → WS {type:"msg", audio:{mime:"audio/ogg", data}}
 ```
 
-- バックエンドは Gemini ネイティブの音声マルチモーダルで**文字起こし＋応答**（外部 STT 不要）。対応 MIME は `audio/ogg`（推奨, Opus）・`audio/wav`・`audio/flac` 等（[`src/bot.ts`](../../../src/bot.ts) の `SUPPORTED_AUDIO_TYPES` と一致させる）。
+- バックエンドは Gemini ネイティブの音声マルチモーダルで**文字起こし＋応答**（外部 STT 不要）。対応 MIME は `audio/ogg`（推奨, Opus）・`audio/wav`・`audio/flac` 等（`src/bot.ts` の `SUPPORTED_AUDIO_TYPES` と一致させる）。
 - 軽量重視で **OGG/Opus**（小サイズ）を既定。エンコードが重い/不安定な環境向けに **WAV(PCM16)** フォールバック（`hound`）。
 - 録音は別スレッド。UI はインジケータのみ。長尺は上限（例 60s / 20MB）で打ち切り。
 - v1 は**音声入力のみ**。TTS（読み上げ）は将来（[roadmap.md](roadmap.md)）。

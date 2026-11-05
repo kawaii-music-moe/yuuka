@@ -77,7 +77,7 @@ body `{ user_code }` → `{ success, device_name, age_secs, expires_in }`（不�
 承認済み:   { success:false, message } （409）  // 承認を上書きしない（別ユーザーによる乗っ取り防止）
 ```
 
-- **必ず `auth:"user"`**。承認はログイン済みユーザー本人の操作。CSRF は既存の Origin チェック（[routeRegistry](../../../src/server/routeRegistry.ts)）が効く。
+- **必ず `auth:"user"`**。承認はログイン済みユーザー本人の操作。CSRF は既存の Origin チェック（`routeRegistry`）が効く。
 - 任意強化: 承認前に「この端末を許可しますか？ 端末名: …」の確認 UI を `/device` に出す（フィッシング耐性）。
 
 ### 1.3 `POST /api/auth/device/token`（auth: none, device_code で認可）
@@ -101,12 +101,12 @@ body `{ user_code }` → `{ success, device_name, age_secs, expires_in }`（不�
 - 生成: CSPRNG 生トークン。クライアントへは生で返し、サーバは **`sha256(token)` のみ保存**（セッションと同方針）。
 - 保存表 `desktop_tokens`（§5）。検証は `desktopAuthService.verifyToken(token) → SessionUser | null`。
 - TTL: 既定 90 日・アクセス毎スライディング延長（`last_used_at` 更新）。設定 `DESKTOP_TOKEN_TTL_DAYS`（任意）。
-- 失効: ユーザーが Web から端末単位で revoke（§4）。パスワード変更時は当該ユーザーの全 desktop_tokens も失効（`destroyAllForUser` 相当を拡張）。
+- 失効: ユーザーが Web から端末単位で revoke（§4）。アカウント削除時は FK CASCADE で全 desktop_tokens が消える。（旧仕様の「パスワード変更時の全失効」は、sk-account 一本化でパスワード変更が無くなったため廃止。）
 - クライアント保存: Windows 資格情報マネージャ（keyring）。平文ファイル禁止（NFR-4）。
 
 ### 1.5 Bearer 認証の組み込み
 
-- 既存の `RouteAuth = "none"|"user"|"admin"` の `resolveUser()`（[routeRegistry](../../../src/server/routeRegistry.ts)）を拡張し、**`Authorization: Bearer <token>` があれば `desktopAuthService.verifyToken` で SessionUser を解決**する（Cookie が無くても通る）。これにより REST（`GET /api/bots` 等）も Bearer で利用可能。
+- 既存の `RouteAuth = "none"|"user"|"admin"` の `resolveUser()`（`routeRegistry`）を拡張し、**`Authorization: Bearer <token>` があれば `desktopAuthService.verifyToken` で SessionUser を解決**する（Cookie が無くても通る）。これにより REST（`GET /api/bots` 等）も Bearer で利用可能。
 - 優先順位: Cookie セッション → Bearer の順で解決（どちらかが成功すれば認証成立）。
 - WS upgrade（§3）も同じ `verifyToken` を使う。
 - ネイティブ Bearer は CSRF 非該当のため、Bearer 認証済みリクエストは Origin チェックを免除してよい（Cookie 認証時のみ Origin チェック）。
@@ -115,7 +115,7 @@ body `{ user_code }` → `{ success, device_name, age_secs, expires_in }`（不�
 
 ## 2. サーバ基盤: WebSocket 受け口の新設
 
-現状 [`src/server.ts`](../../../src/server.ts) は素の `node:http` で `upgrade` を処理していない。WS を同一ポートで受けるため `server.on("upgrade", ...)` を追加する。
+現状 `src/server.ts` は素の `node:http` で `upgrade` を処理していない。WS を同一ポートで受けるため `server.on("upgrade", ...)` を追加する。
 
 ### 2.1 WebSocket ライブラリの方針（要承認の例外）
 
@@ -245,7 +245,7 @@ async function handleMsg(ws, user, botId, m) {
 }
 ```
 
-- **`processMessage` は無改修**。Discord 経路（`bot.ts`）の `asyncDelivery` 組み立てと完全に同型（[`src/bot.ts:594`](../../../src/bot.ts)）で、送り先だけ Discord → WS に替える。
+- **`processMessage` は無改修**。Discord 経路（`bot.ts`）の `asyncDelivery` 組み立てと完全に同型（`src/bot.ts:594`）で、送り先だけ Discord → WS に替える。
 - `notifier.ts` は通さない（重い処理の最終結果も WS `push` で返す）。
 - `serializeRich` は [architecture.md §7](architecture.md)。
 
@@ -278,7 +278,7 @@ POST /api/devices/revoke     (auth: user) { id }  → { success }   // sha256 �
 
 ## 5. DB スキーマ追加（v13）
 
-[`src/db/migrations.ts`](../../../src/db/migrations.ts) に `migrateToDesktopTokens` を追加（現 `SCHEMA_VERSION="12"` → **"13"**）。既存テーブル不変・冪等追加（後方互換）。
+`src/db/migrations.ts` に `migrateToDesktopTokens` を追加（現 `SCHEMA_VERSION="12"` → **"13"**）。既存テーブル不変・冪等追加（後方互換）。
 
 ```sql
 CREATE TABLE IF NOT EXISTS desktop_tokens (

@@ -1,7 +1,8 @@
 //! yuuka-schedule — schedule ドメイン（T1 fan-out）。**参照実装は yuuka-todo**（repo/dto/routes の縦スライス）。
 //!
-//! 参照スコープ = コア CRUD（list_upcoming/add/delete）。Google カレンダー同期
-//! （google_event_id・link/update/backfill）は deferred（後続パスで追加）。期間集約
+//! 参照スコープ = コア CRUD（list_upcoming/add/delete）。登録・削除は Google 同期込みの共通
+//! サービス（[`service`]）を通し、Google → Yuuka の取り込みは [`google_sync`]（`yuuka-services` の
+//! `calendar_sync` が 15 分ごとに起動）が担う。期間集約
 //! （`listSchedulesInRange` 相当）は issue #33（PWA カレンダー `GET /api/client/calendar/events`）
 //! 向けに [`repo::ScheduleRepo::list_in_range`] として実装済み（`google_calendar_id` を含む
 //! 内部専用ビュー [`repo::ScheduleForClient`] を返す・一般ダッシュボードの [`dto::Schedule`]

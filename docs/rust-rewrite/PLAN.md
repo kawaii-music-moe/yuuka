@@ -2,7 +2,7 @@
 
 > **対象**: Discord Gemini 秘書ボット + Web 管理ダッシュボード「yuuka」のバックエンド（現行 Node.js/TypeScript）を Rust へ全面書き換えする詳細計画。
 > **作成**: 2026-07-01 / ブランチ `feature/rust-rewrite`。
-> **根拠**: 既存棚卸し（6領域）＋設計・敵対的検証（[design-checkpoint.md](design-checkpoint.md) 22セクション）＋技術検証15領域の一次ソース照合（[verification/](verification/)）＋確定技術選定（[00-decisions.md](00-decisions.md)）。
+> **根拠**: 既存棚卸し（6領域）＋設計・敵対的検証（design-checkpoint.md 22セクション）＋技術検証15領域の一次ソース照合（[verification/](verification/)）＋確定技術選定（[00-decisions.md](00-decisions.md)）。
 > 本書の技術選定は全て [00-decisions.md](00-decisions.md)（ADR）に従う。各主張は verification レポートおよび現行コードへ相対リンクで裏取り済み。
 
 ## 絶対制約（ユーザー要件・全設計の上位規範）
@@ -28,7 +28,7 @@
 > 本書は最終マスタープランの **第1部（セクション 1〜3）**。
 > 全内容は確定 ADR [`../00-decisions.md`](00-decisions.md) と一次ソース照合レポート群
 > [`../verification/`](verification/) に厳密整合させており、ここで技術を再決定することはしない。
-> 詳細な設計材料は [`../design-checkpoint.md`](design-checkpoint.md)（22 セクション）にある。
+> 詳細な設計材料は `design-checkpoint.md`（22 セクション）にあった（削除済み。`git show 662f46a:docs/rust-rewrite/design-checkpoint.md` で参照可）。
 >
 > **本書全体を貫く前提（絶対制約・[00-decisions §絶対制約](00-decisions.md)）**：
 > 1. **厳格エラー**：`anyhow`/`eyre`/`color-eyre`/`Box<dyn Error>` の握り潰しは全面禁止。`thiserror` の層別具体列挙型のみ。
@@ -78,9 +78,9 @@ Rust 全面書き換えの狙いは、これらを一挙に解消することに
 
 ### 2.1 Cargo workspace クレート構成
 
-単一の `cargo workspace` に統合する。既存の独立クレート `src/rust_synapse/`・`src/rust_crawler/`（[design-checkpoint](design-checkpoint.md) で「ルート `Cargo.toml` は存在せず 2 クレートが独立」と実確認済み）を workspace に取り込み、サーバ本体・bot・AI・サービス群を新規クレートとして追加する。
+単一の `cargo workspace` に統合する。既存の独立クレート `src/rust_synapse/`・`src/rust_crawler/`（design-checkpoint で「ルート `Cargo.toml` は存在せず 2 クレートが独立」と実確認済み）を workspace に取り込み、サーバ本体・bot・AI・サービス群を新規クレートとして追加する。
 
-> **命名について**：本マスタープランでは以下のクレート名を確定名とする。設計ドラフト（[design-checkpoint §C.1](design-checkpoint.md)）では `yuuka-foundation` / `yuuka-domain` / `yuuka-engine` / `bins/gen-types` という暫定名を用いた箇所があるが、本書の命名（`yuuka-core` / `yuuka-services` / `yuuka-supervisor` / `xtask`）に読み替える。責務の切り方は同一である。
+> **命名について**：本マスタープランでは以下のクレート名を確定名とする。設計ドラフト（design-checkpoint §C.1）では `yuuka-foundation` / `yuuka-domain` / `yuuka-engine` / `bins/gen-types` という暫定名を用いた箇所があるが、本書の命名（`yuuka-core` / `yuuka-services` / `yuuka-supervisor` / `xtask`）に読み替える。責務の切り方は同一である。
 
 ```
 apps/yuuka/
@@ -105,7 +105,7 @@ apps/yuuka/
 各クレートの責務：
 
 - **`yuuka-core`**（全員が依存する土台）
-  config.yaml → 型付き構造体への厳密検証、**層別エラー enum の基底**（`ConfigError` 等の最下段）、`UserId` をはじめとする newtype（データ分離キーを型で強制）、機密の `secrecy::SecretString` ラッパ、telemetry/ログ初期化。最初に凍結しないと全クレートが型で衝突するため、移行 Phase F で単独先行する（[design-checkpoint §Phase F](design-checkpoint.md)）。
+  config.yaml → 型付き構造体への厳密検証、**層別エラー enum の基底**（`ConfigError` 等の最下段）、`UserId` をはじめとする newtype（データ分離キーを型で強制）、機密の `secrecy::SecretString` ラッパ、telemetry/ログ初期化。最初に凍結しないと全クレートが型で衝突するため、移行 Phase F で単独先行する（design-checkpoint §Phase F）。
 
 - **`yuuka-db`**（DB 担当・[rpt-db-sqlx-vs-rusqlite](verification/rpt-db-sqlx-vs-rusqlite.md), [rpt-migrations-sqlx-refinery](verification/rpt-migrations-sqlx-refinery.md)）
   **rusqlite 0.40.1（bundled SQLite 3.53.2）**。全書き込みを 1 タスク・1 コネクションに直列化する**単一 writer actor**＋読み取り用の **read pool（deadpool-sqlite 0.13 / r2d2_sqlite 0.34）**。同期呼び出しは `spawn_blocking`。PRAGMA（`journal_mode=WAL` / `busy_timeout=5000` / `foreign_keys=ON` / `synchronous=NORMAL`）を明示、全書き込み Tx は `BEGIN IMMEDIATE`。マイグレーションは **refinery 0.9.2**（前方専用・checksum 管理・現行 v17 スキーマを `CREATE TABLE IF NOT EXISTS` の冪等 baseline V1 に凍結）。現行 `src/db/migrations.ts` の DROP 再作成方式は**完全撤廃**。`DbError` を持つ。全リポジトリ署名に `UserId` を通す。
@@ -136,7 +136,7 @@ apps/yuuka/
 
 #### クレート間依存の向き（循環禁止）
 
-依存は「下流が上流に依存しない DAG」を厳守する（[design-checkpoint §Phase F](design-checkpoint.md)）。
+依存は「下流が上流に依存しない DAG」を厳守する（design-checkpoint §Phase F）。
 
 ```
                          ┌──────────────┐
@@ -159,7 +159,7 @@ apps/yuuka/
 - `yuuka-core` を**全員が依存**する（最上位＝最も抽象な土台）。
 - `yuuka-web` / `yuuka-discord` / `yuuka-gemini` / `yuuka-tools` は**上位**（アプリ層）で、`yuuka-core` と必要な下流（db/gemini 等）に依存する。
 - `yuuka-supervisor` は全アプリクレートを束ねる**最下流**（依存の終端）。
-- **循環依存は禁止**。web が db/ai に直接依存せず、`yuuka-core` に定義したトレイト（`SessionStore` / `UserRepo` 等）越しに `AppState` から受け取る設計（[design-checkpoint §C.1](design-checkpoint.md)）で、web crate をドメインロジックのコンパイル時間・依存に巻き込まず、テストで in-memory 実装を差せるようにする。
+- **循環依存は禁止**。web が db/ai に直接依存せず、`yuuka-core` に定義したトレイト（`SessionStore` / `UserRepo` 等）越しに `AppState` から受け取る設計（design-checkpoint §C.1）で、web crate をドメインロジックのコンパイル時間・依存に巻き込まず、テストで in-memory 実装を差せるようにする。
 - クレート＝層＝エラー型が一致する（`yuuka-db`→`DbError`、`yuuka-web`→`WebError`、…）ため、**エラーの伝播方向も依存の向きに一致**し、`#[from]` は真の層境界のみで使える（絶対制約 1）。
 
 ### 2.2 マルチスレッド実行モデル
@@ -2469,7 +2469,7 @@ Phase 5  daemon 吸収 + 最終カットオーバー
 
 ### 12.6 今回の実地教訓（本計画作成で得た一次経験・必ず適用）
 
-> 本教訓は抽象論ではなく、**この移行計画そのものを複数エージェントで作成した過程**で実際に踏んだ事象に基づく。証跡: [design-checkpoint.md](design-checkpoint.md) 冒頭は「ワークフロー wf_456f35ec-ec8 の**中断時スナップショット**。完了済み 22 エージェント分の生出力を保存。最終統合(Synthesize)は**未完了**。resume で完了可能」と記録している。
+> 本教訓は抽象論ではなく、**この移行計画そのものを複数エージェントで作成した過程**で実際に踏んだ事象に基づく。証跡: design-checkpoint.md 冒頭は「ワークフロー wf_456f35ec-ec8 の**中断時スナップショット**。完了済み 22 エージェント分の生出力を保存。最終統合(Synthesize)は**未完了**。resume で完了可能」と記録している。
 
 1. **バックグラウンド Workflow はセッション境界（ホストプロセス再起動）で "stopped" になり、最終統合が完走しないことがある。**
    → **journal + resumeFromRunId で再開可能に設計**する。かつ**各エージェント成果は即ファイルへ退避**する（transcript にしか無いと回収困難。実際 22/23 完了で中断し、生出力を design-checkpoint.md に退避していたからこそ resume 可能だった）。
@@ -2500,7 +2500,7 @@ Phase 5  daemon 吸収 + 最終カットオーバー
 
 ---
 
-> 出典整合: [`00-decisions.md`](00-decisions.md)（特に末尾「未解決の決定事項」）／[`design-checkpoint.md`](design-checkpoint.md) 各領域「敵対的検証」節（A〜D）／[`verification/`](verification/) 各レポート末尾の確信度・落とし穴。
+> 出典整合: [`00-decisions.md`](00-decisions.md)（特に末尾「未解決の決定事項」）／`design-checkpoint.md` 各領域「敵対的検証」節（A〜D）／[`verification/`](verification/) 各レポート末尾の確信度・落とし穴。
 > 本部の全リスクは一次ソース照合済み（crates.io / docs.rs / 公式ドキュメント）。確率・影響は移行文脈での相対評価。
 
 ---

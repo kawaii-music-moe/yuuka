@@ -21,7 +21,7 @@
 
 ## 1. 修正哲学（なぜこの倒し方か）
 
-移行期は **新旧バックエンドが同一 SQLite と同一フロントを共有**する（[parts/06-migration-workflow.md](parts/06-migration-workflow.md) §11.3〜11.4）。この前提から、修正の優先度は「ユーザー可視のクラッシュ」より **「200 で成功するのに無音でデータが落ちる／劣化データを共有 DB に書く」型のパリティ欠陥**を上に置く。理由は 3 点:
+移行期は **新旧バックエンドが同一 SQLite と同一フロントを共有**する（[PLAN.md](PLAN.md) §11.3〜11.4）。この前提から、修正の優先度は「ユーザー可視のクラッシュ」より **「200 で成功するのに無音でデータが落ちる／劣化データを共有 DB に書く」型のパリティ欠陥**を上に置く。理由は 3 点:
 
 1. **無音のデータ破壊は後付けで救えない**。既に NULL 上書き・孤児行・非正規化日時が書かれた後では、Node 側リマインドエンジンやソートが誤動作しても原因追跡が困難。
 2. **フロントは共有・未改修**。Rust が返す形状／キー名が Node とズレると、`success` 分岐や snake_case 依存のコンポーネントがエラートースト経路や白画面に落ちる。カットオーバーまでフロントは触らない前提なので、**Rust 側が Node の実挙動に合わせる**のが唯一の安全策。
@@ -114,7 +114,7 @@ Node 参照とフロントを実測した結果、契約は左右非対称:
 - **完了条件（M-7〜M-11・未着手）**: 各 fail-closed 経路のテスト（拒否・正規化後の値）。deferred は lib.rs 冒頭列挙で「未実装＝安全に拒否」を明記（**着手時に実施**）。
 
 ### 移行期 migration hazard（Batch 外・データ全喪失ガード）✅ 完了（未コミット・レビュー承認: [review-2026-07-09-batch4-6.md](review-2026-07-09-batch4-6.md)）
-Batch 4/5/6 の実装中に判明した、本方針書起票時に未認識だった移行期ハザード。**Node が Rust 作成の DB を legacy-v1 と誤検出してコアテーブルを全 DROP する（＝データ全喪失）経路**（[parts/06-migration-workflow.md](parts/06-migration-workflow.md) §11.4・[verification/rpt-migrations-sqlx-refinery.md](verification/rpt-migrations-sqlx-refinery.md)）を塞ぐため、Batch 外だが同時に固めた。
+Batch 4/5/6 の実装中に判明した、本方針書起票時に未認識だった移行期ハザード。**Node が Rust 作成の DB を legacy-v1 と誤検出してコアテーブルを全 DROP する（＝データ全喪失）経路**（[PLAN.md](PLAN.md) §11.4・[verification/rpt-migrations-sqlx-refinery.md](verification/rpt-migrations-sqlx-refinery.md)）を塞ぐため、Batch 外だが同時に固めた。
 
 | # | 対応（今回・実装済み） |
 |---|---|
@@ -164,4 +164,4 @@ Batch 4/5/6 の実装中に判明した、本方針書起票時に未認識だ�
 - Batch 4/5/6 実装レビュー（M-1/M-2/M-4/M-5/M-6 ＋移行期 migration hazard・refinery checksum 運用注意）: [review-2026-07-09-batch4-6.md](review-2026-07-09-batch4-6.md)
 - 設計基準: [PLAN.md](PLAN.md)（§5.6/§5.7 fatality、§6.4 CSRF/body、§6.5 静的配信、§6.6 セキュリティヘッダ）
 - 上位決定: [00-decisions.md](00-decisions.md)
-- 移行前提: [parts/06-migration-workflow.md](parts/06-migration-workflow.md)（§11.3 共有 Redis、§11.4 SQLite 移行ハザード）
+- 移行前提: [PLAN.md](PLAN.md)（§11.3 共有 Redis、§11.4 SQLite 移行ハザード）

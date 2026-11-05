@@ -24,7 +24,7 @@ cp deploy/prod/instance.env.example deploy/prod/instance.env
 cp deploy/prod/config.yaml.example  deploy/prod/config.yaml
 openssl rand -base64 48 | tr -d '\n' > deploy/prod/secret.key
 chmod 600 deploy/prod/secret.key
-# instance.env（ポート/パス/プロジェクト名）と config.yaml（sk-account/OAuth/BASE_URL 等）を編集
+# instance.env（ポート/パス/プロジェクト名）と config.yaml（OIDC/OAuth/BASE_URL 等）を編集
 ```
 
 - `instance.env` — 非機密の起動パラメータ（`COMPOSE_PROJECT_NAME` / `HOST_PORT` / `BIND_ADDR` / `DATA_DIR` / `CONFIG_FILE` / `PUID` / `PGID` / `YUUKA_IMAGE_TAG` / `DOCKER_NET_SUBNET` / `TRUSTED_PROXIES`）。値に `$` を含めないこと。
@@ -39,7 +39,9 @@ chmod 600 deploy/prod/secret.key
 
 ## デプロイ・更新
 
-コードを変更したら `pnpm run deploy` だけで反映できます。内部で「現行イメージ退避 → ビルド（Rust バイナリ + SPA）→ コンテナ再作成 → ヘルスチェック」を実行します。DB マイグレーションは起動時に自動適用されます。
+コードを変更したら `pnpm run deploy` だけで反映できます。内部で「現行イメージ退避 → ビルド（Rust バイナリ + 管理画面 + PWA）→ コンテナ再作成 → ヘルスチェック」を実行します。DB マイグレーションは起動時に自動適用されます。
+
+> **V22 以前の DB を持つインスタンスを更新するとき**: V25 が sk-account に紐付いていない利用者を所有データごと削除します。更新前に DB をバックアップし、[setup.md](setup.md) の「既存 DB を新しい版で開くとき」を確認してください。
 
 | コマンド | 動作 |
 |---|---|
@@ -92,9 +94,7 @@ chmod 600 deploy/prod/secret.key
 
 cloudflared / nginx 等のプロキシ経由では、Rust から見た直前の接続元は常に Docker ブリッジの
 ゲートウェイ IP になります。`X-Forwarded-For` から実クライアント IP を取り出すには、この
-ゲートウェイ IP を `TRUSTED_PROXIES`（カンマ区切り）に設定する必要があります（未設定だと
-ログイン試行のレート制限キーが実質 IP 単位でなくなり、第三者が特定ユーザーの試行枠を
-使い切ってロックアウトさせられる可能性があります）。
+ゲートウェイ IP を `TRUSTED_PROXIES`（カンマ区切り）に設定します（未設定だと X-Forwarded-For を信頼せず、デバイスフロー等のレート制限がプロキシの IP 単位になります）。
 
 ゲートウェイ IP は Docker がネットワークを再作成するたびに変わりうるため、
 `DOCKER_NET_SUBNET` で bridge のサブネットを固定してください（サブネットの先頭アドレスが
@@ -132,7 +132,9 @@ cloudflared / nginx 等のプロキシ経由では、Rust から見た直前の�
 pnpm run deploy:rollback        # = deploy/instance.sh prod rollback
 ```
 
----
+> マイグレーションは前方専用です。新しいマイグレーションが適用された後に古いイメージへ戻しても、
+> DB は元に戻りません（特に V25 で削除された利用者・列は戻りません）。スキーマが変わる更新の前には
+> DB をバックアップしてください。
 
 ## systemd からの移行（レガシー）
 

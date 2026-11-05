@@ -32,7 +32,7 @@
 - [x] `server/routes/deviceMgmtRoutes.ts`: `/api/devices`・`/api/devices/revoke`
 - [x] Bearer 解決を `dispatchRoute` へ注入（`httpHelpers.resolveRequestUser` = Cookie→Bearer）。ネイティブ Bearer は Origin 無しのため既存 CSRF 判定で自然に通る
 - [x] `public/*`: `/device` 承認ページ + 「接続端末」管理 UI
-- [x] パスワード変更時に当該ユーザーの desktop_tokens も失効（`revokeAllDesktopTokensForUser`。アカウント削除は FK CASCADE）
+- [x] パスワード変更時に当該ユーザーの desktop_tokens も失効（`revokeAllDesktopTokensForUser`。アカウント削除は FK CASCADE）※ sk-account 一本化でパスワード変更が無くなり、2026-10 に廃止
 - [x] 監査ログ（`desktop.token_issue` / `desktop.token_revoke` / `desktop.device_approve`。トークン本体は記録しない）
 
 ### Phase 1 — WS チャット（バックエンド）— ✅ 実装済み（2026-06-23、未デプロイ）
@@ -110,7 +110,7 @@
 - ✅ **WS 依存**: `ws` を追加で確定。
 - ✅ **会話相手モデル**: **1 プロセス＝1 Bot＝1 WS（選択 Bot のみ）**。モーダル表示中に Bot 切替可（＝WS 再接続）。複数 Bot は**複数起動**で対応。デスクトップ専用の仮想 Bot は作らない（既存 Bot を使い Discord と記憶共有）。
 - ✅ **オーバーレイ意匠**: オーブ＝接続中 Bot のアイコン。通知時は右上に数字バッジ。
-- ✅ **デスクトップトークン**: TTL **既定 90 日**・アクセス毎スライディング延長。失効＝**端末単位 revoke（Web ダッシュボード）**＋パスワード変更時に当該ユーザー全失効。
+- ✅ **デスクトップトークン**: TTL **既定 90 日**・アクセス毎スライディング延長。失効＝**端末単位 revoke（Web ダッシュボード）**（パスワード変更時の全失効は sk-account 一本化に伴い 2026-10 に廃止）。
 - ✅ **大型添付の上限**: **サーバー管理者が設定**（`DESKTOP_MAX_UPLOAD_MB`、**既定 20MB**）。超過は `error{code:"too_large"}`。REST マルチパートアップロード移行は将来（同じ上限値を閾値に使う）。
 - ✅ **コード配置**: **モノレポ** `clients/desktop/`。
 - ✅ **ホットキー / 複数起動の衝突回避**: グローバルホットキーは**プライマリ Bot のインスタンスのみが登録（吸う）**。サブインスタンスは登録せず衝突回避。Bot 一覧/切替はプライマリのモーダルに集約し、ホットキー→プライマリのモーダル表示。サブはオーブのクリック/トレイで開閉。

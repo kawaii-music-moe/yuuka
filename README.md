@@ -1,6 +1,6 @@
 # Yuuka — Discord Gemini Secretary Bot & Admin Dashboard
 
-『Yuuka』は Google の **Gemini API** を活用した Discord 秘書ボットと Web 管理ダッシュボードのハイブリッドな統合管理ソフトウェアです。全ユーザーデータは **Discord ユーザーID 単位で完全分離** され、Bot を共有しても会話履歴・家計・パスワード等が他ユーザーから見えることはありません。
+『Yuuka』は Google の **Gemini API** を活用した Discord 秘書ボットと Web 管理ダッシュボード（＋スマートフォン向け PWA）のハイブリッドな統合管理ソフトウェアです。ログインは OIDC（標準は sk-account）に一本化しています。全ユーザーデータは **Discord ユーザーID 単位で完全分離** され、Bot を共有しても会話履歴・家計・パスワード等が他ユーザーから見えることはありません。
 
 タスク管理・予定（Google カレンダー同期）・家計・リマインド・ブラウザ自動操作・パスワードマネージャ・MCP 拡張などを自然な会話から扱えます。Web の PWA からはチャットに加えて、Irodori-TTS による音声での会話もできます。
 

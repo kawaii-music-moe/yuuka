@@ -1,10 +1,11 @@
 # DiscordBot 統合管理ソフトウェア 仕様書
 
-**バージョン:** 0.6.3-draft  
-**最終更新:** 2026-06-30  
+**バージョン:** 0.6.4-draft  
+**最終更新:** 2026-10-20  
 **ステータス:** Draft
 
 **改訂履歴:**
+- 0.6.4 — Rust 版の現行仕様に合わせて改訂。**本人認証を外部の OIDC プロバイダー（標準は sk-account）に一本化**（Yuuka 側のパスワード・登録・招待コード・パスワードポリシーを廃止。§5.3.3・§5.4 を全面改訂。DB マイグレーション V23・V25。OIDC 化は #222）。**Webhook エンドポイントを Bot ごとの設定に**（§3.13。V26）。グラフ描画をバックエンド内の PNG 描画（`crates/yuuka-chart`）に更新（§3.0.3）。システムデフォルト Bot を案内役とし、個人データを扱わない（§5.1。#138）。
 - 0.6.3 — 実装の進捗を反映（DB スキーマ **v16**）。**機能モジュール化**（ユーザー×Bot 単位で機能モジュール約14を ON/OFF。enabled_modules / bot_user_modules。design/function_modularization.md・architecture_v2.md §14）、**タスク進捗・サブタスク・ガント / ルーチン（繰り返し）タスク**（§3.2）、**汎用チャット API / デスクトップクライアント**バックエンド（WebSocket `/ws/chat` + OAuth デバイスフロー。design/desktop_client/・architecture_v2.md §15）、汎用モードの**ギルド利用申請（承認制）・利用可能ロール**を追記。シナプス認知アーキは R0/R1 が**常時有効**である旨を明確化（下記 0.6.2 の「既定 OFF」を訂正）。
 - 0.6.2 — 実装の進捗を反映。アカウント管理（表示名/テーマ/パスワード集約・本人によるアカウント削除＝最後の管理者は不可）、Bot のオーナー手動停止の永続化、汎用モードの会話履歴クリア、登録時の DM 所有確認チャレンジ、Webhook シークレット必須化、HSTS・認証のタイミングオラクル対策を追記。シナプス認知アーキテクチャ（R0/R1・schema v10・**常時有効**〔バイナリ不在時のみ現行挙動へ自動デグレード〕、architecture_v2.md §13）の追加に伴い、受動的な会話ログ全文検索 `searchConversationLogs` を廃止し L2 連想想起へ統合（時系列要約 `summarizeConversationTopic` は維持。§3.12）。汎用モード（MCPアシスタント）の詳細は [bot_attributes_requirements.md](bot_attributes_requirements.md) を正とする。
 - 0.6.1 — 初版ドラフト。
@@ -203,7 +204,7 @@ Discord の [Embed オブジェクト](https://discord.com/developers/docs/resou
 
 **実装方針**
 
-- グラフ生成ライブラリは **Chart.js**（Node.js環境で `chartjs-node-canvas` を使用）を採用する
+- グラフはバックエンド内で PNG として描画する（`crates/yuuka-chart`。`image` + `ab_glyph`。種類は円 / ドーナツ / 棒 / 横棒 / 折れ線）。旧 Node 版は Chart.js（`chartjs-node-canvas`）を使っていた
 - 生成した画像はPNGバイナリとしてDiscord APIにマルチパート送信する
 - グラフのテーマ（フォント・背景色）はDiscordのダークモードに合わせたデザインとする
 
@@ -789,7 +790,8 @@ GitHub・Zapier・決済サービス等の外部サービスからWebhookを受�
 #### 3.13.2 仕組み
 
 - Bot Application ServerがHTTPエンドポイントを公開し、Webhookを受信する
-- ユーザーは管理UIでWebhookエンドポイントを作成し、発行されたURLを外部サービスに登録する
+- ユーザーは管理UIの **Bot 設定の中で** Webhookエンドポイントを作成し、発行されたURLを外部サービスに登録する
+- 受信で作る通知・ToDo・リマインドは、エンドポイントが属する Bot に帰属させる（システムデフォルト Bot には作れない。Bot 未設定の既存エンドポイントは受信時に失敗として記録する）
 - 受信したWebhookペイロードをLLMが解釈し、ユーザーのDiscord DM / チャンネルへ通知する
 - 通知内容のフォーマットはユーザーがテンプレートで設定できる
 
@@ -797,7 +799,7 @@ GitHub・Zapier・決済サービス等の外部サービスからWebhookを受�
 
 | 機能 | 説明 |
 |------|------|
-| Webhookエンドポイント作成 | ユーザー固有のWebhook URLを発行する |
+| Webhookエンドポイント作成 | Bot ごとに Webhook URL を発行する |
 | ペイロード解釈・通知 | 受信したJSONをLLMが解釈してDiscordへ通知する |
 | フィルタリング | 条件に合致するペイロードのみ通知する（例: issueのクローズ時のみ） |
 | ToDoへの変換 | 受信内容をToDoタスクとして自動登録できる |
@@ -815,6 +817,7 @@ GitHub・Zapier・決済サービス等の外部サービスからWebhookを受�
 WebhookEndpoint {
   id               : UUID
   user_id          : DiscordUserId
+  bot_id           : BotId          (帰属先の Bot。V26 で追加)
   name             : string
   token            : string          (URLトークン、CSPRNG生成)
   secret           : string (必須, HMAC検証用シークレット≥16文字、暗号化保存)
@@ -990,6 +993,7 @@ McpServer {
 - Botインスタンスはアカウントを持つユーザー（Bot作成者）が自身のアカウントで作成する
 - 各インスタンスに対して共有設定を行うことで、複数ユーザーが同一Botを利用できる
 - 共有する場合でも、各ユーザーのデータは完全に分離される（§5.5 参照）
+- **システムデフォルト Bot（`system_default`）** は管理者がトークンを設定する案内役で、使い方の案内と自分の Bot を作る導線だけを担う。ToDo・家計などの個人データ、MCP、認証情報の利用許可、Webhook の帰属先には使えない。Bot を指定しない個人データ API はシステム Bot へフォールバックせず拒否する（#138）
 
 ---
 
@@ -1083,56 +1087,57 @@ BotShare {
 
 ```
 User {
-  id               : UUID
-  discord_user_id  : DiscordUserId  (UNIQUE)
-  password_hash    : string         (bcrypt)
-  salt             : string         (CSPRNG生成)
+  discord_id       : DiscordUserId  (PK。全ユーザーデータの所有者キー)
+  sk_account_id    : string         (UNIQUE。OIDC プロバイダーのアカウント ID〔ID トークンの sub〕。列名は sk-account 時代のまま)
+  username         : string         (プロバイダーの表示名)
+  salt             : string         (CSPRNG生成。PW マネージャの per-user 鍵導出用・不変)
   role             : "User" | "Admin"
   created_at       : datetime
   updated_at       : datetime
 }
 ```
 
+> Yuuka はパスワードを保持しない（`password_hash` 列は V25 で削除）。
+
 ---
 
 ### 5.4 ユーザー登録・認証
 
-#### 5.4.1 登録フロー
+本人認証は外部の **OIDC プロバイダー**に一本化する（`OIDC_ISSUER`。省略時は標準の sk-account）。Yuuka 側にはアカウント登録・パスワード・招待コードを持たない（旧仕様の `/register`・DM 所有確認チャレンジ・パスワードポリシーは廃止）。
 
-1. ユーザーが初回コマンド（例: `/register`）を実行
-2. BotがDiscordのユーザーIDを自動取得
-3. ユーザーがパスワードを設定（DMで送信 または Web管理UI上で入力）
-4. パスワードはbcrypt（コストファクター: 12）でハッシュ化してSQLiteに保存
-5. 初回登録ユーザーのロールは `User` として登録
-6. 登録完了通知をDiscord DMで送信
+#### 5.4.1 登録・紐付け
 
-> **DM 所有確認チャレンジ（必須）**: Web から任意の Discord ID で登録される「なりすまし」を防ぐため、登録は仮登録（メモリ保持・有効期限あり）とし、当該 Discord ID へ **ワンタイムコードを DM 送信**する。ユーザーがそのコードを提示して検証が成功した場合のみ、実ユーザーをDBに作成する（実装: `services/pendingRegistration.ts`）。
+- 利用者の登録はプロバイダー側で行う。ID トークンの `OIDC_DISCORD_ID_CLAIM`（既定 `discord_id`）に Discord ユーザー ID が入っている必要がある
+- 初回ログイン時、Yuuka は ID トークンの Discord ユーザー ID で利用者を作る（または既存の利用者に `sk_account_id` を紐付ける）
+- 最初の利用者、および `ADMIN_DISCORD_IDS` に含まれる Discord ID の新規利用者は `Admin`、それ以外は `User` とする
+- 同じ Discord ID が別のプロバイダーアカウントに紐付いている場合、ログインを拒否する（乗っ取り防止）
+- プロバイダーアカウントに紐付いていない旧アカウントは所有データごと削除する（V25）
 
 #### 5.4.2 認証フロー
 
-- Discord上のやり取りでは、DiscordユーザーID＋セッショントークンによる認証を行う
-- 管理UI（Web）へのログインは DiscordユーザーID + パスワード で行う
-- **タイミングオラクル対策**: ログイン時、ユーザーが存在しない場合でも固定時間の bcrypt 比較（ダミー）を実行し、応答時間差によるアカウント列挙を防ぐ
-- セッショントークンの仕様:
-  - 有効期限: **7日間**
+1. 管理UI の「（`OIDC_LABEL`）でログイン」→ `GET /api/auth/oidc/start` が一回限りの `state`（と nonce・PKCE）を Cookie に置き、プロバイダーの認可エンドポイントへリダイレクトする
+2. プロバイダーでの認証後、`GET /api/auth/oidc/callback?code&state` に戻る。`state` を検証し、認可コードをサーバー間通信（`OIDC_INTERNAL_URL`。未設定は issuer）でトークンに交換して ID トークンを検証する
+3. 利用者を作成・紐付けし（§5.4.1）、セッションを発行して `/` へリダイレクトする
+
+- セッションの仕様:
+  - 有効期限: 既定 **7日間**（`SESSION_TTL_DAYS`）
   - 更新ポリシー: 有効期限内にアクセスがあった場合、有効期限を自動延長（スライディングウィンドウ）
-  - 保存場所: Redis（キー: `session:{token_hash}`）
-  - 失効: ログアウト時またはパスワード変更時に即時無効化
+  - 保存場所: Redis（Cookie は `__Host-yuuka-session`〔HTTPS〕/ `yuuka-session`〔HTTP〕、HttpOnly）
+  - 失効: ログアウト時、またはプロバイダーからの Back-Channel Logout（`POST /api/auth/oidc/backchannel-logout`）で即時無効化
+- デスクトップクライアントは OAuth デバイスフローで発行する Bearer トークン（SQLite 保存）で認証する
 
-#### 5.4.3 パスワードポリシー
+#### 5.4.3 パスワードポリシー（廃止）
 
-- 最低8文字以上
-- 大文字・小文字・数字・記号のうち **2種類以上** を含むこと
-- よく使われるパスワード（上位10,000件）との一致をチェックし拒否する
-- ハッシュアルゴリズム: **bcrypt**（コストファクター: 12）
+Yuuka はパスワードを扱わないため、本節の要件は廃止した。パスワード・パスキーの要件はプロバイダー側の責務とする。
 
 #### 5.4.4 アカウント管理・本人によるアカウント削除
 
-- 管理ダッシュボードに**アカウント管理ページ**を設け、表示名・テーマ・パスワード変更を集約する（Bot 個別画面からは分離）
+- 管理ダッシュボードに**アカウント管理ページ**を設け、表示名・テーマなどを集約する（Bot 個別画面からは分離）
 - ユーザーは**自身のアカウントを削除**できる。要件:
-  - 削除前に**現在のパスワード検証を必須**とする
+  - 削除前に確認ダイアログで意思を確認する（パスワード入力は無い）
   - **最後の管理者は削除不可**（`Admin` ロールが 1 名以下のとき防止）。サービスのロックアウトを避ける
   - 削除時、本人が所有する独立 Bot（`system_default` を除く）を停止し、ユーザーデータを破棄する
+- アカウントと Bot のデータを PIN で暗号化した**移行パッケージ**としてダウンロードできる
 
 ---
 

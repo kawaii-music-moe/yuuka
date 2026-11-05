@@ -10,7 +10,7 @@
 
 - **Rust ツールチェイン** — バックエンド本体（`crates/`）のビルド・起動に使用します。`rust-toolchain.toml` でバージョンを固定しているため、[rustup](https://rustup.rs/) を入れておけば `cargo` 実行時に自動で該当バージョンが解決されます。
 - **Node.js 20 以上** / **pnpm 9** — 管理画面 SPA（`frontend/`）のビルド・開発用のみに使用します（バックエンドの実行には不要）。
-- **Redis**（推奨・任意） — 会話コンテキスト・セッション管理に使用します。未接続・到達不能でも起動は継続し、セッションは Cookie のみへ縮退します。
+- **Redis**（推奨・任意） — ログインセッションの保存に使用します（会話履歴の正本は SQLite）。未接続・到達不能でも起動は継続し、セッションは Cookie のみへ縮退します。
 - **Chromium 実行環境**（任意） — ブラウザ自動操作ツール（`fetchDynamicPage` 等）用。`CHROME_EXECUTABLE_PATH` で明示するか、システムの `/usr/bin/chromium` 等が自動検出されます。未検出でもそれ以外の機能は動作します。
 
 ---
@@ -38,7 +38,7 @@ cp example.yaml config.yaml
 主な項目:
 
 - **`DB_PATH`**: SQLite データベースの保存パス（デフォルト: `./data/yuuka.db`）。`DB_PATH` が指すファイルが無い状態で起動すると既定では即エラーになる。新規インスタンスの初回起動のみ、環境変数 `YUUKA_INIT_DB=1`（`.env` ではなく実際の環境変数として設定）を付けて起動すると、無ければ DB を新規作成して migrations を適用する（詳細は後述）。
-- **`REDIS_URL`**: 会話コンテキスト・セッション管理用の Redis 接続 URL。
+- **`REDIS_URL`**: セッション管理用の Redis 接続 URL。
 - **`PORT` / `HOST`**: バックエンドサーバーがリスンするポートとホスト名。デフォルトはローカル接続のみ (`127.0.0.1` / `7854`)。リバースプロキシ経由で公開する場合は `HOST` を `"0.0.0.0"` に変更します。
 - **`GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`**: Google OAuth 認証情報（カレンダー/Drive 連携用のシステム共通設定、任意）。
 - **`BASE_URL`**: 外部公開 HTTPS ベース URL（OAuth リダイレクト・Cookie ハードニング判定に使用）。
@@ -68,7 +68,7 @@ export YUUKA_ENCRYPTION_SECRET="$(openssl rand -base64 48)"
 - **`YUUKA_ENCRYPTION_SECRET`** 【必須】: 保存時暗号化（API キー・トークン・パスワードマネージャ）のマスターシークレット。未設定では起動しません。十分に長いランダム文字列を設定してください（生成例: `openssl rand -base64 48`）。ローテーションは `YUUKA_ENCRYPTION_SECRET_NEW` を併設して起動（手順は `.env.example` 参照）。
 - systemd 等で運用する場合は `Environment=` で直接渡す方が確実です（`.env` の source 忘れを避けられます）。Docker デプロイでは `deploy/<instance>/secret.key` から自動的に環境変数化されます（[deployment.md](deployment.md) 参照）。
 
-> プレリリース版（v1 スキーマ）からの移行について: 現行バージョンはデータベーススキーマを全面再構築しています。旧スキーマを検出すると自動で再作成され、旧データは破棄されます。また、プレリリース版を `YUUKA_ENCRYPTION_SECRET` なしで運用していた場合は、`YUUKA_ENCRYPTION_SECRET_NEW` に新しい鍵を設定して一度起動すると、既存の暗号化データが新しい鍵で再暗号化されます。
+> **既存 DB を新しい版で開くとき（sk-account 移行の注意）**: マイグレーション V25 は、sk-account に紐付いていない利用者（`users.sk_account_id` が空）を**所有データごと削除**します。紐付けは V23 を含む版で各利用者が sk-account で一度ログインしたときに Discord ID で行われます。V22 以前の DB をいきなり現行版で起動すると V23〜V25 が続けて適用され、誰もログインしていないため全利用者が削除されます。旧 DB を移す前に必ずバックアップを取り、先に紐付けを済ませてください。
 
 ### 新規 DB の作成（`YUUKA_INIT_DB`）
 
@@ -108,8 +108,8 @@ pnpm build              # cargo build --release --bin yuuka + 管理画面 SPA�
 
 > PWA のビルド成果物（`dist/public/pwa`）はリポジトリにコミットされません（#46）。`pnpm build` は `build:front`（`dist/public` を空にして管理画面をビルド）→ `build:pwa` の順で実行します。個別に実行する場合もこの順にしてください（逆順だと `dist/public/pwa` が消えます）。`dist/public/pwa` が無い場合、サーバーは警告を出して PWA の静的配信だけを無効化します（管理画面と API は動作）。
 
-起動後、ブラウザで `http://localhost:7854`（設定したポート）にアクセスします。
+起動後、ブラウザで `http://localhost:7854/admin/`（管理画面。`/` は PWA）にアクセスします。
 
-1. 初期セットアップ: 最初のユーザーとして管理者アカウントを登録します。
-2. デフォルト Bot のトークン設定: システム全体のデフォルト Bot トークンを入力して起動します。
-3. 個人設定: 各ユーザーは自分の Gemini API キー（必須）、Google OAuth 連携、ペルソナ等を管理画面から設定します。
+1. ログイン: ログイン画面のボタン（標準は「sk-9 Accountでログイン」。`OIDC_LABEL` で変更可）から OIDC プロバイダーでログインします。Yuuka 側でのアカウント登録はありません。最初にログインした利用者（または `ADMIN_DISCORD_IDS` に含まれる利用者）が管理者になります。
+2. デフォルト Bot のトークン設定: 管理者がシステムデフォルト Bot（使い方の案内役）のトークンを管理画面から設定します。
+3. 個人設定: 各ユーザーは自分の Gemini API キー（必須）、Google OAuth 連携、ペルソナ等を管理画面から設定し、自分の Bot を作成します（ToDo・家計などの個人の機能は自分の Bot か共有された Bot で使います）。

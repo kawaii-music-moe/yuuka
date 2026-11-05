@@ -10,22 +10,22 @@
 ## 履歴を読む場合
 
 1. **[00-decisions.md](00-decisions.md)** — 確定技術選定（ADR）。全バージョン・採用/却下理由の**唯一の基準**。まずここ。
-2. **[PLAN.md](PLAN.md)** — 詳細マスタープラン（§1〜14、結合ビュー）。設計の本体。
-3. **[design-checkpoint.md](design-checkpoint.md)** — 設計ドラフト＋敵対的検証（22セクション、生成過程の記録）。
-4. **[verification/](verification/)** — 技術検証15領域の一次ソース照合レポート（crates.io/docs.rs/公式ドキュメント実測）。
-5. **[scaffold/](scaffold/)** — 即利用可能な設定テンプレート（厳格エラーの機械強制など）。実装開始時にコピーして使う。
+2. **[PLAN.md](PLAN.md)** — 詳細マスタープラン（§1〜14）。設計の本体。
+3. **[verification/](verification/)** — 技術検証15領域の一次ソース照合レポート（crates.io/docs.rs/公式ドキュメント実測）。
+
+> 設計ドラフト（`design-checkpoint.md`）、PLAN.md の分割元（`parts/`）、実装開始時の設定テンプレート（`scaffold/`。現行の設定はリポジトリ直下の `Cargo.toml`・`clippy.toml`・`deny.toml`・`rust-toolchain.toml`）、検証の中間メモ（`verification/verify-*.md`）は削除しました。参照する場合は `git show 662f46a:docs/rust-rewrite/<path>`（例: `git show 662f46a:docs/rust-rewrite/design-checkpoint.md`）で取り出せます。
 
 ## マスタープランの構成（[PLAN.md](PLAN.md)）
 
-| 部 | 節 | 内容 | 元パート |
-|---|---|---|---|
-| 第1部 | §1〜3 | 目的/ゴール・全体アーキテクチャ(crate workspace)・技術選定サマリ | [parts/01-overview.md](parts/01-overview.md) |
-| 第4〜5部 | §4〜5 | 厳格エラーアーキテクチャ・自己復帰/スーパーバイザ | [parts/02-errors-resilience.md](parts/02-errors-resilience.md) |
-| 第6〜7部 | §6〜7 | Web ランタイム/認証/静的配信/WS・DB/マイグレーション/データ分離 | [parts/03-web-db.md](parts/03-web-db.md) |
-| 第8部 | §8 | Discord(twilight) + Gemini/Function Calling | [parts/04-discord-gemini.md](parts/04-discord-gemini.md) |
-| 第9〜10部 | §9〜10 | ユーザー拡張モジュール基盤・フロント型連携 | [parts/05-plugins-types.md](parts/05-plugins-types.md) |
-| 第11〜12部 | §11〜12 | 段階移行ロードマップ・サブエージェント並行実装ワークフロー | [parts/06-migration-workflow.md](parts/06-migration-workflow.md) |
-| 第13〜14部 | §13〜14 | リスク一覧(R-1〜R-24)・オープンな決定事項 | [parts/07-risks-open.md](parts/07-risks-open.md) |
+| 部 | 節 | 内容 |
+|---|---|---|
+| 第1部 | §1〜3 | 目的/ゴール・全体アーキテクチャ(crate workspace)・技術選定サマリ |
+| 第4〜5部 | §4〜5 | 厳格エラーアーキテクチャ・自己復帰/スーパーバイザ |
+| 第6〜7部 | §6〜7 | Web ランタイム/認証/静的配信/WS・DB/マイグレーション/データ分離 |
+| 第8部 | §8 | Discord(twilight) + Gemini/Function Calling |
+| 第9〜10部 | §9〜10 | ユーザー拡張モジュール基盤・フロント型連携 |
+| 第11〜12部 | §11〜12 | 段階移行ロードマップ・サブエージェント並行実装ワークフロー |
+| 第13〜14部 | §13〜14 | リスク一覧(R-1〜R-24)・オープンな決定事項 |
 
 ## 検証レポート（[verification/](verification/)）
 
@@ -47,8 +47,6 @@
 | [rpt-typegen-tsrs-utoipa.md](verification/rpt-typegen-tsrs-utoipa.md) | 型連携 | ts-rs 12.0.1（型のみ）／utoipa 上位互換・専用DTO フェイルクローズ |
 | [rpt-nginx-session-strangler.md](verification/rpt-nginx-session-strangler.md) | 移行 | nginx strangler・共有Redis署名鍵不要・WS プロキシ |
 
-> `verification/verify-*.md`（小サイズ）は親エージェントの中間メモ。詳細は上記 `rpt-*.md` を参照。
-
 ## 残作業ロードマップ（→ 移行完了・実施記録）
 
 - **[remaining-work.md](remaining-work.md)** — **移行の進捗トラッカー兼実施記録**（2026-07-16 移行完了宣言に更新）。P0〜P3 のチェックリストはほぼ全消化＝機能パリティ 100%（Web **152/152**・ツール **85/85 + MCP 動的**・常駐 cron 全実装・synapse 吸収）・全ゲート緑（**test 717**）・**dev カットオーバー完了**（経路 B を dev で実証・bot 鬼方カヨコ live・prod 無影響）。**残**: prod カットオーバー（push → CI 緑 → `yuuka:latest` Rust ビルド → dev と同手順・ユーザー最終判断）／Gemini `generateAuxText` 上位層（意図的 defer）／live HTTP 実クレデンシャル疎通の実運用検証。日付付き追記が各セッションの実装記録（新しい順）。
@@ -60,11 +58,11 @@
 - [review-2026-07-07-batch1.md](review-2026-07-07-batch1.md) — **Batch 1（`9c8688d`）の修正レビュー: 承認**。完了条件全達成・テスト 90→97・gen-types ドリフトなし。reminder の snake_case 例外を Node 実測で正当と確認。所見は LOW 1 件（float priority の受理幅）と記録事項のみ。
 - [review-2026-07-09-batch4-6.md](review-2026-07-09-batch4-6.md) — **Batch 4/5/6（M-6）＋migration hazard の修正レビュー: 承認**（M-1 認証縮退・M-2 413/空ボディ・M-4 Auth fatality・M-5 writer panic 隔離・M-6 連鎖削除・baseline 冪等化＋schema_version 刻印）。clippy -D クリーン・対象 4 クレート 60 テスト全緑。運用注意 1 件: V17 書き換えによる refinery checksum divergence（旧バイナリ適用済み DB は履歴削除が必要・カットオーバー後は baseline 変更禁止）。
 
-## 次のアクション（prod カットオーバー・ユーザー判断）
+## 当時の次のアクション（2026-07-16 時点の記録・prod カットオーバーは完了済み）
 
 1. **push → CI 緑確認** — ブランチは origin より 5 コミット先行の未 push（P2 完遂コミット群では `rust-ci.yml` 未実行・ローカルゲート緑のみ）。
 2. **`yuuka:latest` を Rust でビルド** — `docker build -t yuuka:latest -f Dockerfile .`（現 Dockerfile は Rust CMD・chromium 同梱で実測 ~932MB・Node 版 1.4GB より約 470MB 減）。
-3. **prod カットオーバー** — [deploy/cutover-dev-rust.sh](../../deploy/cutover-dev-rust.sh) の手順を prod へ写像（DB バックアップ → Node 停止〔SQLite 単一ライター・P0-2〕→ Rust 起動 → `/` + `/api/setup/status` ヘルス → 失敗時ロールバック）。`YUUKA_RUST_DISCORD=1` は Node bot 停止後に有効化。
+3. **prod カットオーバー** — `deploy/cutover-dev-rust.sh`（`390df39` で撤去済み） の手順を prod へ写像（DB バックアップ → Node 停止〔SQLite 単一ライター・P0-2〕→ Rust 起動 → `/` + `/api/setup/status` ヘルス → 失敗時ロールバック）。`YUUKA_RUST_DISCORD=1` は Node bot 停止後に有効化。
 4. **カットオーバー後の実運用検証** — live HTTP（Google OAuth/Drive backup/MCP・code-complete/live-unverified）・briefing/report/backup 常駐 cron の実配信・V17 冪等適用の確認（dev では実証済み）。
 
 > 実装開始前の意思決定記録（オープン事項 5 件の判断・scaffold 展開・並行実装ワークフロー）は [00-decisions.md](00-decisions.md) / [PLAN.md](PLAN.md) §12–14 に完了済みの記録として残る。

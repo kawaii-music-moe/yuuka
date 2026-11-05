@@ -6,7 +6,7 @@
 #
 # これはローカル/開発でバックエンドを直接（Docker を使わず）動かす場合のテンプレートです
 # （docs/guide/setup.md 参照）。Docker デプロイでは同じスキーマの deploy/<instance>/config.yaml.example
-# （instance ごとのポート・招待コード・BASE_URL 等をあらかじめ埋めたもの）を使います。
+# （instance ごとのポート・sk-account の URL・BASE_URL 等をあらかじめ埋めたもの）を使います。
 # 項目を追加・変更する場合は crates/yuuka-core/src/config.rs の Config 構造体が定義の正であり、
 # 対応するキーはこの 3 ファイル（本ファイル / deploy/dev/config.yaml.example / deploy/prod/config.yaml.example）
 # で揃えてください。

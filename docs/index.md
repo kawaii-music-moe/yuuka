@@ -18,7 +18,7 @@ docs/
 ├── spec/                    ← 機能仕様・要件
 │   ├── discordbot_spec.md
 │   └── bot_attributes_requirements.md
-├── skills/                  ← LLM 向けスキル仕様（旧 Node 版は実行時にシステムプロンプトへ注入。Rust 版は未配線）
+├── skills/                  ← LLM 向けスキル仕様（ビルド時にバイナリへ埋め込み、システムプロンプトへ注入）
 │   └── search_skills.md
 ├── design/                  ← 設計方針（旧 Node 実装時点の記述を含む。下記「設計文書」の注記参照）
 │   ├── function_modularization.md          ← 機能モジュール化（P1〜P6 実装済み）
@@ -36,7 +36,7 @@ docs/
 | **現行アーキテクチャを図で把握する（HTML）** | [architecture-current.html](architecture-current.html) |
 | プロジェクト全体像・どのファイルを触ればよいか | [project_overview.md](project_overview.md) |
 | Node → Rust の機能欠落・重複と全API/会話ツールの対応表 | [機能差分・重複の棚卸し（2026-10-08）](audits/2026-10-08-feature-parity.md) |
-| 現行の実装（バックエンド）・DB スキーマ | `crates/`（クレート一覧は [../Cargo.toml](../Cargo.toml)）/ `crates/yuuka-db/migrations/`（V17 baseline〜V22） |
+| 現行の実装（バックエンド）・DB スキーマ | `crates/`（クレート一覧は [../Cargo.toml](../Cargo.toml)）/ `crates/yuuka-db/migrations/`（V17 baseline〜V36） |
 | ローカルセットアップ・Docker デプロイ・機能一覧 | [guide/setup.md](guide/setup.md) / [guide/deployment.md](guide/deployment.md) / [guide/features.md](guide/features.md) |
 | PWA クライアント（Vue）の開発手順 | [../client/pwa/README.md](../client/pwa/README.md) |
 | 旧 Node 実装時点の不変条件・DB スキーマ v16・ファイル所有マップ（**履歴資料**） | [architecture/architecture_v2.md](architecture/architecture_v2.md) |
@@ -56,19 +56,19 @@ docs/
 
 ### 1. 現行の実装（一次情報）
 - **バックエンド**: `crates/`（Rust workspace。クレート構成は [../Cargo.toml](../Cargo.toml)、各クレートの役割は [project_overview.md](project_overview.md) §5）。
-- **DB スキーマ**: `crates/yuuka-db/migrations/`（`V17__baseline.sql` ＋ `V18`〜`V22` の前方専用マイグレーション）。
+- **DB スキーマ**: `crates/yuuka-db/migrations/`（`V17__baseline.sql` ＋ `V18`〜`V26` の前方専用マイグレーション）。
 - **管理画面 / PWA**: `frontend/`（Svelte 5 + Vite）/ `client/pwa/`（Vue 3 + Vite）。
 - **セットアップ・運用**: [guide/setup.md](guide/setup.md) / [guide/deployment.md](guide/deployment.md)。
 
 ### 2. [spec/bot_attributes_requirements.md](spec/bot_attributes_requirements.md) — Bot 属性拡張要件
 Bot の動作モード（**secretary 秘書 / mcp_assistant 汎用**）の能力プリセット、2 層メモリ、汎用モードの分離スコープ（`bot_id × user_id` / `bot_id × guild_id`）を規定。要件としては有効だが、実装への言及（`gemini.ts`・`migrations.ts` 等）は旧 Node 実装時点のもの。
 
-### 3. [spec/discordbot_spec.md](spec/discordbot_spec.md) — マスター機能仕様（v0.6.2）
-全機能の要件定義。§3 Bot 機能（対話・タスク・リマインド・家計・ブラウザ・マクロ・メモリ・日報・連絡先・会話ログ要約・Webhook・音声）、§4 ペルソナ/API/MCP、§5 ユーザー/Bot 管理、§6 PW マネージャ、§7 会話履歴、§8 バックアップ、§9 外部連携、§10 非機能要件。技術選定の記述（Chart.js / Node.js 等）は旧実装時点のもの。
+### 3. [spec/discordbot_spec.md](spec/discordbot_spec.md) — マスター機能仕様（v0.6.4）
+全機能の要件定義。§3 Bot 機能（対話・タスク・リマインド・家計・ブラウザ・マクロ・メモリ・日報・連絡先・会話ログ要約・Webhook・音声）、§4 ペルソナ/API/MCP、§5 ユーザー/Bot 管理、§6 PW マネージャ、§7 会話履歴、§8 バックアップ、§9 外部連携、§10 非機能要件。v0.6.4 で認証（§5.4 sk-account 一本化）・Webhook の Bot 帰属・グラフ描画を現行に合わせた。それ以外の実装への言及（Node.js・`*.ts` 等）は旧実装時点のもの。
 
 ### 4. [skills/search_skills.md](skills/search_skills.md) — 検索クロールスキル
 LLM が `searchWeb` / `fetchDynamicPage` を使う際の推奨ドメイン・クエリ・巡回フロー（天気=気象庁優先、運行=Yahoo、ニュース=一次ソース）。
-**⚠️ 旧 Node 版では `src/gemini.ts` が実行時に読み込んでシステムプロンプトへ注入していました。現行の Rust 版では未配線です**（`crates/yuuka-orchestrator/src/system_prompt.rs` の検索スキル節は空のまま。配線方針は [rust-rewrite/remaining-work.md](rust-rewrite/remaining-work.md) の P2-E を参照）。配線時は Docker イメージに docs/ が含まれないため `include_str!` での埋め込みが想定されています。
+`crates/yuuka-orchestrator/src/system_prompt.rs` が `include_str!` で**ビルド時にバイナリへ埋め込み**、システムプロンプトの「ファクトチェック」と「機能一覧」の間へ注入します（システムデフォルト Bot には注入しない。R12・#109）。Docker イメージは docs/ を同梱しないため、rust-builder 段で `docs/skills` だけを COPY しています。**このファイルを変えたら、反映にはバイナリの再ビルドが必要です。**
 
 ### 5. [architecture/architecture_v2.md](architecture/architecture_v2.md) — 旧 Node/TS 実装のアーキテクチャ規範（**履歴資料**）
 Rust 移行前（DB schema v16）の不変条件・共有型・DB スキーマ・暗号・ファイル所有マップを定義していた文書。**現行の規範ではなく、他の文書に優先しません。** 冒頭に現行の参照先（`crates/`・マイグレーション等）をまとめています。全面的な書き直しは未実施。

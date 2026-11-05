@@ -5,7 +5,7 @@
 > 人間向けの導入・セットアップは [README.md](../README.md) を参照。
 
 > **更新状況**: 本書は現行構成（バックエンド = Rust workspace `crates/`、管理画面 = Svelte `frontend/`、PWA = Vue `client/pwa/`）に合わせて更新済みです。旧 Node.js/TypeScript 実装（`src/*.ts`）は [#68](https://github.com/kawaii-music-moe/yuuka/pull/68) で撤去されました。旧実装の設計・不変条件は [architecture/architecture_v2.md](architecture/architecture_v2.md)（**履歴資料**・現行の規範ではない）にのみ残っています。
-> Rust 版には、旧実装から未移植・縮退中の箇所が残っています（例: 検索スキルの注入、ユーザー×Bot 別の有効モジュールによるツール絞り込み）。現況は **コードを正**とし、経緯は [rust-rewrite/remaining-work.md](rust-rewrite/remaining-work.md) を参照してください。
+> Rust 版には、旧実装から未移植・縮退中の箇所が残っています（例: ユーザー×Bot 別の有効モジュールによるツール絞り込み）。現況は **コードを正**とし、経緯は [rust-rewrite/remaining-work.md](rust-rewrite/remaining-work.md) を参照してください。
 > 本書の詳細（§5 のクレート表など）も実装の変更で古くなり得ます。ズレを見つけたら本書を更新してください。
 
 ---
@@ -18,6 +18,7 @@
 - LLM は **Function Calling** で多数のツール（ToDo・家計・予定・リマインド・ブラウザ操作・パスワードマネージャ・MCP・リッチ表示 等）を呼び出して秘書業務を遂行する。ツールの一覧は各ドメイン crate の `tools()` を [`crates/yuuka-supervisor/src/tool_registry.rs`](../crates/yuuka-supervisor/src/tool_registry.rs) が集約する。機能モジュール（[module_catalog.rs](../crates/yuuka-orchestrator/src/module_catalog.rs) の 14 種）をユーザー×Bot ごとに ON/OFF する設定 API/UI がある（設計は [function_modularization.md](design/function_modularization.md)。**LLM へ渡すツール宣言を有効モジュールで絞り込む処理は現状未移植**で、能力＋経路のみで絞られる。[`crates/yuuka-tools/src/native.rs`](../crates/yuuka-tools/src/native.rs) の注記参照）。
 - 全ユーザーデータは **Discord ユーザー ID 単位で完全分離**。これは設計の最重要不変条件（§8 参照）。
 - Bot は 2 つの動作モードを持つ: **秘書モード（secretary）**＝個人 DM 中心・ユーザー自身の Gemini 鍵、**汎用モード（MCP アシスタント）**＝ギルド常駐・Bot 専用 Gemini 鍵。
+- システムデフォルト Bot（`system_default`）は使い方の案内役で、個人データ・MCP・認証情報を扱わない（[#138](https://github.com/kawaii-music-moe/yuuka/issues/138)）。`botId` 未指定や `system_default` を指定した個人データ API は 403 を返し、システム Bot へフォールバックしない。個人の機能は利用者が作った Bot か共有された Bot で使う。
 - Discord に加え、**クライアント非依存の汎用チャット API**（WebSocket `/ws/chat` + OAuth デバイスフロー。デスクトップクライアント向け）と、**PWA クライアント向け API**（`/api/client/*`、`crates/yuuka-client-api`）を提供する。
 - 記憶は **シナプス認知アーキテクチャ**（`crates/yuuka-synapse` によるインプロセスの L2 連想想起）。
 
@@ -29,7 +30,7 @@
 |---|---|
 | 言語 / 実行系 | **Rust**（バックエンド本体・`crates/`、edition 2021）/ **TypeScript + Svelte**（管理画面 SPA・`frontend/`）/ **TypeScript + Vue**（PWA・`client/pwa/`） |
 | パッケージ管理 | **cargo**（workspace、`Cargo.toml`）/ **pnpm 9**（管理画面のみ、`pnpm-workspace.yaml` は `.` のみ）/ **npm**（`client/pwa/`。独立した `package-lock.json`・pnpm workspace の外） |
-| DB | **SQLite**（`rusqlite`、bundled）。read pool + 単一 writer actor（`crates/yuuka-db`）。スキーマは `refinery` の前方専用マイグレーション（`crates/yuuka-db/migrations/`、現在 V17 baseline〜V22） |
+| DB | **SQLite**（`rusqlite`、bundled）。read pool + 単一 writer actor（`crates/yuuka-db`）。スキーマは `refinery` の前方専用マイグレーション（`crates/yuuka-db/migrations/`、現在 V17 baseline〜V36） |
 | キャッシュ / セッション | **Redis**（`redis` crate、`crates/yuuka-auth::SessionStore`）。到達不能でも起動継続＝Cookie のみへ縮退 |
 | LLM | `crates/yuuka-gemini`（Gemini・`reqwest`/rustls 経由）。秘書=ユーザー鍵 / 汎用=Bot 鍵 |
 | Discord | `twilight-gateway` / `twilight-http` / `twilight-model`（`crates/yuuka-discord`） |
@@ -42,12 +43,12 @@
 | 汎用チャット | **WebSocket**（axum `ws`）`/ws/chat`（`crates/yuuka-supervisor/src/ws.rs`。Bearer デスクトップトークン専用）+ OAuth デバイスフロー（`crates/yuuka-auth`） |
 | グラフ描画 | `crates/yuuka-chart`（`image` + `ab_glyph` で PNG 生成） |
 | 暗号 | `aes-gcm`（システム鍵・AES-256-GCM）+ `scrypt`（システム鍵導出）+ `argon2`（PW マネージャの per-user 鍵導出。`crates/yuuka-crypto`） |
-| 認証 | `bcrypt`（cost 12）+ Redis セッション（Cookie）/ SQLite のデスクトップトークン（Bearer）（`crates/yuuka-auth`） |
+| 認証 | 本人認証は **OIDC プロバイダー**（`OIDC_*`。標準は sk-account）に委ねる（Yuuka はパスワードを持たない。`crates/yuuka-auth/src/oidc.rs`）。ログイン後は Redis セッション（Cookie）/ SQLite のデスクトップトークン（Bearer）（`crates/yuuka-auth`） |
 | スケジューラ | `croner`（cron 式の次回発火計算）。常駐ジョブは `crates/yuuka-services` |
 | フロント⇄Rust の型共有 | `ts-rs`。DTO（`crates/yuuka-types` と各ドメイン crate の `dto.rs`）から `cargo run -p xtask -- gen-types` で `frontend/src/lib/api/generated/` へ生成 |
 | Lint / Format / 型 | Rust: `cargo fmt --check` + `cargo clippy -D warnings`（`rust-toolchain.toml` で 1.96.1 固定）+ `cargo-deny`（`deny.toml`）。フロント: **Biome**（`pnpm lint`、対象は `frontend/src scripts` のみ）+ `svelte-check`（`pnpm typecheck:front`）。`client/pwa` の型チェックは `npm run check`（`vue-tsc`） |
-| テスト | Rust: `cargo test --workspace`（各クレートに `#[cfg(test)]` 併置。`.github/workflows/rust-ci.yml`）。フロント: `pnpm test:front`（vitest。CI 未実行） |
-| CI | `.github/workflows/rust-ci.yml`（fmt / clippy / build / test / cargo-deny）、`.github/workflows/ci.yml`（フロントの typecheck・build + biome lint） |
+| テスト | Rust: `cargo test --workspace`（各クレートに `#[cfg(test)]` 併置）。管理画面: `pnpm test:front`（vitest。CI 未実行）。PWA: `client/pwa` で `npm test` |
+| CI | `.github/workflows/rust-ci.yml`: fmt と cargo-deny は Rust 関連の PR と develop/main への push で実行し、clippy・release build・test は **develop → main の PR でのみ**実行する。`.github/workflows/ci.yml`: 管理画面の svelte-check、PWA の `vue-tsc`、Biome lint は毎回実行し、管理画面の release build と PWA のテスト・build は develop → main の PR でのみ実行する。通常の PR では clippy / test がローカル頼りになる |
 
 ---
 
@@ -58,6 +59,7 @@ pnpm install            # 管理画面の依存のみ導入（バックエンド
 cargo run --bin yuuka   # バックエンド開発起動（config.yaml のある repo ルートで実行）
 pnpm dev                # 管理画面の開発（Vite）。VITE_API_TARGET でバックエンドへ proxy
 pnpm dev:client:mock    # PWA（client/pwa）+ モック API + 管理画面をまとめて起動（手順は client/pwa/README.md）
+pnpm dev:start          # systemd の dev API + PWA/管理画面の Vite を起動。入口は 127.0.0.1:5173（pnpm dev:help で一覧、deploy/README.md）
 cargo test --workspace  # Rust テスト
 pnpm build              # 本番ビルド: cargo build --release --bin yuuka → build:front → build:pwa（管理画面 + PWA）
 pnpm build:front        # 管理画面のみ本番ビルド(dist/public)
@@ -148,7 +150,7 @@ pnpm check              # typecheck:front + lint をまとめて実行
 | `yuuka-core` | 全 crate の土台: 層別エラー（`AppError`/`WebError`/`DbError` 等）・`Config`（`config.yaml`＋環境変数）・`UserId`/`BotId`/`GuildId`・`Tool`/`ToolProvider` 契約・`UserScope`/`CronScan`（データ分離）・secrets・telemetry |
 | `yuuka-types` | フロント⇄Rust の wire DTO と `Envelope<T>`、ts-rs による型 export |
 | `yuuka-crypto` | 保存時暗号化（システム鍵 scrypt + AES-256-GCM / ユーザー鍵 Argon2id + AES-256-GCM）と鍵ローテーション（`rotate`・`ENCRYPTED_COLUMNS`） |
-| `yuuka-db` | SQLite: 単一 writer actor + read pool + `refinery` マイグレーション（`migrations/V17__baseline.sql` 〜 `V22__*.sql`） |
+| `yuuka-db` | SQLite: 単一 writer actor + read pool + `refinery` マイグレーション（`migrations/V17__baseline.sql` 〜 `V36__*.sql`） |
 
 **Web / 認証**
 
@@ -173,7 +175,7 @@ pnpm check              # typecheck:front + lint をまとめて実行
 
 | crate | 役割 |
 |---|---|
-| `yuuka-todo` / `yuuka-schedule` / `yuuka-timeline` / `yuuka-reminder` | ToDo / 予定 / デイリータイムライン / リマインド（Google カレンダー同期の一部は未移植。`yuuka-schedule` 冒頭コメント参照） |
+| `yuuka-todo` / `yuuka-schedule` / `yuuka-timeline` / `yuuka-reminder` | ToDo / 予定 / デイリータイムライン / リマインド（予定は登録・削除時に Google カレンダーへ反映し、常駐ジョブ `calendar_sync` が 15 分ごとに Google から取り込む。取り込むのは Google アカウントを割り当てた Bot だけ。`yuuka-schedule/src/google_sync.rs`） |
 | `yuuka-finance` | 家計（収支・予算・繰り返し支払い・消込・レシート解析） |
 | `yuuka-personal` | 連絡先・コンテキストノート・クリップボード |
 | `yuuka-credential` | パスワードマネージャ（暗号列は DTO に出さない。`browserFillCredential` は復号値をブラウザへ直接入力）、Bot ごとの利用許可 |
@@ -183,7 +185,7 @@ pnpm check              # typecheck:front + lint をまとめて実行
 | `yuuka-browser` | `searchWeb`/`fetchDynamicPage`/`takePageScreenshot`/対話ブラウザ操作（chromium CLI/CDP・SSRF ガード） |
 | `yuuka-google` | Google OAuth・複数アカウント・Calendar/Drive 連携の共有層 |
 | `yuuka-webhook` | 受信 Webhook（`POST /hook/{token}`）と管理 API |
-| `yuuka-settings` / `yuuka-admin` / `yuuka-integrated` | 個人設定 API（`/api/settings/*`）/ 管理者 API（`/api/admin/*`）/ Bot 統合管理 API（`/api/integrated/*`） |
+| `yuuka-settings` / `yuuka-admin` / `yuuka-integrated` | 個人設定 API（`/api/settings/*`。PIN で暗号化したアカウント/Bot 移行パッケージのダウンロードを含む）/ 管理者 API（`/api/admin/*`）/ Bot 統合管理 API（`/api/integrated/*`） |
 | `yuuka-client-api` | PWA 向け API（`/api/client/*`）。ToDo・カレンダー・家計・共有ノート・チャット |
 
 ### 5.3 常駐ジョブ（`crates/yuuka-services`）
@@ -192,12 +194,13 @@ pnpm check              # typecheck:front + lint をまとめて実行
 
 | サービス | スケジュール / 役割 |
 |---|---|
-| `reminder` | 毎分。期限リマインド・ToDo 期限・予定リマインドの配信 |
+| `reminder` | 既定は毎分（`REMINDER_CRON` で変更可）。期限リマインド・ToDo 期限・予定リマインドの配信 |
 | `briefing` / `report` | 毎分に設定を確認し、朝報（天気 + RSS）・日報/週報を配信 |
 | `payment_recurrence` / `todo_recurrence` | 毎日 0:05 / 0:10。繰り返し支払い・ルーチンタスクの次回生成 |
 | `birthday` / `clipboard` | 毎日 8:00 誕生日通知 / 毎時 期限切れクリップボード削除 |
 | `playbook_schedule` | 毎分。マクロの cron 定期実行 |
 | `backup` | 毎時 :15。ユーザー別 SQLite 抽出 → ZIP → 各自の Google Drive |
+| `calendar_sync` | 15 分ごと。Google アカウントを割り当てた Bot の予定を Google カレンダーから取り込む |
 | `metrics` | 定期的にメトリクスをログ出力 |
 
 ### 5.4 フロントエンド（`frontend/`・`client/pwa/`）
@@ -240,11 +243,11 @@ pnpm check              # typecheck:front + lint をまとめて実行
 
 ## 7. データモデルの要点
 
-- **正規の定義元は [`crates/yuuka-db/migrations/`](../crates/yuuka-db/migrations/)**（`V17__baseline.sql` ＋ `V18`〜`V22` の前方専用マイグレーション。`refinery` が適用し `refinery_schema_history` で追跡）。各ドメイン crate の repo はテーブルを再定義しない。テーブル一覧と列の概要は旧実装時点の [architecture_v2.md](architecture/architecture_v2.md) §2 にもあるが、v16 時点で古い（履歴資料）。
+- **正規の定義元は [`crates/yuuka-db/migrations/`](../crates/yuuka-db/migrations/)**（`V17__baseline.sql` ＋ `V18`〜`V26` の前方専用マイグレーション。`refinery` が適用し `refinery_schema_history` で追跡）。各ドメイン crate の repo はテーブルを再定義しない。テーブル一覧と列の概要は旧実装時点の [architecture_v2.md](architecture/architecture_v2.md) §2 にもあるが、v16 時点で古い（履歴資料）。
 - 日時は一貫して **`'YYYY-MM-DD HH:MM:SS'`（ローカル時刻テキスト、`datetime('now','localtime')`）**。
 - 暗号化列は `[encrypted, iv, auth_tag]` の 3 つ組。種類により鍵が異なる（§8）。
 - `message_logs` / `bot_context_notes` / `bot_members` は **`users` への FK を持たない**（Web 未登録の Discord ユーザーも記録するため）。これは意図的（汎用モードの分離キー仕様）。
-- スキーマ進化: `V17__baseline.sql` は旧 Node 実装の最終スキーマを冪等に作成する（既存 DB でも新規 DB でも適用でき、`schema_version='17'` を刻印）。以降の Rust 側の追加: V18 ギルド内チャンネル有効化（`bot_channels`）/ V19 `message_logs` のチャンネル ID / V20 発言禁止チャンネル / V21 PWA クライアント API（`message_logs.source`）/ V22 PWA チャットのリッチ返信永続化（`rich_content`）。
+- スキーマ進化: `V17__baseline.sql` は旧 Node 実装の最終スキーマを冪等に作成する（既存 DB でも新規 DB でも適用でき、`schema_version='17'` を刻印）。以降の Rust 側の追加: V18 ギルド内チャンネル有効化（`bot_channels`）/ V19 `message_logs` のチャンネル ID / V20 発言禁止チャンネル / V21 PWA クライアント API（`message_logs.source`）/ V22 PWA チャットのリッチ返信永続化（`rich_content`）/ V23 sk-account との紐付け（`users.sk_account_id`）/ V24 システムデフォルト Bot に残っていた MCP・認証情報の利用許可を削除 / V25 sk-account に紐付いていない旧アカウントを削除し、`users.password_hash` と `invite_codes` を撤去 / V26 Webhook エンドポイントを Bot ごとにする（`webhook_endpoints.bot_id`）。
 
 ---
 
@@ -302,8 +305,8 @@ pnpm check              # typecheck:front + lint をまとめて実行
 1. **現行のコードとマイグレーション**（`crates/`・`frontend/`・`client/pwa/`・`crates/yuuka-db/migrations/`）— 一次情報。
 2. [docs/guide/](guide/setup.md)（setup / deployment / features）— 現行の利用・運用手順。
 3. [docs/spec/bot_attributes_requirements.md](spec/bot_attributes_requirements.md) — Bot 動作モード拡張（capability、2 層メモリ、汎用モードのスコープ）。
-4. [docs/spec/discordbot_spec.md](spec/discordbot_spec.md) — **マスター機能仕様 v0.6.2**（§3 機能、§5 ユーザー/Bot、§6 PW マネージャ、§7 会話履歴、§8 バックアップ、§9 外部連携）。実装への言及は旧 Node 実装時点のもの。
-5. [docs/skills/search_skills.md](skills/search_skills.md) — 検索クロール時の LLM 指示（天気=気象庁優先 等）。Rust 版では未配線。
+4. [docs/spec/discordbot_spec.md](spec/discordbot_spec.md) — **マスター機能仕様 v0.6.4**（§3 機能、§5 ユーザー/Bot、§6 PW マネージャ、§7 会話履歴、§8 バックアップ、§9 外部連携）。§5.4（認証）は現行の sk-account 方式。それ以外の実装への言及は旧 Node 実装時点のものが残る。
+5. [docs/skills/search_skills.md](skills/search_skills.md) — 検索クロール時の LLM 指示（天気=気象庁優先 等）。`include_str!` でビルド時に埋め込み、システムプロンプトへ注入する（変更の反映には再ビルドが必要）。
 6. [docs/architecture/architecture_v2.md](architecture/architecture_v2.md) — 旧 Node/TS 実装の規範（**履歴資料**。規範としては扱わない）。
 7. [README.md](../README.md) — 人間向け概要・セットアップ（非規範）。
 
@@ -324,4 +327,4 @@ pnpm check              # typecheck:front + lint をまとめて実行
 
 ---
 
-_最終更新: 2026-09-30 / このファイルはリポジトリ解析に基づく AI 向け索引です。実装が動けば、まず該当ファイルの実コードを正とし、本書とズレがあれば本書を更新してください。_
+_最終更新: 2026-10-20 / このファイルはリポジトリ解析に基づく AI 向け索引です。実装が動けば、まず該当ファイルの実コードを正とし、本書とズレがあれば本書を更新してください。_
