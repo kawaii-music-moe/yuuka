@@ -121,14 +121,14 @@ deploy() {
   log 'ビルド（Rust・管理画面・PWA）'
   pnpm install --frozen-lockfile --silent
   # dev の Vite も同じ node_modules を使っているので、消さずに lock に合わせる（ci は消してから入れ直す）。
-  npm --prefix client/pwa install --no-audit --no-fund --silent
+  npm --prefix clients/pwa install --no-audit --no-fund --silent
   cargo build --release --bin yuuka
   # 本番が配信中の dist/public には書かず、別の場所に作ってから入れ替える。
   stage="$ROOT/target/prod-stage-$ts"
   rm -rf "$stage" && mkdir -p "$stage"
   pnpm exec vite build --config frontend/vite.config.ts --outDir "$stage/public" --emptyOutDir --logLevel warn
-  npm --prefix client/pwa run build --silent
-  cp -a "$ROOT/client/pwa/dist" "$stage/public/pwa"
+  npm --prefix clients/pwa run build --silent
+  cp -a "$ROOT/clients/pwa/dist" "$stage/public/pwa"
   install -m 755 "${CARGO_TARGET_DIR:-$ROOT/target}/release/yuuka" "$stage/yuuka"
   [ -f "$stage/public/index.html" ] && [ -f "$stage/public/pwa/index.html" ] || die '画面のビルド結果が足りません'
 

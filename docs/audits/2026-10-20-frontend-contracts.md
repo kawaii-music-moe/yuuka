@@ -15,7 +15,7 @@
 | 設定 | Bot 設定・ペルソナ・連携・管理者向け設定 | モデル・ペルソナ本文・Google 連携 | 共存。PWA の設定契約は意図的に小さく保つ |
 | チャット | 設定と観測のみ | 対話チャット | PWA 専用の通信方式を維持 |
 
-業務ルールはどちらの UI にも、path ごとのハンドラーにも置かず、Rust の業務サービスに置く。各入口は認証済みのユーザーと選択中の Bot を解決してからユースケースを呼ぶ。UI 側の検証は入力補助であり、判定はサーバーが行う。ToDo・家計・ノートの共通サービス化は D02（#126）で行い、その経緯と path ごとの判断は [domain-services 監査](2026-10-20-domain-services.md) にある。PWA のモデル一覧（`client/pwa/src/api/models.ts`）とサーバーの許可リストの一致は、既存の `pwa_model_list_matches_server_allowlist`（`crates/yuuka-client-api/tests/settings.rs`）が検出する。
+業務ルールはどちらの UI にも、path ごとのハンドラーにも置かず、Rust の業務サービスに置く。各入口は認証済みのユーザーと選択中の Bot を解決してからユースケースを呼ぶ。UI 側の検証は入力補助であり、判定はサーバーが行う。ToDo・家計・ノートの共通サービス化は D02（#126）で行い、その経緯と path ごとの判断は [domain-services 監査](2026-10-20-domain-services.md) にある。PWA のモデル一覧（`clients/pwa/src/api/models.ts`）とサーバーの許可リストの一致は、既存の `pwa_model_list_matches_server_allowlist`（`crates/yuuka-client-api/tests/settings.rs`）が検出する。
 
 ## 同じ wire 契約は生成型を使う（D07）
 
@@ -42,9 +42,9 @@
 
 ## PWA の wire 境界
 
-PWA は `client/pwa/src/api/contracts.ts`・`AgentGateway`（`gateway.ts`）・`httpAdapter.ts` を独自に持ち続ける。サーバー側の `yuuka-client-api` が、ドメインの値を PWA 用 view（string ID・camelCase・boolean の `completed`・`Envelope` を使わない素の JSON）へ明示的に変換する。これは別の wire 契約であり、管理画面の型の重複ではない。公開する型は `client/pwa/src/api/index.ts` から再エクスポートする。管理画面の生成型を PWA のページから直接 import しない。この境界は `wire.ts` のコメントにも書いた。
+PWA は `clients/pwa/src/api/contracts.ts`・`AgentGateway`（`gateway.ts`）・`httpAdapter.ts` を独自に持ち続ける。サーバー側の `yuuka-client-api` が、ドメインの値を PWA 用 view（string ID・camelCase・boolean の `completed`・`Envelope` を使わない素の JSON）へ明示的に変換する。これは別の wire 契約であり、管理画面の型の重複ではない。公開する型は `clients/pwa/src/api/index.ts` から再エクスポートする。管理画面の生成型を PWA のページから直接 import しない。この境界は `wire.ts` のコメントにも書いた。
 
-`client/pwa/src/api/httpAdapter.contract.test.ts` は、完了の PATCH の body・選択中 Bot の `?botId=`・string ID と素のレスポンス・レシートの下書き（読み取りだけで取引を登録しない）を固定する。API 間の永続化と変換の境界は、D02 の PR のバックエンドテストで確かめる。
+`clients/pwa/src/api/httpAdapter.contract.test.ts` は、完了の PATCH の body・選択中 Bot の `?botId=`・string ID と素のレスポンス・レシートの下書き（読み取りだけで取引を登録しない）を固定する。API 間の永続化と変換の境界は、D02 の PR のバックエンドテストで確かめる。
 
 ## Bot endpoint（#161 フロント側）
 
@@ -61,7 +61,7 @@ develop 起点のブランチ（`refactor/d01-d07-frontend-contracts`）で実�
 
 - `pnpm install --frozen-lockfile`、`pnpm run typecheck:front`（svelte-check）: 649 ファイル、エラー・警告 0。`wire.test.ts` の型アサーション（`expectTypeOf`）もここで検査される。
 - `pnpm run test:front`（Vitest）: 3 ファイル 37 件成功（`JsonWire` の型変換、タスクのタグ、Bot endpoint の契約と一本化）。
-- `client/pwa` で `npm ci`、`npm run check`（vue-tsc）: エラー 0。`npm test`: 28 件成功（契約テスト 2 件を含む）。
+- `clients/pwa` で `npm ci`、`npm run check`（vue-tsc）: エラー 0。`npm test`: 28 件成功（契約テスト 2 件を含む）。
 - `pnpm lint`（CI と同じ `biome check frontend/src scripts`）: エラー 0、警告 752 件・info 4 件。develop の同じ範囲と同数で、増えていない。PWA は biome の対象外。
 - `cargo check` / `cargo clippy -- -D warnings`（`-p xtask --all-targets`、共有ターゲット）: 成功。
 - 生成型: develop の各 `dto.rs` と export 一覧から ts-rs 12 の出力規則（doc コメント・rename・optional・同名衝突時は先勝ち）と xtask の行末空白除去を再現して期待値を作り、コミットする 72 ファイルと比べた。70 ファイルが完全一致。残る `Envelope.ts`（`where` 句付きジェネリック）と `EmptyData.ts`（空構造体は `Record<symbol, never>`）は再現側が扱えない形で、Rust の定義と目視で照合した。

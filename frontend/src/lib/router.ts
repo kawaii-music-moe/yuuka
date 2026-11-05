@@ -181,7 +181,7 @@ export function isPublicPath(path: string): boolean {
  * 専念する（ロールは見ない）。
  *
  * 「同一オリジンの絶対パス」であれば `/admin/...`（この SPA）に限らず許可する。PWA（`/`・`/todo`・
- * `/chat` 等・`client/pwa`）も同一オリジンで配信され、共有ログイン（`/admin/login`）へ送り出した
+ * `/chat` 等・`clients/pwa`）も同一オリジンで配信され、共有ログイン（`/admin/login`）へ送り出した
  * PWA へ戻すために必要（実際の遷移先の解釈は [`resolveReturnTarget`]）。
  */
 export function isAllowedReturnPath(path: string | null | undefined): boolean {

@@ -13,7 +13,7 @@
 > | 実装（バックエンド） | `crates/`（Rust workspace。クレート一覧は [Cargo.toml](../../Cargo.toml) の `[workspace] members`、全体像は [project_overview.md](../project_overview.md)） |
 > | DB スキーマ | `crates/yuuka-db/migrations/`（`V17__baseline.sql`＝Node 版最終スキーマ〔本書の v16 より新しい v17〕を冪等に作成し、`V18`〜`V22` を前方専用で追加。`refinery` で適用） |
 > | フロントとの型の共有 | `crates/yuuka-types` の DTO を `cargo run -p xtask -- gen-types` で `frontend/src/lib/api/generated/` へ生成 |
-> | 管理画面 / PWA | `frontend/`（Svelte 5 + Vite）/ `client/pwa/`（Vue 3 + Vite。[README](../../client/pwa/README.md)） |
+> | 管理画面 / PWA | `frontend/`（Svelte 5 + Vite）/ `clients/pwa/`（Vue 3 + Vite。[README](../../clients/pwa/README.md)） |
 > | セットアップ・運用 | [docs/guide/setup.md](../guide/setup.md) / [features.md](../guide/features.md) / [deployment.md](../guide/deployment.md) |
 > | 機能仕様 | [docs/spec/](../spec/discordbot_spec.md) |
 > | Rust 移行の経緯・現況 | [docs/rust-rewrite/](../rust-rewrite/README.md)（[remaining-work.md](../rust-rewrite/remaining-work.md)） |

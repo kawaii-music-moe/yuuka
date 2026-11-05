@@ -1,4 +1,4 @@
-# サーバーでの音声生成（GPU の無い端末向け・client/pwa/server/tts）。本番と dev で 1 つを共有する
+# サーバーでの音声生成（GPU の無い端末向け・clients/pwa/server/tts）。本番と dev で 1 つを共有する
 # （CPU を 1 生成で使い切るため）。~/.config/systemd/user/ に置いて有効にする:
 #   cp deploy/tts/yuuka-tts.service ~/.config/systemd/user/ && systemctl --user daemon-reload
 #   systemctl --user enable --now yuuka-tts.service
@@ -9,7 +9,7 @@ Description=Yuuka server-side TTS (Irodori-TTS on CPU)
 After=network.target
 
 [Service]
-WorkingDirectory=/home/suki/apps/yuuka/client/pwa
+WorkingDirectory=/home/suki/apps/yuuka/clients/pwa
 Environment=PATH=/home/suki/.nix-profile/bin:/run/current-system/sw/bin
 Environment=TTS_MODEL_DIR=/home/suki/apps/yuuka/data/tts-models/irodori-v41-mf-fp16-3
 Environment=TTS_PORT=3410

@@ -1,11 +1,11 @@
-//! `/api/client/tts/*` — GPU の無い端末のための、サーバーでの音声生成（`client/pwa/server/tts`）への中継。
+//! `/api/client/tts/*` — GPU の無い端末のための、サーバーでの音声生成（`clients/pwa/server/tts`）への中継。
 //!
 //! 音声生成サーバーは認証を持たず 127.0.0.1 で待ち受けるので、ここでログイン済みかを確かめてから
 //! `TTS_SERVER_URL` へ転送する。生成した音声は区切りごとに届くので、応答はストリームのまま返す
 //! （最初の区切りが届いた時点で PWA が鳴らし始められる）。未設定なら 404 で、PWA は標準の読み上げを使う。
 //!
 //! `TTS_SIGNING_KEY` があれば、要求に Ed25519 の署名を付ける。音声生成サーバーは公開鍵だけを持ち、署名の
-//! 無い要求・時刻のずれた要求・送り直された要求を断る（`client/pwa/server/tts/auth.ts`）。別のマシンに置くときに使う。
+//! 無い要求・時刻のずれた要求・送り直された要求を断る（`clients/pwa/server/tts/auth.ts`）。別のマシンに置くときに使う。
 
 use std::sync::OnceLock;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -172,7 +172,7 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::*;
 
-    /// `client/pwa/server/tts/auth.test.ts` と同じ固定の値。Ed25519 の署名は決定的なので、ここと Node の
+    /// `clients/pwa/server/tts/auth.test.ts` と同じ固定の値。Ed25519 の署名は決定的なので、ここと Node の
     /// 署名が一致すれば、音声生成サーバーが本体の署名を確かめられる。
     #[test]
     fn signature_matches_the_tts_server_vector() {

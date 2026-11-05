@@ -37,7 +37,7 @@ use yuuka_web::{AppState, Db, WebConfig};
 const CONFIG_PATH: &str = "config.yaml";
 /// ビルド済み SPA の配信元（vite `outDir` = `dist/public`）。
 const DIST_DIR: &str = "dist/public";
-/// PWA（`client/pwa`）のビルド出力（issue #33。`pnpm build:pwa` / Dockerfile の PWA stage が生成する）。
+/// PWA（`clients/pwa`）のビルド出力（issue #33。`pnpm build:pwa` / Dockerfile の PWA stage が生成する）。
 /// ビルド成果物はリポジトリにコミットしない（#46）ため、ここが唯一の配信元。
 const PWA_DIST_DIR: &str = "dist/public/pwa";
 

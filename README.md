@@ -10,8 +10,8 @@
 |---|---|---|
 | バックエンド（API・Discord Bot・cron） | `crates/`（`yuuka` バイナリ） | Rust（toolchain は `rust-toolchain.toml` で固定） |
 | 管理画面（`/admin/`） | `frontend/` | Svelte + Vite（pnpm workspace） |
-| PWA クライアント（`/`） | `client/pwa/` | Vue + Vite（npm・pnpm workspace の外） |
-| 音声生成サーバー（GPU の無い端末向け） | `client/pwa/server/tts/` | Node + onnxruntime-node（`yuuka-tts.service`） |
+| PWA クライアント（`/`） | `clients/pwa/` | Vue + Vite（npm・pnpm workspace の外） |
+| 音声生成サーバー（GPU の無い端末向け） | `clients/pwa/server/tts/` | Node + onnxruntime-node（`yuuka-tts.service`） |
 | デスクトップクライアント | `clients/desktop/` | Rust / egui（開発中） |
 
 - データは SQLite（`data/yuuka.db`）。Redis はセッションとキャッシュだけに使います。
@@ -34,7 +34,7 @@ Node.js 24、pnpm 9、npm、Rust が必要です。作業ツリーごとに依�
 
 ```bash
 pnpm install --frozen-lockfile
-npm --prefix client/pwa ci
+npm --prefix clients/pwa ci
 pnpm dev:start  # dev API（yuuka-dev.service）と PWA・管理画面の Vite を起動
 ```
 

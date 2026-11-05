@@ -1,7 +1,7 @@
 //! yuuka-client-api — PWA クライアント API（`/api/client/*`・issue #33: Node `clientRoutes.ts` の
 //! Rust 移植）。
 //!
-//! `client/pwa`（Vue 3・`client/pwa/src/api/contracts.ts` が唯一の wire 契約）専用の薄いルート層。
+//! `clients/pwa`（Vue 3・`clients/pwa/src/api/contracts.ts` が唯一の wire 契約）専用の薄いルート層。
 //! DB アクセスは既存ドメインクレート（`yuuka-todo`/`yuuka-finance`/`yuuka-schedule`/`yuuka-persona`）
 //! の `Repo` と `yuuka-orchestrator`（`message_log`・`context_note`・source 分離済み PWA コンテキスト・
 //! `ChatEngine`）を再利用し、本クレート自身は PWA 契約特有の DTO 変換・JST 日境界・バリデーション・

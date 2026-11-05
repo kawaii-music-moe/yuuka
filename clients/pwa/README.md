@@ -5,7 +5,7 @@ Discord エージェント基盤（Yuuka）向けの Web コントロールパ�
 ## Development commands
 
 実際の dev API（systemd・`127.0.0.1:3403`）で開発する場合は、repo ルートで
-`pnpm install --frozen-lockfile` と `npm --prefix client/pwa ci` を実行し、
+`pnpm install --frozen-lockfile` と `npm --prefix clients/pwa ci` を実行し、
 `pnpm dev`（前景）または `pnpm dev:start`（常駐）で PWA と管理画面をまとめて起動します。
 入口は `http://127.0.0.1:5173/`、管理画面は `/admin/` です。
 詳細は [dev 運用手順](../../deploy/README.md) を参照してください。
@@ -37,16 +37,16 @@ at `http://localhost:5173/admin/` (see `frontend/vite.config.ts`; the app is
 served under the `/admin/` base path). Use this when you
 only need the admin UI and don't need the Client mock stack above.
 
-## 起動（`client/pwa` 単体）
+## 起動（`clients/pwa` 単体）
 
 通常は repo ルートの `pnpm dev:client:mock` を使ってください（モック API・PWA・共有ログイン用の管理画面 dev server をまとめて起動します）。個別に起動する場合は、次の 3 つをそれぞれ別のターミナルで起動します。
 
 ```bash
-# 1. モック API（http://localhost:8787）— client/pwa で
+# 1. モック API（http://localhost:8787）— clients/pwa で
 npm install
 npm run mock
 
-# 2. PWA dev server（http://localhost:5173）— client/pwa で。/api をモックへ向ける
+# 2. PWA dev server（http://localhost:5173）— clients/pwa で。/api をモックへ向ける
 VITE_API_PROXY_TARGET=http://localhost:8787 npm run dev
 
 # 3. 共有ログイン/管理画面 dev server（http://localhost:5174/admin/）— repo ルートで
@@ -56,13 +56,13 @@ VITE_API_TARGET=http://localhost:8787 VITE_PWA_DEV_SERVER=http://localhost:5173 
 
 `http://localhost:5173` を開くと `/admin/login` へ送られ、「sk-9 Accountでログイン」を押すと（モックでは sk-account を経由せず）`admin` でログインして PWA へ戻ります。
 
-開発サーバーは `/api` を `VITE_API_PROXY_TARGET`（未設定時は `http://localhost:3000`。`client/pwa/vite.config.ts`）へプロキシし、`/admin` 配下を `VITE_ADMIN_DEV_SERVER`（未設定時は `http://localhost:5174`）へプロキシし、`/login` を同一オリジンの `/admin/login` へリダイレクトします。`VITE_API_PROXY_TARGET` を付けない `npm run dev` はモックに接続しません。
+開発サーバーは `/api` を `VITE_API_PROXY_TARGET`（未設定時は `http://localhost:3000`。`clients/pwa/vite.config.ts`）へプロキシし、`/admin` 配下を `VITE_ADMIN_DEV_SERVER`（未設定時は `http://localhost:5174`）へプロキシし、`/login` を同一オリジンの `/admin/login` へリダイレクトします。`VITE_API_PROXY_TARGET` を付けない `npm run dev` はモックに接続しません。
 
 - モックに接続する: 上記のとおり `VITE_API_PROXY_TARGET=http://localhost:8787` を指定します（`pnpm dev:client:mock` はこれを自動設定します）。
 - ローカルのバックエンド（`cargo run --bin yuuka`）に接続する: `config.yaml` の `PORT` に合わせて指定します（`example.yaml` の既定は 7854）。例: `VITE_API_PROXY_TARGET=http://localhost:7854 npm run dev`。
 - 別ホストの実サーバーを検証する: `VITE_API_PROXY_TARGET=https://your-agent.example` を設定します。バックエンドに CORS 設定はなく、Cookie 認証の状態変更リクエストは CSRF チェック（`Origin`/`Referer` のホストが `BASE_URL` 由来の許可ホストと一致すること。`BASE_URL` 未設定時は localhost のみ）を受けます。
 
-型チェックは `npm run check`（`vue-tsc --noEmit`）、本番ビルドは `npm run build`（出力は `client/pwa/dist`）です。
+型チェックは `npm run check`（`vue-tsc --noEmit`）、本番ビルドは `npm run build`（出力は `clients/pwa/dist`）です。
 
 ## API 境界
 
@@ -78,7 +78,7 @@ VITE_API_TARGET=http://localhost:8787 VITE_PWA_DEV_SERVER=http://localhost:5173 
 
 ## ビルドと配信
 
-repo ルートで `pnpm build:pwa` を実行すると、`client/pwa` をビルド（依存が無ければ `npm ci` を先に実行）し、出力を `dist/public/pwa` へ配置します。バックエンドは `dist/public/pwa` があれば PWA を `/` で配信します（`crates/yuuka-supervisor/src/main.rs`）。Docker イメージでは pwa-builder ステージが同じ場所へ配置します（[Dockerfile](../../Dockerfile)）。
+repo ルートで `pnpm build:pwa` を実行すると、`clients/pwa` をビルド（依存が無ければ `npm ci` を先に実行）し、出力を `dist/public/pwa` へ配置します。バックエンドは `dist/public/pwa` があれば PWA を `/` で配信します（`crates/yuuka-supervisor/src/main.rs`）。Docker イメージでは pwa-builder ステージが同じ場所へ配置します（[Dockerfile](../../Dockerfile)）。
 
 ## Git 運用
 

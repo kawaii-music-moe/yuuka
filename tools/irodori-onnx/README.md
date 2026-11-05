@@ -1,8 +1,8 @@
 # Irodori-TTS の ONNX 変換（PWA の音声チャット用）
 
-PWA の「音声」画面（`client/pwa/src/pages/VoicePage.vue`）は、返答の読み上げを利用者の端末の GPU（WebGPU）で生成します。
+PWA の「音声」画面（`clients/pwa/src/pages/VoicePage.vue`）は、返答の読み上げを利用者の端末の GPU（WebGPU）で生成します。
 使うモデルは [Irodori-TTS v4.1-Small-MF](https://huggingface.co/Aratako/Irodori-TTS-v4.1-Small-MF)（MeanFlow 蒸留・4 ステップ）で、
-ここにあるスクリプトでブラウザ用の ONNX 一式に変換します。推論の手順は `client/pwa/src/voice/tts/` に TypeScript で移植してあります。
+ここにあるスクリプトでブラウザ用の ONNX 一式に変換します。推論の手順は `clients/pwa/src/voice/tts/` に TypeScript で移植してあります。
 
 ## 構成
 
@@ -43,13 +43,13 @@ $PY .../package.py --fp32 artifacts/onnx --fp16 artifacts/onnx_fp16 --dest <実�
 各 `export.py` は onnxruntime（CPU）で PyTorch との差を表示します。fp32 で最大 6e-5 程度、fp16 で 1e-2 程度が目安です。
 
 `package.py` は `<dest>/<バージョン>/` を作り、`manifest.json`（ONNX ファイルとサイズ）を書きます。
-バージョンは `client/pwa/src/voice/tts/modelStore.ts` の `MODEL_VERSION` と一致させます。
+バージョンは `clients/pwa/src/voice/tts/modelStore.ts` の `MODEL_VERSION` と一致させます。
 配信は `immutable` キャッシュなので、**既存のバージョンのファイルは書き換えず**、モデルを変えるときはバージョンを上げてください（PWA は古いバージョンの保存分を自動で消します）。
 
 ## 配信
 
 yuuka は作業ディレクトリの `data/tts-models/` があれば `/tts-models/*` として配信します（`crates/yuuka-web` の `mount_tts_models`）。
-同じ一式を、GPU の無い端末向けのサーバーでの生成（`client/pwa/server/tts`・`TTS_MODEL_DIR`）でも使います。
+同じ一式を、GPU の無い端末向けのサーバーでの生成（`clients/pwa/server/tts`・`TTS_MODEL_DIR`）でも使います。
 どちらも無い場合、PWA の音声画面はブラウザ標準の読み上げに切り替わります。
 
 サーバーでの生成（CPU・i7-7700K の 4 スレッド）では、5.7 秒の文の最初の音まで約 2 秒、全体で約 6 秒（RTF 約 1.1）でした。

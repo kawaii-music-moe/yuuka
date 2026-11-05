@@ -6,13 +6,13 @@ Yuuka への貢献ありがとうございます。このドキュメントは�
 
 - **Rust / cargo**（バックエンド本体。toolchain は `rust-toolchain.toml` で固定）
 - **Node.js 24** + **pnpm 9**（管理画面 `frontend/`。pnpm 11 系は lockfile と合わない）
-- **npm**（PWA クライアント `client/pwa/`。pnpm workspace の外なので npm で扱う）
+- **npm**（PWA クライアント `clients/pwa/`。pnpm workspace の外なので npm で扱う）
 
 作業ツリーごとに依存をインストールし、dev を起動します。
 
 ```bash
 pnpm install --frozen-lockfile
-npm --prefix client/pwa ci
+npm --prefix clients/pwa ci
 pnpm dev:start      # dev API（yuuka-dev.service）+ PWA・管理画面の Vite（yuuka-dev-vite.service）
 ```
 
@@ -64,14 +64,14 @@ PR を出す前に、作業ブランチで以下が通ることを確認して�
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 pnpm check                      # = pnpm typecheck:front && pnpm lint
-npm --prefix client/pwa run check
+npm --prefix clients/pwa run check
 ```
 
 - `pnpm typecheck:front` … `svelte-check`（型エラー 0）
 - `pnpm lint` … `biome check frontend/src scripts`（`pnpm lint:fix` で自動修正）
-- `npm --prefix client/pwa run check` … `vue-tsc --noEmit`
+- `npm --prefix clients/pwa run check` … `vue-tsc --noEmit`
 
-テスト（`cargo test --workspace`・`pnpm test:front`・`npm --prefix client/pwa test`）は develop での検証時に実行します。
+テスト（`cargo test --workspace`・`pnpm test:front`・`npm --prefix clients/pwa test`）は develop での検証時に実行します。
 
 ### CI
 

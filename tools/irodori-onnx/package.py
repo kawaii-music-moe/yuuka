@@ -12,7 +12,7 @@
     tokenizer.json, irodori_tokenizer.json   (make_tokenizer.py)
     manifest.json               ONNX files and sizes: `files` are fetched up front, `optional` on demand
 
-The version must match MODEL_VERSION in client/pwa/src/voice/tts/modelStore.ts. Never change
+The version must match MODEL_VERSION in clients/pwa/src/voice/tts/modelStore.ts. Never change
 files inside an existing version: they are served with an immutable Cache-Control.
 
   python package.py --fp32 artifacts/onnx --fp16 artifacts/onnx_fp16 --dest <runtime>/data/tts-models

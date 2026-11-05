@@ -58,5 +58,5 @@
 
 ## その他のクライアント
 
-- **PWA（スマートフォン・ブラウザ向け）**: サーバーの `/` で配信。Bot（エージェント）を切り替えながら、チャット（画像・音声・動画・PDF などの添付に対応）、ToDo、カレンダー（予定の追加・Google カレンダー同期）、家計（レシート読み取り）、共有ノート、ダッシュボードを使えます。ログインは管理画面と共通です。開発手順は [client/pwa/README.md](../../client/pwa/README.md)。
+- **PWA（スマートフォン・ブラウザ向け）**: サーバーの `/` で配信。Bot（エージェント）を切り替えながら、チャット（画像・音声・動画・PDF などの添付に対応）、ToDo、カレンダー（予定の追加・Google カレンダー同期）、家計（レシート読み取り）、共有ノート、ダッシュボードを使えます。ログインは管理画面と共通です。開発手順は [clients/pwa/README.md](../../clients/pwa/README.md)。
 - **Yuuka Desktop（Windows 常駐クライアント）**: OAuth デバイスフローでログインし、WebSocket `/ws/chat` で会話します。開発中で、GUI の一部はまだ仮実装です（[clients/desktop/README.md](../../clients/desktop/README.md)）。

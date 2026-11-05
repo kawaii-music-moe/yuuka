@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Write the browser tokenizer files for the PWA (client/pwa/src/voice/tts/text.ts).
+"""Write the browser tokenizer files for the PWA (clients/pwa/src/voice/tts/text.ts).
 
   tokenizer.json          the modernbert-ja tokenizer as shipped with the checkpoint (captions)
   irodori_tokenizer.json  BOS id + the vocab ids RareTokenSplitter disables + its forced splits

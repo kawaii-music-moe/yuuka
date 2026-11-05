@@ -10,8 +10,8 @@ for arg in "$@"; do
 done
 # Resolve dependencies before starting services, so missing installs fail immediately.
 cd "$ROOT"
-node -e 'for (const dir of [process.cwd(), process.cwd()+"/client/pwa"]) require.resolve("vite/package.json", {paths:[dir]})' \
-  || { echo 'Run pnpm install --frozen-lockfile && npm --prefix client/pwa ci first.' >&2; exit 1; }
+node -e 'for (const dir of [process.cwd(), process.cwd()+"/clients/pwa"]) require.resolve("vite/package.json", {paths:[dir]})' \
+  || { echo 'Run pnpm install --frozen-lockfile && npm --prefix clients/pwa ci first.' >&2; exit 1; }
 systemctl --user start yuuka-dev.service
 if systemctl --user is-active --quiet yuuka-dev-vite.service; then
   echo 'yuuka-dev-vite is already running. Stop it with pnpm dev:stop before changing worktrees.'

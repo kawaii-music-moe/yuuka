@@ -40,5 +40,5 @@ TERMS_URL: "/terms"
 GOOGLE_SITE_VERIFICATION: ""
 # サーバーでの音声生成（GPU の無い端末向け・deploy/tts/yuuka-tts.service）。未設定なら標準の読み上げになる。
 TTS_SERVER_URL: "http://127.0.0.1:3410"
-# 音声生成サーバーへの要求の署名の秘密鍵（client/pwa/server/tts/keygen.ts で作る）。別のマシンに置くときは必須。
+# 音声生成サーバーへの要求の署名の秘密鍵（clients/pwa/server/tts/keygen.ts で作る）。別のマシンに置くときは必須。
 # TTS_SIGNING_KEY: ""
