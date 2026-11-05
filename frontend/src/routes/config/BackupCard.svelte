@@ -4,10 +4,9 @@
 // （/api/status は bot-scoped で、フォルダ ID もマスクされている）。
 
 import { onMount } from "svelte";
-import { ApiError } from "$lib/api/client";
 import { settingsApi } from "$lib/api/services";
 import { Button } from "$lib/components/ui";
-import { pushToast } from "$lib/stores/toast";
+import { pushToast, toastError } from "$lib/stores/toast";
 import HelpTip from "../delivery/HelpTip.svelte";
 
 let loaded = $state(false);
@@ -28,12 +27,7 @@ async function load() {
 		lastRun = c.lastRunAt ?? null;
 		loaded = true;
 	} catch (err) {
-		pushToast(
-			err instanceof ApiError
-				? err.message
-				: "バックアップ設定を読み込めませんでした。",
-			"error",
-		);
+		toastError(err, "バックアップ設定を読み込めませんでした。");
 	}
 }
 
@@ -59,10 +53,7 @@ async function submit(e: SubmitEvent) {
 			pushToast(`設定の保存に失敗しました: ${res.message ?? ""}`, "error");
 		}
 	} catch (err) {
-		pushToast(
-			err instanceof ApiError ? err.message : "通信エラーが発生しました。",
-			"error",
-		);
+		toastError(err, "通信エラーが発生しました。");
 	}
 }
 
@@ -91,12 +82,7 @@ async function trigger() {
 			pushToast(`バックアップ失敗: ${res.message ?? ""}`, "error");
 		}
 	} catch (err) {
-		pushToast(
-			err instanceof ApiError
-				? err.message
-				: "バックアップ処理中にエラーが発生しました。",
-			"error",
-		);
+		toastError(err, "バックアップ処理中にエラーが発生しました。");
 	} finally {
 		triggering = false;
 	}

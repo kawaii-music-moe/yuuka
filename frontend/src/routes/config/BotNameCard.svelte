@@ -3,9 +3,8 @@
 // owner/Admin かつ非デフォルト Bot のときだけ親が描画する。
 
 import { untrack } from "svelte";
-import { ApiError } from "$lib/api/client";
 import { botAttributeApi } from "$lib/api/services";
-import { pushToast } from "$lib/stores/toast";
+import { pushToast, toastError } from "$lib/stores/toast";
 import type { BotAttrView } from "./configTypes";
 
 interface Props {
@@ -58,10 +57,7 @@ async function toggleLink() {
 		);
 		onsaved?.();
 	} catch (err) {
-		pushToast(
-			err instanceof ApiError ? err.message : "変更に失敗しました。",
-			"error",
-		);
+		toastError(err, "変更に失敗しました。");
 	} finally {
 		saving = false;
 	}
@@ -87,10 +83,7 @@ async function submit(e: SubmitEvent) {
 		pushToast("登録名を変更しました。", "success");
 		onsaved?.();
 	} catch (err) {
-		pushToast(
-			err instanceof ApiError ? err.message : "変更に失敗しました。",
-			"error",
-		);
+		toastError(err, "変更に失敗しました。");
 	} finally {
 		saving = false;
 	}

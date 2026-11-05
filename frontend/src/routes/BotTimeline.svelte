@@ -12,14 +12,13 @@
 //   - activeBot 変更でリロード。
 // ─────────────────────────────────────────────────────────────────────────
 
-import { onDestroy } from "svelte";
-import { ApiError } from "$lib/api/client";
 import { timelineApi } from "$lib/api/services";
 import type { DayPlanBlock, TimelineRecord } from "$lib/api/types";
 import { confirmDialog, Icon, PageTabs } from "$lib/components/ui";
+import { todayIso } from "$lib/date";
 import { activeBot } from "$lib/stores/activeBot";
-import { headerExtra } from "$lib/stores/headerExtra";
-import { pushToast } from "$lib/stores/toast";
+import { setHeaderExtra } from "$lib/stores/headerExtra";
+import { toastError } from "$lib/stores/toast";
 import PlanBlockModal, {
 	type PlanBlockFormPayload,
 } from "./timeline/PlanBlockModal.svelte";
@@ -28,11 +27,7 @@ import RecordCard from "./timeline/RecordCard.svelte";
 import RecordModal, {
 	type RecordFormPayload,
 } from "./timeline/RecordModal.svelte";
-import {
-	fileToBase64,
-	fmtTimelineDate,
-	todayIso,
-} from "./timeline/timelineUtils";
+import { fileToBase64, fmtTimelineDate } from "./timeline/timelineUtils";
 
 const VIEWS = [
 	{ id: "plan", label: "計画", icon: "event_available" },
@@ -54,18 +49,13 @@ let recordOpen = $state(false);
 
 const dateLabel = $derived(fmtTimelineDate(currentDate));
 
-function reportError(e: unknown) {
-	const msg = e instanceof ApiError ? e.message : "エラーが発生しました";
-	pushToast(msg, "error");
-}
-
 async function loadDay() {
 	try {
 		const res = await timelineApi.day(currentDate);
 		blocks = res.blocks ?? [];
 		records = res.records ?? [];
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 		blocks = [];
 		records = [];
 	}
@@ -82,7 +72,7 @@ async function loadNeighbors(date: string) {
 		prevDate = res.prev ?? null;
 		nextDate = res.next ?? null;
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 	}
 }
 
@@ -137,7 +127,7 @@ async function savePlan(p: PlanBlockFormPayload) {
 		planOpen = false;
 		await loadDay();
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 	}
 }
 async function onDeletePlan(id: number) {
@@ -151,7 +141,7 @@ async function onDeletePlan(id: number) {
 		await timelineApi.deletePlan(id);
 		await loadDay();
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 	}
 }
 
@@ -185,7 +175,7 @@ async function saveRecord(p: RecordFormPayload) {
 		recordOpen = false;
 		await loadDay();
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 	}
 }
 async function onDeleteRecord(id: number) {
@@ -199,13 +189,12 @@ async function onDeleteRecord(id: number) {
 		await timelineApi.deleteRecord(id);
 		await loadDay();
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 	}
 }
 
 // タブはシェルのヘッダーに出す（Playbook / Webhook ページと同じ）。
-headerExtra.set(headerTabs);
-onDestroy(() => headerExtra.set(null));
+setHeaderExtra(headerTabs);
 </script>
 
 {#snippet headerTabs()}

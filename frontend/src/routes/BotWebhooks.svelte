@@ -8,8 +8,6 @@
 // エンドポイントは Bot ごとの設定のため、選択中 Bot が変わったら取り直す。
 // ─────────────────────────────────────────────────────────────────────────
 
-import { onDestroy } from "svelte";
-import { ApiError } from "$lib/api/client";
 import { webhookApi } from "$lib/api/services";
 import type {
 	WebhookDeliveryRecord,
@@ -24,8 +22,8 @@ import {
 	PageTabs,
 } from "$lib/components/ui";
 import { activeBot } from "$lib/stores/activeBot";
-import { headerExtra } from "$lib/stores/headerExtra";
-import { pushToast } from "$lib/stores/toast";
+import { setHeaderExtra } from "$lib/stores/headerExtra";
+import { pushToast, toastError } from "$lib/stores/toast";
 import WebhookForm from "./webhooks/WebhookForm.svelte";
 import {
 	deliveryStatusLabel,
@@ -42,19 +40,12 @@ let endpoints = $state<WebhookEndpointView[]>([]);
 let deliveries = $state<WebhookDeliveryRecord[]>([]);
 let adding = $state(false);
 
-function reportError(e: unknown) {
-	pushToast(
-		e instanceof ApiError ? e.message : "エラーが発生しました",
-		"error",
-	);
-}
-
 async function loadEndpoints() {
 	try {
 		const res = await webhookApi.list();
 		endpoints = res.endpoints ?? [];
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 		endpoints = [];
 	}
 }
@@ -64,7 +55,7 @@ async function loadDeliveries() {
 		const res = await webhookApi.deliveries();
 		deliveries = res.deliveries ?? [];
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 		deliveries = [];
 	}
 }
@@ -93,7 +84,7 @@ async function toggleEnabled(ep: WebhookEndpointView) {
 		await webhookApi.update({ id: ep.id, enabled: !ep.enabled });
 		await loadEndpoints();
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 	}
 }
 
@@ -108,7 +99,7 @@ async function deleteEndpoint(ep: WebhookEndpointView) {
 		await webhookApi.delete(ep.id);
 		await loadEndpoints();
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 	}
 }
 
@@ -128,12 +119,11 @@ async function createEndpoint(payload: {
 		adding = false;
 		await loadEndpoints();
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 	}
 }
 
-headerExtra.set(headerTabs);
-onDestroy(() => headerExtra.set(null));
+setHeaderExtra(headerTabs);
 </script>
 
 {#snippet headerTabs()}

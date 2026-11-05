@@ -11,12 +11,11 @@
 //   - activeBot 変更でリロード（bot-scoped API）。
 // ─────────────────────────────────────────────────────────────────────────
 
-import { ApiError } from "$lib/api/client";
 import { scheduleApi } from "$lib/api/services";
 import type { ScheduleRecord } from "$lib/api/types";
 import { Button, confirmDialog, EmptyState } from "$lib/components/ui";
 import { activeBot } from "$lib/stores/activeBot";
-import { pushToast } from "$lib/stores/toast";
+import { toastError } from "$lib/stores/toast";
 
 import ScheduleCard from "./schedules/ScheduleCard.svelte";
 import ScheduleModal from "./schedules/ScheduleModal.svelte";
@@ -26,11 +25,6 @@ let schedules = $state<ScheduleRecord[]>([]);
 let loading = $state(false);
 let modalOpen = $state(false);
 
-function reportError(e: unknown) {
-	const msg = e instanceof ApiError ? e.message : "エラーが発生しました";
-	pushToast(msg, "error");
-}
-
 // ── 一覧取得（旧 fetchSchedulesList） ──
 async function load() {
 	loading = true;
@@ -38,7 +32,7 @@ async function load() {
 		const res = await scheduleApi.list(days);
 		schedules = res.schedules ?? [];
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 		schedules = [];
 	} finally {
 		loading = false;
@@ -65,7 +59,7 @@ async function onDelete(id: number) {
 		await scheduleApi.delete(id);
 		await load();
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 	}
 }
 
@@ -82,7 +76,7 @@ async function saveSchedule(payload: {
 		modalOpen = false;
 		await load();
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 	}
 }
 </script>

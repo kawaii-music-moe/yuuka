@@ -2,10 +2,9 @@
 // Discord 独自Bot トークン（マスク表示）カード（旧 discord-config-form + fetchDiscordSettings）。
 // system_default は管理者のみ表示（親のガードで制御）。
 
-import { ApiError } from "$lib/api/client";
 import { settingsApi } from "$lib/api/services";
 import { SecretInput, SecretSetMark } from "$lib/components/ui";
-import { pushToast } from "$lib/stores/toast";
+import { pushToast, toastError } from "$lib/stores/toast";
 import type { DiscordTokenResponse } from "./configTypes";
 
 interface Props {
@@ -53,10 +52,7 @@ async function submit(e: SubmitEvent) {
 		hasToken = loadedToken !== "";
 		onsaved?.();
 	} catch (err) {
-		pushToast(
-			err instanceof ApiError ? err.message : "保存に失敗しました。",
-			"error",
-		);
+		toastError(err, "保存に失敗しました。");
 	} finally {
 		saving = false;
 	}

@@ -3,11 +3,6 @@ import type { PlanBlockType, RecordType } from "$lib/api/types";
 
 const DAY_NAMES = ["日", "月", "火", "水", "木", "金", "土"];
 
-/** ローカル日付 'YYYY-MM-DD' を取得。 */
-export function todayIso(): string {
-	return new Date().toISOString().slice(0, 10);
-}
-
 /** 'YYYY-MM-DD' → 'YYYY-MM-DD (曜)'（旧 tlFmtDate）。 */
 export function fmtTimelineDate(iso: string): string {
 	const d = new Date(iso + "T00:00:00");

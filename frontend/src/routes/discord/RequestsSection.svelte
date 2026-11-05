@@ -1,9 +1,8 @@
 <script lang="ts">
 // 利用申請（承認待ち）（旧 renderAssistantRequests + decideMemberRequest）。
 
-import { ApiError } from "$lib/api/client";
 import { botAttributeApi } from "$lib/api/services";
-import { pushToast } from "$lib/stores/toast";
+import { pushToast, toastError } from "$lib/stores/toast";
 import type { MemberRequest, MemberRequestsResp } from "../config/configTypes";
 import AddButton from "./AddButton.svelte";
 import DeleteButton from "./DeleteButton.svelte";
@@ -46,10 +45,7 @@ async function decide(id: number, decision: "approved" | "rejected") {
 		const res = await botAttributeApi.decideMemberRequest(id, decision);
 		if (!res.success) pushToast(res.message ?? "操作に失敗しました。", "error");
 	} catch (err) {
-		pushToast(
-			err instanceof ApiError ? err.message : "通信エラーが発生しました。",
-			"error",
-		);
+		toastError(err, "通信エラーが発生しました。");
 	}
 	onchanged();
 }

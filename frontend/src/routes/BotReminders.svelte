@@ -10,12 +10,11 @@
 //   - activeBot 変更でリロード。
 // ─────────────────────────────────────────────────────────────────────────
 
-import { ApiError } from "$lib/api/client";
 import { reminderApi, settingsApi } from "$lib/api/services";
 import type { ReminderRecord } from "$lib/api/types";
 import { confirmDialog, EmptyState } from "$lib/components/ui";
 import { activeBot } from "$lib/stores/activeBot";
-import { pushToast } from "$lib/stores/toast";
+import { pushToast, toastError } from "$lib/stores/toast";
 import type { StatusConfigResponse } from "./config/configTypes";
 import CronField from "./delivery/CronField.svelte";
 import TargetField from "./delivery/TargetField.svelte";
@@ -50,18 +49,13 @@ function resetTarget() {
 	targetId = defaultTarget?.type === "channel" ? defaultTarget.id : "";
 }
 
-function reportError(e: unknown) {
-	const msg = e instanceof ApiError ? e.message : "エラーが発生しました";
-	pushToast(msg, "error");
-}
-
 async function loadReminders() {
 	loading = true;
 	try {
 		const res = await reminderApi.list({ all: showAll });
 		reminders = res.reminders ?? [];
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 		reminders = [];
 	} finally {
 		loading = false;
@@ -118,7 +112,7 @@ async function onSubmit(e: SubmitEvent) {
 		pushToast("リマインダーを登録しました。", "success");
 		await loadReminders();
 	} catch (err) {
-		reportError(err);
+		toastError(err);
 	} finally {
 		submitting = false;
 	}
@@ -136,7 +130,7 @@ async function onCancel(id: number) {
 		await reminderApi.cancel(id);
 		await loadReminders();
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 	}
 }
 </script>

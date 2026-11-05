@@ -13,7 +13,6 @@
 //     ここではシンプルに toggle 成功後 overview を再取得する（正確性優先・少データ）。
 // ─────────────────────────────────────────────────────────────────────────
 
-import { ApiError } from "$lib/api/client";
 import {
 	credentialApi,
 	integratedApi,
@@ -33,9 +32,14 @@ import {
 	SecretInput,
 	Select,
 } from "$lib/components/ui";
+import {
+	googleAssignOptions,
+	googleAssignValue,
+	googleGrantBody,
+} from "$lib/googleAssign";
 import { INTEGRATED_SECTIONS } from "$lib/managementSections";
 import { isAdmin } from "$lib/stores/session";
-import { pushToast } from "$lib/stores/toast";
+import { pushToast, toastError } from "$lib/stores/toast";
 import McpDashboardModal from "../routes/mcp/McpDashboardModal.svelte";
 import IntCalendarsModal from "./integrated/IntCalendarsModal.svelte";
 import IntGrantChips from "./integrated/IntGrantChips.svelte";
@@ -45,15 +49,8 @@ let bots = $state<IntegratedBotView[]>([]);
 let mcpServers = $state<IntegratedMcpServerView[]>([]);
 let credentials = $state<IntegratedCredentialView[]>([]);
 let googleAccounts = $state<IntegratedGoogleAccountView[]>([]);
-// Bot が使う Google アカウントの選択肢（値は assignValue と同じ形）
-const assignOptions = $derived([
-	{ value: "primary", label: "（primaryを使用）" },
-	{ value: "none", label: "連携なし" },
-	...googleAccounts.map((a) => ({
-		value: `acct:${a.id}`,
-		label: a.email || `アカウント#${a.id}`,
-	})),
-]);
+// Bot が使う Google アカウントの選択肢
+const assignOptions = $derived(googleAssignOptions(googleAccounts));
 let loading = $state(false);
 
 // dashboard 提供有無キャッシュ（serverId → available）
@@ -84,13 +81,6 @@ const MCP_SCOPE_OPTIONS: { value: "user" | "system"; label: string }[] = [
 	{ value: "system", label: "システムレベル（全ユーザー）" },
 ];
 
-function reportError(e: unknown) {
-	pushToast(
-		e instanceof ApiError ? e.message : "エラーが発生しました",
-		"error",
-	);
-}
-
 // ── オーバービュー取得（旧 fetchIntegratedOverview） ──
 async function loadOverview() {
 	loading = true;
@@ -102,7 +92,7 @@ async function loadOverview() {
 		googleAccounts = data.googleAccounts ?? [];
 		void probeDashboards();
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 	} finally {
 		loading = false;
 	}
@@ -140,7 +130,7 @@ async function toggleCred(
 		await integratedApi.grantCredential({ botId, serviceName, granted });
 		await loadOverview();
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 		await loadOverview();
 	}
 }
@@ -149,7 +139,7 @@ async function toggleMcp(botId: string, serverId: number, granted: boolean) {
 		await integratedApi.grantMcp({ botId, serverId, granted });
 		await loadOverview();
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 		await loadOverview();
 	}
 }
@@ -182,7 +172,7 @@ async function deleteCredential(serviceName: string) {
 		await credentialApi.delete(serviceName);
 		await loadOverview();
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 	}
 }
 
@@ -205,7 +195,7 @@ async function submitCredential(e: SubmitEvent) {
 		credUrl = "";
 		await loadOverview();
 	} catch (err) {
-		reportError(err);
+		toastError(err);
 	}
 }
 
@@ -217,7 +207,7 @@ async function refreshMcpTools(server: IntegratedMcpServerView) {
 		pushToast(res.message || "Tool一覧を更新しました。", "success");
 		await loadOverview();
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 	}
 }
 async function toggleMcpServer(server: IntegratedMcpServerView) {
@@ -225,7 +215,7 @@ async function toggleMcpServer(server: IntegratedMcpServerView) {
 		await mcpApi.toggle({ id: server.id, enabled: !server.enabled });
 		await loadOverview();
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 	}
 }
 async function deleteMcpServer(server: IntegratedMcpServerView) {
@@ -239,7 +229,7 @@ async function deleteMcpServer(server: IntegratedMcpServerView) {
 		await mcpApi.delete(server.id);
 		await loadOverview();
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 	}
 }
 function openDashboard(server: IntegratedMcpServerView) {
@@ -266,7 +256,7 @@ async function submitMcp(e: SubmitEvent) {
 		mcpScope = "user";
 		await loadOverview();
 	} catch (err) {
-		reportError(err);
+		toastError(err);
 	}
 }
 
@@ -276,7 +266,7 @@ async function setPrimary(accountId: number) {
 		await integratedApi.setPrimaryGoogleAccount(accountId);
 		await loadOverview();
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 	}
 }
 async function deleteGoogle(accountId: number) {
@@ -290,7 +280,7 @@ async function deleteGoogle(accountId: number) {
 		await integratedApi.deleteGoogleAccount(accountId);
 		await loadOverview();
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 	}
 }
 function openCalendars(acct: IntegratedGoogleAccountView) {
@@ -306,30 +296,19 @@ async function saveCalendars(payload: {
 		calOpen = false;
 		await loadOverview();
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 	}
 }
 
 // Bot 別 使用 Google アカウント割当（primary / none / account）。
 // overview はシステム Bot を含まない（案内役のため・issue #143）ので、bots はすべて所有 Bot。
 const ownedBots = $derived(bots);
-function assignValue(b: IntegratedBotView): string {
-	const gs = b.google_setting;
-	return gs === "primary" || gs === "none" ? String(gs) : `acct:${gs}`;
-}
 async function onAssignChange(botId: string, value: string) {
 	try {
-		let body:
-			| { botId: string; mode: "primary" }
-			| { botId: string; mode: "none" }
-			| { botId: string; mode: "account"; accountId: number };
-		if (value === "primary") body = { botId, mode: "primary" };
-		else if (value === "none") body = { botId, mode: "none" };
-		else body = { botId, mode: "account", accountId: Number(value.slice(5)) };
-		await integratedApi.grantGoogle(body);
+		await integratedApi.grantGoogle(googleGrantBody(botId, value));
 		await loadOverview();
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 	}
 }
 
@@ -339,7 +318,7 @@ async function connectGoogle() {
 		const r = await settingsApi.googleOAuthUrl();
 		if (r.url) window.location.href = r.url;
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 	}
 }
 </script>
@@ -566,7 +545,7 @@ async function connectGoogle() {
 								class="int-assign-select"
 								ariaLabel="{b.name} で使うアカウント"
 								options={assignOptions}
-								value={assignValue(b)}
+								value={googleAssignValue(b)}
 								onchange={(v) => onAssignChange(b.id, v)}
 							/>
 						</div>

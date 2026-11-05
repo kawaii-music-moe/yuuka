@@ -2,10 +2,9 @@
 // Bot共有管理カード（旧 fetchBotShares / renderBotShares / bot-share-invite-form）。
 // owner のみ表示（403 = 非オーナーなら親が描画しない or 自己判定で非表示）。
 
-import { ApiError } from "$lib/api/client";
 import { botAttributeApi } from "$lib/api/services";
 import { Button, confirmDialog } from "$lib/components/ui";
-import { pushToast } from "$lib/stores/toast";
+import { pushToast, toastError } from "$lib/stores/toast";
 import type { BotShare, BotSharesResp } from "./configTypes";
 
 interface Props {
@@ -55,10 +54,7 @@ async function invite(e: SubmitEvent) {
 			await load();
 		}
 	} catch (err) {
-		pushToast(
-			err instanceof ApiError ? err.message : "通信エラーが発生しました。",
-			"error",
-		);
+		toastError(err, "通信エラーが発生しました。");
 	} finally {
 		inviting = false;
 	}
@@ -80,10 +76,7 @@ async function revoke(share: BotShare) {
 		if (res.success) await load();
 		else pushToast(res.message ?? "取り消しに失敗しました。", "error");
 	} catch (err) {
-		pushToast(
-			err instanceof ApiError ? err.message : "通信エラーが発生しました。",
-			"error",
-		);
+		toastError(err, "通信エラーが発生しました。");
 	}
 }
 </script>

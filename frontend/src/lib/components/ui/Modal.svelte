@@ -1,5 +1,7 @@
 <script lang="ts">
 import type { Snippet } from "svelte";
+// マウント位置に依らず viewport 基準で重ねるため、ノードを body 直下へ移す。
+import { portal } from "$lib/actions/portal";
 import Icon from "./Icon.svelte";
 
 // 共通モーダル。既存 .modal / .modal-content / .modal-header / .modal-footer / .active に準拠。
@@ -40,16 +42,6 @@ let {
 	children,
 	footer,
 }: Props = $props();
-
-/** マウント位置に依らず viewport 基準で重ねるため、ノードを body 直下へ移す。 */
-function portal(node: HTMLElement) {
-	document.body.appendChild(node);
-	return {
-		destroy() {
-			node.parentNode?.removeChild(node);
-		},
-	};
-}
 
 function close() {
 	if (!open) return;

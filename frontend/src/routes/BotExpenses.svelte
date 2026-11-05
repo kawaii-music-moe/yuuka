@@ -14,7 +14,6 @@
 //   - activeBot 変更でリロード（bot-scoped API）。
 // ─────────────────────────────────────────────────────────────────────────
 
-import { ApiError } from "$lib/api/client";
 import { financeApi } from "$lib/api/services";
 import type {
 	BudgetLimit,
@@ -24,16 +23,16 @@ import type {
 	PlannedPayment,
 } from "$lib/api/types";
 import { Button, confirmDialog } from "$lib/components/ui";
+import { todayIso } from "$lib/date";
 import { activeBot } from "$lib/stores/activeBot";
-import { pushToast } from "$lib/stores/toast";
-
+import { pushToast, toastError } from "$lib/stores/toast";
 import BudgetBars from "./expenses/BudgetBars.svelte";
 import BudgetSettingsModal from "./expenses/BudgetSettingsModal.svelte";
 import ExpenseForm from "./expenses/ExpenseForm.svelte";
 import ExpenseLedgerTable from "./expenses/ExpenseLedgerTable.svelte";
 import ExpensePlanModal from "./expenses/ExpensePlanModal.svelte";
 import ExpensePlansTable from "./expenses/ExpensePlansTable.svelte";
-import { todayIso, yen } from "./expenses/expenseUtils";
+import { yen } from "./expenses/expenseUtils";
 import ReceiptResultModal from "./expenses/ReceiptResultModal.svelte";
 import ReceiptScanner from "./expenses/ReceiptScanner.svelte";
 
@@ -54,11 +53,6 @@ let scanning = $state(false);
 
 let expenseFormRef: ExpenseForm | undefined = $state();
 
-function reportError(e: unknown) {
-	const msg = e instanceof ApiError ? e.message : "エラーが発生しました";
-	pushToast(msg, "error");
-}
-
 // ── 支払い予定の集計（旧 expense-plans-due-count） ──
 const pendingPlans = $derived(plans.filter((p) => p.status === "pending"));
 const dueSoon = $derived(pendingPlans.filter((p) => p.due_date <= todayIso()));
@@ -78,7 +72,7 @@ async function load() {
 		limits = lim.limits ?? [];
 		plans = pl.plans ?? [];
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 	}
 }
 
@@ -101,7 +95,7 @@ async function saveExpense(payload: {
 		expenseFormRef?.reset();
 		await load();
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 	}
 }
 
@@ -118,7 +112,7 @@ async function savePlan(payload: {
 		planModalOpen = false;
 		await load();
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 	}
 }
 
@@ -134,7 +128,7 @@ async function onPayPlan(plan: PlannedPayment) {
 		if (res.message) pushToast(res.message, "success");
 		await load();
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 	}
 }
 
@@ -150,7 +144,7 @@ async function onCancelPlan(plan: PlannedPayment) {
 		await financeApi.deletePlan(plan.id);
 		await load();
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 	}
 }
 
@@ -162,7 +156,7 @@ async function onAddBudget(payload: { category: string; limitAmount: number }) {
 		limits = lim.limits ?? [];
 		await load();
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 	}
 }
 
@@ -181,7 +175,7 @@ async function onReceiptPick(file: File) {
 		receiptModalOpen = true;
 		await load();
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 	} finally {
 		scanning = false;
 	}

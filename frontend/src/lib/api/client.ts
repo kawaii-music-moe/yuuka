@@ -37,6 +37,9 @@ import {
 } from "$lib/router";
 import { activeBot } from "$lib/stores/activeBot";
 import { currentUser } from "$lib/stores/session";
+import { ApiError, DEFAULT_ERROR_MESSAGE } from "./errors";
+
+export { ApiError, errorMessage } from "./errors";
 
 /** scope:'bot' は botId 注入必須、'user' は絶対に注入しない。 */
 export type Scope = "bot" | "user";
@@ -54,16 +57,6 @@ export interface RequestOpts {
 
 /** body を取らないメソッド（GET/DELETE）用の Opts。 */
 export type NoBodyOpts = Omit<RequestOpts, "body">;
-
-export class ApiError extends Error {
-	constructor(
-		public status: number,
-		message: string,
-	) {
-		super(message);
-		this.name = "ApiError";
-	}
-}
 
 function applyQuery(url: URL, query?: RequestOpts["query"]): void {
 	if (!query) return;
@@ -139,7 +132,7 @@ async function request<T>(
 
 	// HTTP エラー、または 200 でも success:false は失敗扱い
 	if (!res.ok || data.success === false) {
-		throw new ApiError(res.status, data.message ?? "エラーが発生しました");
+		throw new ApiError(res.status, data.message ?? DEFAULT_ERROR_MESSAGE);
 	}
 	return data;
 }

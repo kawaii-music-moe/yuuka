@@ -3,11 +3,10 @@
 // action フィルタ + offset ページングを自前 state で持ち、開くたび / ページ・フィルタ変更で再取得。
 
 import { untrack } from "svelte";
-import { ApiError } from "$lib/api/client";
 import { adminApi } from "$lib/api/services";
 import type { AuditLogEntry } from "$lib/api/types";
 import { Button, Modal } from "$lib/components/ui";
-import { pushToast } from "$lib/stores/toast";
+import { toastError } from "$lib/stores/toast";
 import { maskDiscordId } from "./adminUtils";
 
 interface Props {
@@ -54,10 +53,7 @@ async function load() {
 		logs = res.logs ?? [];
 		total = typeof res.total === "number" ? res.total : 0;
 	} catch (e) {
-		pushToast(
-			e instanceof ApiError ? e.message : "監査ログの取得に失敗しました",
-			"error",
-		);
+		toastError(e, "監査ログの取得に失敗しました");
 		logs = [];
 		total = 0;
 	}

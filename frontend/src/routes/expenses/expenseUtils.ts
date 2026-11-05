@@ -20,11 +20,6 @@ export const EXPENSE_CATEGORY_OPTIONS = EXPENSE_CATEGORIES.map((c) => ({
 	label: c as string,
 }));
 
-/** ローカルの今日 'YYYY-MM-DD'（旧 new Date().toISOString().slice(0,10)）。 */
-export function todayIso(): string {
-	return new Date().toISOString().slice(0, 10);
-}
-
 /** 現在時刻 'HH:mm:ss'（旧 expenseForm submit の time 生成）。 */
 export function nowTime(): string {
 	const now = new Date();

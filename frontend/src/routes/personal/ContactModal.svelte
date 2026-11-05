@@ -5,6 +5,7 @@
 
 import type { ContactView } from "$lib/api/types";
 import { Button, Modal } from "$lib/components/ui";
+import { openPicker } from "$lib/datePicker";
 
 interface Props {
 	open?: boolean;
@@ -86,12 +87,8 @@ $effect(() => {
 });
 
 // 誕生日欄のどこを押しても、重ねた日付ピッカーを開く（未対応ブラウザでは何もしない）。
-function openPicker() {
-	try {
-		pickerEl?.showPicker?.();
-	} catch {
-		// ユーザー操作扱いにならない等で開けないときは、通常の入力欄のままにする
-	}
+function openBirthdayPicker() {
+	if (pickerEl) openPicker(pickerEl);
 }
 
 // ピッカーで選んだ日付は月日だけ使う。
@@ -155,7 +152,7 @@ function submit(e: SubmitEvent) {
 						placeholder="MM/DD"
 						bind:this={birthdayEl}
 						bind:value={birthdayMd}
-						onclick={openPicker}
+						onclick={openBirthdayPicker}
 					/>
 					<input
 						type="date"

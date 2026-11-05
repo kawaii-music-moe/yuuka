@@ -4,10 +4,9 @@
 // GET /api/settings/user から読む。保存は POST /api/settings/user。
 
 import { onMount } from "svelte";
-import { ApiError } from "$lib/api/client";
 import { settingsApi } from "$lib/api/services";
 import { Button } from "$lib/components/ui";
-import { pushToast } from "$lib/stores/toast";
+import { pushToast, toastError } from "$lib/stores/toast";
 import TargetField from "../delivery/TargetField.svelte";
 
 let loaded = $state(false);
@@ -27,10 +26,7 @@ onMount(async () => {
 		timezone = c.timezone ?? "";
 		loaded = true;
 	} catch (err) {
-		pushToast(
-			err instanceof ApiError ? err.message : "設定を読み込めませんでした。",
-			"error",
-		);
+		toastError(err, "設定を読み込めませんでした。");
 	}
 });
 
@@ -50,10 +46,7 @@ async function submit(e: SubmitEvent) {
 			res.success ? "success" : "error",
 		);
 	} catch (err) {
-		pushToast(
-			err instanceof ApiError ? err.message : "設定の保存に失敗しました。",
-			"error",
-		);
+		toastError(err, "設定の保存に失敗しました。");
 	}
 }
 </script>

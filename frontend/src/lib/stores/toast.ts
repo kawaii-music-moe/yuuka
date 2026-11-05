@@ -1,4 +1,5 @@
 import { writable } from "svelte/store";
+import { DEFAULT_ERROR_MESSAGE, errorMessage } from "$lib/api/errors";
 
 // 簡易トーストストア（Toast.svelte / ConfirmDialog が購読して使う）
 export type ToastKind = "info" | "success" | "error" | "warning";
@@ -31,6 +32,17 @@ export function pushToast(
 		window.setTimeout(() => removeToast(id), timeout);
 	}
 	return id;
+}
+
+/**
+ * 失敗をエラートーストで知らせる。ApiError はサーバーの message を、それ以外は
+ * fallback を出す（catch 節からそのまま渡せる）。
+ */
+export function toastError(
+	e: unknown,
+	fallback: string = DEFAULT_ERROR_MESSAGE,
+): number {
+	return pushToast(errorMessage(e, fallback), "error");
 }
 
 export function removeToast(id: number): void {

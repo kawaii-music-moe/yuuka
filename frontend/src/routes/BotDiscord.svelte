@@ -11,11 +11,10 @@
 // 汎用モードの各セクションは assistant-config を1回 fetch して props で配る。操作後は再取得（nonce）。
 // ─────────────────────────────────────────────────────────────────────────
 
-import { onDestroy } from "svelte";
 import { botAttributeApi } from "$lib/api/services";
 import { PageTabs } from "$lib/components/ui";
 import { activeBot } from "$lib/stores/activeBot";
-import { headerExtra } from "$lib/stores/headerExtra";
+import { setHeaderExtra } from "$lib/stores/headerExtra";
 import { currentUser, isAdmin } from "$lib/stores/session";
 import BotInviteCard from "./config/BotInviteCard.svelte";
 import type {
@@ -133,8 +132,7 @@ const shown = $derived(isAssistantOwner ? view : "connection");
 
 // タブはシェルのヘッダー（スコープバッジの位置）に出す。タブが無いときも空で差し込み、
 // バッジは出さない。
-headerExtra.set(headerTabs);
-onDestroy(() => headerExtra.set(null));
+setHeaderExtra(headerTabs);
 </script>
 
 {#snippet headerTabs()}

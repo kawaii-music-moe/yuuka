@@ -2,11 +2,10 @@
 // 有効な機能（モジュール選択）カード（旧 loadBotModules + saveBotModules）。
 // ユーザー個別設定。アクセス権のある全 Bot（デフォルト含む）で表示。
 
-import { ApiError } from "$lib/api/client";
 import { botAttributeApi } from "$lib/api/services";
 import { Button, Checkbox, confirmDialog, Icon } from "$lib/components/ui";
 import { syncDisabledTabs } from "$lib/stores/disabledTabs";
-import { pushToast } from "$lib/stores/toast";
+import { pushToast, toastError } from "$lib/stores/toast";
 import type { ModuleItem, ModulesResp } from "./configTypes";
 
 interface Props {
@@ -57,10 +56,7 @@ async function save(enabled: string[] | "all", toastOnSuccess: boolean) {
 			);
 		await load();
 	} catch (err) {
-		pushToast(
-			err instanceof ApiError ? err.message : "通信エラーが発生しました。",
-			"error",
-		);
+		toastError(err, "通信エラーが発生しました。");
 		await load();
 	}
 }

@@ -9,7 +9,7 @@
 //   から deviceApi.approve で承認する。入力は formatDeviceCode で XXXX-XXXX に自動整形。
 // ─────────────────────────────────────────────────────────────────────────
 
-import { ApiError } from "$lib/api/client";
+import { errorMessage } from "$lib/api/client";
 import { deviceApi } from "$lib/api/services";
 import { goto } from "$lib/router";
 import { currentUser } from "$lib/stores/session";
@@ -52,8 +52,7 @@ async function onInput() {
 		}
 	} catch (err) {
 		if (seq !== lookupSeq) return;
-		errorMsg =
-			err instanceof ApiError ? err.message : "サーバー接続に失敗しました。";
+		errorMsg = errorMessage(err, "サーバー接続に失敗しました。");
 	}
 }
 
@@ -78,8 +77,7 @@ async function approve() {
 			errorMsg = res.message ?? "コードが無効か、有効期限が切れています。";
 		}
 	} catch (err) {
-		errorMsg =
-			err instanceof ApiError ? err.message : "サーバー接続に失敗しました。";
+		errorMsg = errorMessage(err, "サーバー接続に失敗しました。");
 	} finally {
 		approving = false;
 	}

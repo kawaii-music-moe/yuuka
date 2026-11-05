@@ -5,7 +5,6 @@
 // fetchClipboardList / fetchContactsList）。personalApi 使用（scope:'bot'）。
 // ─────────────────────────────────────────────────────────────────────────
 
-import { ApiError } from "$lib/api/client";
 import { personalApi } from "$lib/api/services";
 import type { ClipboardEntry, ContactView } from "$lib/api/types";
 import {
@@ -16,7 +15,7 @@ import {
 	TagChip,
 } from "$lib/components/ui";
 import { activeBot } from "$lib/stores/activeBot";
-import { pushToast } from "$lib/stores/toast";
+import { pushToast, toastError } from "$lib/stores/toast";
 import HelpTip from "./delivery/HelpTip.svelte";
 import ContactModal from "./personal/ContactModal.svelte";
 
@@ -40,20 +39,13 @@ function formatBirthday(birthday: string | null): string {
 	return birthday.replace(/^--/, "").replaceAll("-", "/");
 }
 
-function reportError(e: unknown) {
-	pushToast(
-		e instanceof ApiError ? e.message : "エラーが発生しました",
-		"error",
-	);
-}
-
 async function loadContextNote() {
 	try {
 		const res = await personalApi.getContextNote();
 		noteMaxLength = res.max_length || 10000;
 		noteContent = res.content ?? "";
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 	}
 }
 
@@ -62,7 +54,7 @@ async function loadClipboard() {
 		const res = await personalApi.clipboard();
 		clipboard = res.entries ?? [];
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 		clipboard = [];
 	}
 }
@@ -72,7 +64,7 @@ async function loadContacts() {
 		const res = await personalApi.contacts();
 		contacts = res.contacts ?? [];
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 		contacts = [];
 	}
 }
@@ -98,7 +90,7 @@ async function saveNote(e: SubmitEvent) {
 		const res = await personalApi.saveContextNote(noteContent);
 		pushToast(res.message ?? "保存しました。", "success");
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 	}
 }
 
@@ -113,7 +105,7 @@ async function deleteClip(id: number) {
 		await personalApi.deleteClipboard(id);
 		await loadClipboard();
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 	}
 }
 
@@ -141,7 +133,7 @@ async function saveContact(payload: {
 		contactOpen = false;
 		await loadContacts();
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 	}
 }
 
@@ -156,7 +148,7 @@ async function deleteContactRow(c: ContactView) {
 		await personalApi.deleteContact(c.id);
 		await loadContacts();
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 	}
 }
 </script>

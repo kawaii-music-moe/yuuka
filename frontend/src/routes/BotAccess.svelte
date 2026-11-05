@@ -11,7 +11,6 @@
 //   overview は所有 Bot だけを返す（許可の対象は owner 本人の Bot のみ）ので、共有Botでは案内だけ出す。
 // ─────────────────────────────────────────────────────────────────────────
 
-import { ApiError } from "$lib/api/client";
 import { integratedApi, mcpApi } from "$lib/api/services";
 import type {
 	BotMcpGrantServer,
@@ -22,9 +21,14 @@ import type {
 	IntegratedGoogleAccountView,
 } from "$lib/api/types";
 import { Button, EmptyState, Icon, Select, TagChip } from "$lib/components/ui";
+import {
+	googleAssignOptions,
+	googleAssignValue,
+	googleGrantBody,
+} from "$lib/googleAssign";
 import { withBasePath } from "$lib/router";
 import { activeBot } from "$lib/stores/activeBot";
-import { pushToast } from "$lib/stores/toast";
+import { pushToast, toastError } from "$lib/stores/toast";
 import CredentialsCard from "./config/CredentialsCard.svelte";
 
 const botId = $derived($activeBot?.id ?? "");
@@ -39,22 +43,8 @@ let toolsById = $state<Record<number, string[]>>({});
 let ownedBot = $state<IntegratedBotView | null>(null);
 let googleAccounts = $state<IntegratedGoogleAccountView[]>([]);
 let overviewLoaded = $state(false);
-// Bot が使う Google アカウントの選択肢（値は assignValue と同じ形）
-const assignOptions = $derived([
-	{ value: "primary", label: "（primaryを使用）" },
-	{ value: "none", label: "連携なし" },
-	...googleAccounts.map((a) => ({
-		value: `acct:${a.id}`,
-		label: a.email || `アカウント#${a.id}`,
-	})),
-]);
-
-function reportError(e: unknown) {
-	pushToast(
-		e instanceof ApiError ? e.message : "エラーが発生しました",
-		"error",
-	);
-}
+// Bot が使う Google アカウントの選択肢
+const assignOptions = $derived(googleAssignOptions(googleAccounts));
 
 async function loadBotGrants(id: string) {
 	grantsLoading = true;
@@ -65,7 +55,7 @@ async function loadBotGrants(id: string) {
 		botServers = res.servers ?? [];
 		ownGrantable = res.own_servers ?? [];
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 		botServers = [];
 		ownGrantable = [];
 	} finally {
@@ -94,7 +84,7 @@ async function loadOverview(id: string) {
 		ownedBot = (data.bots ?? []).find((b) => b.id === id) ?? null;
 		googleAccounts = data.googleAccounts ?? [];
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 		ownedBot = null;
 	} finally {
 		overviewLoaded = true;
@@ -116,32 +106,19 @@ async function setGrant(serverId: number, granted: boolean) {
 		await integratedApi.grantMcp({ botId, serverId, granted });
 		await loadBotGrants(botId);
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 	}
 }
 
 // このBotで使う Google アカウント（primary / none / account）。
-function assignValue(b: IntegratedBotView): string {
-	const gs = b.google_setting;
-	return gs === "primary" || gs === "none" ? String(gs) : `acct:${gs}`;
-}
 async function onAssignChange(value: string) {
 	if (!botId) return;
 	try {
-		if (value === "primary")
-			await integratedApi.grantGoogle({ botId, mode: "primary" });
-		else if (value === "none")
-			await integratedApi.grantGoogle({ botId, mode: "none" });
-		else
-			await integratedApi.grantGoogle({
-				botId,
-				mode: "account",
-				accountId: Number(value.slice(5)),
-			});
+		await integratedApi.grantGoogle(googleGrantBody(botId, value));
 		pushToast("このBotで使う Google アカウントを変更しました。", "success");
 		await loadOverview(botId);
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 	}
 }
 </script>
@@ -240,7 +217,7 @@ async function onAssignChange(value: string) {
 				<Select
 					id="access-google-account"
 					options={assignOptions}
-					value={assignValue(ownedBot)}
+					value={googleAssignValue(ownedBot)}
 					onchange={onAssignChange}
 				/>
 			</div>

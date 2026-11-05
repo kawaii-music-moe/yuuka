@@ -2,11 +2,10 @@
 // チェック状態でパーソナル秘書 / 汎用モードを選択する。
 
 import { get } from "svelte/store";
-import { ApiError } from "$lib/api/client";
 import { botAttributeApi } from "$lib/api/services";
 import { Checkbox } from "$lib/components/ui";
 import { activeBot, selectBot } from "$lib/stores/activeBot";
-import { pushToast } from "$lib/stores/toast";
+import { pushToast, toastError } from "$lib/stores/toast";
 import type { BotAttrView } from "./configTypes";
 
 interface Props {
@@ -46,10 +45,7 @@ async function save(enabled: boolean) {
 		onchanged?.();
 	} catch (err) {
 		if (botId === id) secretaryEnabled = previousPreset === "secretary";
-		pushToast(
-			err instanceof ApiError ? err.message : "変更に失敗しました。",
-			"error",
-		);
+		toastError(err, "変更に失敗しました。");
 	} finally {
 		saving = false;
 	}

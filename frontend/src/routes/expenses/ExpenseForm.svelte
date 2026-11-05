@@ -4,11 +4,11 @@
 
 import type { ExpenseType } from "$lib/api/types";
 import { Button, Select } from "$lib/components/ui";
+import { todayIso } from "$lib/date";
 import {
 	EXPENSE_CATEGORIES,
 	EXPENSE_CATEGORY_OPTIONS,
 	nowTime,
-	todayIso,
 } from "./expenseUtils";
 
 interface Props {

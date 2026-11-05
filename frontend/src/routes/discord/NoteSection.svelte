@@ -2,10 +2,9 @@
 // 共有ノート（ギルドノート）（旧 assistant-note-guild-select + btn-open-assistant-note
 //   + modal-assistant-note + loadAssistantGuildNote + btn-save-assistant-note）。
 
-import { ApiError } from "$lib/api/client";
 import { botAttributeApi } from "$lib/api/services";
 import { Button, Modal, Select } from "$lib/components/ui";
-import { pushToast } from "$lib/stores/toast";
+import { pushToast, toastError } from "$lib/stores/toast";
 import type { AssistantGuild, GuildNoteResp } from "../config/configTypes";
 import { guildLabel, guildOptions } from "../config/configTypes";
 
@@ -71,10 +70,7 @@ async function save() {
 			pushToast(res.message ?? "保存に失敗しました。", "error");
 		}
 	} catch (err) {
-		pushToast(
-			err instanceof ApiError ? err.message : "通信エラーが発生しました。",
-			"error",
-		);
+		toastError(err, "通信エラーが発生しました。");
 	}
 }
 </script>

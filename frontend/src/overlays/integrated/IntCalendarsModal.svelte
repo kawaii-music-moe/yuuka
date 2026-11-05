@@ -3,7 +3,7 @@
 // 開くたびに対象アカウントの利用可能カレンダーを取得し、現在の同期対象を初期選択にする。
 // 保存は onsave コールバックで親に委譲（親が API を叩き再取得する）。
 
-import { ApiError } from "$lib/api/client";
+import { errorMessage } from "$lib/api/client";
 import { integratedApi } from "$lib/api/services";
 import type {
 	GoogleCalendarView,
@@ -62,7 +62,7 @@ function save() {
 	try {
 		onsave({ accountId: account.id, calendars: [...selected] });
 	} catch (e) {
-		errorMsg = e instanceof ApiError ? e.message : "保存に失敗しました。";
+		errorMsg = errorMessage(e, "保存に失敗しました。");
 	}
 }
 </script>

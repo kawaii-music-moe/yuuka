@@ -12,8 +12,6 @@
 //   - activeBot 変更でリロード（bot-scoped API）。
 // ─────────────────────────────────────────────────────────────────────────
 
-import { onDestroy } from "svelte";
-import { ApiError } from "$lib/api/client";
 import { taskApi } from "$lib/api/services";
 import type { TodoPriority, TodoWithSubtasks } from "$lib/api/types";
 import {
@@ -25,8 +23,8 @@ import {
 } from "$lib/components/ui";
 import { withBasePath } from "$lib/router";
 import { activeBot } from "$lib/stores/activeBot";
-import { headerExtra } from "$lib/stores/headerExtra";
-import { pushToast } from "$lib/stores/toast";
+import { setHeaderExtra } from "$lib/stores/headerExtra";
+import { toastError } from "$lib/stores/toast";
 import GanttChart from "./tasks/GanttChart.svelte";
 import SubtaskModal from "./tasks/SubtaskModal.svelte";
 import TaskCard from "./tasks/TaskCard.svelte";
@@ -56,11 +54,6 @@ let subParent = $state<TodoWithSubtasks | null>(null);
 let progressOpen = $state(false);
 let progressTask = $state<TodoWithSubtasks | null>(null);
 
-function reportError(e: unknown) {
-	const msg = e instanceof ApiError ? e.message : "エラーが発生しました";
-	pushToast(msg, "error");
-}
-
 // ── 一覧＋いつかやるを取得（旧 fetchTasksList → fetchSomedayTasks） ──
 async function loadList() {
 	loading = true;
@@ -68,7 +61,7 @@ async function loadList() {
 		const res = await taskApi.list({ status: filter });
 		tasks = res.tasks ?? [];
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 		tasks = [];
 	} finally {
 		loading = false;
@@ -77,7 +70,7 @@ async function loadList() {
 		const res = await taskApi.someday();
 		somedayTasks = res.tasks ?? [];
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 		somedayTasks = [];
 	}
 }
@@ -88,7 +81,7 @@ async function loadGantt() {
 		const res = await taskApi.gantt();
 		ganttTasks = res.tasks ?? [];
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 		ganttTasks = [];
 	}
 }
@@ -118,7 +111,7 @@ async function onToggle(id: number, checked: boolean) {
 		else await taskApi.update({ id, status: "open" });
 		await reloadCurrent();
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 	}
 }
 
@@ -135,7 +128,7 @@ async function onDelete(id: number) {
 		await taskApi.delete(id);
 		await reloadCurrent();
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 	}
 }
 
@@ -188,7 +181,7 @@ async function saveTask(payload: {
 		editOpen = false;
 		await reloadCurrent();
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 	}
 }
 
@@ -208,7 +201,7 @@ async function saveSubtask(payload: {
 		subOpen = false;
 		await reloadCurrent();
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 	}
 }
 
@@ -222,12 +215,11 @@ async function saveProgress(payload: {
 		progressOpen = false;
 		await reloadCurrent();
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 	}
 }
 
-headerExtra.set(headerTabs);
-onDestroy(() => headerExtra.set(null));
+setHeaderExtra(headerTabs);
 </script>
 
 {#snippet headerTabs()}

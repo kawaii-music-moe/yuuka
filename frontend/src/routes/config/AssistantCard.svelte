@@ -3,7 +3,6 @@
 // Bot設定 › LLM機能（BotLlm）に置く。MCP の選択は Bot設定 › 連携の利用許可（BotAccess）へ移した。
 // mcp_assistant プリセットの owner にのみ親が描画する。
 
-import { ApiError } from "$lib/api/client";
 import { botAttributeApi } from "$lib/api/services";
 import {
 	confirmDialog,
@@ -11,7 +10,7 @@ import {
 	SecretSetMark,
 	Select,
 } from "$lib/components/ui";
-import { pushToast } from "$lib/stores/toast";
+import { pushToast, toastError } from "$lib/stores/toast";
 import type { AssistantConfigResp } from "./configTypes";
 
 interface Props {
@@ -89,10 +88,7 @@ async function saveLlm(inheritDefaults = false) {
 		);
 		if (res.success) await load();
 	} catch (err) {
-		pushToast(
-			err instanceof ApiError ? err.message : "AI設定を保存できませんでした。",
-			"error",
-		);
+		toastError(err, "AI設定を保存できませんでした。");
 	} finally {
 		savingLlm = false;
 	}
@@ -121,10 +117,7 @@ async function saveKey(e: SubmitEvent) {
 		);
 		await load();
 	} catch (err) {
-		pushToast(
-			err instanceof ApiError ? err.message : "通信エラーが発生しました。",
-			"error",
-		);
+		toastError(err, "通信エラーが発生しました。");
 	} finally {
 		savingKey = false;
 	}

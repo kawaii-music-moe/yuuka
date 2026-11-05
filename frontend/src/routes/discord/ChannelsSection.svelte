@@ -3,10 +3,9 @@
 // 応答許可ギルドを選び、そのギルド内のチャンネルID（数字）を登録する。登録チャンネルでは
 // Bot がメンション/返信なしで全メッセージに応答する（利用資格・レート制限は従来どおり適用）。
 
-import { ApiError } from "$lib/api/client";
 import { botAttributeApi } from "$lib/api/services";
 import { confirmDialog, Select } from "$lib/components/ui";
-import { pushToast } from "$lib/stores/toast";
+import { pushToast, toastError } from "$lib/stores/toast";
 import type { AssistantChannel, AssistantGuild } from "../config/configTypes";
 import { guildLabel, guildOptions } from "../config/configTypes";
 import AddButton from "./AddButton.svelte";
@@ -62,10 +61,7 @@ async function add() {
 			onchanged();
 		} else pushToast(res.message ?? "操作に失敗しました。", "error");
 	} catch (err) {
-		pushToast(
-			err instanceof ApiError ? err.message : "通信エラーが発生しました。",
-			"error",
-		);
+		toastError(err, "通信エラーが発生しました。");
 	}
 }
 
@@ -91,10 +87,7 @@ async function remove(ch: AssistantChannel, shift: boolean) {
 		if (res.success) onchanged();
 		else pushToast(res.message ?? "操作に失敗しました。", "error");
 	} catch (err) {
-		pushToast(
-			err instanceof ApiError ? err.message : "通信エラーが発生しました。",
-			"error",
-		);
+		toastError(err, "通信エラーが発生しました。");
 	}
 }
 </script>

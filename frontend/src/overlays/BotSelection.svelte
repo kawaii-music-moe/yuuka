@@ -12,7 +12,6 @@
 // - あなたの設定 / 連携サービス / 管理者設定（admin のみ）への遷移は HomeSidebar（共通）。
 // ─────────────────────────────────────────────────────────────────────────
 import { onMount } from "svelte";
-import { ApiError } from "$lib/api/client";
 import { botApi } from "$lib/api/services";
 import type { BotView, PresetOption } from "$lib/api/types";
 import { canControlRuntime, controlRuntime } from "$lib/botRuntime";
@@ -20,7 +19,7 @@ import { confirmDialog, Icon, Modal, Select } from "$lib/components/ui";
 import { navigateTo } from "$lib/router";
 import { selectBot } from "$lib/stores/activeBot";
 import { currentUser } from "$lib/stores/session";
-import { pushToast } from "$lib/stores/toast";
+import { pushToast, toastError } from "$lib/stores/toast";
 import HomeSidebar from "./HomeSidebar.svelte";
 
 let bots = $state<BotView[]>([]);
@@ -31,13 +30,6 @@ let loading = $state(false);
 let createOpen = $state(false);
 let newBotName = $state("");
 let newBotPreset = $state("secretary");
-
-function reportError(e: unknown): void {
-	pushToast(
-		e instanceof ApiError ? e.message : "エラーが発生しました",
-		"error",
-	);
-}
 
 // 一覧（/api/bots）はシステムデフォルト Bot を含まない（案内役で個人データを持たないため・issue #140）。
 function isDefaultBot(id: string): boolean {
@@ -50,7 +42,7 @@ async function loadBots(): Promise<void> {
 		const res = await botApi.list();
 		bots = res.bots ?? [];
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 		bots = [];
 	} finally {
 		loading = false;
@@ -123,7 +115,7 @@ async function toggleRuntime(bot: BotView): Promise<void> {
 		const wait = await controlRuntime(bot.running ? "stop" : "start", bot.id);
 		setTimeout(() => void loadBots(), wait);
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 	}
 }
 
@@ -133,7 +125,7 @@ async function syncDiscord(bot: BotView): Promise<void> {
 		await botApi.syncDiscord(bot.id);
 		await loadBots();
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 	}
 }
 
@@ -149,7 +141,7 @@ async function removeBot(bot: BotView): Promise<void> {
 		await botApi.remove(bot.id);
 		await loadBots();
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 	}
 }
 
@@ -173,7 +165,7 @@ async function submitCreate(e: SubmitEvent): Promise<void> {
 		}
 		await loadBots();
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 	}
 }
 

@@ -95,8 +95,3 @@ export function averageExpense(
 ): number {
 	return expenses && expenses.length > 0 ? Math.round(total / 30) : 0;
 }
-
-/** ローカル日付 'YYYY-MM-DD'。 */
-export function todayIso(): string {
-	return new Date().toISOString().slice(0, 10);
-}

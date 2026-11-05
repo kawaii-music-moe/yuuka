@@ -12,6 +12,7 @@ export interface SelectOption<T extends string = string> {
 // （OptionCombobox）に合わせた独自実装で、ブラウザ標準の白い候補表示を出さない。
 // 単独で置くと通常の入力欄と同じ見た目、枠つき入力（.joined-field）の中では枠・背景なし（styles.css）。
 import type { Snippet } from "svelte";
+import { portal } from "$lib/actions/portal";
 
 interface Props {
 	id?: string;
@@ -87,14 +88,6 @@ $effect(() => {
 
 let list = $state<HTMLUListElement>();
 
-function portal(node: HTMLElement) {
-	document.body.appendChild(node);
-	return {
-		destroy() {
-			node.remove();
-		},
-	};
-}
 const listId = $derived(`${id ?? uid}-list`);
 
 function onkeydown(e: KeyboardEvent) {

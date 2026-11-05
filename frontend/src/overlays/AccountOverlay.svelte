@@ -12,7 +12,6 @@
 // ─────────────────────────────────────────────────────────────────────────
 
 import { onMount } from "svelte";
-import { ApiError } from "$lib/api/client";
 import { settingsApi } from "$lib/api/services";
 import {
 	confirmDialog,
@@ -27,7 +26,7 @@ import { navigateTo } from "$lib/router";
 import { selectBot } from "$lib/stores/activeBot";
 import { currentUser } from "$lib/stores/session";
 import { setTheme, type Theme, theme } from "$lib/stores/theme";
-import { pushToast } from "$lib/stores/toast";
+import { pushToast, toastError } from "$lib/stores/toast";
 import BackupCard from "../routes/config/BackupCard.svelte";
 import UserSettingsCard from "../routes/config/UserSettingsCard.svelte";
 import HelpTip from "../routes/delivery/HelpTip.svelte";
@@ -54,7 +53,7 @@ onMount(() => {
 			hasGeminiKey = res.hasApiKey ?? false;
 			llmLoaded = true;
 		})
-		.catch(reportError);
+		.catch((e) => toastError(e, "通信エラーが発生しました。"));
 });
 
 // ── 表示名 ──
@@ -73,13 +72,6 @@ const THEMES: { value: Theme; label: string; preview: string }[] = [
 	{ value: "light", label: "ライト", preview: "light-preview" },
 ];
 
-function reportError(e: unknown): void {
-	pushToast(
-		e instanceof ApiError ? e.message : "通信エラーが発生しました。",
-		"error",
-	);
-}
-
 // ── Gemini 設定保存（旧 geminiConfigForm submit） ──
 async function saveGemini(e: SubmitEvent): Promise<void> {
 	e.preventDefault();
@@ -93,7 +85,7 @@ async function saveGemini(e: SubmitEvent): Promise<void> {
 		geminiApiKey = "";
 		pushToast("Gemini 設定を更新しました。", "success");
 	} catch (e) {
-		reportError(e);
+		toastError(e, "通信エラーが発生しました。");
 	}
 }
 
@@ -106,7 +98,7 @@ async function saveProfile(e: SubmitEvent): Promise<void> {
 		currentUser.update((u) => (u ? { ...u, username: username.trim() } : u));
 		pushToast("プロフィールを更新しました。", "success");
 	} catch (e) {
-		reportError(e);
+		toastError(e, "通信エラーが発生しました。");
 	}
 }
 
@@ -127,7 +119,7 @@ async function deleteAccount(e: SubmitEvent): Promise<void> {
 		currentUser.set(null);
 		navigateTo("/login");
 	} catch (e) {
-		reportError(e);
+		toastError(e, "通信エラーが発生しました。");
 	}
 }
 
@@ -157,7 +149,7 @@ async function downloadPackage(e: SubmitEvent): Promise<void> {
 			"success",
 		);
 	} catch (e) {
-		reportError(e);
+		toastError(e, "通信エラーが発生しました。");
 	} finally {
 		packaging = false;
 	}

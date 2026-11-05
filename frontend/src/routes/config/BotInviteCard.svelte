@@ -2,10 +2,9 @@
 // Bot招待リンク・プロフィールURLカード（旧 updateBotInviteCard + btn-invite-sync）。
 // application_id があればリンク表示、無ければ「今すぐ同期」を促す。
 
-import { ApiError } from "$lib/api/client";
 import { botAttributeApi } from "$lib/api/services";
 import { Button } from "$lib/components/ui";
-import { pushToast } from "$lib/stores/toast";
+import { pushToast, toastError } from "$lib/stores/toast";
 import CopyField from "./CopyField.svelte";
 import { type BotAttrView, botInviteUrl, botProfileUrl } from "./configTypes";
 
@@ -36,10 +35,7 @@ async function sync() {
 			);
 		}
 	} catch (err) {
-		pushToast(
-			err instanceof ApiError ? err.message : "通信エラーが発生しました。",
-			"error",
-		);
+		toastError(err, "通信エラーが発生しました。");
 	} finally {
 		syncing = false;
 	}

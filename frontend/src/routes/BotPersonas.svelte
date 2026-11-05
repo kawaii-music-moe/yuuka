@@ -11,7 +11,6 @@
 //   botAttribute/bot API 依存で本グループ範囲外のため含めない。）
 // ─────────────────────────────────────────────────────────────────────────
 
-import { ApiError } from "$lib/api/client";
 import { integratedApi, personaApi } from "$lib/api/services";
 import type { PersonaRecord, PublicPersonaView } from "$lib/api/types";
 import {
@@ -22,7 +21,7 @@ import {
 	Icon,
 } from "$lib/components/ui";
 import { activeBot } from "$lib/stores/activeBot";
-import { pushToast } from "$lib/stores/toast";
+import { pushToast, toastError } from "$lib/stores/toast";
 import PersonaAddModal from "./personas/PersonaAddModal.svelte";
 import PersonaEditModal from "./personas/PersonaEditModal.svelte";
 import PersonaPreviewModal from "./personas/PersonaPreviewModal.svelte";
@@ -45,13 +44,6 @@ let previewName = $state("");
 let previewPrompt = $state("");
 let previewId = $state<number | null>(null);
 
-function reportError(e: unknown) {
-	pushToast(
-		e instanceof ApiError ? e.message : "エラーが発生しました",
-		"error",
-	);
-}
-
 async function loadPersonas() {
 	try {
 		const res = await personaApi.list();
@@ -59,7 +51,7 @@ async function loadPersonas() {
 		activePersonaId = res.active_persona_id ?? null;
 		maxLength = res.max_length || 20000;
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 		personas = [];
 	}
 }
@@ -69,7 +61,7 @@ async function loadMarketplace() {
 		const res = await personaApi.marketplace();
 		marketplace = res.personas ?? [];
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 		marketplace = [];
 	}
 }
@@ -110,7 +102,7 @@ async function savePersona(payload: {
 		editOpen = false;
 		await loadPersonas();
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 	}
 }
 
@@ -127,7 +119,7 @@ async function activate(id: number | null) {
 		pushToast(res.message ?? "適用しました。", "success");
 		await reloadAll();
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 	}
 }
 
@@ -145,7 +137,7 @@ async function togglePublish(p: PersonaRecord) {
 		pushToast(res.message ?? "更新しました。", "success");
 		await reloadAll();
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 	}
 }
 
@@ -160,7 +152,7 @@ async function deletePersona(p: PersonaRecord) {
 		await personaApi.delete(p.id);
 		await reloadAll();
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 	}
 }
 
@@ -172,7 +164,7 @@ async function openPreview(m: PublicPersonaView) {
 		previewId = res.persona.id;
 		previewOpen = true;
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 	}
 }
 
@@ -184,7 +176,7 @@ async function importPersona(id: number) {
 		addOpen = false;
 		await loadPersonas();
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 	}
 }
 
@@ -203,7 +195,7 @@ async function clearHistory() {
 		await integratedApi.clearHistory(botId);
 		pushToast("会話履歴をクリアしました。", "success");
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 	}
 }
 </script>

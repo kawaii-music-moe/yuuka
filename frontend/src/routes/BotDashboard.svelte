@@ -12,7 +12,6 @@
 // activeBot（bot-scoped）変更で再取得。
 // ─────────────────────────────────────────────────────────────────────────
 
-import { ApiError } from "$lib/api/client";
 import {
 	botApi,
 	financeApi,
@@ -21,19 +20,16 @@ import {
 	taskApi,
 } from "$lib/api/services";
 import type { ScheduleRecord, TodoWithSubtasks } from "$lib/api/types";
+import { todayIso } from "$lib/date";
 import { activeBot } from "$lib/stores/activeBot";
-import { pushToast } from "$lib/stores/toast";
+import { toastError } from "$lib/stores/toast";
 import type {
 	DashboardExpense,
 	DashboardExpenseBreakdown,
 	DashboardStats,
 	UsageDashboardData,
 } from "./dashboard/dashboardTypes";
-import {
-	assistantBubble,
-	secretaryBubble,
-	todayIso,
-} from "./dashboard/dashboardUtils";
+import { assistantBubble, secretaryBubble } from "./dashboard/dashboardUtils";
 import RuntimeCard from "./dashboard/RuntimeCard.svelte";
 import SecretaryDashboard from "./dashboard/SecretaryDashboard.svelte";
 import UsageDashboard from "./dashboard/UsageDashboard.svelte";
@@ -68,11 +64,6 @@ const botAvatar = $derived(
 );
 const botName = $derived($activeBot?.name || "アシスタント");
 
-function reportError(e: unknown) {
-	const msg = e instanceof ApiError ? e.message : "エラーが発生しました";
-	pushToast(msg, "error");
-}
-
 // ── 秘書モード集計（旧 fetchDashboardStats の秘書分岐） ──
 async function loadSecretary() {
 	try {
@@ -102,7 +93,7 @@ async function loadSecretary() {
 		);
 		pendingTasks = taskRes.tasks ?? [];
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 		bubble =
 			"ダッシュボード情報の取得中にエラーが発生しました。サーバーの接続状況を確認してください。";
 	}
@@ -122,7 +113,7 @@ async function loadUsage(botId: string) {
 			res.days ?? res.series?.length ?? 14,
 		);
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 		bubble =
 			"API使用量の取得中にエラーが発生しました。サーバーの接続状況を確認してください。";
 	}

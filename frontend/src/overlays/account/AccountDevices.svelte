@@ -7,11 +7,10 @@
 //   Bot設定ではなくアカウント側に置く。デスクトップ配布状況の取得と、認可済み端末の一覧・失効を扱う。
 // ─────────────────────────────────────────────────────────────────────────
 import { onMount } from "svelte";
-import { ApiError } from "$lib/api/client";
 import { deviceApi } from "$lib/api/services";
 import type { DesktopDevice } from "$lib/api/services/deviceApi";
 import { confirmDialog, EmptyState } from "$lib/components/ui";
-import { pushToast } from "$lib/stores/toast";
+import { pushToast, toastError } from "$lib/stores/toast";
 import DeviceCard from "./DeviceCard.svelte";
 
 let devices = $state<DesktopDevice[]>([]);
@@ -77,10 +76,7 @@ async function revoke(id: number) {
 			pushToast(res.message ?? "端末の失効に失敗しました。", "error");
 		}
 	} catch (err) {
-		pushToast(
-			err instanceof ApiError ? err.message : "端末の失効に失敗しました。",
-			"error",
-		);
+		toastError(err, "端末の失効に失敗しました。");
 	}
 	await loadDevices();
 }

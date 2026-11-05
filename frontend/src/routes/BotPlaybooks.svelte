@@ -8,8 +8,6 @@
 // activeBot 変更で3本 fetch（list / schedules / runs）。playbookApi 使用（scope:'bot'）。
 // ─────────────────────────────────────────────────────────────────────────
 
-import { onDestroy } from "svelte";
-import { ApiError } from "$lib/api/client";
 import { playbookApi } from "$lib/api/services";
 import type {
 	PlaybookRecord,
@@ -25,8 +23,8 @@ import {
 	Select,
 } from "$lib/components/ui";
 import { activeBot } from "$lib/stores/activeBot";
-import { headerExtra } from "$lib/stores/headerExtra";
-import { pushToast } from "$lib/stores/toast";
+import { setHeaderExtra } from "$lib/stores/headerExtra";
+import { pushToast, toastError } from "$lib/stores/toast";
 import CronField from "./delivery/CronField.svelte";
 import {
 	formatRunDuration,
@@ -82,19 +80,12 @@ function resetScheduleForm() {
 	schEnabled = true;
 }
 
-function reportError(e: unknown) {
-	pushToast(
-		e instanceof ApiError ? e.message : "エラーが発生しました",
-		"error",
-	);
-}
-
 async function loadPlaybooks(query?: string) {
 	try {
 		const res = await playbookApi.list(query ? { query } : undefined);
 		playbooks = res.playbooks ?? [];
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 		playbooks = [];
 	}
 }
@@ -104,7 +95,7 @@ async function loadSchedules() {
 		const res = await playbookApi.schedules();
 		schedules = res.schedules ?? [];
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 		schedules = [];
 	}
 }
@@ -115,7 +106,7 @@ async function loadRuns() {
 		runs = res.runs ?? [];
 		runsPage = 0;
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 		runs = [];
 	}
 }
@@ -168,7 +159,7 @@ async function savePlaybook(e: SubmitEvent) {
 		await loadPlaybooks(searchQuery.trim() || undefined);
 		await loadSchedules();
 	} catch (err) {
-		reportError(err);
+		toastError(err);
 	}
 }
 
@@ -184,7 +175,7 @@ async function deletePlaybook(p: PlaybookRecord) {
 		await loadPlaybooks(searchQuery.trim() || undefined);
 		await loadSchedules();
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 	}
 }
 
@@ -213,7 +204,7 @@ async function saveSchedule(e: SubmitEvent) {
 		await loadSchedules();
 		await loadRuns();
 	} catch (err) {
-		reportError(err);
+		toastError(err);
 	}
 }
 
@@ -227,7 +218,7 @@ async function toggleSchedule(s: PlaybookScheduleRecord) {
 		await playbookApi.toggleSchedule({ id: s.id, enabled: !s.enabled });
 		await loadSchedules();
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 	}
 }
 
@@ -243,13 +234,12 @@ async function deleteSchedule(s: PlaybookScheduleRecord) {
 		await loadSchedules();
 		await loadRuns();
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 	}
 }
 
 // タブはシェルのヘッダーに出す（Discord ページと同じ）。
-headerExtra.set(headerTabs);
-onDestroy(() => headerExtra.set(null));
+setHeaderExtra(headerTabs);
 </script>
 
 {#snippet headerTabs()}

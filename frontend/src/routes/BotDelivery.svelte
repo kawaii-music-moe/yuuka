@@ -9,7 +9,6 @@
 // bot-scoped のため activeBot 切替に $effect で追従する。
 // ─────────────────────────────────────────────────────────────────────────
 
-import { ApiError } from "$lib/api/client";
 import { deliveryApi } from "$lib/api/services";
 import type {
 	PeriodicReport,
@@ -25,7 +24,7 @@ import {
 	Select,
 } from "$lib/components/ui";
 import { activeBot } from "$lib/stores/activeBot";
-import { pushToast } from "$lib/stores/toast";
+import { pushToast, toastError } from "$lib/stores/toast";
 import CronField from "./delivery/CronField.svelte";
 import HelpTip from "./delivery/HelpTip.svelte";
 import TargetField from "./delivery/TargetField.svelte";
@@ -120,13 +119,6 @@ const testOptions = $derived(
 	reports.map((r) => ({ value: String(r.id), label: r.name })),
 );
 
-function reportError(e: unknown) {
-	pushToast(
-		e instanceof ApiError ? e.message : "エラーが発生しました",
-		"error",
-	);
-}
-
 function resetForm() {
 	editingId = null;
 	fName = "";
@@ -170,7 +162,7 @@ async function loadReports() {
 			testId = reports.length > 0 ? String(reports[0].id) : "";
 		}
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 	}
 }
 
@@ -226,7 +218,7 @@ async function saveReport(e: SubmitEvent) {
 		resetForm();
 		await loadReports();
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 	} finally {
 		saving = false;
 	}
@@ -237,7 +229,7 @@ async function toggleEnabled(r: PeriodicReport) {
 		await deliveryApi.update(r.id, { enabled: !r.enabled });
 		await loadReports();
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 	}
 }
 
@@ -254,7 +246,7 @@ async function deleteReport(r: PeriodicReport) {
 		if (editingId === r.id) resetForm();
 		await loadReports();
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 	}
 }
 
@@ -265,7 +257,7 @@ async function runTest() {
 		const res = await deliveryApi.test(Number(testId));
 		pushToast(res.message ?? "テスト配信しました。", "success");
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 	} finally {
 		testing = false;
 	}

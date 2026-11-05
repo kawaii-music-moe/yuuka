@@ -4,7 +4,8 @@
 
 import type { PlannedPayment } from "$lib/api/types";
 import { Icon } from "$lib/components/ui";
-import { todayIso, yen } from "./expenseUtils";
+import { todayIso } from "$lib/date";
+import { yen } from "./expenseUtils";
 
 interface Props {
 	plans: PlannedPayment[];

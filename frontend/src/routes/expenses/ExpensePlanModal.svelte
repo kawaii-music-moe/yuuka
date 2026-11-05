@@ -2,11 +2,8 @@
 // 支払い予定の追加モーダル（旧 index.html #modal-expense-plan + app.js expensePlanForm submit）。
 // 保存は onsave で親へ委譲。開くたびに初期化（日付は今日）。
 import { Button, Modal, Select } from "$lib/components/ui";
-import {
-	EXPENSE_CATEGORIES,
-	EXPENSE_CATEGORY_OPTIONS,
-	todayIso,
-} from "./expenseUtils";
+import { todayIso } from "$lib/date";
+import { EXPENSE_CATEGORIES, EXPENSE_CATEGORY_OPTIONS } from "./expenseUtils";
 
 interface Props {
 	open?: boolean;

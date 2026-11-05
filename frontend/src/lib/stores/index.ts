@@ -17,5 +17,6 @@ export {
 	removeToast,
 	type Toast,
 	type ToastKind,
+	toastError,
 	toasts,
 } from "./toast";

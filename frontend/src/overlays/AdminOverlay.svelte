@@ -10,7 +10,6 @@
 //   - 監査ログは直近5件をインライン、全件は AuditModal（自前ページング）。
 // ─────────────────────────────────────────────────────────────────────────
 
-import { ApiError } from "$lib/api/client";
 import { adminApi, personaApi } from "$lib/api/services";
 import type {
 	AdminBotView,
@@ -28,7 +27,7 @@ import {
 } from "$lib/components/ui";
 import { ADMIN_SECTIONS } from "$lib/managementSections";
 import { currentUser } from "$lib/stores/session";
-import { pushToast } from "$lib/stores/toast";
+import { pushToast, toastError } from "$lib/stores/toast";
 import AuditModal from "./admin/AuditModal.svelte";
 import { maskDiscordId } from "./admin/adminUtils";
 import RoleBadge from "./admin/RoleBadge.svelte";
@@ -56,33 +55,26 @@ let auditOpen = $state(false);
 
 const selfId = $derived($currentUser?.discordId ?? "");
 
-function reportError(e: unknown) {
-	pushToast(
-		e instanceof ApiError ? e.message : "エラーが発生しました",
-		"error",
-	);
-}
-
 // ── 各セクション取得 ──
 async function loadStats() {
 	try {
 		stats = (await adminApi.stats()).stats;
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 	}
 }
 async function loadUsers() {
 	try {
 		users = (await adminApi.users()).users ?? [];
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 	}
 }
 async function loadBots() {
 	try {
 		botsList = (await adminApi.bots()).bots ?? [];
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 	}
 }
 async function loadSystemSettings() {
@@ -91,7 +83,7 @@ async function loadSystemSettings() {
 		privacyUrl = s.privacyPolicyUrl || "";
 		termsUrl = s.termsUrl || "";
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 	}
 }
 async function loadAuditPreview() {
@@ -99,14 +91,14 @@ async function loadAuditPreview() {
 		const res = await adminApi.auditLogs({ limit: AUDIT_PREVIEW_LIMIT });
 		auditPreview = res.logs ?? [];
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 	}
 }
 async function loadPersonas() {
 	try {
 		personas = (await personaApi.marketplace()).personas ?? [];
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 	}
 }
 async function loadBotAttrSettings() {
@@ -120,7 +112,7 @@ async function loadBotAttrSettings() {
 		rateUserDay = rl.userPerDay ?? 100;
 		rateGuildDay = rl.guildPerDay ?? 1000;
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 	}
 }
 
@@ -154,7 +146,7 @@ async function toggleRole(user: AdminUserView) {
 		await loadUsers();
 		await loadStats();
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 	}
 }
 async function deleteUser(user: AdminUserView) {
@@ -171,7 +163,7 @@ async function deleteUser(user: AdminUserView) {
 		await loadStats();
 		await loadBots();
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 	}
 }
 
@@ -188,7 +180,7 @@ async function suspendBot(bot: AdminBotView) {
 		await loadBots();
 		await loadStats();
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 	}
 }
 async function unsuspendBot(bot: AdminBotView) {
@@ -202,7 +194,7 @@ async function unsuspendBot(bot: AdminBotView) {
 		await loadBots();
 		await loadStats();
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 	}
 }
 
@@ -217,7 +209,7 @@ async function unpublishPersona(p: PublicPersonaView) {
 		await adminApi.unpublishPersona(p.id);
 		await loadPersonas();
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 	}
 }
 async function deletePersona(p: PublicPersonaView) {
@@ -231,7 +223,7 @@ async function deletePersona(p: PublicPersonaView) {
 		await adminApi.deletePersona(p.id);
 		await loadPersonas();
 	} catch (e) {
-		reportError(e);
+		toastError(e);
 	}
 }
 
@@ -246,7 +238,7 @@ async function submitDefaultBotToken(e: SubmitEvent) {
 		if (stats) stats.defaultBotTokenSet = true;
 		pushToast("システムデフォルト Bot のトークンを更新しました！", "success");
 	} catch (err) {
-		reportError(err);
+		toastError(err);
 	}
 }
 async function submitSystemSettings(e: SubmitEvent) {
@@ -258,7 +250,7 @@ async function submitSystemSettings(e: SubmitEvent) {
 		});
 		pushToast("システム設定を保存しました。", "success");
 	} catch (err) {
-		reportError(err);
+		toastError(err);
 	}
 }
 async function submitBotAttr(e: SubmitEvent) {
@@ -278,7 +270,7 @@ async function submitBotAttr(e: SubmitEvent) {
 		pushToast("Bot属性設定を保存しました。", "success");
 		await loadBotAttrSettings();
 	} catch (err) {
-		reportError(err);
+		toastError(err);
 	}
 }
 

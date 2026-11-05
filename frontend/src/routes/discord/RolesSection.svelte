@@ -1,10 +1,9 @@
 <script lang="ts">
 // 利用可能ロール（旧 renderAssistantRoles + loadGuildOptions("role") + btn-add-assistant-role）。
 
-import { ApiError } from "$lib/api/client";
 import { botAttributeApi } from "$lib/api/services";
 import { confirmDialog, Select } from "$lib/components/ui";
-import { pushToast } from "$lib/stores/toast";
+import { pushToast, toastError } from "$lib/stores/toast";
 import type {
 	AssistantGuild,
 	AssistantRole,
@@ -95,10 +94,7 @@ async function add() {
 			onchanged();
 		} else pushToast(res.message ?? "操作に失敗しました。", "error");
 	} catch (err) {
-		pushToast(
-			err instanceof ApiError ? err.message : "通信エラーが発生しました。",
-			"error",
-		);
+		toastError(err, "通信エラーが発生しました。");
 	}
 }
 
@@ -121,10 +117,7 @@ async function remove(r: AssistantRole, shift: boolean) {
 		if (res.success) onchanged();
 		else pushToast(res.message ?? "操作に失敗しました。", "error");
 	} catch (err) {
-		pushToast(
-			err instanceof ApiError ? err.message : "通信エラーが発生しました。",
-			"error",
-		);
+		toastError(err, "通信エラーが発生しました。");
 	}
 }
 </script>

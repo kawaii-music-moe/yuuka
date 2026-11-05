@@ -1,7 +1,6 @@
 <script lang="ts">
 // 選択中 Bot の稼働状態と起動・停止・再起動（旧 統合管理 › Bot ヘルスの 1 行分）。
 // 操作はオーナー本人の Bot だけ（$lib/botRuntime）。それ以外は状態だけを出す。
-import { ApiError } from "$lib/api/client";
 import { botApi } from "$lib/api/services";
 import type { BotView } from "$lib/api/types";
 import {
@@ -13,7 +12,7 @@ import {
 import { Button, StatusChip } from "$lib/components/ui";
 import { activeBot } from "$lib/stores/activeBot";
 import { currentUser } from "$lib/stores/session";
-import { pushToast } from "$lib/stores/toast";
+import { toastError } from "$lib/stores/toast";
 
 let bot = $state<BotView | null>(null);
 let busy = $state(false);
@@ -51,10 +50,7 @@ async function run(action: RuntimeAction) {
 		}, wait);
 	} catch (e) {
 		busy = false;
-		pushToast(
-			e instanceof ApiError ? e.message : "エラーが発生しました",
-			"error",
-		);
+		toastError(e);
 	}
 }
 </script>
