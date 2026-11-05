@@ -13,10 +13,16 @@
 - [ ] その他 (chore / ci など)
 
 ## テスト
-<!-- 実施した確認。少なくとも下記の静的チェックは必須 -->
-- [ ] `pnpm check`（typecheck + lint）が exit 0
-- [ ] （該当する場合）`pnpm test` が通る
-- [ ] （該当する場合）実 Discord / ブラウザでの動作確認を実施
+<!-- 実施した確認にチェックし、該当しない項目は消す。
+     コンパイルを伴う確認は develop ブランチでのみ実行できる（AGENTS.md）。
+     実行しなかった場合は理由を書き、CI の結果で確認する。 -->
+- [ ] `pnpm check`（svelte-check + biome）が exit 0
+- [ ] フロント: `pnpm test:front` が通る
+- [ ] dev スクリプト: `pnpm test:dev` が通る
+- [ ] PWA: `clients/pwa` で `npm run check` / `npm test` が通る
+- [ ] Rust: `cargo fmt --check` / `cargo clippy` / `cargo test` が通る
+- [ ] ローカルでの確認をスキップした（理由: ___）→ CI の結果で確認
+- [ ] 実 Discord / ブラウザでの動作確認を実施
 
 ## デプロイ影響
 <!-- 挙動変更・破壊的変更・マイグレーション・環境変数・再ビルド要否など -->
