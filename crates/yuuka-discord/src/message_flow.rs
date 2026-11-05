@@ -751,8 +751,12 @@ struct FlowDelivery {
 #[async_trait]
 impl TurnDelivery for FlowDelivery {
     async fn on_interim(&self, text: String) {
-        // 「入力中…」を止めてから一時応答を即返す（現行 onInterim）。
+        // 「入力中…」を止めてから一時応答を即返す（現行 onInterim）。一時応答は逐次表示の返信として送り、
+        // 経過時間の表示・生成中の本文・最終結果をこの 1 通の編集で見せる。
         self.typing_abort.abort();
+        if self.stream.begin_interim(&text).await {
+            return;
+        }
         send_channel_reply(
             &self.http,
             self.channel_id,
