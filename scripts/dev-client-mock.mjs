@@ -5,16 +5,25 @@
 // （clients/pwa/vite.config.ts 参照）。ログイン後の returnTo が Client のパスなら
 // 逆に Client へ戻される（frontend/vite.config.ts の VITE_PWA_DEV_SERVER）。
 // /api は両方ともこのモック API へ向ける（#44）。
-import { clientDir, installHint, processGroup, root } from "./lib/processes.mjs";
+import {
+	clientDir,
+	installHint,
+	processGroup,
+	root,
+} from "./lib/processes.mjs";
 
 const mockApi = "http://localhost:8787";
 const group = processGroup();
 
 try {
-	group.start(process.platform === "win32" ? "npm.cmd" : "npm", ["run", "mock"], {
-		cwd: clientDir,
-		shell: process.platform === "win32",
-	});
+	group.start(
+		process.platform === "win32" ? "npm.cmd" : "npm",
+		["run", "mock"],
+		{
+			cwd: clientDir,
+			shell: process.platform === "win32",
+		},
+	);
 	group.vite(clientDir, [], {
 		VITE_API_PROXY_TARGET: mockApi,
 		VITE_ADMIN_DEV_SERVER: "http://localhost:5174",

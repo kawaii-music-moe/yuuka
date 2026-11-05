@@ -1,5 +1,10 @@
 // PWA と管理画面の Vite を前景で起動する（`pnpm dev`。systemd の dev:start からも使う）。
-import { clientDir, installHint, processGroup, root } from "./lib/processes.mjs";
+import {
+	clientDir,
+	installHint,
+	processGroup,
+	root,
+} from "./lib/processes.mjs";
 
 const api = process.env.VITE_API_TARGET ?? "http://127.0.0.1:3403";
 const host = process.env.VITE_BIND_ADDR ?? "127.0.0.1";
