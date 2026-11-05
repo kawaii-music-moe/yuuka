@@ -1,0 +1,242 @@
+<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>yuuka 音声チャットの構成</title><style>
+:root{--bg:#fff;--fg:#1c1c1e;--mu:#6b6b70;--card:#f6f6f8;--bd:#d8d8de;--ln:#8a8a92;--ac:#3a6df0;--acbg:#eaf0ff;--wa:#b5530c;--wabg:#fff3e8}
+@media(prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#111114;--fg:#eee;--mu:#9a9aa2;--card:#1c1c21;--bd:#33333a;--ln:#777;--ac:#86a6ff;--acbg:#1b2440;--wa:#f0a060;--wabg:#33241a}}
+:root[data-theme="dark"]{--bg:#111114;--fg:#eee;--mu:#9a9aa2;--card:#1c1c21;--bd:#33333a;--ln:#777;--ac:#86a6ff;--acbg:#1b2440;--wa:#f0a060;--wabg:#33241a}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:system-ui,"Noto Sans JP",sans-serif;line-height:1.7;padding:24px 16px 64px}
+main{max-width:1100px;margin:0 auto}
+h1{font-size:22px;margin:0 0 4px}h2{font-size:18px;margin:40px 0 10px;padding-top:8px;border-top:1px solid var(--bd)}h3{font-size:15px;margin:20px 0 6px}
+p{margin:6px 0}.lead{color:var(--mu);margin-bottom:16px}
+code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.88em;background:var(--card);border:1px solid var(--bd);border-radius:4px;padding:0 4px;overflow-wrap:anywhere}
+nav{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:14px;margin:12px 0 8px}nav a{color:var(--ac);text-decoration:none}
+svg{width:100%;height:auto;display:block}
+.g{fill:none;stroke:var(--bd);stroke-dasharray:5 4}.gt{fill:var(--mu);font-size:13px}
+.n rect{fill:var(--card);stroke:var(--bd)}.n.k rect{fill:var(--acbg);stroke:var(--ac)}.t{fill:var(--fg);font-size:14px;font-weight:600}.s{fill:var(--mu);font-size:11.5px}
+.t.sm{font-size:13px}td code{overflow-wrap:normal;word-break:keep-all}
+.e{stroke:var(--ln);stroke-width:1.5;fill:none}.e.d{stroke-dasharray:4 3}.l{fill:var(--mu);font-size:11px}
+.scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
+table{border-collapse:collapse;width:100%;font-size:14px;margin:8px 0}th,td{border-bottom:1px solid var(--bd);padding:6px 8px;text-align:left;vertical-align:top}th{color:var(--mu);font-weight:600;white-space:nowrap}
+td.num{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
+.flow{display:flex;flex-wrap:wrap;gap:8px;align-items:stretch;margin:10px 0;padding:0;list-style:none;counter-reset:f}
+.flow li{counter-increment:f;flex:1 1 150px;background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:8px 10px;font-size:13.5px;position:relative}
+.flow li::before{content:counter(f);display:inline-block;width:20px;height:20px;line-height:20px;text-align:center;border-radius:50%;background:var(--ac);color:var(--bg);font-size:12px;font-weight:700;margin-right:6px}
+.flow li b{font-size:14px}.flow li small{display:block;color:var(--mu);font-size:12px;margin-top:2px}
+.cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px}
+.box{background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:10px 14px}
+.box h3{margin-top:4px}
+.warn{background:var(--wabg);border:1px solid var(--wa);border-radius:10px;padding:10px 14px}
+.warn li{margin:4px 0}
+.tag{display:inline-block;font-size:12px;border:1px solid var(--bd);border-radius:999px;padding:0 8px;color:var(--mu);margin-left:6px;white-space:nowrap}
+ul,ol{padding-left:22px;margin:6px 0}
+</style></head><body><main>
+<h1>yuuka 音声チャットの構成</h1>
+<p class="lead">PWA の「音声」画面（<code>/voice</code>）で、Web 版チャットを声だけで使う仕組みです。読み上げには Irodori-TTS v4.1-Small-MF を使い、普段は端末の GPU で、GPU の無い端末ではサーバーで声を作ります。develop <code>e4e8567</code>（PR #223・#225）時点の内容です。</p>
+<nav><a href="#overview">全体図</a><a href="#turn">1 回のやりとり</a><a href="#engine">生成の場所の選び方</a><a href="#pipeline">音声生成の中身</a><a href="#speaker">声（話者条件）</a><a href="#server">サーバーでの生成</a><a href="#store">声の保存</a><a href="#models">モデル</a><a href="#prod">本番の構成</a><a href="#files">ファイル一覧</a><a href="#pitfalls">落とし穴</a></nav>
+
+<h2 id="overview">全体図</h2>
+<p>端末・yuuka 本体・同じホストの 3 か所に分かれます。音声の入力と再生は常に端末で行い、声を作る場所だけが変わります。</p>
+<div class="scroll"><svg viewBox="0 0 1100 620" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="音声チャットの構成図" style="min-width:760px">
+<defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--ln)"/></marker></defs>
+<rect x="20" y="40" width="440" height="560" rx="14" class="g"/><text x="34" y="62" class="gt">端末（ブラウザ・client/pwa/src）</text>
+<rect x="490" y="40" width="280" height="560" rx="14" class="g"/><text x="504" y="62" class="gt">yuuka 本体（Rust・axum）</text>
+<rect x="800" y="40" width="280" height="560" rx="14" class="g"/><text x="814" y="62" class="gt">同じホスト</text>
+
+<g class="n k"><rect x="40" y="70" width="400" height="56" rx="10"/><text x="54" y="93" class="t">pages/VoicePage.vue</text><text x="54" y="113" class="s">画面・生成の場所の選択・聞く→送る→読む の流れ</text></g>
+<g class="n"><rect x="40" y="150" width="190" height="56" rx="10"/><text x="54" y="173" class="t">speechInput.ts</text><text x="54" y="193" class="s">Web Speech API で聞き取り</text></g>
+<g class="n"><rect x="250" y="150" width="190" height="56" rx="10"/><text x="264" y="173" class="t">voiceStore.ts</text><text x="264" y="193" class="s">保存した声の一覧・取得</text></g>
+<text x="40" y="228" class="l">読み上げ（どれか 1 つ・speaker.ts / serverTts.ts）</text>
+<g class="n k"><rect x="40" y="240" width="125" height="56" rx="10"/><text x="52" y="263" class="t sm">IrodoriSpeaker</text><text x="52" y="283" class="s">端末で生成</text></g>
+<g class="n"><rect x="177" y="240" width="125" height="56" rx="10"/><text x="189" y="263" class="t sm">BrowserSpeaker</text><text x="189" y="283" class="s">標準の読み上げ</text></g>
+<g class="n k"><rect x="315" y="240" width="125" height="56" rx="10"/><text x="327" y="263" class="t sm">ServerSpeaker</text><text x="327" y="283" class="s">サーバーで生成</text></g>
+<g class="n"><rect x="40" y="330" width="262" height="56" rx="10"/><text x="54" y="353" class="t">tts/client.ts → tts/worker.ts</text><text x="54" y="373" class="s">Web Worker に仕事を渡す（1 件ずつ）</text></g>
+<g class="n"><rect x="315" y="330" width="125" height="56" rx="10"/><text x="327" y="353" class="t">ChunkPlayer</text><text x="327" y="373" class="s">届いた順に再生</text></g>
+<g class="n k"><rect x="40" y="420" width="262" height="56" rx="10"/><text x="54" y="443" class="t">tts/pipeline.ts + text.ts</text><text x="54" y="463" class="s">onnxruntime-web（WebGPU）で推論</text></g>
+<g class="n"><rect x="40" y="510" width="262" height="56" rx="10"/><text x="54" y="533" class="t">OPFS（端末の保存領域）</text><text x="54" y="553" class="s">モデル一式・声の話者条件のキャッシュ</text></g>
+
+<g class="n"><rect x="510" y="70" width="240" height="56" rx="10"/><text x="524" y="93" class="t">既存のチャット API</text><text x="524" y="113" class="s">文字で送って返答を受け取る</text></g>
+<g class="n"><rect x="510" y="150" width="240" height="56" rx="10"/><text x="524" y="173" class="t">voices.rs</text><text x="524" y="193" class="s">/api/client/voices（本人の声だけ）</text></g>
+<g class="n k"><rect x="510" y="240" width="240" height="56" rx="10"/><text x="524" y="263" class="t">tts_proxy.rs</text><text x="524" y="283" class="s">/api/client/tts/* ログイン確認して中継</text></g>
+<g class="n"><rect x="510" y="420" width="240" height="56" rx="10"/><text x="524" y="443" class="t">static_files.rs</text><text x="524" y="463" class="s">/tts-models/ を immutable で配信</text></g>
+<text x="510" y="512" class="l">CSP: script-src 'self' 'wasm-unsafe-eval'</text>
+<text x="510" y="530" class="l">（WebAssembly を動かすのに必要）</text>
+
+<g class="n"><rect x="820" y="150" width="240" height="56" rx="10"/><text x="834" y="173" class="t">data/yuuka.db</text><text x="834" y="193" class="s">client_voices（V36）</text></g>
+<g class="n k"><rect x="820" y="240" width="240" height="56" rx="10"/><text x="834" y="263" class="t">yuuka-tts.service</text><text x="834" y="283" class="s">Node・127.0.0.1:3410・認証なし</text></g>
+<g class="n"><rect x="820" y="330" width="240" height="56" rx="10"/><text x="834" y="353" class="t">server/tts/engine.ts</text><text x="834" y="373" class="s">同じ pipeline.ts を CPU で動かす</text></g>
+<g class="n"><rect x="820" y="420" width="240" height="56" rx="10"/><text x="834" y="443" class="t">data/tts-models/&lt;版&gt;/</text><text x="834" y="463" class="s">ONNX 一式（約 1.8 GB）</text></g>
+<g class="n"><rect x="820" y="510" width="240" height="56" rx="10"/><text x="834" y="533" class="t">tools/irodori-onnx/</text><text x="834" y="553" class="s">PyTorch → ONNX 変換と梱包（手作業）</text></g>
+
+<path class="e" d="M440,98 L506,98" marker-end="url(#a)"/>
+<path class="e" d="M135,126 L135,146" marker-end="url(#a)"/>
+<path class="e" d="M345,126 L345,146" marker-end="url(#a)"/>
+<path class="e" d="M440,178 L506,178" marker-end="url(#a)"/>
+<path class="e" d="M750,178 L816,178" marker-end="url(#a)"/>
+<path class="e" d="M440,268 L506,268" marker-end="url(#a)"/>
+<path class="e" d="M750,268 L816,268" marker-end="url(#a)"/><text x="510" y="316" class="l">→ TTS_SERVER_URL へ転送（ストリームのまま）</text>
+<path class="e" d="M940,296 L940,326" marker-end="url(#a)"/>
+<path class="e" d="M940,420 L940,390" marker-end="url(#a)"/><text x="948" y="410" class="l">読み込み</text>
+<path class="e" d="M940,510 L940,480" marker-end="url(#a)"/><text x="948" y="500" class="l">作る</text>
+<path class="e" d="M820,448 L754,448" marker-end="url(#a)"/>
+<path class="e" d="M510,448 L400,448 L400,538 L306,538" marker-end="url(#a)"/><text x="408" y="500" class="l">初回だけ</text><text x="408" y="515" class="l">ダウンロード</text>
+<path class="e" d="M171,510 L171,480" marker-end="url(#a)"/><text x="178" y="500" class="l">読み込み</text>
+<path class="e" d="M102,296 L102,326" marker-end="url(#a)"/>
+<path class="e" d="M171,386 L171,416" marker-end="url(#a)"/>
+<path class="e" d="M377,296 L377,326" marker-end="url(#a)"/>
+<path class="e d" d="M302,358 L311,358" marker-end="url(#a)"/>
+</svg></div>
+<p style="font-size:13px;color:var(--mu)">青い枠が音声生成の本筋です。端末で作るときは左の縦の列、サーバーで作るときは ServerSpeaker → tts_proxy.rs → yuuka-tts.service と進みます。</p>
+
+<h2 id="turn">1 回のやりとり</h2>
+<ol class="flow">
+<li><b>聞く</b><small><code>listenOnce()</code>（Web Speech API）で文字にする。途中経過も画面に出す</small></li>
+<li><b>送る</b><small>既存のチャット API（<code>agentGateway</code>）にそのまま送る。音声専用のチャットはない</small></li>
+<li><b>文に分ける</b><small><code>speechSentences()</code> が Markdown を読める文に直し、80 字までに区切る。最初の文は 24 字前後で読点で切り、最初の音を早くする</small></li>
+<li><b>声を作る</b><small>文ごとに生成し、区切り（チャンク）ごとに音声を返す</small></li>
+<li><b>鳴らす</b><small><code>ChunkPlayer</code>（Web Audio）が届いた順に続けて鳴らす。止める・割り込むと残りを捨てる</small></li>
+<li><b>また聞く</b><small>ハンズフリーがオンなら、読み終えたら 1 に戻る</small></li>
+</ol>
+
+<h2 id="engine">生成の場所の選び方</h2>
+<p><code>VoicePage.vue</code> の <code>checkEngine()</code> が、開いたときに 1 回だけ決めます。状態は <code>checking / needs-download / loading / ready / server / browser / none</code> です。</p>
+<div class="scroll"><table>
+<tr><th>条件</th><th>使うもの</th><th>状態</th></tr>
+<tr><td>設定「サーバーで声を作る」がオンで、サーバーでの生成が使える</td><td>ServerSpeaker</td><td><code>server</code></td></tr>
+<tr><td>WebGPU が使え、モデルが端末に保存済み</td><td>IrodoriSpeaker（そのまま読み込む）</td><td><code>loading → ready</code></td></tr>
+<tr><td>WebGPU が使え、モデルが未保存</td><td>「音声モデルを準備する」ボタンを出す（約 1.7 GB）</td><td><code>needs-download</code></td></tr>
+<tr><td>WebGPU が使えない・読み込みに失敗した</td><td>サーバーでの生成が使えれば ServerSpeaker、無ければ標準の読み上げ</td><td><code>server / browser / none</code></td></tr>
+</table></div>
+<p>「サーバーでの生成が使える」は <code>GET /api/client/tts/status</code> が 200 を返すかどうかで判定します（本体に <code>TTS_SERVER_URL</code> が無ければ 404、音声生成サーバーが落ちていれば 503）。</p>
+
+<h2 id="pipeline">音声生成の中身（pipeline.ts）</h2>
+<p>ブラウザ（<code>worker.ts</code>）とサーバー（<code>engine.ts</code>）は同じ <code>IrodoriTts</code> クラスを使います。違うのは onnxruntime が web（WebGPU）か node（CPU）かだけです。1 文ずつ次の順に処理します。</p>
+<ol class="flow">
+<li><b>文字の整形と分割</b><small><code>text.ts</code> の自前 Unigram トークナイザ（Python 版と 415/415 一致）</small></li>
+<li><b>cond_encoder</b><small>本文とキャプション（声の説明）を ModernBERT-ja でベクトルに</small></li>
+<li><b>duration</b><small>音声の長さ（フレーム数）を予測する。話者条件は「参照なし」で渡す</small></li>
+<li><b>dit_step × 4</b><small>MeanFlow 4 ステップで音の潜在（25 フレーム/秒）を作る</small></li>
+<li><b>末尾を切る</b><small><code>findFlatteningPoint()</code> で末尾の無音を落とす</small></li>
+<li><b>dacvae_decoder</b><small>区切りごとに 48 kHz の波形へ。最初 20 フレーム、以降は倍々。前後 8 フレームの文脈を付け、一括デコードと同じ音になる</small></li>
+</ol>
+<p>生成は async generator（<code>synthesize()</code>）で、区切りごとに音声を返します。止めるときは <code>isCancelled</code> を見て途中でやめます。</p>
+
+<h2 id="speaker">声（話者条件）</h2>
+<p>文ごとに乱数を変えるだけだと声色が変わってしまうので、声は「話者条件」（<code>tokens × 768</code> の f32 行列と mask）に固めて、全部の文で同じものを使います。作り方は 2 つです。</p>
+<div class="cols">
+<div class="box"><h3>説明から作る <span class="tag">design</span></h3>
+<ol><li>キャプション（「落ち着いた若い女性の声」など）と声の番号（seed）を決める</li>
+<li>見本の文を 1 回だけ生成する</li>
+<li>その潜在を <code>speaker_encoder</code> に通して話者条件にする</li></ol>
+<p style="font-size:13px;color:var(--mu)">保存前は <code>VoiceSpec {kind:'design', caption, voiceSeed}</code> のまま渡し、Worker やサーバーが作って覚えておく。</p></div>
+<div class="box"><h3>サンプル音声から作る <span class="tag">clone</span></h3>
+<ol><li>ファイル（MP3 など）か録音（最長 30 秒）を <code>voiceSample.ts</code> で 48 kHz モノラルに</li>
+<li><code>prepareReference()</code> で最長 120 秒・-16 LUFS（BS.1770）にそろえる</li>
+<li><code>dacvae_encoder</code> → <code>speaker_encoder</code> で話者条件に</li></ol>
+<p style="font-size:13px;color:var(--mu)">サーバーで作るときは 16 bit PCM で先頭 60 秒まで送る。<code>dacvae_encoder</code> は声を作るときだけ要るので、端末では後から読み込む。</p></div>
+</div>
+
+<h2 id="server">サーバーでの生成（GPU の無い端末向け）</h2>
+<p>音声生成サーバー（<code>client/pwa/server/tts/server.ts</code>）は認証を持たず 127.0.0.1 で待ち受けます。端末からは必ず本体の <code>/api/client/tts/{op}</code> を通り、本体がログイン済みかを確かめてから転送します（応答はストリームのまま）。</p>
+<div class="scroll"><table>
+<tr><th>操作</th><th>送るもの</th><th>返るもの</th></tr>
+<tr><td><code>GET status</code></td><td>—</td><td><code>{ ok, loaded, model }</code></td></tr>
+<tr><td><code>POST speak</code></td><td><code>{ text, voice, seed, durationScale }</code></td><td>16 bit PCM（48 kHz モノラル）を区切りごとに流す</td></tr>
+<tr><td><code>POST design</code></td><td><code>{ caption, voiceSeed }</code></td><td>話者条件 <code>{ stateBase64, mask }</code></td></tr>
+<tr><td><code>POST clone</code></td><td><code>{ pcmBase64 }</code>（3 秒以上）</td><td>話者条件</td></tr>
+</table></div>
+<ul>
+<li><b>保存した声の渡し方</b>：サーバーは話者条件を key（声の id と作成日時）で 16 件まで覚えます。端末はそのページで初めて使う声だけ話者条件を付けて送り、以降は key だけ送ります。サーバーが再起動して忘れていれば 428 が返るので、付けて送り直します。</li>
+<li><b>処理の順番</b>：CPU を 1 件で使い切るので、要求は 1 件ずつ順に処理します。</li>
+<li><b>メモリ</b>：最初の要求でモデルを読み込み（約 8 秒）、生成中は約 3.7 GB（ピーク約 4.9 GB）です。10 分使われなければ解放します。CPU のメモリアリーナは切っています（入れると約 6.4 GB）。</li>
+<li><b>速さ</b>（スレッド 3）：最初の音まで約 1.9 秒、生成にかかる時間は音声の長さの約 1.1 倍です。int8 量子化は音質と長さが変わるので使っていません。</li>
+</ul>
+
+<h2 id="store">声の保存</h2>
+<p>作った声は作った本人だけが、どの端末からでも使えるようにサーバーに保存します。サンプル音声そのものは保存せず、話者条件だけを保存します。</p>
+<div class="scroll"><table>
+<tr><th>API（voices.rs）</th><th>内容</th></tr>
+<tr><td><code>GET /api/client/voices</code></td><td>自分の声の一覧（mask は含むが、話者条件の行列は含まない）</td></tr>
+<tr><td><code>POST /api/client/voices</code></td><td>保存。1 人 30 件まで・tokens 1024 まで・名前 40 字・キャプション 200 字</td></tr>
+<tr><td><code>PATCH /api/client/voices/{id}</code></td><td>名前・キャプションの変更</td></tr>
+<tr><td><code>DELETE /api/client/voices/{id}</code></td><td>削除</td></tr>
+<tr><td><code>GET /api/client/voices/{id}/state</code></td><td>話者条件（f32 のバイト列）</td></tr>
+</table></div>
+<ul>
+<li><b>DB</b>：<code>client_voices</code>（V36）。<code>speaker_state</code> は BLOB、<code>speaker_mask</code> は JSON、<code>speaker_model</code> は作ったモデルの系統（今は <code>irodori-v4.1-small-mf</code>）。違う系統の声は一覧で「今の音声モデルでは使えません」と表示します。</li>
+<li><b>端末のキャッシュ</b>：<code>voiceStore.ts</code> が話者条件を OPFS に <code>{id}-{作成日時}.f32</code> で置き、2 回目からはダウンロードしません。</li>
+<li><b>古い保存先</b>：以前の端末内だけの保存は、一覧を開いたときにサーバーへ移します。</li>
+</ul>
+
+<h2 id="models">モデル</h2>
+<p>モデルはリポジトリに含めず、<code>tools/irodori-onnx/</code> で作って各環境の <code>data/tts-models/&lt;版&gt;/</code> に置きます。今の版は <code>irodori-v41-mf-fp16-3</code> です。版ごとのフォルダは書き換えず（immutable で配信）、変えるときは新しい版を作って <code>MODEL_VERSION</code> を上げます。</p>
+<div class="scroll"><table>
+<tr><th>ファイル</th><th>精度</th><th class="num">大きさ</th><th>役割</th></tr>
+<tr><td><code>cond_encoder</code></td><td>fp16</td><td class="num">640 MB</td><td>本文・キャプションのエンコーダ</td></tr>
+<tr><td><code>duration</code></td><td>fp32</td><td class="num">87 MB</td><td>長さの予測</td></tr>
+<tr><td><code>dit_step</code></td><td>fp16</td><td class="num">749 MB</td><td>MeanFlow の 1 ステップ（4 回呼ぶ）</td></tr>
+<tr><td><code>dacvae_decoder</code></td><td>fp16</td><td class="num">167 MB</td><td>潜在 → 48 kHz 波形（noguchis/irodori-tts-onnx の codec）</td></tr>
+<tr><td><code>speaker_encoder</code></td><td>fp16</td><td class="num">123 MB</td><td>潜在 → 話者条件</td></tr>
+<tr><td><code>dacvae_encoder</code> <span class="tag">optional</span></td><td>fp16</td><td class="num">56 MB</td><td>サンプル音声 → 潜在（声を作るときだけ）</td></tr>
+<tr><td><code>tokenizer.json</code> ほか</td><td>—</td><td class="num">4 MB</td><td>トークナイザ・設定・参照なしの話者条件・<code>manifest.json</code></td></tr>
+</table></div>
+<ul>
+<li><b>端末での保存</b>：OPFS に置きます（Cache Storage は 700 MB 前後のファイルで失敗するため）。<code>manifest.json</code> だけ no-cache で、版が変わると古いフォルダを消します。Service Worker（<code>sw.js</code>）は <code>/tts-models/</code> を扱いません。</li>
+<li><b>WebGPU の設定</b>：onnxruntime-web 1.23.2 を Web Worker で動かし、<code>numThreads=1</code> です（CSP で blob: URL を使えないため）。asyncify 版の wasm は vite の <code>?url</code> で自分のサーバーから配ります。</li>
+<li><b>変換</b>：<code>export.py</code> が torch.onnx（dynamo）で書き出し、<code>export_patches.py</code> が書き出せない箇所（RoPE の複素数・データで分岐するマスク・長さの固定）を直します。<code>golden.py</code> で PyTorch との一致を確かめ、<code>package.py</code> で版のフォルダにまとめます。作業環境は <code>~/apps/irodori-tts</code> です。</li>
+</ul>
+
+<h2 id="prod">本番の構成</h2>
+<div class="scroll"><table>
+<tr><th>もの</th><th>場所・設定</th></tr>
+<tr><td>yuuka 本体</td><td><code>yuuka.service</code>（systemd --user）。本体チェックアウト（develop）から <code>deploy/prod/bin/yuuka</code> を起動。フロントは <code>dist/public</code></td></tr>
+<tr><td>音声生成サーバー</td><td><code>yuuka-tts.service</code>（ひな形は <code>deploy/tts/yuuka-tts.service</code>）。<code>client/pwa</code> で <code>node --import tsx server/tts/server.ts</code>。ポート 3410・スレッド 3・10 分で解放・MemoryMax 6G</td></tr>
+<tr><td>中継の設定</td><td><code>deploy/prod/config.yaml</code> の <code>TTS_SERVER_URL: "http://127.0.0.1:3410"</code>。無ければサーバーでの生成は使えない（404）</td></tr>
+<tr><td>モデル</td><td><code>data/tts-models/irodori-v41-mf-fp16-3/</code>。あれば本体が <code>/tts-models/</code> で配信する</td></tr>
+<tr><td>DB</td><td><code>data/yuuka.db</code> の <code>client_voices</code></td></tr>
+</table></div>
+<p style="font-size:13px;color:var(--mu)">開発環境（<code>yuuka-dev.service</code>）はモデルを配置済みですが、<code>TTS_SERVER_URL</code> はまだ設定していません。モック（<code>mock/server.ts</code>）は声の保存をメモリで持ち、<code>/api/client/tts/*</code> を 127.0.0.1:3410 に転送します。</p>
+
+<h2 id="files">ファイル一覧</h2>
+<div class="scroll"><table>
+<tr><th>ファイル</th><th class="num">行</th><th>役割</th></tr>
+<tr><td colspan="3"><b>PWA の画面と入出力</b>（<code>client/pwa/src/</code>）</td></tr>
+<tr><td><code>pages/VoicePage.vue</code></td><td class="num">523</td><td>音声画面。生成の場所の選択、会話の流れ、声の設定・作成・保存</td></tr>
+<tr><td><code>components/voice/VoiceSampleForm.vue</code></td><td class="num">138</td><td>サンプル音声（ファイル・録音）から声を作るフォーム</td></tr>
+<tr><td><code>voice/speechInput.ts</code></td><td class="num">82</td><td>Web Speech API での聞き取り（<code>listenOnce</code>）</td></tr>
+<tr><td><code>voice/replyText.ts</code></td><td class="num">78</td><td>返答の Markdown を読み上げ用の文に分ける</td></tr>
+<tr><td><code>voice/speaker.ts</code></td><td class="num">146</td><td><code>ChunkPlayer</code>・<code>IrodoriSpeaker</code>・<code>BrowserSpeaker</code></td></tr>
+<tr><td><code>voice/serverTts.ts</code></td><td class="num">163</td><td><code>ServerSpeaker</code> とサーバーでの声の作成（design / clone）</td></tr>
+<tr><td><code>voice/voiceStore.ts</code></td><td class="num">141</td><td>声の保存（サーバー API ＋ OPFS キャッシュ）</td></tr>
+<tr><td><code>voice/voiceSample.ts</code></td><td class="num">65</td><td>音声ファイルのデコード・録音</td></tr>
+<tr><td colspan="3"><b>音声生成</b>（<code>client/pwa/src/voice/tts/</code>）</td></tr>
+<tr><td><code>pipeline.ts</code></td><td class="num">271</td><td><code>IrodoriTts</code>：推論の本体（ブラウザとサーバーで共通）</td></tr>
+<tr><td><code>text.ts</code></td><td class="num">208</td><td>文字の整形・Unigram トークナイザ・長さの特徴量</td></tr>
+<tr><td><code>referenceAudio.ts</code></td><td class="num">84</td><td>サンプル音声のラウドネス計測（BS.1770）とそろえ</td></tr>
+<tr><td><code>worker.ts</code></td><td class="num">244</td><td>Web Worker。WebGPU のセッション読み込みと仕事の順番待ち</td></tr>
+<tr><td><code>client.ts</code></td><td class="num">116</td><td>画面側から Worker を呼ぶ窓口（<code>irodoriClient()</code>）</td></tr>
+<tr><td><code>protocol.ts</code></td><td class="num">38</td><td>画面と Worker のメッセージの型（<code>VoiceSpec</code> など）</td></tr>
+<tr><td><code>modelStore.ts</code></td><td class="num">109</td><td>モデルのダウンロードと OPFS への保存</td></tr>
+<tr><td colspan="3"><b>音声生成サーバー</b>（<code>client/pwa/server/tts/</code>）</td></tr>
+<tr><td><code>server.ts</code></td><td class="num">119</td><td>HTTP サーバー（status / speak / design / clone）</td></tr>
+<tr><td><code>engine.ts</code></td><td class="num">135</td><td>onnxruntime-node で <code>IrodoriTts</code> を動かす。順番待ち・解放</td></tr>
+<tr><td><code>wire.ts</code></td><td class="num">55</td><td>要求の検証と PCM・base64 の変換</td></tr>
+<tr><td colspan="3"><b>yuuka 本体</b>（<code>crates/</code>）</td></tr>
+<tr><td><code>yuuka-client-api/src/voices.rs</code></td><td class="num">327</td><td>声の保存 API</td></tr>
+<tr><td><code>yuuka-client-api/src/tts_proxy.rs</code></td><td class="num">90</td><td>サーバーでの生成への中継</td></tr>
+<tr><td><code>yuuka-db/migrations/V36__client_voices.sql</code></td><td class="num">20</td><td>声のテーブル</td></tr>
+<tr><td><code>yuuka-web/src/static_files.rs</code></td><td class="num">—</td><td><code>/voice</code> を PWA の画面に、<code>/tts-models/</code> の配信（<code>mount_tts_models</code>）</td></tr>
+<tr><td colspan="3"><b>変換と配置</b></td></tr>
+<tr><td><code>tools/irodori-onnx/</code></td><td class="num">621</td><td>export / export_patches / make_tokenizer / golden / package と README</td></tr>
+<tr><td><code>deploy/tts/yuuka-tts.service</code></td><td class="num">25</td><td>音声生成サーバーの systemd ユニットのひな形</td></tr>
+</table></div>
+<p style="font-size:13px;color:var(--mu)">テストは PWA 側に <code>*.test.ts</code>（トークナイザ・パイプライン・ラウドネス・Worker の窓口・返答の分割・wire）、Rust 側に <code>yuuka-client-api/tests/voices.rs</code>（6 件）と <code>tests/tts_proxy.rs</code>（3 件・develop では未実行）があります。</p>
+
+<h2 id="pitfalls">落とし穴</h2>
+<div class="warn"><ul>
+<li><b>長さの予測は参照なしで</b>：参照ありの話者条件で長さを予測すると、文の長さに関係なく約 3.4 秒になります（上流の PyTorch 版も同じ）。</li>
+<li><b>キャプションには rare-token split をかけない</b>：本文だけにかけます。かけると長さがずれます。</li>
+<li><b>fp16 の Clip</b>：WebGPU でシェーダーエラーになるので、話者エンコーダの平均トークンは fp32 で計算しています。</li>
+<li><b>WASM の実行環境では動かない</b>：fp16 モデルはメモリ不足になるので、端末では WebGPU だけを使います。</li>
+<li><b>Iris Xe などでたまに数値エラー</b>（例：<code>37602664</code>）：読み込み直すと直ることが多いので、再読み込みボタンを出し、失敗したらセッションを解放します。</li>
+<li><b>モデルを差し替えるとき</b>：<code>MODEL_VERSION</code>（modelStore.ts・package.py）と、話者条件が変わるなら <code>SPEAKER_MODEL</code>（voiceStore.ts）も見直します。</li>
+</ul></div>
+</main></body></html>
