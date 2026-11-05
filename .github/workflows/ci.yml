@@ -15,7 +15,7 @@ permissions:
 
 jobs:
   frontend:
-    name: Frontend (svelte-check / vite build)
+    name: Frontend (svelte-check / release build)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -28,10 +28,13 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm typecheck:front
-      - run: pnpm build:front
+      # リリース用の重いビルドは develop -> main の PR でのみ実行する。
+      - name: Build for release
+        if: github.event_name == 'pull_request' && github.base_ref == 'main' && github.head_ref == 'develop'
+        run: pnpm build:front
 
   pwa:
-    name: PWA (vue-tsc / test / vite build)
+    name: PWA (vue-tsc / release test and build)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -45,8 +48,13 @@ jobs:
           cache-dependency-path: client/pwa/package-lock.json
       - run: npm ci
       - run: npm run check
-      - run: npm test
-      - run: npm run build
+      # テストとビルドはリリース前の develop -> main の PR に集約する。
+      - name: Test for release
+        if: github.event_name == 'pull_request' && github.base_ref == 'main' && github.head_ref == 'develop'
+        run: npm test
+      - name: Build for release
+        if: github.event_name == 'pull_request' && github.base_ref == 'main' && github.head_ref == 'develop'
+        run: npm run build
 
   lint:
     name: Lint (biome)
