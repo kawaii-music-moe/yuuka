@@ -3,7 +3,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 for arg in "$@"; do
   case "$arg" in
-    --yes|-y|--) ;; # Compatibility with the former Docker command; start is idempotent.
+    --) ;; # pnpm 10+ passes the `--` of `pnpm dev:start -- ...` through.
     -h|--help) echo 'Usage: pnpm dev:start (start systemd dev API and Vite services)'; exit 0 ;;
     *) echo "Unknown option: $arg" >&2; exit 2 ;;
   esac

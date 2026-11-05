@@ -128,7 +128,7 @@ pnpm check              # typecheck:front + lint をまとめて実行
 | [frontend/](../frontend/) | 管理画面 SPA（§5.4）。`pnpm dev` / `build:front` |
 | [client/pwa/](../client/pwa/) | PWA クライアント（Vue 3）。開発手順は [client/pwa/README.md](../client/pwa/README.md) |
 | [clients/desktop/](../clients/desktop/) | デスクトップクライアント（Rust / egui）。workspace 外の独立クレート |
-| [scripts/](../scripts/) | `dev-client-mock.mjs`（PWA + モック API + 管理画面の同時起動）、`build-pwa.mjs`（PWA ビルド） |
+| [scripts/](../scripts/) | `dev.mjs`（PWA + 管理画面の Vite）・`dev-client-mock.mjs`（モック API 付き）・`lib/processes.mjs`（両者共通の子プロセス管理）、`dev-start.sh`/`dev-ops.sh`/`dev-help.sh`（systemd の dev 操作）、`build-pwa.mjs`（PWA ビルド）、`verify-*.{mjs,py}`（CI のマイグレーション検証） |
 | [Dockerfile](../Dockerfile) / [docker-compose.yml](../docker-compose.yml) / [deploy/](../deploy/) | 本番/開発インスタンス運用（`deploy/instance.sh`、`deploy/prod` / `deploy/dev` の設定テンプレート）。詳細は [docs/guide/deployment.md](guide/deployment.md) |
 | [example.yaml](../example.yaml) / [.env.example](../.env.example) | 設定テンプレート（`config.yaml` / 環境変数） |
 | [rust-toolchain.toml](../rust-toolchain.toml) / [clippy.toml](../clippy.toml) / [deny.toml](../deny.toml) / [biome.json](../biome.json) | ツールチェイン固定・lint 設定（deny.toml は `anyhow`/`eyre` 等の依存を禁止） |

@@ -13,6 +13,5 @@ pnpm dev:client:mock     モック API でフロントを起動
 入口: http://127.0.0.1:5173/ （PWA）、/admin/ （管理画面）
 API: http://127.0.0.1:3403 （VITE_API_TARGET で変更）
 初回: pnpm install --frozen-lockfile && npm --prefix client/pwa ci
-Docker 運用: pnpm dev:docker:start / dev:docker:update / dev:docker:stop
 詳細: deploy/README.md
 HELP

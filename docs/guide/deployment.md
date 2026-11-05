@@ -57,26 +57,9 @@ chmod 600 deploy/prod/secret.key
 
 再作成時は数秒のダウンタイムが発生し、Bot は自動で再ログインします。
 
-### dev のフロント（Vite dev server・HMR）
+### dev のフロント
 
-現在のホストの systemd 運用は [deploy/README.md](../../deploy/README.md#dev-インスタンスsystemd現在のホスト) を参照してください。以下は Docker 運用の手順です。
-
-dev のフロントは、Vite dev server を Docker で常駐させる `deploy/dev/vite.compose.yml`（API とは別の compose プロジェクト `yuuka-dev-vite`）で動かします。`/api`・`/ws/chat` は dev API（`HOST_PORT`=7856）へ proxy されます。dev API を先に起動しておいてください。
-
-```bash
-# 起動（初回）: パラメータは deploy/dev/.env（未設定でも既定値で動く。変数一覧は deploy/dev/.env.example）
-cp deploy/dev/.env.example deploy/dev/.env
-docker compose -f deploy/dev/vite.compose.yml up -d
-docker compose -f deploy/dev/vite.compose.yml logs -f vite
-
-# 更新: ソース変更は HMR で自動反映。lockfile / 依存が変わったときだけ再起動（pnpm install が走る）
-docker compose -f deploy/dev/vite.compose.yml restart vite
-
-# 停止
-docker compose -f deploy/dev/vite.compose.yml down
-```
-
-入口は既定で `127.0.0.1:5173`（管理画面 Vite は内部用の `127.0.0.1:7855`）で待受、proxy 先は `http://127.0.0.1:7856`、公開ホスト名（トンネル）は `yuuka-dev.kawaii-music.moe` です。使うソースツリー・実行ユーザー・ポート・proxy 先は `deploy/dev/.env` の `VITE_*` で変更できます（変数の一覧・デバッグ用の一時プロキシは [deploy/README.md](../../deploy/README.md#docker-の-dev-インスタンス従来構成) の「フロント（Vite dev server・HMR）」を参照）。
+現在のホストの systemd 運用は [deploy/README.md](../../deploy/README.md#dev-インスタンスsystemd現在のホスト) を参照してください（`pnpm dev:start` で dev API と Vite を起動します）。
 
 ---
 

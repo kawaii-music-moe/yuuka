@@ -16,23 +16,19 @@ const clientDir = path.join(root, "client", "pwa");
 // 空にするため、必ず build:front の後に実行すること（root の `pnpm build` はこの順で実行する）。
 const target = path.join(root, "dist", "public", "pwa");
 
-if (!existsSync(path.join(clientDir, "node_modules"))) {
-	const install = spawnSync("npm ci", {
+/** client/pwa で npm を実行し、失敗したらその終了コードで終える。 */
+function npm(command) {
+	const result = spawnSync(`npm ${command}`, {
 		cwd: clientDir,
 		stdio: "inherit",
 		shell: true,
 	});
-	if (install.error) throw install.error;
-	if (install.status !== 0) process.exit(install.status ?? 1);
+	if (result.error) throw result.error;
+	if (result.status !== 0) process.exit(result.status ?? 1);
 }
 
-const run = spawnSync("npm run build", {
-	cwd: clientDir,
-	stdio: "inherit",
-	shell: true,
-});
-if (run.error) throw run.error;
-if (run.status !== 0) process.exit(run.status ?? 1);
+if (!existsSync(path.join(clientDir, "node_modules"))) npm("ci");
+npm("run build");
 
 await rm(target, { recursive: true, force: true });
 await cp(path.join(clientDir, "dist"), target, { recursive: true });
