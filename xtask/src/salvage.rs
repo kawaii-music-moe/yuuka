@@ -184,16 +184,11 @@ fn parse_args(args: &[String]) -> Result<Options, String> {
     let mut apply = false;
     let mut it = args.iter();
     while let Some(arg) = it.next() {
-        let mut value = || {
-            it.next()
-                .cloned()
-                .ok_or_else(|| format!("{arg} に値がありません"))
-        };
         match arg.as_str() {
-            "--from" => from = Some(PathBuf::from(value()?)),
-            "--into" => into = Some(PathBuf::from(value()?)),
-            "--owner" => owner = Some(value()?),
-            "--secretary-name" => secretary_name = value()?,
+            "--from" => from = Some(PathBuf::from(next_value(&mut it, arg)?)),
+            "--into" => into = Some(PathBuf::from(next_value(&mut it, arg)?)),
+            "--owner" => owner = Some(next_value(&mut it, arg)?),
+            "--secretary-name" => secretary_name = next_value(&mut it, arg)?,
             "--apply" => apply = true,
             other => return Err(format!("不明な引数: {other}\n{USAGE}")),
         }
@@ -207,6 +202,13 @@ fn parse_args(args: &[String]) -> Result<Options, String> {
     })
 }
 
+/// `--flag 値` の値を取り出す。
+fn next_value<'a>(it: &mut impl Iterator<Item = &'a String>, flag: &str) -> Result<String, String> {
+    it.next()
+        .cloned()
+        .ok_or_else(|| format!("{flag} に値がありません"))
+}
+
 pub const SNAPSHOT_USAGE: &str =
     "usage: cargo run -p xtask -- salvage-snapshot --from <稼働中の DB> --to <保存先.db>";
 
@@ -216,10 +218,9 @@ pub fn snapshot(args: &[String]) -> Result<(), String> {
     let (mut from, mut to) = (None, None);
     let mut it = args.iter();
     while let Some(arg) = it.next() {
-        let value = it.next().cloned();
         match arg.as_str() {
-            "--from" => from = value.map(PathBuf::from),
-            "--to" => to = value.map(PathBuf::from),
+            "--from" => from = Some(PathBuf::from(next_value(&mut it, arg)?)),
+            "--to" => to = Some(PathBuf::from(next_value(&mut it, arg)?)),
             other => return Err(format!("不明な引数: {other}\n{SNAPSHOT_USAGE}")),
         }
     }
@@ -612,30 +613,32 @@ fn insert_row(
     columns: &[String],
     row: Vec<Value>,
 ) -> Result<(), String> {
-    tx.execute(&insert_sql("INSERT", table, columns), params_from_iter(row))
-        .map(|_| ())
-        .map_err(|e| format!("{table} への投入に失敗: {e}"))
+    execute_insert(tx, "INSERT", table, columns, row).map(|_| ())
 }
 
+/// 既にある行（主キー・一意制約の衝突）は飛ばす。投入した行数を返す。
 fn insert_row_or_ignore(
     tx: &Transaction<'_>,
     table: &str,
     columns: &[String],
     row: Vec<Value>,
 ) -> Result<usize, String> {
-    tx.execute(
-        &insert_sql("INSERT OR IGNORE", table, columns),
-        params_from_iter(row),
-    )
-    .map_err(|e| format!("{table} への投入に失敗: {e}"))
+    execute_insert(tx, "INSERT OR IGNORE", table, columns, row)
+}
+
+fn execute_insert(
+    tx: &Transaction<'_>,
+    verb: &str,
+    table: &str,
+    columns: &[String],
+    row: Vec<Value>,
+) -> Result<usize, String> {
+    tx.execute(&insert_sql(verb, table, columns), params_from_iter(row))
+        .map_err(|e| format!("{table} への投入に失敗: {e}"))
 }
 
 fn insert_sql(verb: &str, table: &str, columns: &[String]) -> String {
-    let names = columns
-        .iter()
-        .map(|c| quote(c))
-        .collect::<Vec<_>>()
-        .join(", ");
+    let names = column_list(columns);
     let marks = (1..=columns.len())
         .map(|i| format!("?{i}"))
         .collect::<Vec<_>>()
@@ -648,11 +651,7 @@ fn read_rows(
     table: &str,
     columns: &[String],
 ) -> Result<Vec<Vec<Value>>, String> {
-    let names = columns
-        .iter()
-        .map(|c| quote(c))
-        .collect::<Vec<_>>()
-        .join(", ");
+    let names = column_list(columns);
     let mut stmt = conn
         .prepare(&format!("SELECT {names} FROM {}", quote(table)))
         .map_err(sql)?;
@@ -727,6 +726,15 @@ fn as_text(value: Option<&Value>) -> Option<String> {
         Some(Value::Text(s)) => Some(s.clone()),
         _ => None,
     }
+}
+
+/// 列名を引用して `, ` でつなぐ（SELECT / INSERT の列リスト）。
+fn column_list(columns: &[String]) -> String {
+    columns
+        .iter()
+        .map(|c| quote(c))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn quote(identifier: &str) -> String {

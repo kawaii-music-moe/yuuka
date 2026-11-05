@@ -16,31 +16,14 @@ mod salvage;
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    let rest = args.get(1..).unwrap_or_default();
     match args.first().map(String::as_str) {
         Some("gen-types") => {
-            let check = args.iter().any(|a| a == "--check");
-            match run_gen_types(check) {
-                Ok(()) => ExitCode::SUCCESS,
-                Err(msg) => {
-                    eprintln!("xtask gen-types failed: {msg}");
-                    ExitCode::FAILURE
-                }
-            }
+            let check = rest.iter().any(|a| a == "--check");
+            finish("gen-types", run_gen_types(check))
         }
-        Some("salvage-snapshot") => match salvage::snapshot(args.get(1..).unwrap_or_default()) {
-            Ok(()) => ExitCode::SUCCESS,
-            Err(msg) => {
-                eprintln!("xtask salvage-snapshot failed: {msg}");
-                ExitCode::FAILURE
-            }
-        },
-        Some("salvage-import") => match salvage::run(args.get(1..).unwrap_or_default()) {
-            Ok(()) => ExitCode::SUCCESS,
-            Err(msg) => {
-                eprintln!("xtask salvage-import failed: {msg}");
-                ExitCode::FAILURE
-            }
-        },
+        Some("salvage-snapshot") => finish("salvage-snapshot", salvage::snapshot(rest)),
+        Some("salvage-import") => finish("salvage-import", salvage::run(rest)),
         other => {
             eprintln!("unknown xtask command: {other:?}");
             eprintln!("usage: cargo run -p xtask -- gen-types [--check]");
@@ -51,81 +34,118 @@ fn main() -> ExitCode {
     }
 }
 
-/// frontend の API ディレクトリ（`apps/yuuka/frontend/src/lib/api`）を解決する。
-///
-/// xtask は `apps/yuuka/xtask` にあるため、親（`apps/yuuka`）配下を辿る。
-fn frontend_api_dir() -> Option<PathBuf> {
-    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let workspace = manifest.parent()?;
-    Some(
-        workspace
-            .join("frontend")
-            .join("src")
-            .join("lib")
-            .join("api"),
-    )
+/// サブコマンドの結果を終了コードにする（失敗ならコマンド名つきで標準エラーへ出す）。
+fn finish(command: &str, result: Result<(), String>) -> ExitCode {
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(msg) => {
+            eprintln!("xtask {command} failed: {msg}");
+            ExitCode::FAILURE
+        }
+    }
 }
 
+/// 生成型の置き場（`frontend/src/lib/api/generated`）を解決する。
+///
+/// xtask はワークスペース直下の `xtask/` にあるため、その親から辿る。
+fn generated_dir() -> Result<PathBuf, String> {
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let workspace = manifest
+        .parent()
+        .ok_or_else(|| "cannot locate workspace root".to_owned())?;
+    Ok(workspace.join("frontend/src/lib/api/generated"))
+}
+
+/// 生成は一時ディレクトリで行い、コミット済みの生成型と内容で比べる（git 非依存）。
+/// `--check` でなければ差分だけ書き込み、DTO が消えて生成されなくなった型のファイルは削除する。
 fn run_gen_types(check: bool) -> Result<(), String> {
-    let api_dir = frontend_api_dir().ok_or_else(|| "cannot locate frontend api dir".to_owned())?;
+    let generated = generated_dir()?;
+    let fresh = render_bindings()?;
+    let committed = read_dir_map(&generated);
 
     if check {
-        // 一時ディレクトリへ再生成し、コミット済みと内容比較（git 非依存）。
-        let tmp = std::env::temp_dir().join("yuuka_gen_types_check");
-        let _ = std::fs::remove_dir_all(&tmp);
-        export_all_domains(&tmp)?;
-        let fresh = read_dir_map(&tmp.join("generated"));
-        let committed = read_dir_map(&api_dir.join("generated"));
-        let _ = std::fs::remove_dir_all(&tmp);
         if fresh != committed {
             return Err(
                 "generated types are stale; run `cargo run -p xtask -- gen-types`".to_owned(),
             );
         }
-        Ok(())
-    } else {
-        export_all_domains(&api_dir)?;
-        println!(
-            "generated ts bindings under {}",
-            api_dir.join("generated").display()
-        );
-        Ok(())
+        return Ok(());
     }
+
+    std::fs::create_dir_all(&generated).map_err(|e| e.to_string())?;
+    let mut removed = 0usize;
+    for name in committed.keys().filter(|name| !fresh.contains_key(*name)) {
+        std::fs::remove_file(generated.join(name)).map_err(|e| e.to_string())?;
+        removed += 1;
+    }
+    let mut written = 0usize;
+    for (name, content) in &fresh {
+        if committed.get(name) != Some(content) {
+            std::fs::write(generated.join(name), content).map_err(|e| e.to_string())?;
+            written += 1;
+        }
+    }
+    println!(
+        "generated ts bindings under {} ({} files, {written} written, {removed} removed)",
+        generated.display(),
+        fresh.len()
+    );
+    Ok(())
+}
+
+/// 全ドメインの wire DTO を一時ディレクトリへ書き出し、ファイル名→内容のマップで返す。
+fn render_bindings() -> Result<BTreeMap<String, String>, String> {
+    // 並行して走っても衝突しないよう、プロセスごとに別のディレクトリを使う。
+    let tmp = std::env::temp_dir().join(format!("yuuka_gen_types_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    let exported = export_all_domains(&tmp).map(|()| read_dir_map(&tmp.join("generated")));
+    let _ = std::fs::remove_dir_all(&tmp);
+    Ok(exported?
+        .into_iter()
+        .map(|(name, content)| {
+            // ts-rs はフィールドと doc コメントの区切りに行末空白を出力する。
+            // 再生成後も `git diff --check` を通すため、ここで行末空白を除去する。
+            let content = if name.ends_with(".ts") {
+                strip_trailing_whitespace(&content)
+            } else {
+                content
+            };
+            (name, content)
+        })
+        .collect())
 }
 
 /// foundation（yuuka-types）と各ドメインクレートの wire DTO をまとめて生成する。
-/// 新ドメインを追加したらここに1行足す（T1 fan-out はこの集約点を Phase 0 的に先行配線する）。
+/// 新ドメインを追加したらここに1行足す。
 fn export_all_domains(base: &Path) -> Result<(), String> {
-    yuuka_types::export_all(base).map_err(|e| e.to_string())?;
-    yuuka_todo::export_bindings(base).map_err(|e| e.to_string())?;
-    yuuka_finance::export_bindings(base).map_err(|e| e.to_string())?;
-    yuuka_schedule::export_bindings(base).map_err(|e| e.to_string())?;
-    yuuka_timeline::export_bindings(base).map_err(|e| e.to_string())?;
-    yuuka_reminder::export_bindings(base).map_err(|e| e.to_string())?;
-    yuuka_personal::export_bindings(base).map_err(|e| e.to_string())?;
-    yuuka_credential::export_bindings(base).map_err(|e| e.to_string())?;
-    yuuka_playbook::export_bindings(base).map_err(|e| e.to_string())?;
-    yuuka_persona::export_bindings(base).map_err(|e| e.to_string())?;
-    // ts-rs はフィールドと doc コメントの区切りに行末空白を出力する。
-    // 再生成後も `git diff --check` を通すため、ここで行末空白を除去する。
-    for entry in std::fs::read_dir(base.join("generated")).map_err(|e| e.to_string())? {
-        let path = entry.map_err(|e| e.to_string())?.path();
-        if path.extension().and_then(|ext| ext.to_str()) != Some("ts") {
-            continue;
-        }
-        let source = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
-        let normalized = source
-            .lines()
-            .map(str::trim_end)
-            .collect::<Vec<_>>()
-            .join("\n")
-            + "\n";
-        std::fs::write(&path, normalized).map_err(|e| e.to_string())?;
+    let exporters = [
+        ("yuuka-types", yuuka_types::export_all as fn(&Path) -> _),
+        ("yuuka-todo", yuuka_todo::export_bindings),
+        ("yuuka-finance", yuuka_finance::export_bindings),
+        ("yuuka-schedule", yuuka_schedule::export_bindings),
+        ("yuuka-timeline", yuuka_timeline::export_bindings),
+        ("yuuka-reminder", yuuka_reminder::export_bindings),
+        ("yuuka-personal", yuuka_personal::export_bindings),
+        ("yuuka-credential", yuuka_credential::export_bindings),
+        ("yuuka-playbook", yuuka_playbook::export_bindings),
+        ("yuuka-persona", yuuka_persona::export_bindings),
+    ];
+    for (krate, export) in exporters {
+        export(base).map_err(|e| format!("{krate}: {e}"))?;
     }
     Ok(())
 }
 
-/// ディレクトリ直下のファイル名→内容のマップ（内容比較用）。
+fn strip_trailing_whitespace(source: &str) -> String {
+    source
+        .lines()
+        .map(str::trim_end)
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n"
+}
+
+/// ディレクトリ直下のファイル名→内容のマップ（内容比較用）。ディレクトリが無ければ空。
 fn read_dir_map(dir: &Path) -> BTreeMap<String, String> {
     let mut out = BTreeMap::new();
     let Ok(entries) = std::fs::read_dir(dir) else {
@@ -144,4 +164,15 @@ fn read_dir_map(dir: &Path) -> BTreeMap<String, String> {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn trailing_whitespace_is_stripped_and_a_final_newline_kept() {
+        assert_eq!(strip_trailing_whitespace("a  \n b\t\n"), "a\n b\n");
+        assert_eq!(strip_trailing_whitespace("a"), "a\n");
+    }
 }
