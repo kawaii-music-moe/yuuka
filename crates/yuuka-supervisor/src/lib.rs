@@ -55,7 +55,7 @@ pub use ws::{ws_routes, ws_routes_with_interactions};
 /// `member_share_routes` は利用申請 + Bot 共有招待ルータ（[`yuuka_orchestrator::member_request_routes_with`]
 /// と [`yuuka_orchestrator::bot_share_routes_with`] を merge したもの・DM sender を `Extension` で内包済み）。
 ///
-/// `pwa_dist_dir` を渡すと PWA（issue #33・`client/pwa`）を [`mount_pwa`] で明示ルート群として
+/// `pwa_dist_dir` を渡すと PWA（issue #33・`clients/pwa`）を [`mount_pwa`] で明示ルート群として
 /// 載せる。`dist_dir`（admin SPA・`fallback_service`）とは独立に効くため、両方 `Some` でも
 /// 互いを横取りしない（[`yuuka_web::mount_pwa`] のドキュメント参照）。
 /// 音声モデル（Irodori-TTS の ONNX 一式・`<version>/` ごと）の配置先（作業ディレクトリ基準）。

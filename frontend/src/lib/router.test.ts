@@ -63,7 +63,7 @@ describe("isAllowedReturnPath (open-redirect 対策・#34 症状4)", () => {
 	});
 
 	it("allows same-origin PWA paths (PWA からの共有ログイン往復)", () => {
-		// PWA（client/pwa）は `/admin/login?returnTo=<現在位置>` へ送り出す。戻り先はこれらの
+		// PWA（clients/pwa）は `/admin/login?returnTo=<現在位置>` へ送り出す。戻り先はこれらの
 		// 同一オリジン絶対パス（管理画面 `/admin` 配下に限らない）。
 		for (const p of [
 			"/",

@@ -44,7 +44,7 @@ pub struct Config {
     pub trusted_proxies: Vec<IpAddr>,
     /// index.html へ差し込む google-site-verification 値（`GOOGLE_SITE_VERIFICATION`）。
     pub google_site_verification: Option<String>,
-    /// サーバーでの音声生成（GPU の無い端末向け・`client/pwa/server/tts`）の URL（`TTS_SERVER_URL`・
+    /// サーバーでの音声生成（GPU の無い端末向け・`clients/pwa/server/tts`）の URL（`TTS_SERVER_URL`・
     /// 例 `http://127.0.0.1:3410`）。未設定なら `/api/client/tts/*` は 404 で、PWA は標準の読み上げを使う。
     pub tts_server_url: Option<String>,
     /// 音声生成サーバーへの要求に付ける Ed25519 署名の秘密鍵（`TTS_SIGNING_KEY`・32 バイトの seed を base64）。
@@ -228,7 +228,7 @@ impl Config {
                 return Err(ConfigError::InvalidValue {
                     field: "TTS_SIGNING_KEY",
                     reason:
-                        "must be a 32-byte Ed25519 seed in base64 (client/pwa/server/tts/keygen.ts)"
+                        "must be a 32-byte Ed25519 seed in base64 (clients/pwa/server/tts/keygen.ts)"
                             .to_owned(),
                 });
             }

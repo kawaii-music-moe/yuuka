@@ -4,7 +4,7 @@
 #
 #   stage rust-builder     : Rust workspace の本番バイナリ `yuuka` をビルド（strip + thin-LTO）
 #   stage frontend-builder : Vite で管理画面 SPA を `dist/public` へビルド
-#   stage pwa-builder      : Vite で PWA（`client/pwa`）を `dist/public/pwa` 用にビルド（issue #33）
+#   stage pwa-builder      : Vite で PWA（`clients/pwa`）を `dist/public/pwa` 用にビルド（issue #33）
 #   stage runtime          : debian-slim に **バイナリ + 管理画面 SPA + PWA のみ**を載せた最小実行イメージ
 #
 # 設計: 出荷物は Rust バイナリ `yuuka` と、それが配信する管理画面 SPA（`dist/public`）・PWA
@@ -49,16 +49,16 @@ RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
 COPY frontend ./frontend
 RUN pnpm exec vite build --config frontend/vite.config.ts
 
-# ---- stage: PWA（client/pwa・Vite → dist、issue #33） ------------------------
-# `client/pwa` は npm 管理（独立 package-lock.json）で pnpm workspace の外。frontend-builder と
-# 同じ node:24-bookworm を使い、`npm ci && npm run build` で `client/pwa/dist` を生成する
-# （`base: '/'`・`client/pwa/vite.config.ts`。runtime 側で `dist/public/pwa` へ配置し、Rust の
+# ---- stage: PWA（clients/pwa・Vite → dist、issue #33） ------------------------
+# `clients/pwa` は npm 管理（独立 package-lock.json）で pnpm workspace の外。frontend-builder と
+# 同じ node:24-bookworm を使い、`npm ci && npm run build` で `clients/pwa/dist` を生成する
+# （`base: '/'`・`clients/pwa/vite.config.ts`。runtime 側で `dist/public/pwa` へ配置し、Rust の
 # `mount_pwa`（`crates/yuuka-web/src/static_files.rs`）がこのビルド出力を配信する）。
 FROM node:24-bookworm AS pwa-builder
 WORKDIR /app
-COPY client/pwa/package.json client/pwa/package-lock.json ./
+COPY clients/pwa/package.json clients/pwa/package-lock.json ./
 RUN npm ci
-COPY client/pwa ./
+COPY clients/pwa ./
 RUN npm run build
 
 # ---- stage: runtime（最小実行イメージ） --------------------------------------
@@ -84,7 +84,7 @@ WORKDIR /app
 # 成果物のみ: Rust バイナリ + それが配信する SPA。config.yaml と data/ は compose がマウントする。
 COPY --from=rust-builder /yuuka ./yuuka
 COPY --from=frontend-builder /app/dist/public ./dist/public
-# issue #33: PWA（client/pwa）のビルド出力を dist/public/pwa へ同梱する（Rust の配信元。#46 で
+# issue #33: PWA（clients/pwa）のビルド出力を dist/public/pwa へ同梱する（Rust の配信元。#46 で
 # コミット済み成果物へのフォールバックを廃止したため、このパスが唯一の PWA 配信元）。
 # 管理画面 SPA の COPY（dist/public）より後に置くこと（先に pwa を置くと上書きで消える）。
 COPY --from=pwa-builder /app/dist ./dist/public/pwa

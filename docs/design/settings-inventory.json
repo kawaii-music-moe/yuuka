@@ -361,7 +361,7 @@
       "label": "PWA設定",
       "client": "pwa",
       "route": "/settings",
-      "source": "client/pwa/src/pages/SettingsPage.vue",
+      "source": "clients/pwa/src/pages/SettingsPage.vue",
       "sections": [
         { "id": "google", "label": "Google連携", "scope": "user", "items": [{ "id": "pwa-google-connection", "label": "Googleアカウントの接続・再認証", "type": "connection", "sensitivity": "internal" }] },
         { "id": "ai", "label": "AI応答", "scope": "user", "items": [{ "id": "pwa-model", "label": "使用モデル", "type": "select", "sensitivity": "internal" }] },

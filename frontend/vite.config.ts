@@ -39,7 +39,7 @@ function resolveWorkboxWindow(): string | undefined {
 }
 const workboxWindowPath = resolveWorkboxWindow();
 
-// dev 専用・opt-in: PWA（client/pwa の dev server）と管理画面（この dev server）を別ポートで
+// dev 専用・opt-in: PWA（clients/pwa の dev server）と管理画面（この dev server）を別ポートで
 // 動かす構成（`pnpm dev:client:mock`・scripts/dev-client-mock.mjs）では、共有ログイン
 // （/admin/login）後の returnTo が PWA のパス（/todo 等）になる。管理画面は base "/admin/" 配下
 // でしか配信されないため、そのままフルページ遷移すると dev server の base 外＝404 になる。

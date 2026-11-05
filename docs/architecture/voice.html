@@ -37,7 +37,7 @@ ul,ol{padding-left:22px;margin:6px 0}
 <p>端末・yuuka 本体・同じホストの 3 か所に分かれます。音声の入力と再生は常に端末で行い、声を作る場所だけが変わります。</p>
 <div class="scroll"><svg viewBox="0 0 1100 620" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="音声チャットの構成図" style="min-width:760px">
 <defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--ln)"/></marker></defs>
-<rect x="20" y="40" width="440" height="560" rx="14" class="g"/><text x="34" y="62" class="gt">端末（ブラウザ・client/pwa/src）</text>
+<rect x="20" y="40" width="440" height="560" rx="14" class="g"/><text x="34" y="62" class="gt">端末（ブラウザ・clients/pwa/src）</text>
 <rect x="490" y="40" width="280" height="560" rx="14" class="g"/><text x="504" y="62" class="gt">yuuka 本体（Rust・axum）</text>
 <rect x="800" y="40" width="280" height="560" rx="14" class="g"/><text x="814" y="62" class="gt">同じホスト</text>
 
@@ -135,7 +135,7 @@ ul,ol{padding-left:22px;margin:6px 0}
 </div>
 
 <h2 id="server">サーバーでの生成（GPU の無い端末向け）</h2>
-<p>音声生成サーバー（<code>client/pwa/server/tts/server.ts</code>）は認証を持たず 127.0.0.1 で待ち受けます。端末からは必ず本体の <code>/api/client/tts/{op}</code> を通り、本体がログイン済みかを確かめてから転送します（応答はストリームのまま）。</p>
+<p>音声生成サーバー（<code>clients/pwa/server/tts/server.ts</code>）は認証を持たず 127.0.0.1 で待ち受けます。端末からは必ず本体の <code>/api/client/tts/{op}</code> を通り、本体がログイン済みかを確かめてから転送します（応答はストリームのまま）。</p>
 <div class="scroll"><table>
 <tr><th>操作</th><th>送るもの</th><th>返るもの</th></tr>
 <tr><td><code>GET status</code></td><td>—</td><td><code>{ ok, loaded, model }</code></td></tr>
@@ -188,7 +188,7 @@ ul,ol{padding-left:22px;margin:6px 0}
 <div class="scroll"><table>
 <tr><th>もの</th><th>場所・設定</th></tr>
 <tr><td>yuuka 本体</td><td><code>yuuka.service</code>（systemd --user）。本体チェックアウト（develop）から <code>deploy/prod/bin/yuuka</code> を起動。フロントは <code>dist/public</code></td></tr>
-<tr><td>音声生成サーバー</td><td><code>yuuka-tts.service</code>（ひな形は <code>deploy/tts/yuuka-tts.service</code>）。<code>client/pwa</code> で <code>node --import tsx server/tts/server.ts</code>。ポート 3410・スレッド 3・10 分で解放・MemoryMax 6G</td></tr>
+<tr><td>音声生成サーバー</td><td><code>yuuka-tts.service</code>（ひな形は <code>deploy/tts/yuuka-tts.service</code>）。<code>clients/pwa</code> で <code>node --import tsx server/tts/server.ts</code>。ポート 3410・スレッド 3・10 分で解放・MemoryMax 6G</td></tr>
 <tr><td>中継の設定</td><td><code>deploy/prod/config.yaml</code> の <code>TTS_SERVER_URL: "http://127.0.0.1:3410"</code>。無ければサーバーでの生成は使えない（404）</td></tr>
 <tr><td>モデル</td><td><code>data/tts-models/irodori-v41-mf-fp16-3/</code>。あれば本体が <code>/tts-models/</code> で配信する</td></tr>
 <tr><td>DB</td><td><code>data/yuuka.db</code> の <code>client_voices</code></td></tr>
@@ -198,7 +198,7 @@ ul,ol{padding-left:22px;margin:6px 0}
 <h2 id="files">ファイル一覧</h2>
 <div class="scroll"><table>
 <tr><th>ファイル</th><th class="num">行</th><th>役割</th></tr>
-<tr><td colspan="3"><b>PWA の画面と入出力</b>（<code>client/pwa/src/</code>）</td></tr>
+<tr><td colspan="3"><b>PWA の画面と入出力</b>（<code>clients/pwa/src/</code>）</td></tr>
 <tr><td><code>pages/VoicePage.vue</code></td><td class="num">523</td><td>音声画面。生成の場所の選択、会話の流れ、声の設定・作成・保存</td></tr>
 <tr><td><code>components/voice/VoiceSampleForm.vue</code></td><td class="num">138</td><td>サンプル音声（ファイル・録音）から声を作るフォーム</td></tr>
 <tr><td><code>voice/speechInput.ts</code></td><td class="num">82</td><td>Web Speech API での聞き取り（<code>listenOnce</code>）</td></tr>
@@ -207,7 +207,7 @@ ul,ol{padding-left:22px;margin:6px 0}
 <tr><td><code>voice/serverTts.ts</code></td><td class="num">163</td><td><code>ServerSpeaker</code> とサーバーでの声の作成（design / clone）</td></tr>
 <tr><td><code>voice/voiceStore.ts</code></td><td class="num">141</td><td>声の保存（サーバー API ＋ OPFS キャッシュ）</td></tr>
 <tr><td><code>voice/voiceSample.ts</code></td><td class="num">65</td><td>音声ファイルのデコード・録音</td></tr>
-<tr><td colspan="3"><b>音声生成</b>（<code>client/pwa/src/voice/tts/</code>）</td></tr>
+<tr><td colspan="3"><b>音声生成</b>（<code>clients/pwa/src/voice/tts/</code>）</td></tr>
 <tr><td><code>pipeline.ts</code></td><td class="num">271</td><td><code>IrodoriTts</code>：推論の本体（ブラウザとサーバーで共通）</td></tr>
 <tr><td><code>text.ts</code></td><td class="num">208</td><td>文字の整形・Unigram トークナイザ・長さの特徴量</td></tr>
 <tr><td><code>referenceAudio.ts</code></td><td class="num">84</td><td>サンプル音声のラウドネス計測（BS.1770）とそろえ</td></tr>
@@ -215,7 +215,7 @@ ul,ol{padding-left:22px;margin:6px 0}
 <tr><td><code>client.ts</code></td><td class="num">116</td><td>画面側から Worker を呼ぶ窓口（<code>irodoriClient()</code>）</td></tr>
 <tr><td><code>protocol.ts</code></td><td class="num">38</td><td>画面と Worker のメッセージの型（<code>VoiceSpec</code> など）</td></tr>
 <tr><td><code>modelStore.ts</code></td><td class="num">109</td><td>モデルのダウンロードと OPFS への保存</td></tr>
-<tr><td colspan="3"><b>音声生成サーバー</b>（<code>client/pwa/server/tts/</code>）</td></tr>
+<tr><td colspan="3"><b>音声生成サーバー</b>（<code>clients/pwa/server/tts/</code>）</td></tr>
 <tr><td><code>server.ts</code></td><td class="num">119</td><td>HTTP サーバー（status / speak / design / clone）</td></tr>
 <tr><td><code>engine.ts</code></td><td class="num">135</td><td>onnxruntime-node で <code>IrodoriTts</code> を動かす。順番待ち・解放</td></tr>
 <tr><td><code>wire.ts</code></td><td class="num">55</td><td>要求の検証と PCM・base64 の変換</td></tr>

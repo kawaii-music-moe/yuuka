@@ -1,5 +1,5 @@
 //! `/api/client/*`（PWA）の wire DTO — Node `clientRoutes.ts` の応答形状と 1:1（camelCase・
-//! `client/pwa/src/api/contracts.ts` が唯一の契約）。
+//! `clients/pwa/src/api/contracts.ts` が唯一の契約）。
 //!
 //! 一般ダッシュボード（`yuuka-todo`/`yuuka-finance`/`yuuka-schedule` 等）の snake_case
 //! クリーンビュー・`Envelope<T>` 包みとは**別の契約**のため、ここに独立した DTO を持つ

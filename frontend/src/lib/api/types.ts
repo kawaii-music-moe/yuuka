@@ -47,7 +47,7 @@ import type { JsonWire } from "./wire";
 // - Rust wire DTO（ts-rs 生成型・generated/）がある同一契約は生成型を使う。i64 の
 //   bigint → number の変換だけを JsonWire<T>（wire.ts）で行う。Rust DTO が未生成の
 //   管理用契約は手書きで維持する。
-// - PWA の camelCase / string ID 契約は別 wire 契約。client/pwa/src/api/contracts.ts
+// - PWA の camelCase / string ID 契約は別 wire 契約。clients/pwa/src/api/contracts.ts
 //   で独立管理し、管理画面の生成型を PWA から直接 import しない（wire.ts 参照）。
 // ─────────────────────────────────────────────────────────────────────────────
 

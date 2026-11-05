@@ -23,7 +23,7 @@ pnpm install
 
 フロントエンド（Svelte/Vite）の依存関係のみをインストールします。バックエンド（Rust）の依存は `cargo build`/`cargo run` 時に取得されます。
 
-> PWA クライアント（`client/pwa/`）は npm で別管理です。`pnpm build:pwa` は依存が無ければ `npm ci` でインストールしてからビルドします。開発時の起動方法は [client/pwa/README.md](../../client/pwa/README.md) を参照してください。
+> PWA クライアント（`clients/pwa/`）は npm で別管理です。`pnpm build:pwa` は依存が無ければ `npm ci` でインストールしてからビルドします。開発時の起動方法は [clients/pwa/README.md](../../clients/pwa/README.md) を参照してください。
 
 ## 2. 設定ファイルの作成
 
@@ -84,7 +84,7 @@ YUUKA_INIT_DB=1 cargo run --bin yuuka   # 初回のみ。DB（と data/ ディ�
 ## 3. ビルド・起動
 
 現在の systemd ホストでの起動は [deploy/README.md](../../deploy/README.md#dev-インスタンスsystemd現在のホスト) を参照。
-`pnpm dev` は PWA と管理画面の両方を起動するため、初回は `npm --prefix client/pwa ci` も実行する。
+`pnpm dev` は PWA と管理画面の両方を起動するため、初回は `npm --prefix clients/pwa ci` も実行する。
 以下は API を自分で起動する場合の手順。
 
 開発モード（バックエンド + フロントエンドを別々に起動、フロントエンドはホットリロード）:

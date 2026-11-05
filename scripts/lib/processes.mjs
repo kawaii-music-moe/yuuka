@@ -8,9 +8,9 @@ export const root = path.resolve(
 	path.dirname(fileURLToPath(import.meta.url)),
 	"../..",
 );
-export const clientDir = path.join(root, "client", "pwa");
+export const clientDir = path.join(root, "clients", "pwa");
 export const installHint =
-	"Install dependencies: pnpm install --frozen-lockfile && npm --prefix client/pwa ci";
+	"Install dependencies: pnpm install --frozen-lockfile && npm --prefix clients/pwa ci";
 
 /** `cwd` の node_modules にある vite の CLI（見つからなければ例外）。 */
 export function viteBin(cwd) {

@@ -1,6 +1,6 @@
 /**
  * サーバーでの音声生成（GPU の無い端末向け）。yuuka 本体が `/api/client/tts/*` をログイン済みの要求だけ
- * 音声生成サーバー（`client/pwa/server/tts`）へ中継する。音声は 16 bit PCM（48 kHz モノラル）で区切りごとに
+ * 音声生成サーバー（`clients/pwa/server/tts`）へ中継する。音声は 16 bit PCM（48 kHz モノラル）で区切りごとに
  * 届くので、届いた分から鳴らす。
  */
 import type { ReplySpeaker, SpeechStats } from './speaker'

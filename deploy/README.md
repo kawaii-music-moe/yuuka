@@ -112,7 +112,7 @@ PWA はブラウザ標準の読み上げに切り替える）。作り方と配�
 利用者が作った声（話者条件。サンプルの音声そのものではない）は DB の `client_voices`（V36）に本人のものとして
 保存され、`/api/client/voices` で本人だけが読み書きする。
 
-GPU（WebGPU）の無い端末のために、サーバーでも音声を生成できる（`client/pwa/server/tts`・onnxruntime-node の CPU で
+GPU（WebGPU）の無い端末のために、サーバーでも音声を生成できる（`clients/pwa/server/tts`・onnxruntime-node の CPU で
 同じ推論コードを動かす）。音声生成サーバー `yuuka-tts.service`（[deploy/tts/yuuka-tts.service](tts/yuuka-tts.service)）を
 本番と dev で 1 つ動かし、両方の config.yaml に `TTS_SERVER_URL: "http://127.0.0.1:3410"` を書くと、yuuka が
 `/api/client/tts/*` をログイン済みの要求だけ中継する（未設定なら PWA は標準の読み上げ）。生成中は約 3.7 GB を使い、
@@ -121,7 +121,7 @@ GPU（WebGPU）の無い端末のために、サーバーでも音声を生成�
 音声生成サーバーは自分では利用者を確かめない。別のマシンに置くとき（`TTS_HOST` を 127.0.0.1 以外にするとき）は、
 yuuka からの要求に Ed25519 の署名を付けて、音声生成サーバーで確かめる（同じホストでも使える）。
 
-1. 鍵を作る（本番と dev で別々に）: `cd client/pwa && npx tsx server/tts/keygen.ts`
+1. 鍵を作る（本番と dev で別々に）: `cd clients/pwa && npx tsx server/tts/keygen.ts`
 2. 秘密鍵を yuuka の config.yaml の `TTS_SIGNING_KEY` に書く（人に見せない）。
 3. 公開鍵を `yuuka-tts.service` の `TTS_VERIFY_KEYS` に書く（本番と dev の分をカンマで並べる）。
 4. yuuka を先に再起動してから、音声生成サーバーを再起動する（鍵の無い音声生成サーバーは署名を無視して受け付けるので、
@@ -152,7 +152,7 @@ Node.js 24 と pnpm、npm が必要。作業ツリーごとに依存をインス
 
 ```bash
 pnpm install --frozen-lockfile
-npm --prefix client/pwa ci
+npm --prefix clients/pwa ci
 pnpm dev:start
 ```
 

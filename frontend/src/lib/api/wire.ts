@@ -6,9 +6,9 @@
  * number へ写し、フィールド名・nullability・optional・ネストは生成型のまま保つ。
  * Number.MAX_SAFE_INTEGER を超える ID を扱うなら、先にサーバの文字列契約が必要。
  *
- * PWA（client/pwa）は別の wire 契約（string ID・camelCase・completed: boolean・
+ * PWA（clients/pwa）は別の wire 契約（string ID・camelCase・completed: boolean・
  * Envelope なしの素の JSON）を持つ。ドメイン値から PWA 用 view への変換はサーバ
- * （yuuka-client-api）で明示的に行い、PWA 側は client/pwa/src/api/contracts.ts と
+ * （yuuka-client-api）で明示的に行い、PWA 側は clients/pwa/src/api/contracts.ts と
  * httpAdapter.contract.test.ts で契約を固定する。管理画面の生成型を PWA から直接
  * import しない。
  */

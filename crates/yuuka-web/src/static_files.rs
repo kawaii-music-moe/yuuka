@@ -50,7 +50,7 @@ const IMMUTABLE: &str = "public, max-age=31536000, immutable";
 const NO_CACHE: &str = "no-cache, no-store, must-revalidate";
 
 /// `index.html` 内の google-site-verification 差し込み位置（`frontend/index.html`・
-/// `client/pwa/index.html` の `<head>` 内）。Vite はこの HTML コメントをビルド後も残す。
+/// `clients/pwa/index.html` の `<head>` 内）。Vite はこの HTML コメントをビルド後も残す。
 pub const SITE_VERIFICATION_PLACEHOLDER: &str = "<!-- GOOGLE_SITE_VERIFICATION -->";
 
 /// 管理画面 SPA の配信プレフィックス。`frontend/vite.config.ts` の `base` と一字一句一致させる
@@ -316,7 +316,7 @@ fn is_hashed_asset(path: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
 }
 
-/// PWA（`client/pwa`）のクライアントサイドルート（Node `CLIENT_ROUTES`・`src/server.ts`）。
+/// PWA（`clients/pwa`）のクライアントサイドルート（Node `CLIENT_ROUTES`・`src/server.ts`）。
 const PWA_SHELL_ROUTES: [&str; 8] = [
     "/",
     "/chat",
@@ -328,7 +328,7 @@ const PWA_SHELL_ROUTES: [&str; 8] = [
     "/settings",
 ];
 
-/// PWA（`client/pwa`）の SPA を、Node `serveStaticFile` の PWA 分岐と同じ URL 面に登録する
+/// PWA（`clients/pwa`）の SPA を、Node `serveStaticFile` の PWA 分岐と同じ URL 面に登録する
 /// （issue #33: Rust に `/api/client/*` は移植したが、PWA 自体を配信するルートが無いと
 /// ブラウザから開けない）。
 ///
@@ -469,7 +469,7 @@ pub const TTS_MODELS_PREFIX: &str = "/tts-models";
 /// モデルは `dir/<version>/…` に置き、差し替えるときはバージョン（フォルダ名）を変える運用なので、
 /// `manifest.json`（ファイル一覧とサイズ）以外は `immutable` で長期キャッシュさせる。モデルは
 /// 公開済みの重み（MIT）の変換物なのでログインは要求しない。PWA はこれを OPFS に保存して使う
-/// （Service Worker の Cache Storage には入れない・`client/pwa/public/sw.js`）。
+/// （Service Worker の Cache Storage には入れない・`clients/pwa/public/sw.js`）。
 pub fn mount_tts_models<S>(router: Router<S>, dir: &Path) -> Router<S>
 where
     S: Clone + Send + Sync + 'static,

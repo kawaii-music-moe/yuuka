@@ -1,8 +1,8 @@
-// モック API（client/pwa/mock/server.ts・8787）で PWA と管理画面を起動する（`pnpm dev:client:mock`）。
+// モック API（clients/pwa/mock/server.ts・8787）で PWA と管理画面を起動する（`pnpm dev:client:mock`）。
 //
 // 管理画面（frontend の Svelte dev server・/admin/ 配下）は 5174 に固定する。Client の
 // /admin/... はここへプロキシされ、/login は /admin/login へリダイレクトされる
-// （client/pwa/vite.config.ts 参照）。ログイン後の returnTo が Client のパスなら
+// （clients/pwa/vite.config.ts 参照）。ログイン後の returnTo が Client のパスなら
 // 逆に Client へ戻される（frontend/vite.config.ts の VITE_PWA_DEV_SERVER）。
 // /api は両方ともこのモック API へ向ける（#44）。
 import { clientDir, installHint, processGroup, root } from "./lib/processes.mjs";

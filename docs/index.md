@@ -38,7 +38,7 @@ docs/
 | Node → Rust の機能欠落・重複と全API/会話ツールの対応表 | [機能差分・重複の棚卸し（2026-10-08）](audits/2026-10-08-feature-parity.md) |
 | 現行の実装（バックエンド）・DB スキーマ | `crates/`（クレート一覧は [../Cargo.toml](../Cargo.toml)）/ `crates/yuuka-db/migrations/`（V17 baseline〜V36） |
 | ローカルセットアップ・Docker デプロイ・機能一覧 | [guide/setup.md](guide/setup.md) / [guide/deployment.md](guide/deployment.md) / [guide/features.md](guide/features.md) |
-| PWA クライアント（Vue）の開発手順 | [../client/pwa/README.md](../client/pwa/README.md) |
+| PWA クライアント（Vue）の開発手順 | [../clients/pwa/README.md](../clients/pwa/README.md) |
 | 旧 Node 実装時点の不変条件・DB スキーマ v16・ファイル所有マップ（**履歴資料**） | [architecture/architecture_v2.md](architecture/architecture_v2.md) |
 | 各機能の詳細仕様（ToDo・家計・ブラウザ操作 等） | [spec/discordbot_spec.md](spec/discordbot_spec.md) |
 | Bot の動作モード（秘書 / MCP アシスタント）・能力 | [spec/bot_attributes_requirements.md](spec/bot_attributes_requirements.md) |
@@ -52,12 +52,12 @@ docs/
 
 ## 📚 文書一覧と参照の優先順位
 
-**現行の実装・運用については、コード（`crates/`・`frontend/`・`client/pwa/`）とマイグレーション（`crates/yuuka-db/migrations/`）を一次情報とします。** 下記の文書は意図・要件・経緯を補うもので、コードと食い違う場合は**コードが正**です（食い違いを見つけたら文書側を更新してください）。旧 Node/TS 実装向けに書かれた文書（`architecture_v2.md` など）は、Rust への全面移行（[#68](https://github.com/kawaii-music-moe/yuuka/pull/68) で Node 撤去）後は履歴資料であり、規範ではありません。これらの文書が挙げる `src/*.ts` などのパスは現行リポジトリに存在しません（リンク切れを含む）。撤去前のソースは `git show 390df39^:<path>`（例: `git show 390df39^:src/gemini.ts`）で参照できます。
+**現行の実装・運用については、コード（`crates/`・`frontend/`・`clients/pwa/`）とマイグレーション（`crates/yuuka-db/migrations/`）を一次情報とします。** 下記の文書は意図・要件・経緯を補うもので、コードと食い違う場合は**コードが正**です（食い違いを見つけたら文書側を更新してください）。旧 Node/TS 実装向けに書かれた文書（`architecture_v2.md` など）は、Rust への全面移行（[#68](https://github.com/kawaii-music-moe/yuuka/pull/68) で Node 撤去）後は履歴資料であり、規範ではありません。これらの文書が挙げる `src/*.ts` などのパスは現行リポジトリに存在しません（リンク切れを含む）。撤去前のソースは `git show 390df39^:<path>`（例: `git show 390df39^:src/gemini.ts`）で参照できます。
 
 ### 1. 現行の実装（一次情報）
 - **バックエンド**: `crates/`（Rust workspace。クレート構成は [../Cargo.toml](../Cargo.toml)、各クレートの役割は [project_overview.md](project_overview.md) §5）。
 - **DB スキーマ**: `crates/yuuka-db/migrations/`（`V17__baseline.sql` ＋ `V18`〜`V26` の前方専用マイグレーション）。
-- **管理画面 / PWA**: `frontend/`（Svelte 5 + Vite）/ `client/pwa/`（Vue 3 + Vite）。
+- **管理画面 / PWA**: `frontend/`（Svelte 5 + Vite）/ `clients/pwa/`（Vue 3 + Vite）。
 - **セットアップ・運用**: [guide/setup.md](guide/setup.md) / [guide/deployment.md](guide/deployment.md)。
 
 ### 2. [spec/bot_attributes_requirements.md](spec/bot_attributes_requirements.md) — Bot 属性拡張要件
