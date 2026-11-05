@@ -1,56 +1,56 @@
 {
-  "name": "yuuka",
-  "version": "2.0.0",
-  "description": "Discord Gemini 秘書ボット & Web管理ダッシュボード",
-  "license": "MIT",
-  "private": true,
-  "type": "module",
-  "engines": {
-    "node": ">=20"
-  },
-  "scripts": {
-    "dev": "node scripts/dev.mjs",
-    "dev:start": "bash scripts/dev-start.sh",
-    "dev:help": "bash scripts/dev-help.sh",
-    "dev:update": "bash scripts/dev-ops.sh update",
-    "dev:stop": "bash scripts/dev-ops.sh stop",
-    "dev:logs": "bash scripts/dev-ops.sh logs",
-    "dev:logs:vite": "bash scripts/dev-ops.sh logs-vite",
-    "build:front": "vite build --config frontend/vite.config.ts",
-    "typecheck:front": "svelte-check --tsconfig frontend/tsconfig.json",
-    "test:front": "vitest run --config frontend/vitest.config.ts",
-    "dev:client:mock": "node scripts/dev-client-mock.mjs",
-    "build:pwa": "node scripts/build-pwa.mjs",
-    "deploy": "deploy/prod/deploy-develop.sh",
-    "deploy:verify": "deploy/prod/deploy-develop.sh verify",
-    "deploy:rollback": "deploy/prod/deploy-develop.sh rollback",
-    "deploy:logs": "journalctl --user -u yuuka.service -n 100 -f",
-    "build": "cargo build --release --bin yuuka && pnpm build:front && pnpm build:pwa",
-    "lint": "biome check frontend/src scripts",
-    "lint:fix": "biome check --write frontend/src scripts",
-    "check": "pnpm typecheck:front && pnpm lint",
-    "dev:admin": "vite --config frontend/vite.config.ts",
-    "test:dev": "node --test scripts/dev.test.mjs"
-  },
-  "dependencies": {
-    "chart.js": "^4.5.1"
-  },
-  "devDependencies": {
-    "@biomejs/biome": "^2.5.0",
-    "@sveltejs/vite-plugin-svelte": "^7.1.2",
-    "@tsconfig/svelte": "^5.0.8",
-    "@types/node": "^22.19.19",
-    "svelte": "^5.56.4",
-    "svelte-check": "^4.7.1",
-    "typescript": "^5.9.3",
-    "vite": "^8.1.2",
-    "vite-plugin-pwa": "^1.3.0",
-    "vitest": "^4.1.9"
-  },
-  "pnpm": {
-    "comment": "推移的依存の既知脆弱性をパッチ版へ固定。",
-    "overrides": {
-      "esbuild@<0.28.1": ">=0.28.1"
-    }
-  }
+	"name": "yuuka",
+	"version": "2.0.0",
+	"description": "Discord Gemini 秘書ボット & Web管理ダッシュボード",
+	"license": "MIT",
+	"private": true,
+	"type": "module",
+	"engines": {
+		"node": ">=20"
+	},
+	"scripts": {
+		"dev": "node scripts/dev.mjs",
+		"dev:start": "bash scripts/dev-start.sh",
+		"dev:help": "bash scripts/dev-help.sh",
+		"dev:update": "bash scripts/dev-ops.sh update",
+		"dev:stop": "bash scripts/dev-ops.sh stop",
+		"dev:logs": "bash scripts/dev-ops.sh logs",
+		"dev:logs:vite": "bash scripts/dev-ops.sh logs-vite",
+		"build:front": "vite build --config frontend/vite.config.ts",
+		"typecheck:front": "svelte-check --tsconfig frontend/tsconfig.json",
+		"test:front": "vitest run --config frontend/vitest.config.ts",
+		"dev:client:mock": "node scripts/dev-client-mock.mjs",
+		"build:pwa": "node scripts/build-pwa.mjs",
+		"deploy": "deploy/prod/deploy-develop.sh",
+		"deploy:verify": "deploy/prod/deploy-develop.sh verify",
+		"deploy:rollback": "deploy/prod/deploy-develop.sh rollback",
+		"deploy:logs": "journalctl --user -u yuuka.service -n 100 -f",
+		"build": "cargo build --release --bin yuuka && pnpm build:front && pnpm build:pwa",
+		"lint": "biome check .",
+		"lint:fix": "biome check --write .",
+		"check": "pnpm typecheck:front && pnpm lint",
+		"dev:admin": "vite --config frontend/vite.config.ts",
+		"test:dev": "node --test scripts/dev.test.mjs"
+	},
+	"dependencies": {
+		"chart.js": "^4.5.1"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "^2.5.0",
+		"@sveltejs/vite-plugin-svelte": "^7.1.2",
+		"@tsconfig/svelte": "^5.0.8",
+		"@types/node": "^22.19.19",
+		"svelte": "^5.56.4",
+		"svelte-check": "^4.7.1",
+		"typescript": "^5.9.3",
+		"vite": "^8.1.2",
+		"vite-plugin-pwa": "^1.3.0",
+		"vitest": "^4.1.9"
+	},
+	"pnpm": {
+		"comment": "推移的依存の既知脆弱性をパッチ版へ固定。",
+		"overrides": {
+			"esbuild@<0.28.1": ">=0.28.1"
+		}
+	}
 }

@@ -1,13 +1,13 @@
 <script setup lang="ts">
-import { computed } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
-import AppIcon from './AppIcon.vue'
+import { computed } from "vue";
+import { useRoute, useRouter } from "vue-router";
+import AppIcon from "./AppIcon.vue";
 
-const route = useRoute()
-const router = useRouter()
-const title = computed(() => route.meta.title ?? 'Agent Desk')
-const fromChat = computed(() => route.query.from === 'chat')
-const emit = defineEmits<{ openMenu: [] }>()
+const route = useRoute();
+const router = useRouter();
+const title = computed(() => route.meta.title ?? "Agent Desk");
+const fromChat = computed(() => route.query.from === "chat");
+const emit = defineEmits<{ openMenu: [] }>();
 </script>
 
 <template>

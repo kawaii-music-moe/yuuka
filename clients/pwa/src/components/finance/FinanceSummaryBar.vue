@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import type { FinanceSummary } from '@/api'
-import { yen } from '@/utils/format'
+import type { FinanceSummary } from "@/api";
+import { yen } from "@/utils/format";
 
-defineProps<{ summary: FinanceSummary }>()
+defineProps<{ summary: FinanceSummary }>();
 </script>
 
 <template>

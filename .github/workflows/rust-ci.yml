@@ -7,6 +7,7 @@ on:
   pull_request:
     paths:
       - "crates/**"
+      - "clients/desktop/**"
       - "scripts/verify-r13.mjs"
       - "xtask/**"
       - "Cargo.toml"
@@ -47,6 +48,9 @@ jobs:
         run: rustc --version && cargo --version && cargo fmt --version
       - name: Format check (P3-2)
         run: cargo fmt --all -- --check
+      # デスクトップクライアントは workspace 外の別 Cargo プロジェクトのため個別に検査する。
+      - name: Format check (desktop client)
+        run: cargo fmt --manifest-path clients/desktop/Cargo.toml --all -- --check
       - name: SQLite migration regression (SD07)
         run: python3 scripts/verify-sd07.py
 

@@ -1,52 +1,57 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, watch } from 'vue'
-import { useRoute } from 'vue-router'
-import AppIcon from './AppIcon.vue'
-import { agents, selectAgent, selectedAgentId } from '../api/agents'
-import { logout, type SessionUser } from '../api/auth'
-import { buildLoginUrl } from '../api/loginRedirect'
+import { onBeforeUnmount, onMounted, watch } from "vue";
+import { useRoute } from "vue-router";
+import { agents, selectAgent, selectedAgentId } from "../api/agents";
+import { logout, type SessionUser } from "../api/auth";
+import { buildLoginUrl } from "../api/loginRedirect";
+import AppIcon from "./AppIcon.vue";
 
 // 管理画面（HomeSidebar）と同じ導線: PC は常設、スマホは ☰ で開くドロワー。
-const open = defineModel<boolean>('open', { default: false })
-const props = defineProps<{ user: SessionUser | null }>()
+const open = defineModel<boolean>("open", { default: false });
+const props = defineProps<{ user: SessionUser | null }>();
 
 const items = [
-  { to: '/', icon: 'home', label: 'ホーム' },
-  { to: '/chat', icon: 'chat', label: 'チャット' },
-  { to: '/voice', icon: 'mic', label: '音声' },
-  { to: '/todo', icon: 'check_circle', label: 'タスク' },
-  { to: '/calendar', icon: 'calendar_month', label: '予定' },
-  { to: '/finance', icon: 'account_balance_wallet', label: '家計' },
-  { to: '/notes', icon: 'description', label: '共有ノート' },
-  { to: '/settings', icon: 'settings', label: '設定' },
-]
+	{ to: "/", icon: "home", label: "ホーム" },
+	{ to: "/chat", icon: "chat", label: "チャット" },
+	{ to: "/voice", icon: "mic", label: "音声" },
+	{ to: "/todo", icon: "check_circle", label: "タスク" },
+	{ to: "/calendar", icon: "calendar_month", label: "予定" },
+	{ to: "/finance", icon: "account_balance_wallet", label: "家計" },
+	{ to: "/notes", icon: "description", label: "共有ノート" },
+	{ to: "/settings", icon: "settings", label: "設定" },
+];
 
 // 画面遷移したらドロワーを閉じる。
-const route = useRoute()
-watch(() => route.fullPath, () => { open.value = false })
+const route = useRoute();
+watch(
+	() => route.fullPath,
+	() => {
+		open.value = false;
+	},
+);
 
 // 一覧は AppShell が取得する。切り替え先が 1 つ以下なら選択欄は出さない。
 function handleAgentChange(event: Event) {
-  selectAgent((event.target as HTMLSelectElement).value)
-  open.value = false
+	selectAgent((event.target as HTMLSelectElement).value);
+	open.value = false;
 }
 
 async function handleLogout() {
-  try {
-    await logout()
-  } catch {
-    // セッションが既に切れている場合でも、ログイン画面へは戻す。
-  } finally {
-    // 再ログイン後はこの PWA のホームへ戻す（returnTo 無しだと管理画面の Bot 選択へ着地する）。
-    window.location.assign(buildLoginUrl('/'))
-  }
+	try {
+		await logout();
+	} catch {
+		// セッションが既に切れている場合でも、ログイン画面へは戻す。
+	} finally {
+		// 再ログイン後はこの PWA のホームへ戻す（returnTo 無しだと管理画面の Bot 選択へ着地する）。
+		window.location.assign(buildLoginUrl("/"));
+	}
 }
 
 function handleKeydown(event: KeyboardEvent) {
-  if (event.key === 'Escape') open.value = false
+	if (event.key === "Escape") open.value = false;
 }
-onMounted(() => window.addEventListener('keydown', handleKeydown))
-onBeforeUnmount(() => window.removeEventListener('keydown', handleKeydown))
+onMounted(() => window.addEventListener("keydown", handleKeydown));
+onBeforeUnmount(() => window.removeEventListener("keydown", handleKeydown));
 </script>
 
 <template>

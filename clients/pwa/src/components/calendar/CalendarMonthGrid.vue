@@ -1,15 +1,19 @@
 <script setup lang="ts">
-import type { CalendarEvent } from '@/api'
-import { eventsOn, monthGridDays } from '@/utils/calendar'
-import { localDateKey, time } from '@/utils/format'
+import type { CalendarEvent } from "@/api";
+import { eventsOn, monthGridDays } from "@/utils/calendar";
+import { localDateKey, time } from "@/utils/format";
 
 // 月表示のマス目（PC 用。スマホでは CalendarAgenda の一覧で見せる）。マスのクリックでその日の予定追加、
 // 日付の数字のクリックでその日の日表示を依頼する。
-const props = defineProps<{ anchor: Date; events: CalendarEvent[]; today: Date }>()
-const emit = defineEmits<{ add: [day: Date]; selectDay: [day: Date] }>()
+const props = defineProps<{
+	anchor: Date;
+	events: CalendarEvent[];
+	today: Date;
+}>();
+const emit = defineEmits<{ add: [day: Date]; selectDay: [day: Date] }>();
 
-const WEEKDAYS = ['日', '月', '火', '水', '木', '金', '土']
-const isToday = (day: Date) => localDateKey(day) === localDateKey(props.today)
+const WEEKDAYS = ["日", "月", "火", "水", "木", "金", "土"];
+const isToday = (day: Date) => localDateKey(day) === localDateKey(props.today);
 </script>
 
 <template>

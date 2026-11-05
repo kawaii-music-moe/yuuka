@@ -228,7 +228,10 @@ fn attachment_bar(state: &mut AppState, ui: &mut egui::Ui) {
                 if over {
                     ui.colored_label(
                         egui::Color32::from_rgb(220, 80, 80),
-                        format!("サイズ超過（上限 {}MB）。送信できません。", state.max_upload_mb),
+                        format!(
+                            "サイズ超過（上限 {}MB）。送信できません。",
+                            state.max_upload_mb
+                        ),
                     );
                 }
             });
@@ -253,11 +256,9 @@ fn start_recording(state: &mut AppState, ui: &egui::Ui) {
             });
         }
         Err(e) => {
-            state
-                .history
-                .push(super::ChatEntry::assistant(format!(
-                    "⚠ 録音を開始できません: {e}"
-                )));
+            state.history.push(super::ChatEntry::assistant(format!(
+                "⚠ 録音を開始できません: {e}"
+            )));
         }
     }
 }
@@ -289,8 +290,11 @@ fn recording_bar(state: &mut AppState, ui: &mut egui::Ui, intent: &mut Option<Ui
                 let red = (170.0_f32 + 70.0 * pulse) as u8;
                 let (rect, _) =
                     ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
-                ui.painter()
-                    .circle_filled(rect.center(), 6.0, egui::Color32::from_rgb(red, 40, 40));
+                ui.painter().circle_filled(
+                    rect.center(),
+                    6.0,
+                    egui::Color32::from_rgb(red, 40, 40),
+                );
                 ui.colored_label(
                     egui::Color32::from_rgb(235, 120, 120),
                     format!("● 録音中  {elapsed:.1} 秒"),
@@ -327,11 +331,9 @@ fn recording_bar(state: &mut AppState, ui: &mut egui::Ui, intent: &mut Option<Ui
                     });
                 }
                 Err(e) => {
-                    state
-                        .history
-                        .push(super::ChatEntry::assistant(format!(
-                            "⚠ 録音の処理に失敗: {e}"
-                        )));
+                    state.history.push(super::ChatEntry::assistant(format!(
+                        "⚠ 録音の処理に失敗: {e}"
+                    )));
                 }
             }
         }
@@ -396,8 +398,11 @@ fn bot_row_icon(state: &AppState, bot_id: &str, ui: &mut egui::Ui) {
         .rounding(egui::Rounding::same(SZ / 2.0))
         .paint_at(ui, rect);
     } else {
-        ui.painter()
-            .circle_filled(rect.center(), SZ / 2.0, egui::Color32::from_rgb(70, 110, 180));
+        ui.painter().circle_filled(
+            rect.center(),
+            SZ / 2.0,
+            egui::Color32::from_rgb(70, 110, 180),
+        );
     }
 }
 
@@ -405,17 +410,19 @@ fn bot_row_icon(state: &AppState, bot_id: &str, ui: &mut egui::Ui) {
 /// 詳細（再接続の残り秒数など）はホバーのツールチップに載せる。
 fn connection_label(conn: &ConnectionState, ui: &mut egui::Ui) {
     let (color, tip) = match conn {
-        ConnectionState::Connected { .. } => {
-            (egui::Color32::from_rgb(80, 200, 120), "オンライン".to_string())
-        }
+        ConnectionState::Connected { .. } => (
+            egui::Color32::from_rgb(80, 200, 120),
+            "オンライン".to_string(),
+        ),
         ConnectionState::Connecting => (egui::Color32::GRAY, "接続中…".to_string()),
         ConnectionState::Reconnecting { next_retry_secs } => (
             egui::Color32::from_rgb(230, 180, 80),
             format!("再接続中… ({next_retry_secs}s)"),
         ),
-        ConnectionState::Disconnected => {
-            (egui::Color32::from_rgb(200, 80, 80), "オフライン".to_string())
-        }
+        ConnectionState::Disconnected => (
+            egui::Color32::from_rgb(200, 80, 80),
+            "オフライン".to_string(),
+        ),
     };
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
     ui.painter().circle_filled(rect.center(), 5.0, color);
@@ -533,11 +540,11 @@ fn action_row(
 /// 1=Primary(青) 2=Secondary(灰) 3=Success(緑) 4=Danger(赤) 5=Link(リンク表示)。
 fn button_color(style: u8) -> egui::Color32 {
     match style {
-        1 => egui::Color32::from_rgb(60, 110, 200),  // Primary 青
-        3 => egui::Color32::from_rgb(60, 160, 90),   // Success 緑
-        4 => egui::Color32::from_rgb(200, 70, 70),   // Danger 赤
-        5 => egui::Color32::from_rgb(70, 90, 130),   // Link リンク調
-        _ => egui::Color32::from_rgb(90, 90, 100),   // Secondary 灰（既定）
+        1 => egui::Color32::from_rgb(60, 110, 200), // Primary 青
+        3 => egui::Color32::from_rgb(60, 160, 90),  // Success 緑
+        4 => egui::Color32::from_rgb(200, 70, 70),  // Danger 赤
+        5 => egui::Color32::from_rgb(70, 90, 130),  // Link リンク調
+        _ => egui::Color32::from_rgb(90, 90, 100),  // Secondary 灰（既定）
     }
 }
 

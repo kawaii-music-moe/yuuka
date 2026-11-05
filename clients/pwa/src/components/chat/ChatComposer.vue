@@ -1,90 +1,109 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
-import AppIcon from '../AppIcon.vue'
-import { CHAT_ATTACHMENT_ACCEPT, chatAttachmentError, mediaKind } from '@/utils/chatAttachments'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
+import {
+	CHAT_ATTACHMENT_ACCEPT,
+	chatAttachmentError,
+	mediaKind,
+} from "@/utils/chatAttachments";
+import AppIcon from "../AppIcon.vue";
 
 // Discord 風の入力バー（＋で添付・本文・送信）。本文か添付のどちらかがあれば送信できる。
 // 送信が同期的に拒否されたときは、親が `restore` で本文と添付を戻す。
-defineProps<{ disabled: boolean }>()
-const emit = defineEmits<{ send: [payload: { content: string; files: File[] }] }>()
+defineProps<{ disabled: boolean }>();
+const emit = defineEmits<{
+	send: [payload: { content: string; files: File[] }];
+}>();
 
-type Pending = { id: number; file: File; previewUrl?: string }
-let nextId = 0
+type Pending = { id: number; file: File; previewUrl?: string };
+let nextId = 0;
 
-const draft = ref('')
-const pending = ref<Pending[]>([])
-const error = ref('')
-const input = ref<HTMLTextAreaElement>()
-const picker = ref<HTMLInputElement>()
-const canSend = computed(() => draft.value.trim() !== '' || pending.value.length > 0)
+const draft = ref("");
+const pending = ref<Pending[]>([]);
+const error = ref("");
+const input = ref<HTMLTextAreaElement>();
+const picker = ref<HTMLInputElement>();
+const canSend = computed(
+	() => draft.value.trim() !== "" || pending.value.length > 0,
+);
 
 // 入力欄は 1 行から始め、内容に合わせて最大 8 行程度まで伸ばす（それ以上は欄の中でスクロール）。
-const MAX_INPUT_HEIGHT = 200
+const MAX_INPUT_HEIGHT = 200;
 watch(draft, async () => {
-  await nextTick()
-  const el = input.value
-  if (!el) return
-  el.style.height = 'auto'
-  el.style.height = `${Math.min(el.scrollHeight, MAX_INPUT_HEIGHT)}px`
-})
+	await nextTick();
+	const el = input.value;
+	if (!el) return;
+	el.style.height = "auto";
+	el.style.height = `${Math.min(el.scrollHeight, MAX_INPUT_HEIGHT)}px`;
+});
 
 function toPending(file: File): Pending {
-  return { id: nextId++, file, previewUrl: mediaKind(file.type) === 'image' ? URL.createObjectURL(file) : undefined }
+	return {
+		id: nextId++,
+		file,
+		previewUrl:
+			mediaKind(file.type) === "image" ? URL.createObjectURL(file) : undefined,
+	};
 }
 function release(item: Pending) {
-  if (item.previewUrl) URL.revokeObjectURL(item.previewUrl)
+	if (item.previewUrl) URL.revokeObjectURL(item.previewUrl);
 }
 
 function addFiles(files: File[]) {
-  const message = chatAttachmentError(pending.value.map((item) => item.file), files)
-  if (message) {
-    error.value = message
-    return
-  }
-  error.value = ''
-  pending.value.push(...files.map(toPending))
+	const message = chatAttachmentError(
+		pending.value.map((item) => item.file),
+		files,
+	);
+	if (message) {
+		error.value = message;
+		return;
+	}
+	error.value = "";
+	pending.value.push(...files.map(toPending));
 }
 function handlePick(event: Event) {
-  const target = event.target as HTMLInputElement
-  addFiles([...(target.files ?? [])])
-  target.value = '' // 同じファイルを選び直しても change が発火するようにする
+	const target = event.target as HTMLInputElement;
+	addFiles([...(target.files ?? [])]);
+	target.value = ""; // 同じファイルを選び直しても change が発火するようにする
 }
 // 画像などを入力欄へ貼り付けたときも添付にする。
 function handlePaste(event: ClipboardEvent) {
-  const files = [...(event.clipboardData?.files ?? [])]
-  if (!files.length) return
-  event.preventDefault()
-  addFiles(files)
+	const files = [...(event.clipboardData?.files ?? [])];
+	if (!files.length) return;
+	event.preventDefault();
+	addFiles(files);
 }
 function remove(item: Pending) {
-  release(item)
-  pending.value = pending.value.filter((other) => other !== item)
-  error.value = ''
+	release(item);
+	pending.value = pending.value.filter((other) => other !== item);
+	error.value = "";
 }
 
 function submit() {
-  if (!canSend.value) return
-  const payload = { content: draft.value.trim(), files: pending.value.map((item) => item.file) }
-  pending.value.forEach(release)
-  draft.value = ''
-  pending.value = []
-  error.value = ''
-  emit('send', payload)
+	if (!canSend.value) return;
+	const payload = {
+		content: draft.value.trim(),
+		files: pending.value.map((item) => item.file),
+	};
+	pending.value.forEach(release);
+	draft.value = "";
+	pending.value = [];
+	error.value = "";
+	emit("send", payload);
 }
 function handleKeydown(event: KeyboardEvent) {
-  if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
-    event.preventDefault()
-    submit()
-  }
+	if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
+		event.preventDefault();
+		submit();
+	}
 }
 
 defineExpose({
-  restore(content: string, files: File[]) {
-    draft.value = content
-    pending.value = files.map(toPending)
-  },
-})
-onBeforeUnmount(() => pending.value.forEach(release))
+	restore(content: string, files: File[]) {
+		draft.value = content;
+		pending.value = files.map(toPending);
+	},
+});
+onBeforeUnmount(() => pending.value.forEach(release));
 </script>
 
 <template>

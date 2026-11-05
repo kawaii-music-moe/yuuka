@@ -160,7 +160,7 @@ eframe の `mouse_passthrough` で大半が足りるが、不足時のみ:
   └─ 無い/無効 →
        POST /api/auth/device/code  → user_code 等
        open(verification_uri_complete)            // 既定ブラウザでログイン&承認
-       loop: POST /api/auth/device/token (interval) 
+       loop: POST /api/auth/device/token (interval)
              authorization_pending → 継続 / approved → access_token
        keyring へ保存 → WS 接続
 ```

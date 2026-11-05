@@ -1,43 +1,66 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from 'vue'
-import AppIcon from '../AppIcon.vue'
-import type { CalendarView } from '@/utils/calendar'
+import { onBeforeUnmount, onMounted, ref } from "vue";
+import type { CalendarView } from "@/utils/calendar";
+import AppIcon from "../AppIcon.vue";
 
 // 表示切り替えのドロップダウン（日・週・月）。右端のキー（D / W / M）はキーボードショートカット。
 const VIEWS: { value: CalendarView; label: string; shortcut: string }[] = [
-  { value: 'day', label: '日', shortcut: 'D' },
-  { value: 'week', label: '週', shortcut: 'W' },
-  { value: 'month', label: '月', shortcut: 'M' },
-]
+	{ value: "day", label: "日", shortcut: "D" },
+	{ value: "week", label: "週", shortcut: "W" },
+	{ value: "month", label: "月", shortcut: "M" },
+];
 
-const view = defineModel<CalendarView>({ required: true })
-const open = ref(false)
-const root = ref<HTMLElement>()
+const view = defineModel<CalendarView>({ required: true });
+const open = ref(false);
+const root = ref<HTMLElement>();
 
 function choose(next: CalendarView) {
-  view.value = next
-  open.value = false
+	view.value = next;
+	open.value = false;
 }
 
 function isTyping(target: EventTarget | null) {
-  const element = target as HTMLElement | null
-  return !!element && (['INPUT', 'TEXTAREA', 'SELECT'].includes(element.tagName) || element.isContentEditable)
+	const element = target as HTMLElement | null;
+	return (
+		!!element &&
+		(["INPUT", "TEXTAREA", "SELECT"].includes(element.tagName) ||
+			element.isContentEditable)
+	);
 }
 
 function handleKeydown(event: KeyboardEvent) {
-  if (event.key === 'Escape') { open.value = false; return }
-  // 入力中・修飾キー付き・モーダル表示中はショートカットを効かせない。
-  if (event.ctrlKey || event.metaKey || event.altKey || isTyping(event.target) || document.querySelector('dialog[open]')) return
-  const match = VIEWS.find((option) => option.shortcut === event.key.toUpperCase())
-  if (match) choose(match.value)
+	if (event.key === "Escape") {
+		open.value = false;
+		return;
+	}
+	// 入力中・修飾キー付き・モーダル表示中はショートカットを効かせない。
+	if (
+		event.ctrlKey ||
+		event.metaKey ||
+		event.altKey ||
+		isTyping(event.target) ||
+		document.querySelector("dialog[open]")
+	)
+		return;
+	const match = VIEWS.find(
+		(option) => option.shortcut === event.key.toUpperCase(),
+	);
+	if (match) choose(match.value);
 }
 
 function handleOutsideClick(event: MouseEvent) {
-  if (open.value && !root.value?.contains(event.target as Node)) open.value = false
+	if (open.value && !root.value?.contains(event.target as Node))
+		open.value = false;
 }
 
-onMounted(() => { window.addEventListener('keydown', handleKeydown); document.addEventListener('click', handleOutsideClick) })
-onBeforeUnmount(() => { window.removeEventListener('keydown', handleKeydown); document.removeEventListener('click', handleOutsideClick) })
+onMounted(() => {
+	window.addEventListener("keydown", handleKeydown);
+	document.addEventListener("click", handleOutsideClick);
+});
+onBeforeUnmount(() => {
+	window.removeEventListener("keydown", handleKeydown);
+	document.removeEventListener("click", handleOutsideClick);
+});
 </script>
 
 <template>

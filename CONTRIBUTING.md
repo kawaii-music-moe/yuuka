@@ -62,13 +62,14 @@ PR を出す前に、作業ブランチで以下が通ることを確認して�
 
 ```bash
 cargo fmt --all -- --check
+cargo fmt --manifest-path clients/desktop/Cargo.toml --all -- --check   # workspace 外のデスクトップクライアント
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 pnpm check                      # = pnpm typecheck:front && pnpm lint
 npm --prefix clients/pwa run check
 ```
 
 - `pnpm typecheck:front` … `svelte-check`（型エラー 0）
-- `pnpm lint` … `biome check frontend/src scripts`（`pnpm lint:fix` で自動修正）
+- `pnpm lint` … `biome check .`（リポジトリ全体。PWA の `.vue` も含む。`pnpm lint:fix` で自動修正）
 - `npm --prefix clients/pwa run check` … `vue-tsc --noEmit`
 
 テスト（`cargo test --workspace`・`pnpm test:front`・`npm --prefix clients/pwa test`）は develop での検証時に実行します。

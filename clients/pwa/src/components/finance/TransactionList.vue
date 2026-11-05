@@ -1,11 +1,11 @@
 <script setup lang="ts">
-import type { Transaction } from '@/api'
-import { yen } from '@/utils/format'
+import type { Transaction } from "@/api";
+import { yen } from "@/utils/format";
 
-defineProps<{ transactions: Transaction[] }>()
+defineProps<{ transactions: Transaction[] }>();
 
 /** `YYYY-MM-DD` → `MM/DD`。 */
-const shortDate = (date: string) => date.slice(5).replace('-', '/')
+const shortDate = (date: string) => date.slice(5).replace("-", "/");
 </script>
 
 <template>

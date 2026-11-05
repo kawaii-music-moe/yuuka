@@ -137,7 +137,11 @@ pub fn install_fonts(ctx: &egui::Context) {
         );
         // 先頭へ差し込む＝日本語を最優先で解決し、欠落グリフは既定フォントへフォールバック。
         for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
-            fonts.families.entry(family).or_default().insert(0, "jp".to_owned());
+            fonts
+                .families
+                .entry(family)
+                .or_default()
+                .insert(0, "jp".to_owned());
         }
         ctx.set_fonts(fonts);
         log::info!("loaded Japanese font: {path}");
@@ -145,7 +149,9 @@ pub fn install_fonts(ctx: &egui::Context) {
     }
     // 1 つも妥当な日本語フォントが見つからなくても、既定フォントのまま**起動は続行する**
     // （日本語は豆腐 □ になるが、無言で落ちるよりはるかに良い）。
-    log::warn!("no usable Japanese font found; CJK may render as tofu (□), but the app will still start");
+    log::warn!(
+        "no usable Japanese font found; CJK may render as tofu (□), but the app will still start"
+    );
 }
 
 /// ログイン UI のステート（ui/login.rs と共有）。

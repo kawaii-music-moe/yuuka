@@ -65,10 +65,11 @@ pnpm build              # 本番ビルド: cargo build --release --bin yuuka →
 pnpm build:front        # 管理画面のみ本番ビルド(dist/public)
 pnpm build:pwa          # PWA のビルド（clients/pwa。出力は dist/public/pwa。依存が無ければ npm ci を実行）
 cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings   # Rust lint/format
+cargo fmt --manifest-path clients/desktop/Cargo.toml --all -- --check   # デスクトップクライアント（workspace 外）の format
 cargo run -p xtask -- gen-types [--check]   # ts-rs 型を frontend/src/lib/api/generated/ へ生成（--check はドリフト検査）
 pnpm typecheck:front    # svelte-check
 pnpm test:front         # 管理画面のユニットテスト（vitest）
-pnpm lint / lint:fix    # Biome lint（--write で自動修正。対象は frontend/src scripts のみ）
+pnpm lint / lint:fix    # Biome の lint と整形チェック（--write で自動修正。対象はリポジトリ全体）
 pnpm check              # typecheck:front + lint をまとめて実行
 ```
 

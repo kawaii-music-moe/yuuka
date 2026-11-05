@@ -1,38 +1,39 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
-import { agentGateway } from '@/api'
-import { useAsyncState } from '@/composables/useAsyncState'
-import { useSavedNotice } from '@/composables/useSavedNotice'
-import FormField from '@/components/FormField.vue'
-import PageState from '@/components/PageState.vue'
-import PageTitle from '@/components/PageTitle.vue'
-import UiButton from '@/components/UiButton.vue'
+import { onMounted, ref } from "vue";
+import { agentGateway } from "@/api";
+import FormField from "@/components/FormField.vue";
+import PageState from "@/components/PageState.vue";
+import PageTitle from "@/components/PageTitle.vue";
+import UiButton from "@/components/UiButton.vue";
+import { useAsyncState } from "@/composables/useAsyncState";
+import { useSavedNotice } from "@/composables/useSavedNotice";
 
-const note = ref<{ title: string; body: string }>()
-const { loading, error, run } = useAsyncState()
-const { visible: saved, show: showSaved } = useSavedNotice()
-const saveError = ref('')
+const note = ref<{ title: string; body: string }>();
+const { loading, error, run } = useAsyncState();
+const { visible: saved, show: showSaved } = useSavedNotice();
+const saveError = ref("");
 
 async function load() {
-  await run(async () => {
-    const result = await agentGateway.getSharedNote()
-    note.value = { title: result.title, body: result.body }
-  }, '共有ノートを取得できません。')
+	await run(async () => {
+		const result = await agentGateway.getSharedNote();
+		note.value = { title: result.title, body: result.body };
+	}, "共有ノートを取得できません。");
 }
 
 async function save() {
-  if (!note.value) return
-  saveError.value = ''
-  try {
-    const result = await agentGateway.saveSharedNote(note.value)
-    note.value = { title: result.title, body: result.body }
-    showSaved()
-  } catch {
-    saveError.value = '共有ノートを保存できませんでした。もう一度お試しください。'
-  }
+	if (!note.value) return;
+	saveError.value = "";
+	try {
+		const result = await agentGateway.saveSharedNote(note.value);
+		note.value = { title: result.title, body: result.body };
+		showSaved();
+	} catch {
+		saveError.value =
+			"共有ノートを保存できませんでした。もう一度お試しください。";
+	}
 }
 
-onMounted(load)
+onMounted(load);
 </script>
 
 <template>

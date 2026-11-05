@@ -1,37 +1,43 @@
 <script setup lang="ts">
-import { ref } from 'vue'
-import { agentGateway, type ReceiptDraft } from '@/api'
-import { ApiError } from '@/api/http'
-import UiButton from '../UiButton.vue'
-import { prepareReceiptImage, RECEIPT_MIME_TYPES } from '@/utils/receiptImage'
+import { ref } from "vue";
+import { agentGateway, type ReceiptDraft } from "@/api";
+import { ApiError } from "@/api/http";
+import { prepareReceiptImage, RECEIPT_MIME_TYPES } from "@/utils/receiptImage";
+import UiButton from "../UiButton.vue";
 
 // レシート画像を選んで読み取り、下書きを親へ渡す（登録はしない）。`filled` の間は「入力しました」の案内を出す。
-defineProps<{ filled: boolean }>()
-const emit = defineEmits<{ scanned: [draft: ReceiptDraft] }>()
+defineProps<{ filled: boolean }>();
+const emit = defineEmits<{ scanned: [draft: ReceiptDraft] }>();
 
-const scanning = ref(false)
-const error = ref('')
-const input = ref<HTMLInputElement>()
+const scanning = ref(false);
+const error = ref("");
+const input = ref<HTMLInputElement>();
 
 async function handleChange(event: Event) {
-  const target = event.target as HTMLInputElement
-  const file = target.files?.[0]
-  target.value = '' // 同じ画像を選び直しても change が発火するようにする
-  if (!file) return
-  // 拡張子だけで MIME が空になる端末もあるため、空なら送ってサーバーの判定に任せる。
-  if (file.type && !RECEIPT_MIME_TYPES.includes(file.type.toLowerCase())) {
-    error.value = 'PNG・JPEG・WebP・HEIC・GIF の画像を選んでください。'
-    return
-  }
-  scanning.value = true
-  error.value = ''
-  try {
-    emit('scanned', await agentGateway.scanReceipt(await prepareReceiptImage(file)))
-  } catch (cause) {
-    error.value = cause instanceof ApiError && cause.serverMessage ? cause.serverMessage : 'レシートを読み取れませんでした。もう一度お試しください。'
-  } finally {
-    scanning.value = false
-  }
+	const target = event.target as HTMLInputElement;
+	const file = target.files?.[0];
+	target.value = ""; // 同じ画像を選び直しても change が発火するようにする
+	if (!file) return;
+	// 拡張子だけで MIME が空になる端末もあるため、空なら送ってサーバーの判定に任せる。
+	if (file.type && !RECEIPT_MIME_TYPES.includes(file.type.toLowerCase())) {
+		error.value = "PNG・JPEG・WebP・HEIC・GIF の画像を選んでください。";
+		return;
+	}
+	scanning.value = true;
+	error.value = "";
+	try {
+		emit(
+			"scanned",
+			await agentGateway.scanReceipt(await prepareReceiptImage(file)),
+		);
+	} catch (cause) {
+		error.value =
+			cause instanceof ApiError && cause.serverMessage
+				? cause.serverMessage
+				: "レシートを読み取れませんでした。もう一度お試しください。";
+	} finally {
+		scanning.value = false;
+	}
 }
 </script>
 

@@ -314,7 +314,7 @@ function botStatus(bot: AdminBotView): { label: string; tone: string } {
 		</div>
 	</div>
 
-	
+
 	{/snippet}
 
 	{#snippet children(section)}

@@ -3,139 +3,190 @@
  * 使えるようにする。話者条件の本体はこの端末の OPFS にもキャッシュする（毎回取りに行かない）。
  * サンプルの音声そのものはどこにも保存しない（話者条件だけ）。
  */
-import { agentGateway, type Voice } from '@/api'
-import type { SpeakerCondition } from './tts/pipeline'
+import { agentGateway, type Voice } from "@/api";
+import type { SpeakerCondition } from "./tts/pipeline";
 
-export type SavedVoice = Voice
+export type SavedVoice = Voice;
 
 /**
  * 話者条件を作ったモデルの系統。話者エンコーダ（v4.1-Small-MF）が変わったら上げる。
  * 一致しない声は話者条件の意味が違うので使わない。
  */
-export const SPEAKER_MODEL = 'irodori-v4.1-small-mf'
-const SPEAKER_DIM = 768
-const CACHE_DIR = 'voices'
+export const SPEAKER_MODEL = "irodori-v4.1-small-mf";
+const SPEAKER_DIM = 768;
+const CACHE_DIR = "voices";
 /** 端末だけに保存していた頃（サーバー保存の前）の一覧。見つけたらサーバーへ移す。 */
-const LEGACY_INDEX = 'index.json'
+const LEGACY_INDEX = "index.json";
 
 async function cacheDir(): Promise<FileSystemDirectoryHandle | undefined> {
-  try {
-    return await (await navigator.storage.getDirectory()).getDirectoryHandle(CACHE_DIR, { create: true })
-  } catch {
-    return undefined
-  }
+	try {
+		return await (await navigator.storage.getDirectory()).getDirectoryHandle(
+			CACHE_DIR,
+			{ create: true },
+		);
+	} catch {
+		return undefined;
+	}
 }
 
 /**
  * キャッシュのファイル名。id だけだと、サーバーの DB を作り直したときなどに別の声の id と重なり、
  * 違う声を読んでしまう。作成日時も含めて、同じ声のときだけ当たるようにする。
  */
-const cacheName = (voice: Pick<SavedVoice, 'id' | 'createdAt'>) => `${voice.id}-${voice.createdAt.replace(/[^0-9A-Za-z]/g, '')}.f32`
+const cacheName = (voice: Pick<SavedVoice, "id" | "createdAt">) =>
+	`${voice.id}-${voice.createdAt.replace(/[^0-9A-Za-z]/g, "")}.f32`;
 
-async function readCache(name: string, bytes: number): Promise<Float32Array | undefined> {
-  try {
-    const file = await (await (await cacheDir())?.getFileHandle(name))?.getFile()
-    return file && file.size === bytes ? new Float32Array(await file.arrayBuffer()) : undefined
-  } catch {
-    return undefined
-  }
+async function readCache(
+	name: string,
+	bytes: number,
+): Promise<Float32Array | undefined> {
+	try {
+		const file = await (
+			await (await cacheDir())?.getFileHandle(name)
+		)?.getFile();
+		return file && file.size === bytes
+			? new Float32Array(await file.arrayBuffer())
+			: undefined;
+	} catch {
+		return undefined;
+	}
 }
 
 async function writeCache(name: string, state: Float32Array) {
-  try {
-    const handle = await (await cacheDir())?.getFileHandle(name, { create: true })
-    const writable = await handle?.createWritable()
-    await writable?.write(new Blob([state as Float32Array<ArrayBuffer>]))
-    await writable?.close()
-  } catch {
-    // キャッシュできなくても、次からサーバーから取り直すだけ。
-  }
+	try {
+		const handle = await (await cacheDir())?.getFileHandle(name, {
+			create: true,
+		});
+		const writable = await handle?.createWritable();
+		await writable?.write(new Blob([state as Float32Array<ArrayBuffer>]));
+		await writable?.close();
+	} catch {
+		// キャッシュできなくても、次からサーバーから取り直すだけ。
+	}
 }
 
 function toBase64(state: Float32Array): string {
-  const bytes = new Uint8Array(state.buffer, state.byteOffset, state.byteLength)
-  let binary = ''
-  for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000))
-  return btoa(binary)
+	const bytes = new Uint8Array(
+		state.buffer,
+		state.byteOffset,
+		state.byteLength,
+	);
+	let binary = "";
+	for (let i = 0; i < bytes.length; i += 0x8000)
+		binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+	return btoa(binary);
 }
 
 /** 今のモデルで使える声か。 */
-export const usable = (voice: SavedVoice) => voice.speakerModel === SPEAKER_MODEL
+export const usable = (voice: SavedVoice) =>
+	voice.speakerModel === SPEAKER_MODEL;
 
 export async function listVoices(): Promise<SavedVoice[]> {
-  await migrateLegacyVoices()
-  return agentGateway.listVoices()
+	await migrateLegacyVoices();
+	return agentGateway.listVoices();
 }
 
 /** 声の話者条件（端末にあればそれを、無ければサーバーから取ってキャッシュする）。 */
-export async function loadSpeaker(voice: SavedVoice): Promise<SpeakerCondition> {
-  const bytes = voice.tokens * SPEAKER_DIM * 4
-  let state = await readCache(cacheName(voice), bytes)
-  if (!state) {
-    state = new Float32Array(await agentGateway.getVoiceState(voice.id))
-    if (state.byteLength !== bytes) throw new Error(`声「${voice.name}」のデータが壊れています`)
-    await writeCache(cacheName(voice), state)
-  }
-  return { state, mask: voice.mask }
+export async function loadSpeaker(
+	voice: SavedVoice,
+): Promise<SpeakerCondition> {
+	const bytes = voice.tokens * SPEAKER_DIM * 4;
+	let state = await readCache(cacheName(voice), bytes);
+	if (!state) {
+		state = new Float32Array(await agentGateway.getVoiceState(voice.id));
+		if (state.byteLength !== bytes)
+			throw new Error(`声「${voice.name}」のデータが壊れています`);
+		await writeCache(cacheName(voice), state);
+	}
+	return { state, mask: voice.mask };
 }
 
 /** サーバーの上限（`crates/yuuka-client-api/src/voices.rs`）。 */
-export const VOICE_NAME_MAX = 40
-export const VOICE_CAPTION_MAX = 200
-const clip = (text: string, max: number) => [...text.trim()].slice(0, max).join('')
+export const VOICE_NAME_MAX = 40;
+export const VOICE_CAPTION_MAX = 200;
+const clip = (text: string, max: number) =>
+	[...text.trim()].slice(0, max).join("");
 
-export async function saveVoice(meta: Pick<SavedVoice, 'name' | 'caption' | 'source' | 'seconds'>, speaker: SpeakerCondition): Promise<SavedVoice> {
-  const voice = await agentGateway.createVoice({
-    ...meta,
-    // ファイル名から付けた既定の名前などが上限を超えると 400 になるので、ここで切る。
-    name: clip(meta.name, VOICE_NAME_MAX) || '新しい声',
-    caption: clip(meta.caption, VOICE_CAPTION_MAX),
-    speakerModel: SPEAKER_MODEL,
-    mask: speaker.mask,
-    stateBase64: toBase64(speaker.state),
-  })
-  await writeCache(cacheName(voice), speaker.state)
-  return voice
+export async function saveVoice(
+	meta: Pick<SavedVoice, "name" | "caption" | "source" | "seconds">,
+	speaker: SpeakerCondition,
+): Promise<SavedVoice> {
+	const voice = await agentGateway.createVoice({
+		...meta,
+		// ファイル名から付けた既定の名前などが上限を超えると 400 になるので、ここで切る。
+		name: clip(meta.name, VOICE_NAME_MAX) || "新しい声",
+		caption: clip(meta.caption, VOICE_CAPTION_MAX),
+		speakerModel: SPEAKER_MODEL,
+		mask: speaker.mask,
+		stateBase64: toBase64(speaker.state),
+	});
+	await writeCache(cacheName(voice), speaker.state);
+	return voice;
 }
 
-export const updateVoice = (id: string, patch: Partial<Pick<SavedVoice, 'name' | 'caption'>>) => agentGateway.updateVoice(id, patch)
+export const updateVoice = (
+	id: string,
+	patch: Partial<Pick<SavedVoice, "name" | "caption">>,
+) => agentGateway.updateVoice(id, patch);
 
 export async function deleteVoice(voice: SavedVoice): Promise<void> {
-  await agentGateway.deleteVoice(voice.id)
-  await (await cacheDir())?.removeEntry(cacheName(voice)).catch(() => undefined)
+	await agentGateway.deleteVoice(voice.id);
+	await (await cacheDir())
+		?.removeEntry(cacheName(voice))
+		.catch(() => undefined);
 }
 
-type LegacyVoice = { id: string; name: string; caption: string; seconds: number; mask: boolean[] }
-let migrating: Promise<void> | undefined
+type LegacyVoice = {
+	id: string;
+	name: string;
+	caption: string;
+	seconds: number;
+	mask: boolean[];
+};
+let migrating: Promise<void> | undefined;
 
 /** サーバー保存の前に端末だけに保存した声を、サーバーへ移す（移せたものは端末の古い形式を消す）。 */
 function migrateLegacyVoices(): Promise<void> {
-  migrating ??= (async () => {
-    const dir = await cacheDir()
-    if (!dir) return
-    let legacy: LegacyVoice[]
-    try {
-      legacy = JSON.parse(await (await (await dir.getFileHandle(LEGACY_INDEX)).getFile()).text()) as LegacyVoice[]
-    } catch {
-      return
-    }
-    const remaining: LegacyVoice[] = []
-    for (const old of legacy) {
-      try {
-        const file = await (await dir.getFileHandle(`${old.id}.f32`)).getFile()
-        await saveVoice({ name: old.name, caption: old.caption, source: 'sample', seconds: old.seconds }, { state: new Float32Array(await file.arrayBuffer()), mask: old.mask })
-        await dir.removeEntry(`${old.id}.f32`).catch(() => undefined)
-      } catch {
-        remaining.push(old)
-      }
-    }
-    if (remaining.length > 0) {
-      const writable = await (await dir.getFileHandle(LEGACY_INDEX)).createWritable()
-      await writable.write(JSON.stringify(remaining))
-      await writable.close()
-    } else {
-      await dir.removeEntry(LEGACY_INDEX).catch(() => undefined)
-    }
-  })().finally(() => { migrating = undefined })
-  return migrating
+	migrating ??= (async () => {
+		const dir = await cacheDir();
+		if (!dir) return;
+		let legacy: LegacyVoice[];
+		try {
+			legacy = JSON.parse(
+				await (await (await dir.getFileHandle(LEGACY_INDEX)).getFile()).text(),
+			) as LegacyVoice[];
+		} catch {
+			return;
+		}
+		const remaining: LegacyVoice[] = [];
+		for (const old of legacy) {
+			try {
+				const file = await (await dir.getFileHandle(`${old.id}.f32`)).getFile();
+				await saveVoice(
+					{
+						name: old.name,
+						caption: old.caption,
+						source: "sample",
+						seconds: old.seconds,
+					},
+					{ state: new Float32Array(await file.arrayBuffer()), mask: old.mask },
+				);
+				await dir.removeEntry(`${old.id}.f32`).catch(() => undefined);
+			} catch {
+				remaining.push(old);
+			}
+		}
+		if (remaining.length > 0) {
+			const writable = await (
+				await dir.getFileHandle(LEGACY_INDEX)
+			).createWritable();
+			await writable.write(JSON.stringify(remaining));
+			await writable.close();
+		} else {
+			await dir.removeEntry(LEGACY_INDEX).catch(() => undefined);
+		}
+	})().finally(() => {
+		migrating = undefined;
+	});
+	return migrating;
 }

@@ -1,16 +1,19 @@
 <script setup lang="ts">
-import { ref } from 'vue'
-import FormField from '../FormField.vue'
-import UiButton from '../UiButton.vue'
-import { EXPENSE_CATEGORIES, type TransactionForm } from '@/utils/finance'
+import { ref } from "vue";
+import { EXPENSE_CATEGORIES, type TransactionForm } from "@/utils/finance";
+import FormField from "../FormField.vue";
+import UiButton from "../UiButton.vue";
 
 // 「取引を追加」フォーム。入力の検証と登録は親が行う（`submit`）。レシート読み取り後に親がここまでスクロールする。
-const form = defineModel<TransactionForm>({ required: true })
-defineProps<{ error: string }>()
-const emit = defineEmits<{ submit: [] }>()
+const form = defineModel<TransactionForm>({ required: true });
+defineProps<{ error: string }>();
+const emit = defineEmits<{ submit: [] }>();
 
-const root = ref<HTMLFormElement>()
-defineExpose({ scrollIntoView: () => root.value?.scrollIntoView({ behavior: 'smooth', block: 'start' }) })
+const root = ref<HTMLFormElement>();
+defineExpose({
+	scrollIntoView: () =>
+		root.value?.scrollIntoView({ behavior: "smooth", block: "start" }),
+});
 </script>
 
 <template>

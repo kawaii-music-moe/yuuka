@@ -1,12 +1,23 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
-import { agentGateway, type Todo } from '@/api'
-import PageState from '@/components/PageState.vue'
-import AppIcon from '@/components/AppIcon.vue'
-import PageTitle from '@/components/PageTitle.vue'
-import { date } from '@/utils/format'
-const todos = ref<Todo[]>([]); const loading = ref(true); const error = ref('')
-onMounted(async () => { try { todos.value = await agentGateway.listTodos() } catch { error.value = 'エージェントサーバーに接続できません。' } finally { loading.value = false } })
+import { onMounted, ref } from "vue";
+import { agentGateway, type Todo } from "@/api";
+import AppIcon from "@/components/AppIcon.vue";
+import PageState from "@/components/PageState.vue";
+import PageTitle from "@/components/PageTitle.vue";
+import { date } from "@/utils/format";
+
+const todos = ref<Todo[]>([]);
+const loading = ref(true);
+const error = ref("");
+onMounted(async () => {
+	try {
+		todos.value = await agentGateway.listTodos();
+	} catch {
+		error.value = "エージェントサーバーに接続できません。";
+	} finally {
+		loading.value = false;
+	}
+});
 </script>
 <template>
   <section class="dashboard"><PageTitle title="おはようございます" description="今日の状況を確認しましょう" />

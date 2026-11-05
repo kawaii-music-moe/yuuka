@@ -95,8 +95,8 @@ pub fn view(state: &mut AppState, ui: &mut egui::Ui) -> bool {
 
     // is_pointer_button_down_on＝押下起点がオーブの間 true。primary_down と AND して、
     // OS 移動ループ後に万一フラグが残っても確実に release 側（タップ判定）へ倒す。
-    let pressing = response.is_pointer_button_down_on()
-        && ui.ctx().input(|i| i.pointer.primary_down());
+    let pressing =
+        response.is_pointer_button_down_on() && ui.ctx().input(|i| i.pointer.primary_down());
     if pressing {
         let moved = ui.ctx().input(|i| i.pointer.delta()).length();
         let travel = state.orb_press_travel.get_or_insert(0.0);

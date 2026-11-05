@@ -1,38 +1,40 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from 'vue'
-import { agents, refreshAgents, selectedAgentId } from '../api/agents'
-import type { SessionUser } from '../api/auth'
-import AppHeader from './AppHeader.vue'
-import AppSidebar from './AppSidebar.vue'
-import PageState from './PageState.vue'
-import UiButton from './UiButton.vue'
+import { onBeforeUnmount, onMounted, ref } from "vue";
+import { agents, refreshAgents, selectedAgentId } from "../api/agents";
+import type { SessionUser } from "../api/auth";
+import AppHeader from "./AppHeader.vue";
+import AppSidebar from "./AppSidebar.vue";
+import PageState from "./PageState.vue";
+import UiButton from "./UiButton.vue";
 
-defineProps<{ user: SessionUser | null }>()
-const menuOpen = ref(false)
+defineProps<{ user: SessionUser | null }>();
+const menuOpen = ref(false);
 
 // PWA の画面はすべて選択中のエージェント（自分の Bot・共有された Bot）のデータを扱う。
 // 一覧を取るまでは、前回選んでいたエージェントがあればそのまま表示し、無ければ待つ。
 // 管理画面で Bot を作った・共有されたあとに戻ってきたときも候補に出るよう、画面に戻るたびに取り直す。
-const agentsLoaded = ref(false)
-const agentsError = ref('')
+const agentsLoaded = ref(false);
+const agentsError = ref("");
 async function loadAgents() {
-  try {
-    await refreshAgents()
-    agentsError.value = ''
-  } catch {
-    agentsError.value = 'エージェントの一覧を取得できませんでした。'
-  } finally {
-    agentsLoaded.value = true
-  }
+	try {
+		await refreshAgents();
+		agentsError.value = "";
+	} catch {
+		agentsError.value = "エージェントの一覧を取得できませんでした。";
+	} finally {
+		agentsLoaded.value = true;
+	}
 }
 function handleVisibilityChange() {
-  if (document.visibilityState === 'visible') loadAgents()
+	if (document.visibilityState === "visible") loadAgents();
 }
 onMounted(() => {
-  loadAgents()
-  document.addEventListener('visibilitychange', handleVisibilityChange)
-})
-onBeforeUnmount(() => document.removeEventListener('visibilitychange', handleVisibilityChange))
+	loadAgents();
+	document.addEventListener("visibilitychange", handleVisibilityChange);
+});
+onBeforeUnmount(() =>
+	document.removeEventListener("visibilitychange", handleVisibilityChange),
+);
 </script>
 
 <template>

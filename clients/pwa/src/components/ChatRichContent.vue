@@ -1,17 +1,20 @@
 <script setup lang="ts">
-import type { ChatEmbed, ChatFile } from '@/api'
-import AppIcon from './AppIcon.vue'
-import { mediaKind } from '@/utils/chatAttachments'
-import MarkdownContent from './MarkdownContent.vue'
+import type { ChatEmbed, ChatFile } from "@/api";
+import { mediaKind } from "@/utils/chatAttachments";
+import AppIcon from "./AppIcon.vue";
+import MarkdownContent from "./MarkdownContent.vue";
 
 /**
  * メッセージのリッチコンテンツ（Discord Embed 相当の埋め込みとファイル添付）。
  * embed の色は 0xRRGGBB の数値で届く。ファイルの実体は認証必須の同一オリジン URL
  * （所有者スコープ）なので、画像は `<img>`、音声・動画はその場で再生、それ以外はダウンロードリンクにする。
  */
-defineProps<{ embeds?: ChatEmbed[]; files?: ChatFile[] }>()
-const accent = (color?: number) => (color === undefined ? undefined : `#${(color & 0xffffff).toString(16).padStart(6, '0')}`)
-const kind = (file: ChatFile) => mediaKind(file.mimeType)
+defineProps<{ embeds?: ChatEmbed[]; files?: ChatFile[] }>();
+const accent = (color?: number) =>
+	color === undefined
+		? undefined
+		: `#${(color & 0xffffff).toString(16).padStart(6, "0")}`;
+const kind = (file: ChatFile) => mediaKind(file.mimeType);
 </script>
 <template>
   <div v-if="embeds?.length || files?.length" class="rich-content">

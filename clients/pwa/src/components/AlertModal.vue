@@ -1,20 +1,26 @@
 <script setup lang="ts">
-import { nextTick, ref, watch } from 'vue'
-import UiButton from './UiButton.vue'
+import { nextTick, ref, watch } from "vue";
+import UiButton from "./UiButton.vue";
 
 // 入力不足や処理結果を知らせるモーダル。`message` が空でなければ表示し、OK・背景・Esc で閉じる。
-const message = defineModel<string>({ default: '' })
-const props = withDefaults(defineProps<{ title?: string }>(), { title: '入力内容を確認してください' })
-const dialog = ref<HTMLDialogElement>()
+const message = defineModel<string>({ default: "" });
+const props = withDefaults(defineProps<{ title?: string }>(), {
+	title: "入力内容を確認してください",
+});
+const dialog = ref<HTMLDialogElement>();
 
 watch(message, async (value) => {
-  await nextTick()
-  if (value && !dialog.value?.open) dialog.value?.showModal()
-  else if (!value && dialog.value?.open) dialog.value.close()
-})
+	await nextTick();
+	if (value && !dialog.value?.open) dialog.value?.showModal();
+	else if (!value && dialog.value?.open) dialog.value.close();
+});
 
-function close() { message.value = '' }
-function handleBackdropClick(event: MouseEvent) { if (event.target === dialog.value) close() }
+function close() {
+	message.value = "";
+}
+function handleBackdropClick(event: MouseEvent) {
+	if (event.target === dialog.value) close();
+}
 </script>
 
 <template>

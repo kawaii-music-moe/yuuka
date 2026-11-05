@@ -10,20 +10,22 @@
  * 管理画面側でも検証される（オープンリダイレクト対策）が、ここでも同一オリジンの絶対パス
  * 以外は渡さない。
  */
-export const ADMIN_LOGIN_PATH = '/admin/login'
+export const ADMIN_LOGIN_PATH = "/admin/login";
 
 /** 同一オリジンの絶対パスか（`//host`・`/\host`・スキーム付き・相対パスは不可）。 */
 function isSameOriginPath(path: string): boolean {
-  return path.startsWith('/') && !path.startsWith('//') && !path.includes('\\')
+	return path.startsWith("/") && !path.startsWith("//") && !path.includes("\\");
 }
 
 /** 共有ログイン画面の URL。`returnTo` が安全な同一オリジンパスのときだけクエリへ載せる。 */
 export function buildLoginUrl(returnTo?: string | null): string {
-  if (!returnTo || !isSameOriginPath(returnTo)) return ADMIN_LOGIN_PATH
-  return `${ADMIN_LOGIN_PATH}?returnTo=${encodeURIComponent(returnTo)}`
+	if (!returnTo || !isSameOriginPath(returnTo)) return ADMIN_LOGIN_PATH;
+	return `${ADMIN_LOGIN_PATH}?returnTo=${encodeURIComponent(returnTo)}`;
 }
 
 /** 現在の PWA 上の位置（パス+クエリ+ハッシュ）。ログイン後にここへ戻すために使う。 */
-export function currentReturnTo(location: Pick<Location, 'pathname' | 'search' | 'hash'>): string {
-  return `${location.pathname}${location.search}${location.hash}`
+export function currentReturnTo(
+	location: Pick<Location, "pathname" | "search" | "hash">,
+): string {
+	return `${location.pathname}${location.search}${location.hash}`;
 }

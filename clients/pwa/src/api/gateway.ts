@@ -1,45 +1,69 @@
-import type { ChatPollOptions } from './chatPolling'
-import type { ReceiptImage } from '../utils/receiptImage'
-import type { AgentSettings, CalendarEvent, ChatAttachment, ChatMessage, NewCalendarEvent, FinanceSummary, HealthStatus, NewVoice, ReceiptDraft, SharedNote, Todo, Transaction, Voice } from './contracts'
+import type { ReceiptImage } from "../utils/receiptImage";
+import type { ChatPollOptions } from "./chatPolling";
+import type {
+	AgentSettings,
+	CalendarEvent,
+	ChatAttachment,
+	ChatMessage,
+	FinanceSummary,
+	HealthStatus,
+	NewCalendarEvent,
+	NewVoice,
+	ReceiptDraft,
+	SharedNote,
+	Todo,
+	Transaction,
+	Voice,
+} from "./contracts";
 
 /** UI が依存する唯一の API 契約。バックエンド仕様変更時は adapter だけを変更する。 */
 export interface AgentGateway {
-  getHealth(): Promise<HealthStatus>
-  getSettings(): Promise<AgentSettings>
-  saveSettings(settings: AgentSettings): Promise<AgentSettings>
-  startGoogleAuthorization(): Promise<{ authorizationUrl: string }>
-  getSharedNote(): Promise<SharedNote>
-  saveSharedNote(note: Pick<SharedNote, 'title' | 'body'>): Promise<SharedNote>
-  listTodos(): Promise<Todo[]>
-  createTodo(todo: Pick<Todo, 'title' | 'dueDate' | 'list'>): Promise<Todo>
-  updateTodo(id: string, patch: Pick<Todo, 'completed'>): Promise<Todo>
-  listCalendarEvents(from: string, to: string): Promise<CalendarEvent[]>
-  createCalendarEvent(event: NewCalendarEvent): Promise<CalendarEvent>
-  getFinanceSummary(month: string): Promise<FinanceSummary>
-  listTransactions(month: string): Promise<Transaction[]>
-  createTransaction(transaction: Omit<Transaction, 'id'>): Promise<Transaction>
-  /**
-   * レシート画像を読み取り、取引の下書きを返す（登録はしない。フォームで確認してから createTransaction する）。
-   * 形式不正・キー未設定（400）・読み取れない（422）・レート制限（429）等は `ApiError`（`serverMessage` に案内文）で失敗する。
-   */
-  scanReceipt(image: ReceiptImage): Promise<ReceiptDraft>
-  listChatMessages(): Promise<ChatMessage[]>
-  /**
-   * メッセージ（本文と添付）を送り、エージェントの応答が届くまで待って返す。本文が空でも添付があれば送れる。サーバーは重いターンを非同期実行する
-   * （`202` + 履歴のポーリング）ため、この呼び出しは数十秒〜数分かかりうる。`onTick` で待機中の
-   * 経過を、`signal` で中断を受け取れる。同期的に拒否された場合（空・キー未設定 400 / 処理中 409 /
-   * レート制限 429）は `ApiError`（`serverMessage` に案内文）で即座に失敗する。待ちきれなければ
-   * `ChatReplyTimeoutError`。
-   */
-  sendChatMessage(content: string, attachments: ChatAttachment[], options?: Pick<ChatPollOptions, 'onTick' | 'signal'>): Promise<ChatMessage>
-  /** 送信済みだが応答待ちのターン（リロード後など）の応答を待つ。`sinceId` は最後に見えた id。 */
-  waitForChatReply(sinceId: string, options?: Pick<ChatPollOptions, 'onTick' | 'signal'>): Promise<ChatMessage>
-  /** 音声チャットの声（ユーザー本人のもの・エージェントに依らない）。 */
-  listVoices(): Promise<Voice[]>
-  /** 声の話者条件の本体（f32 リトルエンディアン）。 */
-  getVoiceState(id: string): Promise<ArrayBuffer>
-  /** 声を保存する。保存数の上限（409）・`users` 行が無い（404）などは `ApiError`。 */
-  createVoice(voice: NewVoice): Promise<Voice>
-  updateVoice(id: string, patch: Partial<Pick<Voice, 'name' | 'caption'>>): Promise<Voice>
-  deleteVoice(id: string): Promise<void>
+	getHealth(): Promise<HealthStatus>;
+	getSettings(): Promise<AgentSettings>;
+	saveSettings(settings: AgentSettings): Promise<AgentSettings>;
+	startGoogleAuthorization(): Promise<{ authorizationUrl: string }>;
+	getSharedNote(): Promise<SharedNote>;
+	saveSharedNote(note: Pick<SharedNote, "title" | "body">): Promise<SharedNote>;
+	listTodos(): Promise<Todo[]>;
+	createTodo(todo: Pick<Todo, "title" | "dueDate" | "list">): Promise<Todo>;
+	updateTodo(id: string, patch: Pick<Todo, "completed">): Promise<Todo>;
+	listCalendarEvents(from: string, to: string): Promise<CalendarEvent[]>;
+	createCalendarEvent(event: NewCalendarEvent): Promise<CalendarEvent>;
+	getFinanceSummary(month: string): Promise<FinanceSummary>;
+	listTransactions(month: string): Promise<Transaction[]>;
+	createTransaction(transaction: Omit<Transaction, "id">): Promise<Transaction>;
+	/**
+	 * レシート画像を読み取り、取引の下書きを返す（登録はしない。フォームで確認してから createTransaction する）。
+	 * 形式不正・キー未設定（400）・読み取れない（422）・レート制限（429）等は `ApiError`（`serverMessage` に案内文）で失敗する。
+	 */
+	scanReceipt(image: ReceiptImage): Promise<ReceiptDraft>;
+	listChatMessages(): Promise<ChatMessage[]>;
+	/**
+	 * メッセージ（本文と添付）を送り、エージェントの応答が届くまで待って返す。本文が空でも添付があれば送れる。サーバーは重いターンを非同期実行する
+	 * （`202` + 履歴のポーリング）ため、この呼び出しは数十秒〜数分かかりうる。`onTick` で待機中の
+	 * 経過を、`signal` で中断を受け取れる。同期的に拒否された場合（空・キー未設定 400 / 処理中 409 /
+	 * レート制限 429）は `ApiError`（`serverMessage` に案内文）で即座に失敗する。待ちきれなければ
+	 * `ChatReplyTimeoutError`。
+	 */
+	sendChatMessage(
+		content: string,
+		attachments: ChatAttachment[],
+		options?: Pick<ChatPollOptions, "onTick" | "signal">,
+	): Promise<ChatMessage>;
+	/** 送信済みだが応答待ちのターン（リロード後など）の応答を待つ。`sinceId` は最後に見えた id。 */
+	waitForChatReply(
+		sinceId: string,
+		options?: Pick<ChatPollOptions, "onTick" | "signal">,
+	): Promise<ChatMessage>;
+	/** 音声チャットの声（ユーザー本人のもの・エージェントに依らない）。 */
+	listVoices(): Promise<Voice[]>;
+	/** 声の話者条件の本体（f32 リトルエンディアン）。 */
+	getVoiceState(id: string): Promise<ArrayBuffer>;
+	/** 声を保存する。保存数の上限（409）・`users` 行が無い（404）などは `ApiError`。 */
+	createVoice(voice: NewVoice): Promise<Voice>;
+	updateVoice(
+		id: string,
+		patch: Partial<Pick<Voice, "name" | "caption">>,
+	): Promise<Voice>;
+	deleteVoice(id: string): Promise<void>;
 }

@@ -1,12 +1,12 @@
 <script setup lang="ts">
-import { calendarLabel, weekdayLabel, type AgendaDay } from '@/utils/calendar'
-import { localDateKey, time } from '@/utils/format'
+import { type AgendaDay, calendarLabel, weekdayLabel } from "@/utils/calendar";
+import { localDateKey, time } from "@/utils/format";
 
 // スマホ向けの日ごとの予定一覧（月・週表示）。予定の無い日（週表示）からはその日の予定追加を依頼できる。
-const props = defineProps<{ days: AgendaDay[]; today: Date }>()
-const emit = defineEmits<{ add: [day: Date]; selectDay: [day: Date] }>()
+const props = defineProps<{ days: AgendaDay[]; today: Date }>();
+const emit = defineEmits<{ add: [day: Date]; selectDay: [day: Date] }>();
 
-const todayKey = () => localDateKey(props.today)
+const todayKey = () => localDateKey(props.today);
 </script>
 
 <template>
