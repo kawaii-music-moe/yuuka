@@ -13,6 +13,7 @@ import TransactionFormView from "@/components/finance/TransactionForm.vue";
 import TransactionList from "@/components/finance/TransactionList.vue";
 import PageState from "@/components/PageState.vue";
 import PageTitle from "@/components/PageTitle.vue";
+import { useAsyncState } from "@/composables/useAsyncState";
 import {
 	applyReceiptDraft,
 	emptyTransactionForm,
@@ -24,22 +25,19 @@ import { localDateKey, localMonthKey } from "@/utils/format";
 const month = ref(localMonthKey(new Date()));
 const summary = ref<FinanceSummary>();
 const transactions = ref<Transaction[]>([]);
-const loading = ref(true);
-const error = ref("");
+const { loading, error, run } = useAsyncState();
 
+// 月を素早く切り替えたときは、最新の読み込みだけが反映される（useAsyncState）。
 async function load() {
-	loading.value = true;
-	error.value = "";
-	try {
-		[summary.value, transactions.value] = await Promise.all([
-			agentGateway.getFinanceSummary(month.value),
-			agentGateway.listTransactions(month.value),
-		]);
-	} catch {
-		error.value = "家計データを取得できません。";
-	} finally {
-		loading.value = false;
-	}
+	const result = await run(
+		() =>
+			Promise.all([
+				agentGateway.getFinanceSummary(month.value),
+				agentGateway.listTransactions(month.value),
+			]),
+		"家計データを取得できません。",
+	);
+	if (result) [summary.value, transactions.value] = result;
 }
 
 const form = ref(emptyTransactionForm(localDateKey(new Date())));

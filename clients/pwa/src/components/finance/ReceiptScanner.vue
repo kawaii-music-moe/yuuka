@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { ref } from "vue";
-import { agentGateway, type ReceiptDraft } from "@/api";
-import { ApiError } from "@/api/http";
+import { ApiError, agentGateway, type ReceiptDraft } from "@/api";
 import { prepareReceiptImage, RECEIPT_MIME_TYPES } from "@/utils/receiptImage";
 import UiButton from "../UiButton.vue";
 

@@ -14,10 +14,11 @@ const { visible: saved, show: showSaved } = useSavedNotice();
 const saveError = ref("");
 
 async function load() {
-	await run(async () => {
-		const result = await agentGateway.getSharedNote();
-		note.value = { title: result.title, body: result.body };
-	}, "共有ノートを取得できません。");
+	const result = await run(
+		() => agentGateway.getSharedNote(),
+		"共有ノートを取得できません。",
+	);
+	if (result) note.value = { title: result.title, body: result.body };
 }
 
 async function save() {

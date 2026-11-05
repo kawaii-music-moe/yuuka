@@ -1,4 +1,5 @@
 import { ref } from "vue";
+import { readStorage, removeStorage, writeStorage } from "../utils/storage";
 import { request } from "./http";
 
 /** 切り替え先のエージェント（サーバーの Bot）。 */
@@ -12,14 +13,10 @@ export const SYSTEM_AGENT_ID = "system_default";
 
 const STORAGE_KEY = "yuuka.pwa.agentId";
 
+/** 前回選んだエージェント。保存が無い・読めないときは未選択にし、一覧の取得後に先頭のエージェントを選ぶ。 */
 function loadStoredAgentId(): string {
-	try {
-		const stored = window.localStorage.getItem(STORAGE_KEY) ?? "";
-		return stored === SYSTEM_AGENT_ID ? "" : stored;
-	} catch {
-		// プライベートブラウズ等で storage が使えなくても、一覧の取得後に先頭のエージェントを選ぶ。
-		return "";
-	}
+	const stored = readStorage(STORAGE_KEY) ?? "";
+	return stored === SYSTEM_AGENT_ID ? "" : stored;
 }
 
 /** 選択中のエージェント（未選択は空文字）。`/api/client/*` はすべてこの Bot のデータを読み書きする。 */
@@ -27,12 +24,8 @@ export const selectedAgentId = ref(loadStoredAgentId());
 
 export function selectAgent(id: string) {
 	selectedAgentId.value = id;
-	try {
-		if (id) window.localStorage.setItem(STORAGE_KEY, id);
-		else window.localStorage.removeItem(STORAGE_KEY);
-	} catch {
-		// 保存できなくても、このタブの中では切り替わったまま動く。
-	}
+	if (id) writeStorage(STORAGE_KEY, id);
+	else removeStorage(STORAGE_KEY);
 }
 
 /** `/api/client/*` のパスに選択中エージェントの `botId` を付ける。 */

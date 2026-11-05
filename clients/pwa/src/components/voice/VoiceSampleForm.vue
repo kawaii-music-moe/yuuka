@@ -164,7 +164,10 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-.sample-form{display:flex;flex-direction:column;gap:10px}.sample-form .muted,.sample-form .error{margin:0}
-.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.picked{font-size:13px}
-.field{display:flex;flex-direction:column;gap:5px;font-size:12px;color:var(--text-medium)}.field input{padding:9px 10px;border:1px solid var(--field);border-radius:4px;font-size:14px}
+.sample-form { display: flex; flex-direction: column; gap: 10px; }
+.sample-form .muted, .sample-form .error { margin: 0; }
+.row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.picked { font-size: 13px; }
+.field { display: flex; flex-direction: column; gap: 5px; font-size: 12px; color: var(--text-medium); }
+.field input { padding: 9px 10px; border: 1px solid var(--field); border-radius: 4px; font-size: 14px; }
 </style>

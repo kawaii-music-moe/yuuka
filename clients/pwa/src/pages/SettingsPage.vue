@@ -8,20 +8,18 @@ import FormField from "@/components/FormField.vue";
 import PageState from "@/components/PageState.vue";
 import PageTitle from "@/components/PageTitle.vue";
 import UiButton from "@/components/UiButton.vue";
+import { useAsyncState } from "@/composables/useAsyncState";
+import { useSavedNotice } from "@/composables/useSavedNotice";
 
 const settings = ref<AgentSettings>();
-const loading = ref(true);
-const error = ref("");
-const saved = ref(false);
+const { loading, error, run } = useAsyncState();
+const { visible: saved, show: showSaved } = useSavedNotice();
 const saveError = ref("");
 onMounted(async () => {
-	try {
-		settings.value = await agentGateway.getSettings();
-	} catch {
-		error.value = "設定を取得できません。";
-	} finally {
-		loading.value = false;
-	}
+	settings.value = await run(
+		() => agentGateway.getSettings(),
+		"設定を取得できません。",
+	);
 });
 // 切り替えは保存ボタンを待たずに即時反映する（画面が作り直され、新しいエージェントの設定を読み直す）。
 function handleAgentChange(event: Event) {
@@ -32,16 +30,76 @@ async function save() {
 	saveError.value = "";
 	try {
 		settings.value = await agentGateway.saveSettings(settings.value);
-		saved.value = true;
-		setTimeout(() => (saved.value = false), 2500);
+		showSaved();
 	} catch {
 		saveError.value = "設定を保存できませんでした。もう一度お試しください。";
 	}
 }
 async function authorize() {
-	const result = await agentGateway.startGoogleAuthorization();
-	window.open(result.authorizationUrl, "_blank", "noopener,noreferrer");
+	saveError.value = "";
+	try {
+		const result = await agentGateway.startGoogleAuthorization();
+		window.open(result.authorizationUrl, "_blank", "noopener,noreferrer");
+	} catch {
+		saveError.value =
+			"Google 連携を開始できませんでした。もう一度お試しください。";
+	}
 }
 </script>
-<template><section><PageTitle title="設定" description="エージェントの連携と応答方針を管理します"><template #actions><UiButton :disabled="!settings" @click="save">保存</UiButton></template></PageTitle><PageState :loading="loading" :error="error"/><form v-if="settings" class="settings-form" @submit.prevent="save"><p v-if="saved" class="saved">保存しました。</p><p v-if="saveError" class="error save-error">{{ saveError }}</p><ContentSection title="Google 連携"><div class="integration"><div><strong>{{ settings.googleConnected ? '接続済み' : '未接続' }}</strong><p>{{ settings.googleAccount ?? 'カレンダーとタスクの連携を有効にします。' }}</p></div><UiButton variant="secondary" @click="authorize">{{ settings.googleConnected ? '再認証' : '連携する' }}</UiButton></div></ContentSection><ContentSection title="AI 応答"><div class="field-grid"><FormField label="使用モデル"><select v-model="settings.model"><option v-for="modelName in GEMINI_MODELS" :key="modelName" :value="modelName">{{ modelName }}</option></select></FormField></div><p class="hint">管理画面の「あなたの設定 › AI モデル」と同じ設定です。秘書の Bot はこのモデルで応答します。</p></ContentSection><ContentSection title="エージェント"><div class="field-grid"><FormField label="使用するエージェント"><select :value="selectedAgentId" :disabled="agents.length < 2" @change="handleAgentChange"><option v-if="agents.length === 0" :value="selectedAgentId">{{ selectedAgentId }}</option><option v-for="agent in agents" :key="agent.id" :value="agent.id">{{ agent.name }}</option></select></FormField></div><p class="hint">切り替えるとすぐに反映され、チャットや Todo などはそのエージェントのデータになります。選択はこの端末（ブラウザ）だけに保存されます。</p></ContentSection></form></section></template>
-<style scoped>.settings-form{max-width:760px}.integration{display:flex;justify-content:space-between;align-items:center;background:var(--primary-soft);border-left:3px solid var(--primary);padding:13px}.integration strong{font-size:14px}.integration p{font-size:12px;color:var(--text-medium);margin:4px 0 0}.field-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}.hint{font-size:12px;color:var(--text-medium);margin:8px 0 0}.saved{color:var(--primary);font-size:13px;margin:0 0 14px}.save-error{font-size:13px;margin:0 0 14px}@media(max-width:640px){.field-grid{grid-template-columns:1fr}.integration{gap:12px}.integration .ui-button{flex-shrink:0}}</style>
+<template>
+  <section>
+    <PageTitle title="設定" description="エージェントの連携と応答方針を管理します">
+      <template #actions><UiButton :disabled="!settings" @click="save">保存</UiButton></template>
+    </PageTitle>
+    <PageState :loading="loading" :error="error"/>
+    <form v-if="settings" class="settings-form" @submit.prevent="save">
+      <p v-if="saved" class="saved">保存しました。</p>
+      <p v-if="saveError" class="error save-error">{{ saveError }}</p>
+      <ContentSection title="Google 連携">
+        <div class="integration">
+          <div>
+            <strong>{{ settings.googleConnected ? '接続済み' : '未接続' }}</strong>
+            <p>{{ settings.googleAccount ?? 'カレンダーとタスクの連携を有効にします。' }}</p>
+          </div>
+          <UiButton variant="secondary" @click="authorize">{{ settings.googleConnected ? '再認証' : '連携する' }}</UiButton>
+        </div>
+      </ContentSection>
+      <ContentSection title="AI 応答">
+        <div class="field-grid">
+          <FormField label="使用モデル">
+            <select v-model="settings.model">
+              <option v-for="modelName in GEMINI_MODELS" :key="modelName" :value="modelName">{{ modelName }}</option>
+            </select>
+          </FormField>
+        </div>
+        <p class="hint">管理画面の「あなたの設定 › AI モデル」と同じ設定です。秘書の Bot はこのモデルで応答します。</p>
+      </ContentSection>
+      <ContentSection title="エージェント">
+        <div class="field-grid">
+          <FormField label="使用するエージェント">
+            <select :value="selectedAgentId" :disabled="agents.length < 2" @change="handleAgentChange">
+              <option v-if="agents.length === 0" :value="selectedAgentId">{{ selectedAgentId }}</option>
+              <option v-for="agent in agents" :key="agent.id" :value="agent.id">{{ agent.name }}</option>
+            </select>
+          </FormField>
+        </div>
+        <p class="hint">切り替えるとすぐに反映され、チャットや Todo などはそのエージェントのデータになります。選択はこの端末（ブラウザ）だけに保存されます。</p>
+      </ContentSection>
+    </form>
+  </section>
+</template>
+<style scoped>
+.settings-form { max-width: 760px; }
+.integration { display: flex; justify-content: space-between; align-items: center; background: var(--primary-soft); border-left: 3px solid var(--primary); padding: 13px; }
+.integration strong { font-size: 14px; }
+.integration p { font-size: 12px; color: var(--text-medium); margin: 4px 0 0; }
+.field-grid { display: grid; grid-template-columns: repeat(3,1fr); gap: 14px; }
+.hint { font-size: 12px; color: var(--text-medium); margin: 8px 0 0; }
+.saved { color: var(--primary); font-size: 13px; margin: 0 0 14px; }
+.save-error { font-size: 13px; margin: 0 0 14px; }
+@media (max-width: 640px) {
+  .field-grid { grid-template-columns: 1fr; }
+  .integration { gap: 12px; }
+  .integration .ui-button { flex-shrink: 0; }
+}
+</style>
