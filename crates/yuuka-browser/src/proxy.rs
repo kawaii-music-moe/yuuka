@@ -103,7 +103,7 @@ pub fn sandbox_args() -> Vec<&'static str> {
     }
 }
 
-/// `--no-sandbox` を付けるか。root 実行（Docker 等でサンドボックスが使えない）か
+/// `--no-sandbox` を付けるか。root 実行（コンテナ等でサンドボックスが使えない）か
 /// `YUUKA_BROWSER_NO_SANDBOX=1` のときだけ付ける。それ以外はサンドボックスを有効にする。
 #[must_use]
 pub fn no_sandbox_required() -> bool {

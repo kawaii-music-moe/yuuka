@@ -1,8 +1,8 @@
 //! デスクトップクライアント配布 Web-API（Node `desktopClientRoutes`・auth:user）。
 //!
 //! `GET /api/desktop/info`（配布バイナリのメタ情報）と `GET /api/desktop/download`
-//! （Windows 版 `yuuka-desktop.exe` の添付配信）。バイナリは Docker の desktop-builder ステージで
-//! 生成され配布ディレクトリ（既定 `dist/downloads`・env `DESKTOP_DOWNLOAD_DIR` で上書き）へ置かれる。
+//! （Windows 版 `yuuka-desktop.exe` の添付配信）。バイナリは別途ビルドして
+//! 配布ディレクトリ（既定 `dist/downloads`・env `DESKTOP_DOWNLOAD_DIR` で上書き）へ置かれる。
 //! ファイルが無い環境（ローカル/本 Rust ランタイム＝exe 非同梱）では info が `available:false` を返し、
 //! ダッシュボードがその旨を表示する（Node と同挙動）。
 

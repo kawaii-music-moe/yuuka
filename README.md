@@ -23,8 +23,8 @@
 |---|---|
 | できること一覧（機能） | [docs/guide/features.md](docs/guide/features.md) |
 | セットアップ・設定 | [docs/guide/setup.md](docs/guide/setup.md) |
-| dev / 本番の運用手順（systemd・Docker） | [deploy/README.md](deploy/README.md) |
-| Docker での本番デプロイ・複数インスタンス運用 | [docs/guide/deployment.md](docs/guide/deployment.md) |
+| dev / 本番の運用手順 | [deploy/README.md](deploy/README.md) |
+| 本番を立てる（systemd） | [docs/guide/deployment.md](docs/guide/deployment.md) |
 | 設計・仕様・アーキテクチャ（開発者 / AI 向け） | [docs/index.md](docs/index.md) |
 | 開発の流れとルール | [CONTRIBUTING.md](CONTRIBUTING.md) |
 
@@ -40,11 +40,11 @@ pnpm dev:start  # dev API（yuuka-dev.service）と PWA・管理画面の Vite �
 
 入口は `http://127.0.0.1:5173/`、管理画面は `/admin/` です（`/api` は dev API の `127.0.0.1:3403` へ中継）。
 API が起動済みなら `pnpm dev` でフロントだけを前景で起動できます。
-更新・停止・ログ・OIDC の登録は [dev 運用手順](deploy/README.md#dev-インスタンスsystemd現在のホスト) を参照してください。
+更新・停止・ログ・OIDC の登録は [dev 運用手順](deploy/README.md#dev) を参照してください。
 
 ## 本番
 
-現在のホストの本番は Docker ではなく、systemd ユーザーサービスで動いています。
+本番も dev も、ユーザー systemd のサービスとしてホストで直接動かします（ユニットの例は `deploy/systemd/`）。
 
 | サービス | 役割 |
 |---|---|
@@ -53,16 +53,15 @@ API が起動済みなら `pnpm dev` でフロントだけを前景で起動で�
 | `yuuka-redis.service` | 本番と dev で共有する Redis |
 | `yuuka-tts.service` | 音声生成サーバー（`127.0.0.1:3410`） |
 
-本番へは develop の最新版を次のスクリプトで反映します（main へは出しません）。
+本番へは develop の最新版を次のコマンドで反映します（main へは出しません）。
 
 ```bash
-deploy/prod/deploy-develop.sh                    # origin/develop を fast-forward して本番へ
-deploy/prod/deploy-develop.sh verify             # 確認だけ
-deploy/prod/deploy-develop.sh rollback <退避先>  # 退避した状態へ戻す（DB も戻る）
+pnpm run deploy                       # origin/develop を fast-forward して本番へ（deploy/prod/deploy-develop.sh）
+pnpm run deploy:verify                # 確認だけ
+pnpm run deploy:rollback -- <退避先>  # 退避した状態へ戻す（DB も戻る）
 ```
 
-退避先・確認の内容・音声モデル（`data/tts-models`）の配置は [deploy/README.md](deploy/README.md) を参照してください。
-Docker で動かす場合（`pnpm run deploy`）の手順は [docs/guide/deployment.md](docs/guide/deployment.md) にあります。
+退避先・確認の内容・音声モデル（`data/tts-models`）の配置は [deploy/README.md](deploy/README.md)、新しく本番を立てる手順は [docs/guide/deployment.md](docs/guide/deployment.md) を参照してください。
 
 ## ライセンス・免責（ファンメイド作品）
 

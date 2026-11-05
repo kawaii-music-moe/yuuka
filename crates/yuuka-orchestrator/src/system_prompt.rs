@@ -4,10 +4,8 @@
 //! 検索スキル → 機能一覧 → システムルール（現在日時・未実行の完了報告禁止）。空セクションは除去して
 //! `\n` 結合する。カレンダー情報・コンテキストノート・シナプス想起は engine 層で末尾へ追記する。
 //!
-//! **検索スキル（R12・#109）**: Node は実行時に `docs/skills/search_skills.md` を読み、旧 Docker イメージは
-//! `docs/` を作業ディレクトリへ同梱していたため本番でも常に注入されていた。現行イメージは成果物のみで
-//! `docs/` を同梱しないため、ビルド時に `include_str!` で埋め込む（Dockerfile の rust-builder 段で
-//! `docs/skills` を COPY する）。
+//! **検索スキル（R12・#109）**: Node は実行時に `docs/skills/search_skills.md` を読み、実行時の作業ディレクトリに
+//! `docs/` があるとは限らないため、ビルド時に `include_str!` で埋め込む（反映には再ビルドが要る）。
 
 use chrono::{Datelike, Local, TimeZone, Timelike};
 

@@ -1,7 +1,7 @@
 //! JST 日境界のヘルパ（issue #43: PWA のカレンダー・家計は UTC 基準で 1 日ずれていた）。
 //!
 //! PWA クライアント（PR #63・`localDateKey`/`localMonthKey`）はブラウザのローカル日付
-//! （`YYYY-MM-DD`/`YYYY-MM`）を送る。サーバー（本番デプロイは JST 固定・`Dockerfile` の
+//! （`YYYY-MM-DD`/`YYYY-MM`）を送る。サーバー（本番デプロイは JST 固定・systemd ユニットの
 //! `TZ=Asia/Tokyo`）はそれを**そのままローカル暦日**として扱えばよく、UTC 変換は不要。
 //! SQLite 側の列（`expenses.date`・`schedules.start_at` 等）も同じくローカル暦文字列で保存されて
 //! いるため（他ドメインの `date('now','localtime')` 等と同じ規約）、文字列比較がそのまま JST の

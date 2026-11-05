@@ -1,14 +1,26 @@
 # ==============================================================================
-# Yuuka 本番(prod) インスタンス設定 — Docker 運用版（テンプレート）
-#   cp config.yaml.example config.yaml して編集する。config.yaml は .gitignore 済。
-#   暗号化シークレットはここに書かず deploy/prod/secret.key（環境変数注入）に置く。
+# Yuuka 本番(prod) の設定（テンプレート）
+#   cp deploy/prod/config.yaml.example deploy/prod/config.yaml して編集する（git 管理外）。
+#   yuuka.service の作業ディレクトリ（チェックアウト）直下の config.yaml を、このファイルへの
+#   シンボリックリンクにする: ln -s deploy/prod/config.yaml config.yaml
+#   暗号化シークレットはここに書かず deploy/prod/secret.key に置く（run-yuuka.sh が環境変数にする）。
+#   キーの一覧と既定値は .env.example を参照。
 # ==============================================================================
 
-# DB（コンテナ内パス。/app/data はホストの実 data/ を bind マウント）
+# DB（作業ディレクトリからの相対パス。無いと起動しない。新規なら初回だけ YUUKA_INIT_DB=1）
 DB_PATH: "./data/yuuka.db"
 
-# Redis はインスタンス専用コンテナ（compose の service 名 "redis"）へ接続
-REDIS_URL: "redis://redis:6379"
+# Redis（yuuka-redis.service。dev とは DB 番号を分ける）
+REDIS_URL: "redis://127.0.0.1:6379"
+
+# 待ち受け。外部公開はトンネル / リバースプロキシからこのポートへ向ける。
+HOST: "127.0.0.1"
+PORT: 3402
+
+# 外部公開 URL（OAuth の戻り先・Cookie・CSRF 判定に使う）
+BASE_URL: "https://yuuka.example.com"
+# 同じホストのトンネル / プロキシから来る要求の X-Forwarded-For を信頼する
+TRUSTED_PROXIES: "127.0.0.1"
 
 # 運用チューニング（未設定なら既定値。不正値は起動時に警告して既定値を使う。詳細は example.yaml）
 REMINDER_CRON: "* * * * *"
@@ -18,12 +30,9 @@ REMINDER_CRON: "* * * * *"
 # DESKTOP_TOKEN_TTL_DAYS: 90
 # DESKTOP_DEVICE_CODE_TTL_SEC: 600
 
-# 管理画面（コンテナ内待受。ホスト公開ポートは instance.env の HOST_PORT）
-PORT: 7854
-HOST: "0.0.0.0"
-
 # ログインは OIDC プロバイダーに委ねる（OIDC_ISSUER 省略時は標準の sk-account）。
 # シークレットは sk-account の `oidc new-secret` で作り、sk-account の oidc-clients.toml に登録する（機密）
+# OIDC_INTERNAL_URL は同じホストで sk-account を動かすときだけ書く。
 OIDC_INTERNAL_URL: "http://127.0.0.1:3100"
 OIDC_CLIENT_ID: "yuuka"
 OIDC_CLIENT_SECRET: ""
@@ -32,13 +41,10 @@ OIDC_CLIENT_SECRET: ""
 GOOGLE_CLIENT_ID: "your-google-oauth-client-id.apps.googleusercontent.com"
 GOOGLE_CLIENT_SECRET: "your-google-oauth-client-secret"
 
-# 外部公開ベースURL（Cloudflare Tunnel 等で公開する本番ドメイン）
-BASE_URL: "https://yuuka.example.com"
-
 PRIVACY_POLICY_URL: "/privacy"
 TERMS_URL: "/terms"
 GOOGLE_SITE_VERIFICATION: ""
-# サーバーでの音声生成（GPU の無い端末向け・deploy/tts/yuuka-tts.service）。未設定なら標準の読み上げになる。
+# サーバーでの音声生成（GPU の無い端末向け・deploy/systemd/yuuka-tts.service.example）。未設定なら標準の読み上げになる。
 TTS_SERVER_URL: "http://127.0.0.1:3410"
 # 音声生成サーバーへの要求の署名の秘密鍵（clients/pwa/server/tts/keygen.ts で作る）。別のマシンに置くときは必須。
 # TTS_SIGNING_KEY: ""

@@ -4,9 +4,9 @@
 # システム全体設定（全ユーザー共有）
 # ユーザー別の設定（Gemini API Key/Model、Google OAuth等）は管理画面から設定します。
 #
-# これはローカル/開発でバックエンドを直接（Docker を使わず）動かす場合のテンプレートです
-# （docs/guide/setup.md 参照）。Docker デプロイでは同じスキーマの deploy/<instance>/config.yaml.example
-# （instance ごとのポート・sk-account の URL・BASE_URL 等をあらかじめ埋めたもの）を使います。
+# これはローカル/開発でバックエンドを直接動かす場合のテンプレートです（docs/guide/setup.md 参照）。
+# 本番・dev は同じスキーマの deploy/prod/config.yaml.example / deploy/dev/config.yaml.example
+# （ポート・OIDC・BASE_URL 等をあらかじめ埋めたもの）を使います。
 # 項目を追加・変更する場合は crates/yuuka-core/src/config.rs の Config 構造体が定義の正であり、
 # 対応するキーはこの 3 ファイル（本ファイル / deploy/dev/config.yaml.example / deploy/prod/config.yaml.example）
 # で揃えてください。
@@ -64,8 +64,8 @@ PORT: 7854
 
 # 管理画面サーバーがバインドするホスト名
 # デフォルトはローカルからの接続のみ受け付けます (127.0.0.1)。
-# Cloudflare Tunnels や Docker 等のリバースプロキシを介して公開する場合は
-# すべてのインターフェース ("0.0.0.0") に変更してください。
+# 別のマシンのリバースプロキシから受ける場合は、すべてのインターフェース ("0.0.0.0") に変更してください
+# （同じホストのトンネル / プロキシなら 127.0.0.1 のままでよい）。
 HOST: "127.0.0.1"
 
 # ==============================================================================

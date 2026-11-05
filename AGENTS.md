@@ -24,7 +24,7 @@ These rules apply to Codex and any subagents working in this repository.
 
 - Treat any command that may compile code as a build for these rules, including
   `cargo build`, `cargo check`, `cargo test`, `cargo clippy`, frontend/package
-  build scripts, Docker image builds, and compilation invoked indirectly by
+  build scripts, and compilation invoked indirectly by
   `xtask` or another script.
 - For Rust compilation, also limit compiler parallelism to one job, for example
   with `CARGO_BUILD_JOBS=1` or `--jobs 1`.

@@ -1,106 +1,101 @@
-# Docker デプロイ・複数インスタンス運用
+# 本番デプロイ（systemd）
 
-同一ホスト上で Yuuka を複数インスタンス（本番 `prod` / 開発 `dev` / 任意の `<name>`）として互いに隔離して起動するための運用ガイドです。1 つの `Dockerfile` / `docker-compose.yml` をインスタンスごとの設定で使い回します。
-
-スクリプトの詳細リファレンスは [../../deploy/README.md](../../deploy/README.md) を参照。ローカル/開発で直接動かす場合は [setup.md](setup.md)。
+Yuuka の本番を、ユーザー systemd のサービスとしてホストで直接動かす手順です。リポジトリのチェックアウトを
+作業ディレクトリにし、ビルドしたバイナリ・画面を配信します。dev や日々のデプロイの細かい挙動は
+[deploy/README.md](../../deploy/README.md)、ローカルで試すだけなら [setup.md](setup.md) を参照してください。
 
 ---
 
 ## 前提
 
-- Docker Engine + Docker Compose v2 以上
-- ホストユーザーが `docker` グループに所属（`sudo` なしで `docker` を使える）
-
-各インスタンスは `COMPOSE_PROJECT_NAME` で名前空間が分離され、専用のネットワーク・Redis コンテナ・データ（bind マウント）・ホストポートを持ちます。
+- Linux（ユーザー systemd が使えること。ログアウト後も動かすなら `loginctl enable-linger "$USER"`）
+- Rust（`rust-toolchain.toml` の版）、Node.js 24 + pnpm 9、npm
+- Redis、Chromium（ブラウザ操作を使う場合）、fonts-noto-cjk（グラフの日本語）
+- 外部公開する場合はトンネル（Cloudflare Tunnel 等）かリバースプロキシ
 
 ---
 
 ## 初期セットアップ
 
-インスタンスごとに `deploy/<name>/` を用意します（`*.example` をコピーして編集）。
+チェックアウトを `~/yuuka` に置く例です（ユニットの例の `%h/yuuka` を、置いた場所に合わせて書き換えます）。
 
 ```bash
-cp deploy/prod/instance.env.example deploy/prod/instance.env
-cp deploy/prod/config.yaml.example  deploy/prod/config.yaml
+git clone https://github.com/kawaii-music-moe/yuuka.git ~/yuuka && cd ~/yuuka
+git switch develop
+
+# 設定とシークレット（どちらも git 管理外）
+cp deploy/prod/config.yaml.example deploy/prod/config.yaml   # BASE_URL・OIDC・Google 等を編集
+ln -s deploy/prod/config.yaml config.yaml                     # yuuka は作業ディレクトリの config.yaml を読む
 openssl rand -base64 48 | tr -d '\n' > deploy/prod/secret.key
-chmod 600 deploy/prod/secret.key
-# instance.env（ポート/パス/プロジェクト名）と config.yaml（OIDC/OAuth/BASE_URL 等）を編集
+chmod 600 deploy/prod/config.yaml deploy/prod/secret.key
+
+# ユニット
+mkdir -p ~/.config/systemd/user
+cp deploy/systemd/yuuka.service.example       ~/.config/systemd/user/yuuka.service
+cp deploy/systemd/yuuka-redis.service.example ~/.config/systemd/user/yuuka-redis.service
+systemctl --user daemon-reload
+systemctl --user enable --now yuuka-redis.service
+systemctl --user enable yuuka.service
 ```
 
-- `instance.env` — 非機密の起動パラメータ（`COMPOSE_PROJECT_NAME` / `HOST_PORT` / `BIND_ADDR` / `DATA_DIR` / `CONFIG_FILE` / `PUID` / `PGID` / `YUUKA_IMAGE_TAG` / `DOCKER_NET_SUBNET` / `TRUSTED_PROXIES`）。値に `$` を含めないこと。
-  - `YUUKA_IMAGE_TAG` — このインスタンス専用の Docker イメージタグ（例: prod=`latest` / dev=`dev`）。他インスタンスと共有すると `update` が互いのイメージを巻き込んで壊す。
-  - `DOCKER_NET_SUBNET` / `TRUSTED_PROXIES` — 下記「外部公開」を参照。他インスタンスと重複しない値にすること。
-- `secret.key` — 暗号化シークレット（`YUUKA_ENCRYPTION_SECRET`）。生値のみを 1 行で保存。
-- `config.yaml` — システム共通設定。`*.example` を参照。
+- `secret.key` — 暗号化シークレット（`YUUKA_ENCRYPTION_SECRET`）。生値のみを 1 行で保存。失くすと保存済みのトークン・
+  API キー等を読めなくなるので、別の場所にも控えておきます。
+- `config.yaml` — キーの一覧は [.env.example](../../.env.example)。
+- サーバーでの音声生成を使うなら `deploy/systemd/yuuka-tts.service.example` も置きます（[deploy/README.md](../../deploy/README.md#音声モデルpwa-の音声チャット)）。
 
-> いずれも git 管理外（`*.example` だけが追跡されます）。
+### 初回のデプロイ
+
+DB がまだ無いので、初回だけ `YUUKA_INIT_DB=1` を渡して新規作成させます。
+
+```bash
+mkdir -p data
+systemctl --user set-environment YUUKA_INIT_DB=1
+pnpm run deploy            # ビルド → deploy/prod/bin/yuuka と dist/public を置いて起動 → 確認
+systemctl --user unset-environment YUUKA_INIT_DB
+```
+
+最初にログインした利用者（または `ADMIN_DISCORD_IDS` に含まれる利用者）が管理者になります。
+
+> **既存の DB を持ってくるとき**: `data/yuuka.db` に置きます。V22 以前の DB は V25 で sk-account に紐付いていない利用者が
+> 所有データごと削除されるので、[setup.md](setup.md) の「既存 DB を新しい版で開くとき」を先に確認してください。
 
 ---
 
 ## デプロイ・更新
 
-コードを変更したら `pnpm run deploy` だけで反映できます。内部で「現行イメージ退避 → ビルド（Rust バイナリ + 管理画面 + PWA）→ コンテナ再作成 → ヘルスチェック」を実行します。DB マイグレーションは起動時に自動適用されます。
+```bash
+pnpm run deploy                       # origin/develop を fast-forward → ビルド → 退避 → 入れ替え → 確認
+pnpm run deploy:verify                # 確認だけ
+pnpm run deploy:rollback -- <退避先>  # 退避した状態（バイナリ・画面・DB）へ戻す
+pnpm run deploy:logs                  # journal を追う
+```
 
-> **V22 以前の DB を持つインスタンスを更新するとき**: V25 が sk-account に紐付いていない利用者を所有データごと削除します。更新前に DB をバックアップし、[setup.md](setup.md) の「既存 DB を新しい版で開くとき」を確認してください。
-
-| コマンド | 動作 |
-|---|---|
-| `pnpm run deploy` | 本番(prod)をビルドして反映 |
-| `pnpm run deploy:rollback` | 直前イメージ（`yuuka:prev-prod`）へ戻す |
-| `pnpm run deploy:verify` | ヘルスチェックのみ（HTTP / Bot ログイン / エラー件数） |
-| `pnpm run deploy:logs` | 本番ログ追従 |
-| `pnpm run deploy:ps` / `deploy:down` | 状態確認 / 停止・撤去 |
+- 止めている数秒の間にバイナリ・画面・DB・設定を `deploy/prod/backups/` へ退避します（直近 3 件を残す）。
+- DB マイグレーションは起動時に自動で当たります。前方専用なので、古い版へ戻すときは DB ごと戻ります（`rollback`）。
+- 入れ替えの間は数秒止まり、Bot は自動で再ログインします。
 
 > `pnpm deploy`（`run` 無し）は pnpm 組込みコマンドと衝突するため、必ず `pnpm run deploy` を使います。
-
-開発(dev)インスタンスは pnpm スクリプトを介さず `deploy/instance.sh dev update`（ロールバックは `dev rollback`、ログは `pnpm run deploy:logs:dev` または `dev logs -f`）で操作します。dev は `YUUKA_IMAGE_TAG=dev`（`yuuka:dev`）で prod の `yuuka:latest` と分離されているため、prod と同じ手順で安全に更新できます（`deploy/dev/instance.env` に `YUUKA_IMAGE_TAG=dev` が必要。詳細は [deploy/README.md](../../deploy/README.md#docker-の-dev-インスタンス従来構成)）。
-
-低レベルには `deploy/instance.sh <name> <update|rollback|verify|up -d|down|logs -f|build|ps>` でも操作できます。
-
-再作成時は数秒のダウンタイムが発生し、Bot は自動で再ログインします。
-
-### dev のフロント
-
-現在のホストの systemd 運用は [deploy/README.md](../../deploy/README.md#dev-インスタンスsystemd現在のホスト) を参照してください（`pnpm dev:start` で dev API と Vite を起動します）。
-
----
-
-## 新しいインスタンスを追加する
-
-1. `deploy/<name>/` を作成し `instance.env` / `config.yaml` / `secret.key` を用意（`COMPOSE_PROJECT_NAME` / `HOST_PORT` / `YUUKA_IMAGE_TAG` / `DOCKER_NET_SUBNET` は他インスタンスと重複させない）。
-2. `openssl rand -base64 48 | tr -d '\n' > deploy/<name>/secret.key && chmod 600 deploy/<name>/secret.key`
-3. `deploy/instance.sh <name> update`
 
 ---
 
 ## 暗号化シークレットのローテーション
 
-1. `deploy/<name>/secret.key.new` に新しい鍵を置く（`instance.sh` が `YUUKA_ENCRYPTION_SECRET_NEW` として渡す）。
-2. `deploy/instance.sh <name> up -d` → 起動時に全暗号化データが新鍵で再暗号化される。
-3. 完了後 `secret.key` を新鍵に置き換え、`secret.key.new` を削除して再起動。
+1. `deploy/prod/secret.key.new` に新しい鍵を置く（`run-yuuka.sh` が `YUUKA_ENCRYPTION_SECRET_NEW` として渡す）。
+2. `systemctl --user restart yuuka.service` → 起動時に全暗号化データが新しい鍵で再暗号化される。
+3. 完了後 `secret.key` を新しい鍵に置き換え、`secret.key.new` を削除して再起動。
 
 ---
 
 ## 外部公開（リバースプロキシ / Cloudflare Tunnel）
 
-`instance.env` の `BIND_ADDR` で公開バインドアドレスを切り替えます。
-
-- プロキシ/トンネルがホスト LAN IP へ接続する構成では `0.0.0.0`。
-- 完全にローカル（`127.0.0.1`）からのみ受ける場合は `127.0.0.1` にし、プロキシ側も `localhost` を向けます。
-
-ホスト公開ポートは `HOST_PORT`、コンテナ内待受は固定で `7854` です。
+yuuka は `config.yaml` の `HOST` / `PORT`（例: `127.0.0.1:3402`）で待ち受けます。トンネル / プロキシはこのポートへ
+向け、`BASE_URL` をブラウザで開く公開 URL（`https://...`）にします（OAuth の戻り先・Cookie・CSRF 判定に使います）。
 
 ### 信頼するプロキシ（`TRUSTED_PROXIES`）
 
-cloudflared / nginx 等のプロキシ経由では、Rust から見た直前の接続元は常に Docker ブリッジの
-ゲートウェイ IP になります。`X-Forwarded-For` から実クライアント IP を取り出すには、この
-ゲートウェイ IP を `TRUSTED_PROXIES`（カンマ区切り）に設定します（未設定だと X-Forwarded-For を信頼せず、デバイスフロー等のレート制限がプロキシの IP 単位になります）。
-
-ゲートウェイ IP は Docker がネットワークを再作成するたびに変わりうるため、
-`DOCKER_NET_SUBNET` で bridge のサブネットを固定してください（サブネットの先頭アドレスが
-既定でゲートウェイ IP になります。例: `172.28.0.0/24` → `172.28.0.1`）。複数インスタンスを
-同一ホストで動かす場合は、インスタンスごとに重複しないサブネットを割り当てます
-（`deploy/prod/instance.env.example` / `deploy/dev/instance.env.example` 参照）。
+プロキシ経由では、yuuka から見た直前の接続元はプロキシになります。`X-Forwarded-For` から実クライアント IP を
+取り出すには、そのプロキシの IP を `TRUSTED_PROXIES`（カンマ区切り）に設定します。同じホストで動かすなら
+`127.0.0.1` です（未設定だと X-Forwarded-For を信頼せず、デバイスフロー等のレート制限がプロキシの IP 単位になります）。
 
 ### WebSocket（`/ws/chat`）の透過設定
 
@@ -110,7 +105,7 @@ cloudflared / nginx 等のプロキシ経由では、Rust から見た直前の�
 
   ```nginx
   location /ws/chat {
-      proxy_pass http://127.0.0.1:7854;
+      proxy_pass http://127.0.0.1:3402;
       proxy_http_version 1.1;
       proxy_set_header Upgrade $http_upgrade;
       proxy_set_header Connection "upgrade";
@@ -124,28 +119,7 @@ cloudflared / nginx 等のプロキシ経由では、Rust から見た直前の�
 
 ---
 
-## ロールバック
-
-デプロイのたびに `yuuka:prev-<name>` タグへ自動退避されます。問題があれば直前イメージへ即戻せます。
-
-```bash
-pnpm run deploy:rollback        # = deploy/instance.sh prod rollback
-```
-
-> マイグレーションは前方専用です。新しいマイグレーションが適用された後に古いイメージへ戻しても、
-> DB は元に戻りません（特に V25 で削除された利用者・列は戻りません）。スキーマが変わる更新の前には
-> DB をバックアップしてください。
-
-## systemd からの移行（レガシー）
-
-旧構成は systemd ユニット（`yuuka.service`）で常駐していましたが、現在は Docker 運用へ移行済みです。systemd へ一時的に戻す場合は、コンテナと systemd が同じデータを共有するため**同時起動は不可**（SQLite WAL 単一ライター）である点に注意してください。
-
-```bash
-deploy/instance.sh prod down
-sudo systemctl enable --now yuuka
-```
-
-### AIプロバイダとモデル
+## AI プロバイダとモデル
 
 プロセスの作業ディレクトリにある `.env` に次の既定値を指定できます。
 現在対応するプロバイダは `gemini` のみです。
@@ -156,7 +130,7 @@ LLM_MODEL=gemini-3.5-flash-lite
 ```
 
 この2項目だけは起動時に自動読込され、同名の環境変数がある場合は環境変数を優先します。
-不正なプロバイダ・モデルは起動時に拒否します。Dockerでは `instance.env` から環境変数として渡せます。
+不正なプロバイダ・モデルは起動時に拒否します。本番では作業ディレクトリ（チェックアウト）の `.env` に書きます。
 既定値の変更には再起動が必要です。
 
 「Bot設定」→「汎用モード設定」のAPIキー付近で、Botごとのプロバイダ・モデルを保存できます。

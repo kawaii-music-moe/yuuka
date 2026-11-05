@@ -1,0 +1,26 @@
+# 本番の yuuka（ユーザー systemd）。リポジトリのチェックアウトを作業ディレクトリにして動かす。
+#   %h/yuuka はチェックアウトの場所に合わせて書き換える（%h はホームディレクトリ）。
+#   cp deploy/systemd/yuuka.service.example ~/.config/systemd/user/yuuka.service
+#   systemctl --user daemon-reload && systemctl --user enable --now yuuka.service
+#   ログアウト後も動かすなら: loginctl enable-linger "$USER"
+# 設定は <チェックアウト>/config.yaml ではなく deploy/prod/config.yaml を読ませたいので、
+# 作業ディレクトリ直下の config.yaml を deploy/prod/config.yaml へのシンボリックリンクにしておく。
+# 暗号化シークレットは deploy/prod/secret.key に置き、run-yuuka.sh が環境変数にして起動する。
+[Unit]
+Description=Yuuka
+Requires=yuuka-redis.service
+After=network.target yuuka-redis.service
+
+[Service]
+Type=simple
+WorkingDirectory=%h/yuuka
+Environment=TZ=Asia/Tokyo
+# ブラウザ操作に使う Chromium（既知のパスに無いときだけ指定する）。
+#Environment=CHROME_EXECUTABLE_PATH=/usr/bin/chromium
+ExecStart=%h/yuuka/deploy/prod/run-yuuka.sh
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65536
+
+[Install]
+WantedBy=default.target

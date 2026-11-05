@@ -1,0 +1,16 @@
+# yuuka のセッション用 Redis（ユーザー systemd）。本番と dev で共有する（dev は REDIS_URL の DB 番号を分ける）。
+# 保存しない設定（deploy/prod/redis.conf）なので、落ちても SQLite から作り直せる情報しか持たない。
+#   cp deploy/systemd/yuuka-redis.service.example ~/.config/systemd/user/yuuka-redis.service
+#   systemctl --user daemon-reload && systemctl --user enable --now yuuka-redis.service
+# システムの redis-server を使う場合は ExecStart のパスを合わせる（command -v redis-server）。
+[Unit]
+Description=Yuuka Redis session store
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/redis-server %h/yuuka/deploy/prod/redis.conf
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=default.target

@@ -37,7 +37,7 @@ docs/
 | プロジェクト全体像・どのファイルを触ればよいか | [project_overview.md](project_overview.md) |
 | Node → Rust の機能欠落・重複と全API/会話ツールの対応表 | [機能差分・重複の棚卸し（2026-10-08）](audits/2026-10-08-feature-parity.md) |
 | 現行の実装（バックエンド）・DB スキーマ | `crates/`（クレート一覧は [../Cargo.toml](../Cargo.toml)）/ `crates/yuuka-db/migrations/`（V17 baseline〜V36） |
-| ローカルセットアップ・Docker デプロイ・機能一覧 | [guide/setup.md](guide/setup.md) / [guide/deployment.md](guide/deployment.md) / [guide/features.md](guide/features.md) |
+| ローカルセットアップ・本番デプロイ（systemd）・機能一覧 | [guide/setup.md](guide/setup.md) / [guide/deployment.md](guide/deployment.md) / [guide/features.md](guide/features.md) |
 | PWA クライアント（Vue）の開発手順 | [../clients/pwa/README.md](../clients/pwa/README.md) |
 | 旧 Node 実装時点の不変条件・DB スキーマ v16・ファイル所有マップ（**履歴資料**） | [architecture/architecture_v2.md](architecture/architecture_v2.md) |
 | 各機能の詳細仕様（ToDo・家計・ブラウザ操作 等） | [spec/discordbot_spec.md](spec/discordbot_spec.md) |
@@ -68,7 +68,7 @@ Bot の動作モード（**secretary 秘書 / mcp_assistant 汎用**）の能力
 
 ### 4. [skills/search_skills.md](skills/search_skills.md) — 検索クロールスキル
 LLM が `searchWeb` / `fetchDynamicPage` を使う際の推奨ドメイン・クエリ・巡回フロー（天気=気象庁優先、運行=Yahoo、ニュース=一次ソース）。
-`crates/yuuka-orchestrator/src/system_prompt.rs` が `include_str!` で**ビルド時にバイナリへ埋め込み**、システムプロンプトの「ファクトチェック」と「機能一覧」の間へ注入します（システムデフォルト Bot には注入しない。R12・#109）。Docker イメージは docs/ を同梱しないため、rust-builder 段で `docs/skills` だけを COPY しています。**このファイルを変えたら、反映にはバイナリの再ビルドが必要です。**
+`crates/yuuka-orchestrator/src/system_prompt.rs` が `include_str!` で**ビルド時にバイナリへ埋め込み**、システムプロンプトの「ファクトチェック」と「機能一覧」の間へ注入します（システムデフォルト Bot には注入しない。R12・#109）。**このファイルを変えたら、反映にはバイナリの再ビルドが必要です。**
 
 ### 5. [architecture/architecture_v2.md](architecture/architecture_v2.md) — 旧 Node/TS 実装のアーキテクチャ規範（**履歴資料**）
 Rust 移行前（DB schema v16）の不変条件・共有型・DB スキーマ・暗号・ファイル所有マップを定義していた文書。**現行の規範ではなく、他の文書に優先しません。** 冒頭に現行の参照先（`crates/`・マイグレーション等）をまとめています。全面的な書き直しは未実施。

@@ -1,8 +1,8 @@
 # セットアップ・設定（ローカル / 開発）
 
-ローカルや開発環境で直接（Docker を使わずに）動かす手順です。本番運用は [Docker デプロイ](deployment.md) を推奨します。
+ローカルや開発環境で動かす手順です。本番は [本番デプロイ](deployment.md) を参照してください。
 
-関連: [機能一覧](features.md) / [Docker デプロイ](deployment.md)
+関連: [機能一覧](features.md) / [本番デプロイ](deployment.md)
 
 ---
 
@@ -66,7 +66,7 @@ export YUUKA_ENCRYPTION_SECRET="$(openssl rand -base64 48)"
 ```
 
 - **`YUUKA_ENCRYPTION_SECRET`** 【必須】: 保存時暗号化（API キー・トークン・パスワードマネージャ）のマスターシークレット。未設定では起動しません。十分に長いランダム文字列を設定してください（生成例: `openssl rand -base64 48`）。ローテーションは `YUUKA_ENCRYPTION_SECRET_NEW` を併設して起動（手順は `.env.example` 参照）。
-- systemd 等で運用する場合は `Environment=` で直接渡す方が確実です（`.env` の source 忘れを避けられます）。Docker デプロイでは `deploy/<instance>/secret.key` から自動的に環境変数化されます（[deployment.md](deployment.md) 参照）。
+- systemd 等で運用する場合は `Environment=` で直接渡す方が確実です（`.env` の source 忘れを避けられます）。本番では `deploy/prod/secret.key` を `deploy/prod/run-yuuka.sh` が環境変数にします（[deployment.md](deployment.md) 参照）。
 
 > **既存 DB を新しい版で開くとき（sk-account 移行の注意）**: マイグレーション V25 は、sk-account に紐付いていない利用者（`users.sk_account_id` が空）を**所有データごと削除**します。紐付けは V23 を含む版で各利用者が sk-account で一度ログインしたときに Discord ID で行われます。V22 以前の DB をいきなり現行版で起動すると V23〜V25 が続けて適用され、誰もログインしていないため全利用者が削除されます。旧 DB を移す前に必ずバックアップを取り、先に紐付けを済ませてください。
 
@@ -83,7 +83,7 @@ YUUKA_INIT_DB=1 cargo run --bin yuuka   # 初回のみ。DB（と data/ ディ�
 
 ## 3. ビルド・起動
 
-現在の systemd ホストでの起動は [deploy/README.md](../../deploy/README.md#dev-インスタンスsystemd現在のホスト) を参照。
+現在の systemd ホストでの起動は [deploy/README.md](../../deploy/README.md#dev) を参照。
 `pnpm dev` は PWA と管理画面の両方を起動するため、初回は `npm --prefix clients/pwa ci` も実行する。
 以下は API を自分で起動する場合の手順。
 
@@ -97,9 +97,9 @@ cargo run --bin yuuka
 VITE_API_TARGET=http://127.0.0.1:7854 pnpm dev
 ```
 
-> `pnpm dev` のデフォルト proxy 先は `http://127.0.0.1:3403` です。`cargo run` を直接使うローカル実行では、`config.yaml` の `PORT`（既定 `7854`）に合わせて `VITE_API_TARGET` を明示してください。Docker の dev API（`HOST_PORT=7856`）へ向ける場合は `VITE_API_TARGET=http://127.0.0.1:7856`。Vite はホストで動かす（Docker で Vite を常駐させる構成は廃止済み）。
+> `pnpm dev` のデフォルト proxy 先は `http://127.0.0.1:3403` です。`cargo run` を直接使うローカル実行では、`config.yaml` の `PORT`（既定 `7854`）に合わせて `VITE_API_TARGET` を明示してください。systemd の dev API（`yuuka-dev.service`）はこの既定の 3403 で待ち受けます。
 
-プロダクション相当（Docker を使わない場合）:
+プロダクション相当:
 
 ```bash
 pnpm build              # cargo build --release --bin yuuka + 管理画面 SPA（dist/public）+ PWA（dist/public/pwa）

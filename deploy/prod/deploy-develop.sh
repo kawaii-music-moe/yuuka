@@ -3,6 +3,8 @@
 #
 #   deploy/prod/deploy-develop.sh                  # origin/develop の最新を本番へ
 #   deploy/prod/deploy-develop.sh rollback <dir>   # 退避した状態（バイナリ・画面・DB）へ戻す
+#   deploy/prod/deploy-develop.sh verify           # 確認だけ
+#   （pnpm run deploy / deploy:rollback <dir> / deploy:verify からも呼べる）
 #
 # 本番は本体のチェックアウト（/home/suki/apps/yuuka・develop）を作業ディレクトリに動いている:
 #   バイナリ deploy/prod/bin/yuuka（run-yuuka.sh が起動）・画面 dist/public（管理画面 + pwa/）・
@@ -10,13 +12,15 @@
 #
 # 流れ: develop を fast-forward → リリースビルド（Rust・管理画面・PWA）を別の場所に作る →
 #   サービスを止めて、今の状態（バイナリ・画面・DB・設定）を deploy/prod/backups/<時刻>-develop-<sha>/
-#   へ退避 → 入れ替えて起動 → 確認。確認に失敗したら rollback の手順を表示する（自動では戻さない:
+#   へ退避（直近 3 件だけ残す・KEEP_BACKUPS）→ 入れ替えて起動 → 確認。確認に失敗したら rollback の手順を表示する（自動では戻さない:
 #   マイグレーションを当てた後に古いバイナリへ戻すと DB も戻す必要があり、デプロイ後の書き込みが消えるため）。
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PROD="$ROOT/deploy/prod"
 SERVICE=yuuka.service
+# deploy/prod/backups に残すデプロイ時の退避の数（1 件で約 120MB）。
+KEEP_BACKUPS=3
 PORT="$(grep -E '^PORT:' "$PROD/config.yaml" | grep -oE '[0-9]+' | head -1)"
 BASE="http://127.0.0.1:${PORT:-3402}"
 cd "$ROOT"
@@ -28,14 +32,26 @@ die() { printf '❌ %s\n' "$*" >&2; exit 1; }
 snapshot() {
   local dest="$1"
   mkdir -p "$dest/data"
-  cp -a "$PROD/bin/yuuka" "$dest/yuuka"
-  cp -a "$ROOT/dist/public" "$dest/public"
+  # 初回（まだ何も置いていない）でも止まらないよう、在るものだけ写す。
+  [ -e "$PROD/bin/yuuka" ] && cp -a "$PROD/bin/yuuka" "$dest/yuuka"
+  [ -d "$ROOT/dist/public" ] && cp -a "$ROOT/dist/public" "$dest/public"
   cp -a "$PROD/config.yaml" "$PROD/run-yuuka.sh" "$dest/"
   cp -a "$PROD"/deployed-revision "$PROD"/deployed-frontend-revision "$dest/" 2>/dev/null || true
   for f in yuuka.db yuuka.db-wal yuuka.db-shm; do
     [ -e "$ROOT/data/$f" ] && cp -a "$ROOT/data/$f" "$dest/data/"
   done
   chmod 700 "$dest/data"
+}
+
+# 退避を新しい順に $KEEP_BACKUPS 件だけ残す（フォルダ名の先頭は UTC の時刻なので名前順＝時刻順）。
+prune_backups() {
+  local old
+  old="$(find "$PROD/backups" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort | head -n -"$KEEP_BACKUPS")"
+  [ -n "$old" ] || return 0
+  while IFS= read -r name; do
+    rm -rf -- "${PROD:?}/backups/$name"
+    echo "  古い退避を削除: $name"
+  done <<< "$old"
 }
 
 wait_healthy() {
@@ -137,8 +153,11 @@ deploy() {
   since="$(date '+%Y-%m-%d %H:%M:%S')"
   systemctl --user stop "$SERVICE"
   snapshot "$backup"
+  mkdir -p "$PROD/bin" "$ROOT/dist"
   mv "$stage/yuuka" "$PROD/bin/yuuka.new" && mv "$PROD/bin/yuuka.new" "$PROD/bin/yuuka"
-  mv "$ROOT/dist/public" "$ROOT/dist/public.old" && mv "$stage/public" "$ROOT/dist/public" && rm -rf "$ROOT/dist/public.old"
+  rm -rf "$ROOT/dist/public.old"
+  if [ -d "$ROOT/dist/public" ]; then mv "$ROOT/dist/public" "$ROOT/dist/public.old"; fi
+  mv "$stage/public" "$ROOT/dist/public" && rm -rf "$ROOT/dist/public.old"
   rm -rf "$stage"
   echo "$rev" > "$PROD/deployed-revision"
   echo "$rev" > "$PROD/deployed-frontend-revision"
@@ -159,6 +178,7 @@ deploy() {
 }
 JSON
   if [ "$result" = ok ]; then
+    prune_backups
     echo "✅ $short を本番へデプロイしました（直前の状態: $backup）"
   else
     echo "❌ 確認に失敗しました。ログ: journalctl --user -u $SERVICE --since '$since'"
@@ -167,6 +187,9 @@ JSON
   fi
 }
 
+# pnpm 10+ は `pnpm run deploy:rollback -- <dir>` の `--` もそのまま渡すので読み飛ばす。
+[ "${1:-}" = -- ] && shift
+[ "${2:-}" = -- ] && set -- "$1" "${@:3}"
 case "${1:-deploy}" in
   deploy) deploy ;;
   rollback) rollback "${2:-}" ;;

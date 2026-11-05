@@ -59,6 +59,6 @@ body:
     id: env
     attributes:
       label: 環境
-      description: 例) prod / dev、Docker タグ、Node バージョンなど。
+      description: 例) prod / dev、デプロイしたリビジョン、Node バージョンなど。
     validations:
       required: false

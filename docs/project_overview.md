@@ -77,8 +77,8 @@ pnpm check              # typecheck:front + lint をまとめて実行
 - 設定は `config.yaml`（一般設定・git 管理外・cwd 相対で固定パス）と実環境変数（機密）。読み込み順は **config.yaml のキー → 同名の環境変数 → 既定値**（`crates/yuuka-core/src/config.rs` の `get_setting`）。テンプレは [example.yaml](../example.yaml) / [.env.example](../.env.example)。
 - 既定ポートはコード上 `3000`（`crates/yuuka-core/src/config.rs`）だが、`example.yaml`/本デプロイは `config.yaml` で **7854** に上書き。
 - バックエンドは既定では存在しない DB ファイルを新規作成しない。新規インスタンスの初回起動のみ環境変数 `YUUKA_INIT_DB=1` を設定すると、無ければ DB を新規作成して migrations を適用する（[#55](https://github.com/kawaii-music-moe/yuuka/issues/55) / [PR #64](https://github.com/kawaii-music-moe/yuuka/pull/64)。詳細は [docs/guide/setup.md](guide/setup.md) 参照）。
-- 静的配信: `dist/public`（管理画面 SPA）が在れば `/admin` 配下に、`dist/public/pwa`（PWA）が在れば `/` に配信される（`crates/yuuka-supervisor/src/main.rs` の `DIST_DIR` / `PWA_DIST_DIR`、`crates/yuuka-web/src/static_files.rs`）。Docker イメージは両方をビルドして同梱する（[Dockerfile](../Dockerfile)）。
-- Docker 運用は `deploy/instance.sh`（`pnpm run deploy` 等）。手順は [docs/guide/deployment.md](guide/deployment.md) / [deploy/README.md](../deploy/README.md)。
+- 静的配信: `dist/public`（管理画面 SPA）が在れば `/admin` 配下に、`dist/public/pwa`（PWA）が在れば `/` に配信される（`crates/yuuka-supervisor/src/main.rs` の `DIST_DIR` / `PWA_DIST_DIR`、`crates/yuuka-web/src/static_files.rs`）。本番は `deploy/prod/deploy-develop.sh` が両方をビルドして置く。
+- 本番・dev はユーザー systemd で動かす（`pnpm run deploy` = `deploy/prod/deploy-develop.sh`）。手順は [docs/guide/deployment.md](guide/deployment.md) / [deploy/README.md](../deploy/README.md)。
 
 ---
 
@@ -131,7 +131,7 @@ pnpm check              # typecheck:front + lint をまとめて実行
 | [clients/pwa/](../clients/pwa/) | PWA クライアント（Vue 3）。開発手順は [clients/pwa/README.md](../clients/pwa/README.md) |
 | [clients/desktop/](../clients/desktop/) | デスクトップクライアント（Rust / egui）。workspace 外の独立クレート |
 | [scripts/](../scripts/) | `dev.mjs`（PWA + 管理画面の Vite）・`dev-client-mock.mjs`（モック API 付き）・`lib/processes.mjs`（両者共通の子プロセス管理）、`dev-start.sh`/`dev-ops.sh`/`dev-help.sh`（systemd の dev 操作）、`build-pwa.mjs`（PWA ビルド）、`verify-*.{mjs,py}`（CI のマイグレーション検証） |
-| [Dockerfile](../Dockerfile) / [docker-compose.yml](../docker-compose.yml) / [deploy/](../deploy/) | 本番/開発インスタンス運用（`deploy/instance.sh`、`deploy/prod` / `deploy/dev` の設定テンプレート）。詳細は [docs/guide/deployment.md](guide/deployment.md) |
+| [deploy/](../deploy/) | 本番 / dev の運用（`deploy/systemd/` のユニットの例、`deploy/prod/deploy-develop.sh`、`deploy/prod` / `deploy/dev` の設定テンプレート）。詳細は [docs/guide/deployment.md](guide/deployment.md) |
 | [example.yaml](../example.yaml) / [.env.example](../.env.example) | 設定テンプレート（`config.yaml` / 環境変数） |
 | [rust-toolchain.toml](../rust-toolchain.toml) / [clippy.toml](../clippy.toml) / [deny.toml](../deny.toml) / [biome.json](../biome.json) | ツールチェイン固定・lint 設定（deny.toml は `anyhow`/`eyre` 等の依存を禁止） |
 | [docs/](../docs/) | ドキュメント（[index.md](index.md) が目次） |
@@ -190,7 +190,7 @@ pnpm check              # typecheck:front + lint をまとめて実行
 
 ### 5.3 常駐ジョブ（`crates/yuuka-services`）
 
-各サービスは `CronService` を実装し、`yuuka-supervisor` が JoinSet 監督下で回す（通知は `Notifier` 経由）。cron は全ユーザーを跨いで走査するため、`CronScan` メソッド（`CrossUserAccess` 証憑必須）に隔離されている。Rust 版の cron は環境変数 `YUUKA_RUST_CRON=1` のとき起動し、Dockerfile がこれを焼き込む。
+各サービスは `CronService` を実装し、`yuuka-supervisor` が JoinSet 監督下で回す（通知は `Notifier` 経由）。cron は全ユーザーを跨いで走査するため、`CronScan` メソッド（`CrossUserAccess` 証憑必須）に隔離されている。Rust 版の cron は環境変数 `YUUKA_RUST_CRON=1` のとき起動する（本番は `deploy/prod/run-yuuka.sh` が設定し、dev は 0）。
 
 | サービス | スケジュール / 役割 |
 |---|---|
@@ -323,7 +323,7 @@ pnpm check              # typecheck:front + lint をまとめて実行
 - **会話の正は SQLite**: Redis はキャッシュ/セッション。`message_logs` は自動削除されない。
 - **MCP 実行前確認**: `requires_confirmation` は DB のフラグのみ。実際の確認はエージェント/ツール呼出層の責務。
 - **Google refresh_token は自動更新されない**: 失効時はカレンダー連携が静かに無効化される。
-- **PWA の配信元**: PWA は `dist/public/pwa`（`pnpm build:pwa` または Docker の pwa-builder ステージの出力）から配信される。ビルドしていないと PWA 配信は無効（`/api/client/*` は動作）。
+- **PWA の配信元**: PWA は `dist/public/pwa`（`pnpm build:pwa` の出力）から配信される。ビルドしていないと PWA 配信は無効（`/api/client/*` は動作）。
 
 ---
 

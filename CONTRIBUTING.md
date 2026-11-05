@@ -105,14 +105,14 @@ pnpm build          # Rust バイナリ（target/release/yuuka）+ 管理画面 
 本番（systemd の `yuuka.service`）へは、develop にマージした後に本体のチェックアウトで反映します。
 
 ```bash
-deploy/prod/deploy-develop.sh            # origin/develop を fast-forward → ビルド → 退避 → 入れ替え → 確認
-deploy/prod/deploy-develop.sh verify     # 確認だけ
-deploy/prod/deploy-develop.sh rollback <退避先>
+pnpm run deploy                       # origin/develop を fast-forward → ビルド → 退避 → 入れ替え → 確認
+pnpm run deploy:verify                # 確認だけ
+pnpm run deploy:rollback -- <退避先>
 ```
 
 - DB マイグレーションは起動時に自動で適用されます。確認に失敗しても自動では戻らないので、表示される `rollback` で戻すかを判断します。
 - 音声モデル（`data/tts-models`）はリポジトリに含めず、手で配置します（[`tools/irodori-onnx/README.md`](tools/irodori-onnx/README.md)）。
-- Docker で動かす構成（`pnpm run deploy`）は [`docs/guide/deployment.md`](docs/guide/deployment.md) を参照してください。Dockerfile を変更した場合は `--no-cache` のフルビルドと再起動が必要です。
+- 新しく本番を立てる手順は [`docs/guide/deployment.md`](docs/guide/deployment.md) を参照してください。
 
 ## セキュリティ
 

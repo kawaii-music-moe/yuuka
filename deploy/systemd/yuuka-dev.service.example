@@ -1,0 +1,26 @@
+# dev の yuuka API（ユーザー systemd）。本番とは別の実行ディレクトリ（deploy/dev/runtime）で動かす。
+# runtime には config.yaml（deploy/dev/config.yaml.example から作る）・.env・data/yuuka.db・bin/yuuka を置く。
+#   cp deploy/systemd/yuuka-dev.service.example ~/.config/systemd/user/yuuka-dev.service
+#   systemctl --user daemon-reload && systemctl --user enable --now yuuka-dev.service
+# バイナリの更新は pnpm dev:update、画面は pnpm dev:start の Vite で配信する（deploy/README.md）。
+[Unit]
+Description=Yuuka (dev)
+Requires=yuuka-redis.service
+After=network.target yuuka-redis.service
+
+[Service]
+Type=simple
+WorkingDirectory=%h/yuuka/deploy/dev/runtime
+# YUUKA_ENCRYPTION_SECRET（本番と別の値）を書いておく。
+EnvironmentFile=%h/yuuka/deploy/dev/runtime/.env
+Environment=TZ=Asia/Tokyo
+# dev 用の Discord Bot で応答する。定期ジョブ（リマインダー等）は本番だけで回す。
+Environment=YUUKA_RUST_DISCORD=1
+Environment=YUUKA_RUST_CRON=0
+ExecStart=%h/yuuka/deploy/dev/runtime/bin/yuuka
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65536
+
+[Install]
+WantedBy=default.target

@@ -1,6 +1,6 @@
 //! チャート描画用フォントのロード（ab_glyph・純 Rust・native freetype/fontconfig 非依存）。
 //!
-//! 日本語ラベルのため fonts-noto-cjk（Docker 同梱・`.ttc`）を優先し、無ければ DejaVu（Latin のみ・
+//! 日本語ラベルのため fonts-noto-cjk（ホストに入れる・`.ttc`）を優先し、無ければ DejaVu（Latin のみ・
 //! テスト/フォールバック）を探す。`YUUKA_CHART_FONT` で明示パス指定可。見つからなければ `None`
 //! （描画はテキスト無しで続行＝クラッシュしない）。プロセス内で 1 回だけロードしてキャッシュする。
 

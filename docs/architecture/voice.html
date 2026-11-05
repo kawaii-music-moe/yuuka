@@ -188,7 +188,7 @@ ul,ol{padding-left:22px;margin:6px 0}
 <div class="scroll"><table>
 <tr><th>もの</th><th>場所・設定</th></tr>
 <tr><td>yuuka 本体</td><td><code>yuuka.service</code>（systemd --user）。本体チェックアウト（develop）から <code>deploy/prod/bin/yuuka</code> を起動。フロントは <code>dist/public</code></td></tr>
-<tr><td>音声生成サーバー</td><td><code>yuuka-tts.service</code>（ひな形は <code>deploy/tts/yuuka-tts.service</code>）。<code>clients/pwa</code> で <code>node --import tsx server/tts/server.ts</code>。ポート 3410・スレッド 3・10 分で解放・MemoryMax 6G</td></tr>
+<tr><td>音声生成サーバー</td><td><code>yuuka-tts.service</code>（ひな形は <code>deploy/systemd/yuuka-tts.service.example</code>）。<code>clients/pwa</code> で <code>node --import tsx server/tts/server.ts</code>。ポート 3410・スレッド 3・10 分で解放・MemoryMax 6G</td></tr>
 <tr><td>中継の設定</td><td><code>deploy/prod/config.yaml</code> の <code>TTS_SERVER_URL: "http://127.0.0.1:3410"</code>。無ければサーバーでの生成は使えない（404）</td></tr>
 <tr><td>モデル</td><td><code>data/tts-models/irodori-v41-mf-fp16-3/</code>。あれば本体が <code>/tts-models/</code> で配信する</td></tr>
 <tr><td>DB</td><td><code>data/yuuka.db</code> の <code>client_voices</code></td></tr>
@@ -226,7 +226,7 @@ ul,ol{padding-left:22px;margin:6px 0}
 <tr><td><code>yuuka-web/src/static_files.rs</code></td><td class="num">—</td><td><code>/voice</code> を PWA の画面に、<code>/tts-models/</code> の配信（<code>mount_tts_models</code>）</td></tr>
 <tr><td colspan="3"><b>変換と配置</b></td></tr>
 <tr><td><code>tools/irodori-onnx/</code></td><td class="num">621</td><td>export / export_patches / make_tokenizer / golden / package と README</td></tr>
-<tr><td><code>deploy/tts/yuuka-tts.service</code></td><td class="num">25</td><td>音声生成サーバーの systemd ユニットのひな形</td></tr>
+<tr><td><code>deploy/systemd/yuuka-tts.service.example</code></td><td class="num">25</td><td>音声生成サーバーの systemd ユニットのひな形</td></tr>
 </table></div>
 <p style="font-size:13px;color:var(--mu)">テストは PWA 側に <code>*.test.ts</code>（トークナイザ・パイプライン・ラウドネス・Worker の窓口・返答の分割・wire）、Rust 側に <code>yuuka-client-api/tests/voices.rs</code>（6 件）と <code>tests/tts_proxy.rs</code>（3 件・develop では未実行）があります。</p>
 

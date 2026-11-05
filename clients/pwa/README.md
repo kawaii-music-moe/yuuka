@@ -78,7 +78,7 @@ VITE_API_TARGET=http://localhost:8787 VITE_PWA_DEV_SERVER=http://localhost:5173 
 
 ## ビルドと配信
 
-repo ルートで `pnpm build:pwa` を実行すると、`clients/pwa` をビルド（依存が無ければ `npm ci` を先に実行）し、出力を `dist/public/pwa` へ配置します。バックエンドは `dist/public/pwa` があれば PWA を `/` で配信します（`crates/yuuka-supervisor/src/main.rs`）。Docker イメージでは pwa-builder ステージが同じ場所へ配置します（[Dockerfile](../../Dockerfile)）。
+repo ルートで `pnpm build:pwa` を実行すると、`clients/pwa` をビルド（依存が無ければ `npm ci` を先に実行）し、出力を `dist/public/pwa` へ配置します。バックエンドは `dist/public/pwa` があれば PWA を `/` で配信します（`crates/yuuka-supervisor/src/main.rs`）。本番は `deploy/prod/deploy-develop.sh` が同じ場所へ配置します。
 
 ## Git 運用
 
