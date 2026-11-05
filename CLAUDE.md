@@ -2,10 +2,17 @@
 
 ## ビルドと検証
 
-- 開発中の確認は `cargo check`（必要に応じて `cargo clippy` / `cargo fmt`）だけで行う。
-- `cargo build` / `cargo test` / `cargo run` / `cargo nextest` などの実ビルドは、`develop` ブランチでの検証時以外は実行しない。
-  - 理由: 複数の worktree で並列にビルドすると、開発サーバ（RAM 15GB）のメモリが枯渇してクラッシュするため。
-  - `.claude/hooks/guard-cargo-build.sh` が、`develop` 以外のブランチでのこれらのコマンドをブロックする。
+@AGENTS.md
+
+- ビルド制限は `AGENTS.md` に従う。`cargo check` / `cargo clippy`、フロントエンド、`xtask` やスクリプト経由のコンパイルも対象。
+- コンパイルの可能性があるコマンドは `.claude/hooks/run-build.sh <コマンド> [引数...]` で実行する。
+  - 例: `.claude/hooks/run-build.sh cargo check`
+  - 例: `.claude/hooks/run-build.sh pnpm build:front`
+  - 実行直前に `git branch --show-current` で確認し、`develop` 以外なら検証をスキップする。制限回避のためにブランチを切り替えない。
+  - `/tmp/yuuka-codex-build.lock` の非ブロッキングロックを終了まで保持する。使用中なら検証をスキップする。
+  - Rust は `CARGO_BUILD_JOBS=1`。環境変数や `--jobs` / `-j` で並列数を上書きしない。
+- ビルドは一度に一つだけ。バックグラウンド起動・並列実行・サブエージェントへのビルド委任は禁止。スクリプト内部でもこの制限を守る。
+- フックは一般的なビルドコマンドを検出する補助。任意のエイリアスやスクリプトの内部までは判定できないため、コンパイルの可能性があれば必ずランナーを使う。
 
 ## PR レビュー
 

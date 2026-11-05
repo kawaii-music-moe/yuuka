@@ -1,18 +1,19 @@
 #!/usr/bin/env bash
-# develop ブランチ以外での cargo build/test/run などを禁止し、cargo check を使わせる
+# 一般的なコンパイルコマンドは共有ロックを保持するランナーに限定する。
+set -euo pipefail
 input=$(cat)
 cmd=$(jq -r '.tool_input.command // empty' <<<"$input")
-cwd=$(jq -r '.cwd // empty' <<<"$input")
-
-# check / clippy / fmt / doc 以外のビルドを伴うサブコマンド
-if ! grep -qE '(^|[;&|(` ])cargo( +\+[^ ]+)?( +-[^ ]+)* +(build|b|test|t|run|r|bench|nextest|install|llvm-cov|tarpaulin)( |$)' <<<"$cmd"; then
+# 複合コマンドにランナーが含まれるだけでは許可しない。
+if [[ "$cmd" =~ ^(\./)?\.claude/hooks/run-build\.sh[[:space:]] ]] &&
+   [[ ! "$cmd" =~ [\;\&\|\`\$\(\)\<\>] ]] && [[ "$cmd" != *$'\n'* ]]; then
   exit 0
 fi
-
-branch=$(git -C "${cwd:-.}" rev-parse --abbrev-ref HEAD 2>/dev/null)
-if [ "$branch" = "develop" ]; then
+# パッケージやスクリプト経由の間接ビルドも保守的に検出する。
+if ! grep -qE '(^|[;&|(` /])(cargo|rustc|rustup|xtask|npm|npx|pnpm|yarn|bun|vite|vitest|tsc|vue-tsc|svelte-check|make|cmake|ninja|just)([[:space:]]|$)|(^|[[:space:]/])[^[:space:]]*build[^[:space:]]*|(^|[;&|(` ])(bash|sh|node) +[^;&|]*(scripts/|deploy/)' <<<"$cmd"; then
   exit 0
 fi
-
-echo "yuuka ルール: develop ブランチ以外（現在: ${branch:-不明}）では cargo build/test/run 等の実ビルドは禁止です。cargo check（必要なら cargo clippy）で確認してください。実ビルドでの検証は develop ブランチで行います。" >&2
+if [[ "$cmd" =~ ^cargo[[:space:]]+(fmt|--version|-V)[[:space:]]*$ ]]; then
+  exit 0
+fi
+echo 'yuuka ルール: コンパイルの可能性があるコマンドは .claude/hooks/run-build.sh <コマンド> [引数...] で実行してください。develop 限定・共有ロック・Rust 1ジョブを適用します。バックグラウンド起動や並列ビルドは禁止です。詳細は AGENTS.md を参照してください。' >&2
 exit 2
