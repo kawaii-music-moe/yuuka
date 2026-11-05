@@ -396,8 +396,8 @@ async fn put_without_users_row_is_explicit_error_and_writes_nothing() {
 /// 差分があると、選べるのに 400 になる／サーバーが許すのに選べないモデルが生まれる（issue #39）。
 #[test]
 fn pwa_model_list_matches_server_allowlist() {
-    let path =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../clients/pwa/src/api/models.ts");
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../clients/pwa/src/api/models.ts");
     let src = std::fs::read_to_string(&path).expect("read clients/pwa/src/api/models.ts");
     let list = src
         .split("GEMINI_MODELS = [")
