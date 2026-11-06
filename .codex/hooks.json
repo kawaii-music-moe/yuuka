@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "^Bash$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$(git rev-parse --show-toplevel)/scripts/guard-build.sh\"",
+            "timeout": 10,
+            "statusMessage": "Checking yuuka build safety"
+          }
+        ]
+      }
+    ]
+  }
+}

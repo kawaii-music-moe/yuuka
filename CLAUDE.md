@@ -5,9 +5,9 @@
 @AGENTS.md
 
 - ビルド制限は `AGENTS.md` に従う。`cargo check` / `cargo clippy`、フロントエンド、`xtask` やスクリプト経由のコンパイルも対象。
-- コンパイルの可能性があるコマンドは `.claude/hooks/run-build.sh <コマンド> [引数...]` で実行する。
-  - 例: `.claude/hooks/run-build.sh cargo check`
-  - 例: `.claude/hooks/run-build.sh pnpm build:front`
+- コンパイルの可能性があるコマンドは `scripts/run-build.sh <コマンド> [引数...]` で実行する。
+  - 例: `scripts/run-build.sh cargo check`
+  - 例: `scripts/run-build.sh pnpm build:front`
   - 実行直前に `git branch --show-current` で確認し、`develop` 以外なら検証をスキップする。制限回避のためにブランチを切り替えない。
   - `/tmp/yuuka-codex-build.lock` の非ブロッキングロックを終了まで保持する。使用中なら検証をスキップする。
   - Rust は `CARGO_BUILD_JOBS=1`。環境変数や `--jobs` / `-j` で並列数を上書きしない。
