@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use scraper::{Html, Selector};
 use serde::Serialize;
+use yuuka_outbound::BlockedByResolver;
 
 /// 検索結果 1 件（tool 応答の `results[]` 要素）。
 #[derive(Debug, Clone, Serialize)]
@@ -265,32 +266,6 @@ fn parse_ddg(html: &str) -> Vec<SearchResult> {
     results
 }
 
-/// [`PublicOnlyResolver`] が接続を拒否したことを示すエラー（送信エラーの原因から見分ける）。
-#[derive(Debug)]
-struct BlockedByResolver(String);
-
-impl std::fmt::Display for BlockedByResolver {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-
-impl std::error::Error for BlockedByResolver {}
-
-/// 静的取得用 DNS リゾルバ。内部/予約レンジに解決されるホストへは接続させない（rebinding 対策・#206）。
-struct PublicOnlyResolver;
-
-impl reqwest::dns::Resolve for PublicOnlyResolver {
-    fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
-        Box::pin(async move {
-            let addrs = yuuka_outbound::resolve_public_addrs(name.as_str(), 0)
-                .await
-                .map_err(BlockedByResolver)?;
-            Ok(Box::new(addrs.into_iter()) as reqwest::dns::Addrs)
-        })
-    }
-}
-
 const MAX_REDIRECTS: usize = 5;
 
 /// [`get_following`] の失敗。再試行してよいのは `Transport` だけ。
@@ -309,7 +284,7 @@ fn classify_send_error(e: &reqwest::Error) -> FetchError {
     let mut source: Option<&(dyn std::error::Error + 'static)> = std::error::Error::source(e);
     while let Some(err) = source {
         if let Some(blocked) = err.downcast_ref::<BlockedByResolver>() {
-            return FetchError::Blocked(blocked.0.clone());
+            return FetchError::Blocked(blocked.to_string());
         }
         source = err.source();
     }
@@ -358,10 +333,11 @@ async fn get_following(
 /// # Errors
 /// 全リトライ失敗時に最後のエラー文言を返す。
 pub async fn fetch_html(url: &str) -> Result<String, String> {
-    let client = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .dns_resolver(std::sync::Arc::new(PublicOnlyResolver))
-        .build()
+    static CLIENT: std::sync::OnceLock<Result<reqwest::Client, reqwest::Error>> =
+        std::sync::OnceLock::new();
+    let client = CLIENT
+        .get_or_init(|| yuuka_outbound::guarded_client(Duration::from_secs(15)))
+        .as_ref()
         .map_err(|e| e.to_string())?;
 
     let mut delay = Duration::from_secs(1);
@@ -369,7 +345,7 @@ pub async fn fetch_html(url: &str) -> Result<String, String> {
     let mut last_err = "ページ取得に失敗しました。".to_owned();
 
     for i in 0..max_retries {
-        let sent = get_following(&client, url, |req| {
+        let sent = get_following(client, url, |req| {
             req
             .header("User-Agent", UA)
             .header(
@@ -415,6 +391,7 @@ pub async fn fetch_html(url: &str) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use yuuka_outbound::PublicOnlyResolver;
 
     #[tokio::test]
     async fn fetch_html_refuses_internal_targets_without_connecting() {
@@ -439,10 +416,7 @@ mod tests {
     /// リゾルバの拒否は送信エラーの原因から `Blocked` と分かる（再試行しない）。
     #[tokio::test]
     async fn resolver_rejection_is_classified_as_blocked() {
-        let client = reqwest::Client::builder()
-            .dns_resolver(std::sync::Arc::new(PublicOnlyResolver))
-            .build()
-            .unwrap();
+        let client = yuuka_outbound::guarded_client(Duration::from_secs(1)).unwrap();
         // URL の事前検査を通さず、リゾルバだけで拒否される名前（*.localhost）で送る。
         let err = client
             .get("http://yuuka-test.localhost/")

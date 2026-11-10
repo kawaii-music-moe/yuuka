@@ -5,11 +5,21 @@
 //! フィード（SSRF ガード付き・個別失敗は無視）を [`AuxTextGenerator`] ポート越しに補助 LLM で要約し、
 //! キー未設定・生成失敗・空応答時はヘッドライン列挙へ安全に縮退する。
 
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use yuuka_core::aux_text::AuxTextGenerator;
 
 use crate::model::ReportSettings;
+
+/// 定期報告全体で接続プールを共有する（天気・地名検索・RSS）。
+fn http_client() -> Option<&'static reqwest::Client> {
+    static CLIENT: OnceLock<Result<reqwest::Client, reqwest::Error>> = OnceLock::new();
+    CLIENT
+        .get_or_init(|| yuuka_outbound::guarded_client(Duration::from_secs(10)))
+        .as_ref()
+        .ok()
+}
 
 /// 天気の Embed フィールド（名前, 本文）。地点が見つからない・取得できないときは、その旨の本文にする。
 pub(crate) async fn weather_field(settings: &ReportSettings) -> (String, String) {
@@ -92,10 +102,7 @@ async fn geocode(name: &str) -> Option<(f64, f64)> {
         ],
     )
     .ok()?;
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(10))
-        .build()
-        .ok()?;
+    let client = http_client()?;
     let resp = client.get(url).send().await.ok()?;
     if !resp.status().is_success() {
         return None;
@@ -121,10 +128,7 @@ async fn fetch_weather(lat: f64, lng: f64) -> Option<Vec<WeatherDay>> {
          &daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max\
          &timezone=Asia%2FTokyo&forecast_days=2"
     );
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(10))
-        .build()
-        .ok()?;
+    let client = http_client()?;
     let resp = client.get(&url).send().await.ok()?;
     if !resp.status().is_success() {
         return None;
@@ -244,8 +248,11 @@ async fn summarize_news(
 }
 
 async fn fetch_news(feeds: &[String], keywords: &[String]) -> Vec<NewsItem> {
-    fetch_news_with(feeds, keywords, |url| async move {
-        yuuka_outbound::assert_safe_outbound_url(&url).await.is_ok()
+    let Some(client) = http_client() else {
+        return Vec::new();
+    };
+    fetch_news_with(client, feeds, keywords, |url| async move {
+        yuuka_outbound::assert_safe_outbound_url_without_dns(&url).is_ok()
     })
     .await
 }
@@ -254,27 +261,21 @@ async fn fetch_news(feeds: &[String], keywords: &[String]) -> Vec<NewsItem> {
 const MAX_FEED_REDIRECTS: usize = 5;
 
 /// [`fetch_news`] の本体。`is_safe` は取得する各 URL（リダイレクト先を含む）の SSRF 検査で、
-/// 本番は DNS 解決先まで見る `assert_safe_outbound_url`。テストはループバック上の擬似サーバーを
+/// 本番は URL を事前検査し、client のリゾルバで接続先を検査する。テストはループバック上の擬似サーバーを
 /// 「公開先」と「内部先」に見立てるために差し替える。
-async fn fetch_news_with<F, Fut>(feeds: &[String], keywords: &[String], is_safe: F) -> Vec<NewsItem>
+async fn fetch_news_with<F, Fut>(
+    client: &reqwest::Client,
+    feeds: &[String],
+    keywords: &[String],
+    is_safe: F,
+) -> Vec<NewsItem>
 where
     F: Fn(String) -> Fut,
     Fut: std::future::Future<Output = bool>,
 {
-    let client = match reqwest::Client::builder()
-        .timeout(Duration::from_secs(10))
-        // reqwest に追わせると検査は最初の URL だけになり、公開フィードが内部アドレスへリダイレクト
-        // できてしまう。リダイレクトは `fetch_feed` で 1 回ずつ検査してから追う。
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-    {
-        Ok(c) => c,
-        Err(_) => return Vec::new(),
-    };
-
     let mut items: Vec<NewsItem> = Vec::new();
     for feed in feeds.iter().take(10) {
-        let Some(resp) = fetch_feed(&client, feed, &is_safe).await else {
+        let Some(resp) = fetch_feed(client, feed, &is_safe).await else {
             continue;
         };
         // Node は `feed.title || new URL(登録URL).hostname`。リダイレクト後 URL ではなく登録 URL を使う。
@@ -547,6 +548,15 @@ mod tests {
         )
     }
 
+    fn test_http_client() -> reqwest::Client {
+        reqwest::Client::builder()
+            .no_proxy()
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(Duration::from_secs(10))
+            .build()
+            .unwrap()
+    }
+
     /// 擬似サーバーのうち `public` のポートだけを公開先として通す検査（それ以外は内部扱い）。
     fn only_public(public: std::net::SocketAddr) -> impl Fn(String) -> std::future::Ready<bool> {
         move |url| {
@@ -567,7 +577,7 @@ mod tests {
                 .await;
 
         let feeds = vec![format!("http://{public}/feed.xml")];
-        let items = fetch_news_with(&feeds, &[], only_public(public)).await;
+        let items = fetch_news_with(&test_http_client(), &feeds, &[], only_public(public)).await;
         public_server.abort();
         internal_server.abort();
 
@@ -591,7 +601,7 @@ mod tests {
         .await;
 
         let feeds = vec![format!("http://{public}/old.xml")];
-        let items = fetch_news_with(&feeds, &[], only_public(public)).await;
+        let items = fetch_news_with(&test_http_client(), &feeds, &[], only_public(public)).await;
         server.abort();
 
         let titles: Vec<String> = items.into_iter().map(|it| it.title).collect();
@@ -606,7 +616,7 @@ mod tests {
         let (public, hits, server) = spawn_feed_server(|_| redirect_response("/loop.xml")).await;
 
         let feeds = vec![format!("http://{public}/feed.xml")];
-        let items = fetch_news_with(&feeds, &[], only_public(public)).await;
+        let items = fetch_news_with(&test_http_client(), &feeds, &[], only_public(public)).await;
         server.abort();
 
         assert!(items.is_empty());
