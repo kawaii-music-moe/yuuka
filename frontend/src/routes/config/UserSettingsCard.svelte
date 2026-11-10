@@ -14,7 +14,6 @@ let richReply = $state(true);
 let remindDefault = $state(10);
 let notifyType = $state<"dm" | "channel">("dm");
 let notifyId = $state("");
-let timezone = $state("");
 
 onMount(async () => {
 	try {
@@ -23,7 +22,6 @@ onMount(async () => {
 		remindDefault = c.remindDefaultMinutes ?? 10;
 		notifyType = c.notifyTarget?.type === "channel" ? "channel" : "dm";
 		notifyId = c.notifyTarget?.id ?? "";
-		timezone = c.timezone ?? "";
 		loaded = true;
 	} catch (err) {
 		toastError(err, "設定を読み込めませんでした。");
@@ -38,7 +36,6 @@ async function submit(e: SubmitEvent) {
 		notifyTargetType: notifyType,
 		notifyTargetId: notifyId.trim(),
 	};
-	if (timezone.trim()) payload.timezone = timezone.trim();
 	try {
 		const res = await settingsApi.updateUserSettings(payload);
 		pushToast(
@@ -57,15 +54,9 @@ async function submit(e: SubmitEvent) {
 	</div>
 	<p class="description-text">あなたのすべてのBotに共通の設定です。</p>
 	<form onsubmit={submit} class="user-form">
-		<div class="form-row">
-			<div class="form-group">
-				<label for="user-timezone">タイムゾーン</label>
-				<input type="text" id="user-timezone" placeholder="例: Asia/Tokyo" bind:value={timezone} />
-			</div>
-			<div class="form-group">
-				<label for="user-remind-default">リマインド既定 (分前)</label>
-				<input type="number" id="user-remind-default" min="0" placeholder="10" bind:value={remindDefault} />
-			</div>
+		<div class="form-group">
+			<label for="user-remind-default">リマインド既定 (分前)</label>
+			<input type="number" id="user-remind-default" min="0" placeholder="10" bind:value={remindDefault} />
 		</div>
 		<div class="form-group">
 			<label for="user-notify-type">通知先</label>
