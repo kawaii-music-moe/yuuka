@@ -1,4 +1,6 @@
 <script lang="ts">
+import { onDestroy } from "svelte";
+import { asyncState } from "$lib/asyncState";
 // ─────────────────────────────────────────────────────────────────────────
 // タスク タブ（旧 app.js の tasks 関連 + index.html #tab-tasks を移植）。
 // 参照実装（§11.3）: 共通 Modal 機構 / 再帰 SubtaskRow / chart.js 動的 import。
@@ -56,34 +58,42 @@ let progressTask = $state<TodoWithSubtasks | null>(null);
 
 // ── 一覧＋いつかやるを取得（旧 fetchTasksList → fetchSomedayTasks） ──
 async function loadList() {
-	loading = true;
-	try {
-		const res = await taskApi.list({ status: filter });
-		tasks = res.tasks ?? [];
-	} catch (e) {
-		toastError(e);
-		tasks = [];
-	} finally {
-		loading = false;
-	}
-	try {
-		const res = await taskApi.someday();
-		somedayTasks = res.tasks ?? [];
-	} catch (e) {
-		toastError(e);
-		somedayTasks = [];
-	}
+	await Promise.all([
+		loadListRequest.run(
+			() => taskApi.list({ status: filter }),
+			(res) => {
+				tasks = res.tasks ?? [];
+			},
+			(e) => {
+				toastError(e);
+				tasks = [];
+			},
+		),
+		loadSomedayRequest.run(
+			() => taskApi.someday(),
+			(res) => {
+				somedayTasks = res.tasks ?? [];
+			},
+			(e) => {
+				toastError(e);
+				somedayTasks = [];
+			},
+		),
+	]);
 }
 
 // ── ガント取得（旧 renderGantt の fetch 部分） ──
 async function loadGantt() {
-	try {
-		const res = await taskApi.gantt();
-		ganttTasks = res.tasks ?? [];
-	} catch (e) {
-		toastError(e);
-		ganttTasks = [];
-	}
+	await loadGanttRequest.run(
+		async () => await taskApi.gantt(),
+		(res) => {
+			ganttTasks = res.tasks ?? [];
+		},
+		(e) => {
+			toastError(e);
+			ganttTasks = [];
+		},
+	);
 }
 
 // activeBot（bot-scoped）変更 or viewMode/filter 変更で再取得。
@@ -220,6 +230,19 @@ async function saveProgress(payload: {
 }
 
 setHeaderExtra(headerTabs);
+
+const loadGanttRequest = asyncState();
+onDestroy(() => {
+	loadGanttRequest.cancel();
+});
+const loadListRequest = asyncState((value) => {
+	loading = value;
+});
+const loadSomedayRequest = asyncState();
+onDestroy(() => {
+	loadListRequest.cancel();
+	loadSomedayRequest.cancel();
+});
 </script>
 
 {#snippet headerTabs()}

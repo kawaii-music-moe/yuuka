@@ -1,4 +1,6 @@
 <script lang="ts">
+import { onDestroy } from "svelte";
+import { asyncState } from "$lib/asyncState";
 // ─────────────────────────────────────────────────────────────────────────
 // タイムライン タブ（旧 app.js デイリータイムライン群 2811-3187 + index.html
 // #tab-timeline を移植）。timelineApi 使用（bot-scoped）。
@@ -50,30 +52,36 @@ let recordOpen = $state(false);
 const dateLabel = $derived(fmtTimelineDate(currentDate));
 
 async function loadDay() {
-	try {
-		const res = await timelineApi.day(currentDate);
-		blocks = res.blocks ?? [];
-		records = res.records ?? [];
-	} catch (e) {
-		toastError(e);
-		blocks = [];
-		records = [];
-	}
+	await loadDayRequest.run(
+		async () => await timelineApi.day(currentDate),
+		(res) => {
+			blocks = res.blocks ?? [];
+			records = res.records ?? [];
+		},
+		(e) => {
+			toastError(e);
+			blocks = [];
+			records = [];
+		},
+	);
 }
 
 // 基準日そのものは含まないので、その日の追加・削除では変わらない（日付・Bot の変更時だけ取る）。
 async function loadNeighbors(date: string) {
 	prevDate = null;
 	nextDate = null;
-	try {
-		const res = await timelineApi.neighbors(date);
-		// 連打で日付が先に進んでいたら古い応答は捨てる。
-		if (date !== currentDate) return;
-		prevDate = res.prev ?? null;
-		nextDate = res.next ?? null;
-	} catch (e) {
-		toastError(e);
-	}
+	await loadNeighborsRequest.run(
+		async () => await timelineApi.neighbors(date),
+		(res) => {
+			// 連打で日付が先に進んでいたら古い応答は捨てる。
+			if (date !== currentDate) return;
+			prevDate = res.prev ?? null;
+			nextDate = res.next ?? null;
+		},
+		(e) => {
+			toastError(e);
+		},
+	);
 }
 
 // activeBot（bot-scoped）変更 or currentDate 変更で再取得。
@@ -195,6 +203,13 @@ async function onDeleteRecord(id: number) {
 
 // タブはシェルのヘッダーに出す（Playbook / Webhook ページと同じ）。
 setHeaderExtra(headerTabs);
+
+const loadDayRequest = asyncState();
+const loadNeighborsRequest = asyncState();
+onDestroy(() => {
+	loadDayRequest.cancel();
+	loadNeighborsRequest.cancel();
+});
 </script>
 
 {#snippet headerTabs()}

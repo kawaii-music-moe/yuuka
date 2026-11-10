@@ -1,4 +1,6 @@
 <script lang="ts">
+import { onDestroy } from "svelte";
+import { asyncState } from "$lib/asyncState";
 // ─────────────────────────────────────────────────────────────────────────
 // ダッシュボード タブ（旧 app.js fetchDashboardStats(1634) / renderDonutChart /
 // renderPriceTrendChart / renderUsageChart(Axes) / renderUrgentDashboardList
@@ -66,68 +68,72 @@ const botName = $derived($activeBot?.name || "アシスタント");
 
 // ── 秘書モード集計（旧 fetchDashboardStats の秘書分岐） ──
 async function loadSecretary() {
-	try {
-		const statusRes = (await settingsApi.status()) as StatusPayload;
-		const expenseRes = (await financeApi.list()) as ExpensesPayload & {
-			success?: boolean;
-		};
-
-		stats = statusRes.stats ?? null;
-		total = expenseRes.total ?? 0;
-		expenses = expenseRes.expenses ?? [];
-		breakdown = expenseRes.breakdown ?? [];
-
-		if (stats) {
-			bubble = secretaryBubble(total, stats.pendingTasks);
-		}
-
-		// 緊急リスト（今日の予定 + 未消化タスク）。旧 renderUrgentDashboardList。
-		// scheduleApi は days パラメタ非対応（既定7日）なので今日ぶんを client 側で抽出。
-		const today = todayIso();
-		const [schedRes, taskRes] = await Promise.all([
-			scheduleApi.list(),
-			taskApi.list({ status: "pending" }),
-		]);
-		schedules = (schedRes.schedules ?? []).filter(
-			(s) => s.start_at.slice(0, 10) === today,
-		);
-		pendingTasks = taskRes.tasks ?? [];
-	} catch (e) {
-		toastError(e);
-		bubble =
-			"ダッシュボード情報の取得中にエラーが発生しました。サーバーの接続状況を確認してください。";
-	}
+	await dashboardRequest.run(
+		() =>
+			Promise.all([
+				settingsApi.status(),
+				financeApi.list(),
+				scheduleApi.list(),
+				taskApi.list({ status: "pending" }),
+			]),
+		([status, expense, schedRes, taskRes]) => {
+			const statusRes = status as StatusPayload;
+			const expenseRes = expense as ExpensesPayload;
+			stats = statusRes.stats ?? null;
+			total = expenseRes.total ?? 0;
+			expenses = expenseRes.expenses ?? [];
+			breakdown = expenseRes.breakdown ?? [];
+			if (stats) bubble = secretaryBubble(total, stats.pendingTasks);
+			const today = todayIso();
+			schedules = (schedRes.schedules ?? []).filter(
+				(s) => s.start_at.slice(0, 10) === today,
+			);
+			pendingTasks = taskRes.tasks ?? [];
+		},
+		(e) => {
+			toastError(e);
+			bubble =
+				"ダッシュボード情報の取得中にエラーが発生しました。サーバーの接続状況を確認してください。";
+		},
+	);
 }
 
 // ── 汎用モード集計（旧 fetchAssistantUsageDashboard） ──
 async function loadUsage(botId: string) {
-	try {
-		// /api/bots/usage は botId を手動 query 付与（scope:'user'）。
-		// 実レスポンスは series/totals/days/rate_limits を含む（型は BotUsageResponse で
-		// usage? のみのため局所型へキャスト）。
-		const res = (await botApi.usage(botId)) as unknown as UsageDashboardData;
-		usage = res;
-		bubble = assistantBubble(
-			res.series ?? [],
-			res.totals ?? { requests: 0, responses: 0 },
-			res.days ?? res.series?.length ?? 14,
-		);
-	} catch (e) {
-		toastError(e);
-		bubble =
-			"API使用量の取得中にエラーが発生しました。サーバーの接続状況を確認してください。";
-	}
+	await dashboardRequest.run(
+		async () => (await botApi.usage(botId)) as unknown as UsageDashboardData,
+		(res) => {
+			usage = res;
+			bubble = assistantBubble(
+				res.series ?? [],
+				res.totals ?? { requests: 0, responses: 0 },
+				res.days ?? res.series?.length ?? 14,
+			);
+		},
+		(e) => {
+			toastError(e);
+			bubble =
+				"API使用量の取得中にエラーが発生しました。サーバーの接続状況を確認してください。";
+		},
+	);
 }
 
 // activeBot（bot-scoped）変更で、preset に応じたダッシュボードを再取得。
 $effect(() => {
 	const bot = $activeBot;
-	if (!bot?.id) return;
+	if (!bot?.id) {
+		dashboardRequest.cancel();
+		return;
+	}
 	if (bot.preset === "mcp_assistant") {
 		void loadUsage(bot.id);
 	} else {
 		void loadSecretary();
 	}
+});
+const dashboardRequest = asyncState();
+onDestroy(() => {
+	dashboardRequest.cancel();
 });
 </script>
 

@@ -1,4 +1,6 @@
 <script lang="ts">
+import { onDestroy } from "svelte";
+import { asyncState } from "$lib/asyncState";
 // ─────────────────────────────────────────────────────────────────────────
 // 連携の利用許可（Bot設定 › このBot）。「このBotに何を使わせるか」を 1 ページにまとめる。
 // 登録そのものは「連携サービス」（IntegratedOverlay）で行い、ここは許可の切り替えと確認だけ。
@@ -47,53 +49,61 @@ let overviewLoaded = $state(false);
 const assignOptions = $derived(googleAssignOptions(googleAccounts));
 
 async function loadBotGrants(id: string) {
-	grantsLoading = true;
-	try {
-		const res = await integratedApi.botMcpGrants();
-		// Bot 切替の競合防止: 応答が現在選択中の Bot のものでなければ破棄（stale 応答で上書きしない）。
-		if (res.bot_id !== ($activeBot?.id ?? "") || res.bot_id !== id) return;
-		botServers = res.servers ?? [];
-		ownGrantable = res.own_servers ?? [];
-	} catch (e) {
-		toastError(e);
-		botServers = [];
-		ownGrantable = [];
-	} finally {
-		grantsLoading = false;
-	}
+	await loadBotGrantsRequest.run(
+		async () => await integratedApi.botMcpGrants(),
+		(res) => {
+			// Bot 切替の競合防止: 応答が現在選択中の Bot のものでなければ破棄（stale 応答で上書きしない）。
+			if (res.bot_id !== ($activeBot?.id ?? "") || res.bot_id !== id) return;
+			botServers = res.servers ?? [];
+			ownGrantable = res.own_servers ?? [];
+		},
+		(e) => {
+			toastError(e);
+			botServers = [];
+			ownGrantable = [];
+		},
+	);
 }
 
 async function loadTools() {
-	try {
-		const res = await mcpApi.list();
-		const next: Record<number, string[]> = {};
-		for (const s of res.servers ?? []) {
-			next[s.id] = (s.tools ?? []).map((t) => t.name);
-		}
-		toolsById = next;
-	} catch {
-		toolsById = {};
-	}
+	await loadToolsRequest.run(
+		async () => await mcpApi.list(),
+		(res) => {
+			const next: Record<number, string[]> = {};
+			for (const s of res.servers ?? []) {
+				next[s.id] = (s.tools ?? []).map((t) => t.name);
+			}
+			toolsById = next;
+		},
+		(_error) => {
+			toolsById = {};
+		},
+	);
 }
 
 async function loadOverview(id: string) {
-	overviewLoaded = false;
-	try {
-		const data = await integratedApi.overview();
-		if (id !== ($activeBot?.id ?? "")) return;
-		ownedBot = (data.bots ?? []).find((b) => b.id === id) ?? null;
-		googleAccounts = data.googleAccounts ?? [];
-	} catch (e) {
-		toastError(e);
-		ownedBot = null;
-	} finally {
-		overviewLoaded = true;
-	}
+	await loadOverviewRequest.run(
+		() => integratedApi.overview(),
+		(data) => {
+			if (id !== ($activeBot?.id ?? "")) return;
+			ownedBot = (data.bots ?? []).find((b) => b.id === id) ?? null;
+			googleAccounts = data.googleAccounts ?? [];
+		},
+		(e) => {
+			toastError(e);
+			ownedBot = null;
+		},
+	);
 }
 
 $effect(() => {
 	const id = botId;
-	if (!id) return;
+	if (!id) {
+		loadBotGrantsRequest.cancel();
+		loadOverviewRequest.cancel();
+		loadToolsRequest.cancel();
+		return;
+	}
 	void loadBotGrants(id);
 	void loadOverview(id);
 	void loadTools();
@@ -121,6 +131,21 @@ async function onAssignChange(value: string) {
 		toastError(e);
 	}
 }
+
+const loadBotGrantsRequest = asyncState((value) => {
+	grantsLoading = value;
+});
+const loadToolsRequest = asyncState();
+onDestroy(() => {
+	loadBotGrantsRequest.cancel();
+	loadToolsRequest.cancel();
+});
+const loadOverviewRequest = asyncState((value) => {
+	overviewLoaded = !value;
+});
+onDestroy(() => {
+	loadOverviewRequest.cancel();
+});
 </script>
 
 <section class="tab-view settings-page">

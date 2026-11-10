@@ -1,4 +1,6 @@
 <script lang="ts">
+import { onDestroy } from "svelte";
+import { asyncState } from "$lib/asyncState";
 // ─────────────────────────────────────────────────────────────────────────
 // 定期報告タブ。天気・ニュース・タスクなどから載せる内容を選んで、名前を付けた報告を定時配信する。
 // deliveryApi 使用（scope:'bot'）。
@@ -155,15 +157,18 @@ function editReport(r: PeriodicReport) {
 }
 
 async function loadReports() {
-	try {
-		const res = await deliveryApi.list();
-		reports = res.reports ?? [];
-		if (!reports.some((r) => String(r.id) === testId)) {
-			testId = reports.length > 0 ? String(reports[0].id) : "";
-		}
-	} catch (e) {
-		toastError(e);
-	}
+	await loadReportsRequest.run(
+		async () => await deliveryApi.list(),
+		(res) => {
+			reports = res.reports ?? [];
+			if (!reports.some((r) => String(r.id) === testId)) {
+				testId = reports.length > 0 ? String(reports[0].id) : "";
+			}
+		},
+		(e) => {
+			toastError(e);
+		},
+	);
 }
 
 function addFeed() {
@@ -272,6 +277,11 @@ $effect(() => {
 	void $activeBot?.id;
 	resetForm();
 	loadReports();
+});
+
+const loadReportsRequest = asyncState();
+onDestroy(() => {
+	loadReportsRequest.cancel();
 });
 </script>
 

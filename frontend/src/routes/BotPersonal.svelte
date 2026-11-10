@@ -1,4 +1,6 @@
 <script lang="ts">
+import { onDestroy } from "svelte";
+import { asyncState } from "$lib/asyncState";
 // ─────────────────────────────────────────────────────────────────────────
 // パーソナル タブ（旧 app.js の context-note / clipboard / contacts + index.html
 // #tab-personal を移植）。activeBot 変更で3本 fetch（fetchContextNote /
@@ -40,33 +42,42 @@ function formatBirthday(birthday: string | null): string {
 }
 
 async function loadContextNote() {
-	try {
-		const res = await personalApi.getContextNote();
-		noteMaxLength = res.max_length || 10000;
-		noteContent = res.content ?? "";
-	} catch (e) {
-		toastError(e);
-	}
+	await loadContextNoteRequest.run(
+		async () => await personalApi.getContextNote(),
+		(res) => {
+			noteMaxLength = res.max_length || 10000;
+			noteContent = res.content ?? "";
+		},
+		(e) => {
+			toastError(e);
+		},
+	);
 }
 
 async function loadClipboard() {
-	try {
-		const res = await personalApi.clipboard();
-		clipboard = res.entries ?? [];
-	} catch (e) {
-		toastError(e);
-		clipboard = [];
-	}
+	await loadClipboardRequest.run(
+		async () => await personalApi.clipboard(),
+		(res) => {
+			clipboard = res.entries ?? [];
+		},
+		(e) => {
+			toastError(e);
+			clipboard = [];
+		},
+	);
 }
 
 async function loadContacts() {
-	try {
-		const res = await personalApi.contacts();
-		contacts = res.contacts ?? [];
-	} catch (e) {
-		toastError(e);
-		contacts = [];
-	}
+	await loadContactsRequest.run(
+		async () => await personalApi.contacts(),
+		(res) => {
+			contacts = res.contacts ?? [];
+		},
+		(e) => {
+			toastError(e);
+			contacts = [];
+		},
+	);
 }
 
 // activeBot（bot-scoped）変更で3本再取得。
@@ -151,6 +162,15 @@ async function deleteContactRow(c: ContactView) {
 		toastError(e);
 	}
 }
+
+const loadContextNoteRequest = asyncState();
+const loadClipboardRequest = asyncState();
+const loadContactsRequest = asyncState();
+onDestroy(() => {
+	loadContextNoteRequest.cancel();
+	loadClipboardRequest.cancel();
+	loadContactsRequest.cancel();
+});
 </script>
 
 <section class="tab-view">

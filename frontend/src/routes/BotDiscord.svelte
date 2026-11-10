@@ -1,4 +1,6 @@
 <script lang="ts">
+import { onDestroy } from "svelte";
+import { asyncState } from "$lib/asyncState";
 // ─────────────────────────────────────────────────────────────────────────
 // Discord（Bot設定 › Discord）。旧 app.js の fetchDiscordSettings / loadAssistantConfig の
 //   Discord 部分 + index.html #tab-discord を移植し、再構成で旧 Bot基本設定の
@@ -88,6 +90,7 @@ async function loadAssistant() {
 	const id = $activeBot?.id;
 	// 汎用モードでないか、デフォルト Bot は対象外。
 	if (!id || isDefaultBot(id) || !isAssistant) {
+		loadAssistantRequest.cancel();
 		isAssistantOwner = false;
 		guilds = [];
 		channels = [];
@@ -96,24 +99,26 @@ async function loadAssistant() {
 		roles = [];
 		return;
 	}
-	try {
-		const res = (await botAttributeApi.assistantConfig(
-			id,
-		)) as AssistantConfigResp;
-		if (!res.success) {
-			// 403（非オーナー）等 → 汎用モードのタブを出さない。
+	await loadAssistantRequest.run(
+		async () =>
+			(await botAttributeApi.assistantConfig(id)) as AssistantConfigResp,
+		(res) => {
+			if (!res.success) {
+				// 403（非オーナー）等 → 汎用モードのタブを出さない。
+				isAssistantOwner = false;
+				return;
+			}
+			isAssistantOwner = true;
+			guilds = res.guilds ?? [];
+			channels = res.channels ?? [];
+			mutedChannels = res.muted_channels ?? [];
+			members = res.members ?? [];
+			roles = res.roles ?? [];
+		},
+		(_error) => {
 			isAssistantOwner = false;
-			return;
-		}
-		isAssistantOwner = true;
-		guilds = res.guilds ?? [];
-		channels = res.channels ?? [];
-		mutedChannels = res.muted_channels ?? [];
-		members = res.members ?? [];
-		roles = res.roles ?? [];
-	} catch {
-		isAssistantOwner = false;
-	}
+		},
+	);
 }
 
 function refresh() {
@@ -133,6 +138,11 @@ const shown = $derived(isAssistantOwner ? view : "connection");
 // タブはシェルのヘッダー（スコープバッジの位置）に出す。タブが無いときも空で差し込み、
 // バッジは出さない。
 setHeaderExtra(headerTabs);
+
+const loadAssistantRequest = asyncState();
+onDestroy(() => {
+	loadAssistantRequest.cancel();
+});
 </script>
 
 {#snippet headerTabs()}

@@ -1,4 +1,6 @@
 <script lang="ts">
+import { onDestroy } from "svelte";
+import { asyncState } from "$lib/asyncState";
 // ─────────────────────────────────────────────────────────────────────────
 // 経費（家計簿）タブ。旧 app.js の fetchExpensesList / renderCategoryBudgetBars /
 // renderExpensePlans / renderBudgetSettingsList / handleReceiptScan・各フォーム submit
@@ -59,21 +61,25 @@ const dueSoon = $derived(pendingPlans.filter((p) => p.due_date <= todayIso()));
 
 // ── 一覧・集計・予算・予定をまとめて取得（旧 fetchExpensesList の Promise.all） ──
 async function load() {
-	try {
-		const [exp, lim, pl] = await Promise.all([
-			financeApi.list(),
-			financeApi.budgetLimits(),
-			financeApi.plans(),
-		]);
-		expenses = exp.expenses ?? [];
-		breakdown = exp.breakdown ?? [];
-		monthTotal = exp.total ?? 0;
-		incomeTotal = exp.incomeTotal ?? 0;
-		limits = lim.limits ?? [];
-		plans = pl.plans ?? [];
-	} catch (e) {
-		toastError(e);
-	}
+	await loadRequest.run(
+		() =>
+			Promise.all([
+				financeApi.list(),
+				financeApi.budgetLimits(),
+				financeApi.plans(),
+			]),
+		([exp, lim, pl]) => {
+			expenses = exp.expenses ?? [];
+			breakdown = exp.breakdown ?? [];
+			monthTotal = exp.total ?? 0;
+			incomeTotal = exp.incomeTotal ?? 0;
+			limits = lim.limits ?? [];
+			plans = pl.plans ?? [];
+		},
+		(e) => {
+			toastError(e);
+		},
+	);
 }
 
 $effect(() => {
@@ -180,6 +186,10 @@ async function onReceiptPick(file: File) {
 		scanning = false;
 	}
 }
+const loadRequest = asyncState();
+onDestroy(() => {
+	loadRequest.cancel();
+});
 </script>
 
 <section class="tab-view">
