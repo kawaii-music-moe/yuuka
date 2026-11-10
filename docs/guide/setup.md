@@ -9,7 +9,7 @@
 ## 動作要件
 
 - **Rust ツールチェイン** — バックエンド本体（`crates/`）のビルド・起動に使用します。`rust-toolchain.toml` でバージョンを固定しているため、[rustup](https://rustup.rs/) を入れておけば `cargo` 実行時に自動で該当バージョンが解決されます。
-- **Node.js 20 以上** / **pnpm 9** — 管理画面 SPA（`frontend/`）のビルド・開発用のみに使用します（バックエンドの実行には不要）。
+- **Node.js 24 以上** / **pnpm 9** — 管理画面 SPA（`frontend/`）のビルド・開発用のみに使用します（バックエンドの実行には不要）。
 - **Redis**（推奨・任意） — ログインセッションの保存に使用します（会話履歴の正本は SQLite）。未接続・到達不能でも起動は継続し、セッションは Cookie のみへ縮退します。
 - **Chromium 実行環境**（任意） — ブラウザ自動操作ツール（`fetchDynamicPage` 等）用。`CHROME_EXECUTABLE_PATH` で明示するか、システムの `/usr/bin/chromium` 等が自動検出されます。未検出でもそれ以外の機能は動作します。
 
@@ -39,7 +39,7 @@ cp example.yaml config.yaml
 
 - **`DB_PATH`**: SQLite データベースの保存パス（デフォルト: `./data/yuuka.db`）。`DB_PATH` が指すファイルが無い状態で起動すると既定では即エラーになる。新規インスタンスの初回起動のみ、環境変数 `YUUKA_INIT_DB=1`（`.env` ではなく実際の環境変数として設定）を付けて起動すると、無ければ DB を新規作成して migrations を適用する（詳細は後述）。
 - **`REDIS_URL`**: セッション管理用の Redis 接続 URL。
-- **`PORT` / `HOST`**: バックエンドサーバーがリスンするポートとホスト名。デフォルトはローカル接続のみ (`127.0.0.1` / `7854`)。リバースプロキシ経由で公開する場合は `HOST` を `"0.0.0.0"` に変更します。
+- **`PORT` / `HOST`**: バックエンドサーバーがリスンするポートとホスト名。未設定時はローカル接続のみ (`127.0.0.1` / `3000`)。`example.yaml` では `PORT: 7854` を明示しています。リバースプロキシ経由で公開する場合は `HOST` を `"0.0.0.0"` に変更します。
 - **`GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`**: Google OAuth 認証情報（カレンダー/Drive 連携用のシステム共通設定、任意）。
 - **`BASE_URL`**: 外部公開 HTTPS ベース URL（OAuth リダイレクト・Cookie ハードニング判定に使用）。
 - **`OIDC_*`**: ログインに使う OIDC プロバイダー。Yuuka はパスワードを持たず、本人認証は OIDC プロバイダーだけで行う。
@@ -93,11 +93,11 @@ YUUKA_INIT_DB=1 cargo run --bin yuuka   # 初回のみ。DB（と data/ ディ�
 # ターミナル1: バックエンド（config.yaml を読む cwd で実行すること）
 cargo run --bin yuuka
 
-# ターミナル2: フロントエンド（Vite）。config.yaml の PORT（既定 7854）へ proxy する
+# ターミナル2: フロントエンド（Vite）。config.yaml の PORT（example.yaml では 7854）へ proxy する
 VITE_API_TARGET=http://127.0.0.1:7854 pnpm dev
 ```
 
-> `pnpm dev` のデフォルト proxy 先は `http://127.0.0.1:3403` です。`cargo run` を直接使うローカル実行では、`config.yaml` の `PORT`（既定 `7854`）に合わせて `VITE_API_TARGET` を明示してください。systemd の dev API（`yuuka-dev.service`）はこの既定の 3403 で待ち受けます。
+> `pnpm dev` のデフォルト proxy 先は `http://127.0.0.1:3403` です。`cargo run` を直接使うローカル実行では、`config.yaml` の `PORT`（未設定時 `3000`、`example.yaml` では `7854`）に合わせて `VITE_API_TARGET` を明示してください。systemd の dev API（`yuuka-dev.service`）はこの既定の 3403 で待ち受けます。
 
 プロダクション相当:
 
@@ -108,7 +108,7 @@ pnpm build              # cargo build --release --bin yuuka + 管理画面 SPA�
 
 > PWA のビルド成果物（`dist/public/pwa`）はリポジトリにコミットされません（#46）。`pnpm build` は `build:front`（`dist/public` を空にして管理画面をビルド）→ `build:pwa` の順で実行します。個別に実行する場合もこの順にしてください（逆順だと `dist/public/pwa` が消えます）。`dist/public/pwa` が無い場合、サーバーは警告を出して PWA の静的配信だけを無効化します（管理画面と API は動作）。
 
-起動後、ブラウザで `http://localhost:7854/admin/`（管理画面。`/` は PWA）にアクセスします。
+`example.yaml` の `PORT: 7854` を使う場合、起動後はブラウザで `http://localhost:7854/admin/`（管理画面。`/` は PWA）にアクセスします。
 
 1. ログイン: ログイン画面のボタン（標準は「sk-9 Accountでログイン」。`OIDC_LABEL` で変更可）から OIDC プロバイダーでログインします。Yuuka 側でのアカウント登録はありません。最初にログインした利用者（または `ADMIN_DISCORD_IDS` に含まれる利用者）が管理者になります。
 2. デフォルト Bot のトークン設定: 管理者がシステムデフォルト Bot（使い方の案内役）のトークンを管理画面から設定します。
