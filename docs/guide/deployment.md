@@ -139,3 +139,35 @@ LLM_MODEL=gemini-3.5-flash-lite
 秘書モードは「アカウント管理」のAPIキー設定画面で指定した個人モデルを使います。
 既存の個人モデルは維持し、NULL/空の場合だけ環境の既定値へフォールバックします。
 モデルの無料枠・利用上限はGoogle AI Studioで確認してください。
+
+## 外部サービスを使う運営者の確認事項
+
+各インスタンスの運営者が、自分の Google Cloud プロジェクト・API キー・Discord アプリについて確認します。以下は 2026-11-11 に公式資料を確認した内容です。公開前や規模が変わる際はリンク先と各管理コンソールの最新案内を確認してください。
+
+### Google OAuth（カレンダー・Drive）
+
+Yuuka は `calendar` と `drive.file` に加えてプロフィール用のスコープを要求します（`crates/yuuka-google/src/http.rs` の `OAUTH_SCOPES`）。公開するプロジェクトには同意画面の運営者情報・ドメイン・規約・プライバシーポリシーと、実際に要求するスコープを登録し、必要な審査を受けてください。
+
+- External / Testing は登録済みのテストユーザー最大 100 人に限られ、認可とリフレッシュトークンは原則 7 日で失効します。Yuuka の Calendar / Drive スコープは基本プロフィールだけの例外に該当しません。継続運用で Testing のままにすると同期やバックアップが止まり、再連携が必要になります。
+- In production への公開と、機密・制限付きスコープの審査完了は別です。未承認スコープで未確認アプリの警告が出る場合は、プロジェクトの累計新規利用者数にも上限があります。
+
+公式: [利用対象・公開状態・上限](https://support.google.com/cloud/answer/15549945?hl=en)、[OAuth 2.0 のトークン失効条件](https://developers.google.com/identity/protocols/oauth2/)、[本番公開と審査](https://developers.google.com/identity/protocols/oauth2/production-readiness/overview)。
+
+### Gemini API（入力データ・年齢・地域）
+
+API キーは利用者が登録しますが、運営者は、会話、予定・タスク、家計やレシート、連絡先、音声・画像などが、利用する機能に応じて Google に送信されることを利用者に説明してください。
+
+無料サービスでは入力・出力が製品改善や人によるレビューに使われる場合があり、規約は機微情報・機密情報・個人情報を送らないよう求めています。家計・連絡先などを扱う運用は無料枠を前提にせず、課金状態とデータ取扱条件を確認してください。有料サービスにも不正利用監視等の取扱いがあり、「保存されない」とは案内しないでください。
+
+Gemini API の規約には 18 歳以上という条件、18 歳未満がアクセスしうる API クライアントへの制限、提供地域・用途の条件があります。EEA・スイス・英国の利用者向け提供は有料サービスの条件も確認してください。用途と対象者が条件に適合するか、公開前に判断してください。
+
+公式: [Gemini API 追加利用規約](https://ai.google.dev/gemini-api/terms)、[提供地域](https://ai.google.dev/gemini-api/docs/available-regions)。
+
+### Discord（アプリ認証と特権 Intent は別）
+
+Yuuka の Gateway 接続は `MESSAGE_CONTENT` を要求します（`crates/yuuka-discord/src/tenant.rs`）。Developer Portal の Bot 設定でも必要な Intent を有効にしてください。未設定・未承認なら接続が拒否される場合があります。
+
+- **アプリ認証**: 100 サーバーを超えて Bot を導入するには認証が必要です。Developer Portal の App Verification の要件を満たしてください。
+- **特権 Intent の審査**: 2026-06-10 から、サーバー数ではなく、導入先全体で Bot にアクセスできるユニークユーザー数が基準です。10,000 人のしきい値に近づいたら Portal の通知と申請案内を確認してください。承認済みでも毎年の再申請が必要です。
+
+公式: [アプリ認証](https://support-dev.discord.com/hc/en-us/articles/23926564536471-How-Do-I-Get-My-App-Verified)、[特権 Intent の審査](https://docs.discord.com/developers/gateway/getting-started-with-privileged-intent-review)、[特権 Intent の申請案内](https://support-dev.discord.com/hc/en-us/articles/6205754771351-How-do-I-get-Privileged-Intents-for-my-bot)。
