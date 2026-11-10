@@ -663,7 +663,7 @@ async fn callback_rejects_code_without_matching_state() {
 }
 
 #[tokio::test]
-async fn callback_creates_first_user_as_admin_and_issues_session() {
+async fn callback_creates_first_user_as_user_and_issues_session() {
     let provider = start_provider().await;
     let t = app_with(&provider, Vec::new());
 
@@ -684,8 +684,24 @@ async fn callback_creates_first_user_as_admin_and_issues_session() {
         "sub を sk_account_id に入れる"
     );
     assert_eq!(name, "Alice");
-    assert_eq!(role, "admin", "最初の利用者は admin");
+    assert_eq!(role, "user", "未指定の最初の利用者も user");
     assert_eq!(logged_in(&t, &name_value(&cookie)).await, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn callback_requires_explicit_admin_even_for_first_login() {
+    let provider = start_provider().await;
+    // 管理者が後からログインする場合、先にログインした第三者を昇格させない。
+    let t = app_with(&provider, vec!["300".to_owned()]);
+    login_session(&t, &provider, account("acc-2", "200", "Bob")).await;
+    login_session(&t, &provider, account("acc-3", "300", "Carol")).await;
+    assert_eq!(user_row(&t.db_path, "200").expect("bob").2, "user");
+    assert_eq!(user_row(&t.db_path, "300").expect("carol").2, "admin");
+
+    // 明示された本人が最初にログインした場合は管理者を作れる。
+    let fresh = app_with(&provider, vec!["100".to_owned()]);
+    login_session(&fresh, &provider, account("acc-1", "100", "Alice")).await;
+    assert_eq!(user_row(&fresh.db_path, "100").expect("alice").2, "admin");
 }
 
 #[tokio::test]

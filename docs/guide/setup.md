@@ -48,7 +48,7 @@ cp example.yaml config.yaml
   - `OIDC_CLIENT_ID`（既定 `yuuka`）/ `OIDC_CLIENT_SECRET`（必須。未設定だとログインできない）: プロバイダーに登録したクライアント。戻り先は `{BASE_URL}/api/auth/oidc/callback`、Back-Channel Logout の受け口は `/api/auth/oidc/backchannel-logout`。
   - `OIDC_SCOPE`（既定 `openid profile discord`）/ `OIDC_DISCORD_ID_CLAIM`（既定 `discord_id`）: Yuuka は利用者を Discord ID で識別するので、ID トークンのこの claim に Discord ID が必要。
   - `OIDC_LABEL`: ログインボタンの表示名（省略時は標準なら `sk-9 Account`、それ以外は issuer のホスト名）。
-- **`ADMIN_DISCORD_IDS`**: 初回ログイン時に Admin として作成する Discord ユーザー ID（任意。未設定なら最初のログイン者が Admin）。
+- **`ADMIN_DISCORD_IDS`**: 初回ログイン時に Admin として作成する Discord ユーザー ID（未設定なら全員 User。初回ログイン前に管理者の ID を指定）。
 
 ### 環境変数（機密設定）
 
@@ -110,6 +110,6 @@ pnpm build              # cargo build --release --bin yuuka + 管理画面 SPA�
 
 起動後、ブラウザで `http://localhost:7854/admin/`（管理画面。`/` は PWA）にアクセスします。
 
-1. ログイン: ログイン画面のボタン（標準は「sk-9 Accountでログイン」。`OIDC_LABEL` で変更可）から OIDC プロバイダーでログインします。Yuuka 側でのアカウント登録はありません。最初にログインした利用者（または `ADMIN_DISCORD_IDS` に含まれる利用者）が管理者になります。
+1. ログイン: ログイン画面のボタン（標準は「sk-9 Accountでログイン」。`OIDC_LABEL` で変更可）から OIDC プロバイダーでログインします。Yuuka 側でのアカウント登録はありません。初回ログイン前に `ADMIN_DISCORD_IDS` に管理者の Discord ID を設定してください。指定した ID の新規利用者だけが管理者になります。未設定なら、最初のログイン者も一般利用者になります。既存の権限は維持され、設定を後から追加しても既存利用者は自動昇格しません。既存の一般利用者を管理者にする場合は、既存管理者が管理画面から権限を変更してください。
 2. デフォルト Bot のトークン設定: 管理者がシステムデフォルト Bot（使い方の案内役）のトークンを管理画面から設定します。
 3. 個人設定: 各ユーザーは自分の Gemini API キー（必須）、Google OAuth 連携、ペルソナ等を管理画面から設定し、自分の Bot を作成します（ToDo・家計などの個人の機能は自分の Bot か共有された Bot で使います）。

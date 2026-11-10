@@ -63,7 +63,7 @@ pub struct Config {
     /// 旧鍵→新鍵で全暗号化列を再暗号化する（Node `config.secretKeyNew` / `rotateSecretKey`）。
     pub encryption_secret_new: Option<SecretString>,
     /// 初期 admin に昇格する Discord ユーザー ID（`ADMIN_DISCORD_IDS`・任意・Node `config.adminDiscordIds`）。
-    /// `createUser` はこのリストに含まれる ID（または最初のユーザー）を admin ロールで作成する。
+    /// `createUser` はこのリストに含まれる ID のみを admin ロールで作成する。
     pub admin_discord_ids: Vec<String>,
     /// デスクトップ `/ws/chat` の 1 メッセージ添付上限（MB・`DESKTOP_MAX_UPLOAD_MB`・既定 20・
     /// Node `config.desktopMaxUploadMb`）。
