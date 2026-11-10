@@ -4,6 +4,8 @@
 //! [`SystemCrypto`](yuuka_crypto::SystemCrypto) で暗号化保存し、変更時は runtime シーム経由で Bot を
 //! （再）起動する（gateway 未配線時は no-op・DB 効果は常に働く）。
 
+use yuuka_web::error::forbidden;
+
 use std::sync::Arc;
 
 use axum::extract::{Query, State};
@@ -22,14 +24,6 @@ use crate::SettingsRuntime;
 pub(crate) struct BotIdQuery {
     #[serde(rename = "botId")]
     bot_id: Option<String>,
-}
-
-fn forbidden(message: &str) -> Response {
-    (
-        StatusCode::FORBIDDEN,
-        Json(json!({ "success": false, "message": message })),
-    )
-        .into_response()
 }
 
 /// `?botId=` を解決する（非空なら採用・空/欠落は `system_default`・Node と一致）。

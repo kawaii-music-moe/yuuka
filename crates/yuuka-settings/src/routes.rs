@@ -7,6 +7,8 @@
 //! プロフィール変更は Node と同じく**セッションを再発行**して継続ログインさせる
 //! （現在のセッションを失効→新規発行）。
 
+use yuuka_web::error::{bad_request, conflict, not_found};
+
 use std::sync::Arc;
 
 use axum::extract::State;
@@ -313,26 +315,6 @@ fn json_with_cookie(body: Value, cookie: HeaderValue) -> Response {
 
 fn ok_message(message: &str) -> Response {
     json_ok(json!({ "success": true, "message": message }))
-}
-
-fn status_json(status: StatusCode, message: &str) -> Response {
-    (
-        status,
-        Json(json!({ "success": false, "message": message })),
-    )
-        .into_response()
-}
-
-fn bad_request(message: &str) -> Response {
-    status_json(StatusCode::BAD_REQUEST, message)
-}
-
-fn conflict(message: &str) -> Response {
-    status_json(StatusCode::CONFLICT, message)
-}
-
-fn not_found(message: &str) -> Response {
-    status_json(StatusCode::NOT_FOUND, message)
 }
 
 /// JS `Number(x) || fallback` 相当（0/NaN/非数は fallback）。`intervalHours`/`generations` 用。

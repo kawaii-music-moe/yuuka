@@ -6,6 +6,8 @@
 //! [`WebhookProcessor`] シーム越しに委譲する（本番は [`crate::RealWebhookProcessor`]・未配線時は既定
 //! [`NullWebhookProcessor`]＝no-op）。
 
+use yuuka_web::error::{bad_request, server_error, status_json};
+
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
@@ -481,25 +483,6 @@ fn int_field(body: &Value, key: &str) -> Option<i64> {
         Some(Value::String(s)) => s.trim().parse::<i64>().ok(),
         _ => None,
     }
-}
-
-fn status_json(status: StatusCode, message: &str) -> Response {
-    (
-        status,
-        Json(json!({ "success": false, "message": message })),
-    )
-        .into_response()
-}
-
-fn bad_request(message: &str) -> Response {
-    status_json(StatusCode::BAD_REQUEST, message)
-}
-
-fn server_error() -> Response {
-    status_json(
-        StatusCode::INTERNAL_SERVER_ERROR,
-        "内部エラーが発生しました。",
-    )
 }
 
 #[cfg(test)]

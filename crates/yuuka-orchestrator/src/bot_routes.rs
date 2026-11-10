@@ -9,6 +9,8 @@
 //! `discord_application_id` はトークン復号（[`SystemCrypto::decrypt_text`]）→先頭 base64url セグメントで
 //! 導出する（crypto 未注入・復号失敗時は同期済み値のみ／なければ null）。
 
+use yuuka_web::error::{bad_request, server_error, status_json};
+
 use std::sync::Arc;
 
 use axum::extract::{Extension, Query, State};
@@ -511,25 +513,6 @@ fn str_field(body: &Value, key: &str) -> String {
         .map(str::trim)
         .unwrap_or("")
         .to_owned()
-}
-
-fn status_json(status: StatusCode, message: &str) -> Response {
-    (
-        status,
-        Json(json!({ "success": false, "message": message })),
-    )
-        .into_response()
-}
-
-fn bad_request(message: &str) -> Response {
-    status_json(StatusCode::BAD_REQUEST, message)
-}
-
-fn server_error() -> Response {
-    status_json(
-        StatusCode::INTERNAL_SERVER_ERROR,
-        "内部エラーが発生しました。",
-    )
 }
 
 #[cfg(test)]

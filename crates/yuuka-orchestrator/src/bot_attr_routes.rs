@@ -5,6 +5,8 @@
 //! **残（別増分）**: usage（利用量集計）・modules（enabled_modules）・assistant-*（gemini-key/persona/
 //! guilds/members/roles/guild-note〔暗号・ギルド設定サブシステム〕）。
 
+use yuuka_web::error::{bad_request, server_error, status_json};
+
 use std::sync::Arc;
 
 use axum::extract::{Extension, Query, State};
@@ -1611,25 +1613,6 @@ fn js_positive_int(v: &Value) -> Option<i64> {
         _ => return None,
     };
     (n > 0).then_some(n)
-}
-
-fn status_json(status: StatusCode, message: &str) -> Response {
-    (
-        status,
-        Json(json!({ "success": false, "message": message })),
-    )
-        .into_response()
-}
-
-fn bad_request(message: &str) -> Response {
-    status_json(StatusCode::BAD_REQUEST, message)
-}
-
-fn server_error() -> Response {
-    status_json(
-        StatusCode::INTERNAL_SERVER_ERROR,
-        "内部エラーが発生しました。",
-    )
 }
 
 #[cfg(test)]
