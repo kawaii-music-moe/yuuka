@@ -1110,10 +1110,11 @@ async fn current_timeline_attachments(
     if candidates.is_empty() {
         return Vec::new();
     }
-    let client = match reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .timeout(TIMELINE_ATTACHMENT_FETCH_BUDGET)
-        .build()
+    static CLIENT: std::sync::OnceLock<Result<reqwest::Client, reqwest::Error>> =
+        std::sync::OnceLock::new();
+    let client = match CLIENT
+        .get_or_init(|| yuuka_outbound::guarded_client(TIMELINE_ATTACHMENT_FETCH_BUDGET))
+        .as_ref()
     {
         Ok(client) => client,
         Err(e) => {
@@ -1137,7 +1138,7 @@ async fn current_timeline_attachments(
         }
         let bytes = match tokio::time::timeout_at(
             deadline,
-            fetch_timeline_attachment(&client, att, remaining),
+            fetch_timeline_attachment(client, att, remaining),
         )
         .await
         {

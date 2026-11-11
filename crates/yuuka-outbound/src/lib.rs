@@ -6,11 +6,57 @@
 //! `Err(String)` で返す。
 //!
 //! 通信時検査は呼び出しのたびに DNS を引く。結果のキャッシュ・allowlist による迂回はしない。
-//! HTTP/Chromium の接続・リダイレクト制御は呼び出し元の責務。本 API は接続 IP を固定しないため、
-//! 検査と接続の間の DNS rebinding（TOCTOU）を完全には防がない。
+//! HTTP は [`guarded_client`] を使い、検査した DNS 解決先へ直接接続する。
+//! URL の事前検査とリダイレクト先の検査は呼び出し元の責務。
 //! 登録時の簡易検査は [`RegistrationPolicy`] を必須とし、通信時検査の代替にはしない。
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::sync::Arc;
+use std::time::Duration;
+
+/// 接続時の DNS 検査で拒否したことを識別するエラー。
+#[derive(Debug)]
+pub struct BlockedByResolver(String);
+
+impl std::fmt::Display for BlockedByResolver {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for BlockedByResolver {}
+
+/// DNS で返された全 IP を検査し、そのアドレスへ直接接続させるリゾルバ。
+#[derive(Debug)]
+pub struct PublicOnlyResolver;
+
+impl reqwest::dns::Resolve for PublicOnlyResolver {
+    fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
+        Box::pin(async move {
+            let addrs = resolve_public_addrs(name.as_str(), 0)
+                .await
+                .map_err(BlockedByResolver)?;
+            Ok(Box::new(addrs.into_iter()) as reqwest::dns::Addrs)
+        })
+    }
+}
+
+/// 内部 IP への DNS rebinding と自動リダイレクトを防ぐ HTTP クライアントを作る。
+///
+/// 接続プールを再利用できるよう、呼び出し側で保持すること。プロキシによる再解決を防ぐため、
+/// 環境変数の HTTP(S)_PROXY は使わない。IP リテラルは reqwest のリゾルバを通らないため、
+/// 送信する各 URL は必ず [`assert_safe_outbound_url_without_dns`] でも検査すること。
+///
+/// # Errors
+/// TLS 等のクライアント初期化失敗時。
+pub fn guarded_client(timeout: Duration) -> Result<reqwest::Client, reqwest::Error> {
+    reqwest::Client::builder()
+        .no_proxy()
+        .dns_resolver(Arc::new(PublicOnlyResolver))
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(timeout)
+        .build()
+}
 
 /// 外向き URL の安全性を検証する（Node `assertSafeOutboundUrl`）。
 ///
@@ -176,7 +222,16 @@ fn is_blocked_ipv6(ip: Ipv6Addr) -> bool {
     if let Some(v4) = ip.to_ipv4_mapped() {
         return is_blocked_ipv4(v4);
     }
-    let [seg0, seg1, ..] = ip.segments();
+    let segments = ip.segments();
+    let [seg0, seg1, seg2, ..] = segments;
+    // IPv4-compatible、NAT64、6to4 は範囲ごと拒否する。ネットワークごとの変換に依存しない。
+    let compatible = segments.starts_with(&[0; 6]); // ::/96
+    let nat64 = segments.starts_with(&[0x64, 0xff9b, 0, 0, 0, 0]); // 64:ff9b::/96
+    let nat64_local = seg0 == 0x64 && seg1 == 0xff9b && seg2 == 1; // 64:ff9b:1::/48
+    let six_to_four = seg0 == 0x2002; // 2002::/16
+    if compatible || nat64 || nat64_local || six_to_four {
+        return true;
+    }
     (seg0 & 0xffc0) == 0xfe80        // fe80::/10 link-local
         || (seg0 & 0xfe00) == 0xfc00 // fc00::/7 unique-local
         || (seg0 & 0xffc0) == 0xfec0 // fec0::/10 site-local（deprecated）
@@ -220,6 +275,58 @@ pub fn is_likely_public_http_url(raw: &str, policy: RegistrationPolicy) -> bool 
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn rejects_ipv4_transition_ranges_at_registration_and_fetch() {
+        for ip in [
+            "::127.0.0.1",
+            "::8.8.8.8",
+            "64:ff9b::7f00:1",
+            "64:ff9b::a9fe:a9fe",
+            "64:ff9b::808:808",
+            "64:ff9b:1::1",
+            "2002:7f00:1::",
+            "2002:a00:1::",
+            "2002:808:808::",
+        ] {
+            let url = format!("http://[{ip}]/");
+            assert!(is_blocked_ip(ip.parse().unwrap()), "{ip}");
+            assert!(assert_safe_outbound_url(&url).await.is_err(), "{ip}");
+            assert!(
+                !is_likely_public_http_url(&url, RegistrationPolicy::PublicHttp),
+                "{ip}"
+            );
+            assert!(resolve_public_addrs(ip, 80).await.is_err(), "{ip}");
+        }
+        for ip in ["::ffff:8.8.8.8", "2606:4700:4700::1111"] {
+            assert!(!is_blocked_ip(ip.parse().unwrap()), "{ip}");
+        }
+    }
+
+    /// URL の事前検査を通った名前でも、接続時のリゾルバが内部先を拒否する。
+    #[tokio::test]
+    async fn guarded_client_rejects_internal_dns_without_connecting() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let client = guarded_client(Duration::from_secs(1)).unwrap();
+        let error = client
+            .get(format!("http://localhost:{port}/"))
+            .send()
+            .await
+            .unwrap_err();
+        let mut source: Option<&(dyn std::error::Error + 'static)> = Some(&error);
+        let mut blocked = false;
+        while let Some(error) = source {
+            blocked |= error.is::<BlockedByResolver>();
+            source = error.source();
+        }
+        assert!(blocked, "DNS の拒否を送信エラーから識別できること: {error}");
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), listener.accept())
+                .await
+                .is_err()
+        );
+    }
 
     /// DNS を引かない検査は、形式・scheme・認証情報・IP リテラル・localhost だけを見る。
     #[test]
