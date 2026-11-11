@@ -274,8 +274,10 @@ mod tests {
 
     #[test]
     fn resolve_bot_id_priority() {
-        let mut settings = Settings::default();
-        settings.last_bot_id = Some("saved".into());
+        let settings = Settings {
+            last_bot_id: Some("saved".into()),
+            ..Settings::default()
+        };
 
         // 1. --bot が最優先
         let args = CliArgs {
