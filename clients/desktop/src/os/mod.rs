@@ -40,7 +40,10 @@ pub trait OsIntegration {
     ///
     /// `--bot <id>` 付きで登録する（常駐させたい Bot ごと。client_design.md §4.3）。
     /// 対応しないプラットフォームでは `Err`。
-    #[expect(dead_code, reason = "Reserved for startup settings integration")]
+    #[cfg_attr(
+        not(windows),
+        expect(dead_code, reason = "Reserved for startup settings integration")
+    )]
     fn set_autostart(&self, _enabled: bool, _bot_id: &str) -> Result<(), OsError> {
         Err(OsError::Unsupported("autostart"))
     }
@@ -50,7 +53,10 @@ pub trait OsIntegration {
     ///
     /// `window_handle` はプラットフォーム固有のウィンドウハンドル（Windows なら HWND）。
     /// `passthrough=true` でクリック透過（WS_EX_LAYERED | WS_EX_TRANSPARENT）。
-    #[expect(dead_code, reason = "Reserved for native overlay integration")]
+    #[cfg_attr(
+        not(windows),
+        expect(dead_code, reason = "Reserved for native overlay integration")
+    )]
     fn set_overlay_passthrough(&self, _window_handle: isize, _passthrough: bool) {
         // 既定: 何もしない（eframe 標準で足りる前提）。
     }
@@ -61,7 +67,10 @@ pub trait OsIntegration {
     /// （client_design.md §4.2）。クリック透過中は egui がマウス座標を受け取れない
     /// ため、OS へ直接問い合わせてオーブ矩形との内外を判定する。未対応の
     /// プラットフォームでは `None`（呼び出し側は安全側＝透過 OFF にフォールバックする）。
-    #[expect(dead_code, reason = "Reserved for native overlay integration")]
+    #[cfg_attr(
+        not(windows),
+        expect(dead_code, reason = "Reserved for native overlay integration")
+    )]
     fn cursor_pos_physical(&self) -> Option<(f32, f32)> {
         None
     }
@@ -69,7 +78,10 @@ pub trait OsIntegration {
 
 /// OS 統合のエラー。
 #[derive(Debug, thiserror::Error)]
-#[expect(dead_code, reason = "Returned by the reserved OS integration methods")]
+#[cfg_attr(
+    not(windows),
+    expect(dead_code, reason = "Returned by the reserved OS integration methods")
+)]
 pub enum OsError {
     #[error("operation not supported on this platform: {0}")]
     Unsupported(&'static str),
