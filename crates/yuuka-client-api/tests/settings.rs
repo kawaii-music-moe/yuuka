@@ -404,18 +404,24 @@ fn pwa_model_list_matches_server_allowlist() {
         .nth(1)
         .and_then(|rest| rest.split(']').next())
         .expect("GEMINI_MODELS array literal");
-    let pwa: Vec<&str> = list.split('\'').skip(1).step_by(2).collect();
+    let pwa: Vec<&str> = list.split(['\'', '"']).skip(1).step_by(2).collect();
     assert_eq!(
         pwa, ALLOWED_MODELS,
         "PWA の GEMINI_MODELS と ALLOWED_MODELS の順序・内容が一致する"
     );
 
-    let default_line = src
-        .lines()
-        .find(|l| l.contains("DEFAULT_GEMINI_MODEL"))
-        .expect("DEFAULT_GEMINI_MODEL");
-    assert!(
-        default_line.contains(&format!("'{DEFAULT_MODEL}'")),
-        "PWA の既定モデルはサーバーの DEFAULT_MODEL と一致する: {default_line}"
+    // biome may change quotes or wrap the initializer onto the next line.
+    // Compare the declared value rather than a particular source-code layout.
+    let default_value = src
+        .split("export const DEFAULT_GEMINI_MODEL")
+        .nth(1)
+        .and_then(|declaration| declaration.split_once('='))
+        .and_then(|(_, initializer)| initializer.split(';').next())
+        .expect("DEFAULT_GEMINI_MODEL initializer")
+        .trim()
+        .trim_matches(['\'', '"']);
+    assert_eq!(
+        default_value, DEFAULT_MODEL,
+        "PWA の既定モデルはサーバーの DEFAULT_MODEL と一致する"
     );
 }
