@@ -11,6 +11,8 @@
 //! warn ログのみで応答は成功のまま（DB 上の申請は Web 管理から拾える・Node も同方針）。既定 [`routes`] は
 //! [`NullMemberDmSender`]（no-op・テスト / Discord 無し構成用）。
 
+use yuuka_web::error::{server_error, status_json};
+
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -352,21 +354,6 @@ fn ok_message(message: &str) -> Response {
         Json(json!({ "success": true, "message": message })),
     )
         .into_response()
-}
-
-fn status_json(status: StatusCode, message: &str) -> Response {
-    (
-        status,
-        Json(json!({ "success": false, "message": message })),
-    )
-        .into_response()
-}
-
-fn server_error() -> Response {
-    status_json(
-        StatusCode::INTERNAL_SERVER_ERROR,
-        "内部エラーが発生しました。",
-    )
 }
 
 #[cfg(test)]

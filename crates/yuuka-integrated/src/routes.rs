@@ -10,6 +10,8 @@
 //! フラグ・許可付与・Google 割当・floor 進行）は常に完全に働く**。start/restart は `set_bot_stopped(false)`
 //! を先に反映してから `start`（Null は `false`）→ 502 を返す。
 
+use yuuka_web::error::{conflict, forbidden, not_found};
+
 use std::sync::Arc;
 
 use axum::extract::{Path, State};
@@ -616,24 +618,4 @@ fn bool_response(ok: bool, body: Value) -> Response {
 
 fn json_ok(body: Value) -> Response {
     (StatusCode::OK, Json(body)).into_response()
-}
-
-fn status_json(status: StatusCode, message: &str) -> Response {
-    (
-        status,
-        Json(json!({ "success": false, "message": message })),
-    )
-        .into_response()
-}
-
-fn forbidden(message: &str) -> Response {
-    status_json(StatusCode::FORBIDDEN, message)
-}
-
-fn not_found(message: &str) -> Response {
-    status_json(StatusCode::NOT_FOUND, message)
-}
-
-fn conflict(message: &str) -> Response {
-    status_json(StatusCode::CONFLICT, message)
 }

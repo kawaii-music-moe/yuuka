@@ -6,6 +6,8 @@
 //! 作成済みで 200 を返す（Node 同様 message で失敗を伝える・承認待ち一覧から拾える）。
 //! bot CRUD / sync-discord / profile（同 `botRoutes`）は Discord ランタイム health に依存するため別増分。
 
+use yuuka_web::error::{bad_request, server_error, status_json};
+
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -269,25 +271,6 @@ fn share_json(s: &BotShareRow, shared_username: Option<&str>) -> Value {
         "updated_at": s.updated_at,
         "shared_username": shared_username,
     })
-}
-
-fn status_json(status: StatusCode, message: &str) -> Response {
-    (
-        status,
-        Json(json!({ "success": false, "message": message })),
-    )
-        .into_response()
-}
-
-fn bad_request(message: &str) -> Response {
-    status_json(StatusCode::BAD_REQUEST, message)
-}
-
-fn server_error() -> Response {
-    status_json(
-        StatusCode::INTERNAL_SERVER_ERROR,
-        "内部エラーが発生しました。",
-    )
 }
 
 #[cfg(test)]

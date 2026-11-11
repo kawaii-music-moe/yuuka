@@ -3,6 +3,8 @@
 //! auth:none + 手動セッション検証 + 302 リダイレクト）・`POST /api/settings/calendars`（同期対象更新）・
 //! `POST /api/settings/backup/trigger`（手動バックアップ）。外部 HTTP はシーム越し（未配線時は縮退）。
 
+use yuuka_web::error::bad_request;
+
 use std::sync::Arc;
 
 use axum::extract::{Query, State};
@@ -42,14 +44,6 @@ fn build_redirect_uri(base_url: Option<&str>, host_header: Option<&str>) -> Opti
 
 fn host_header(headers: &HeaderMap) -> Option<&str> {
     headers.get("host").and_then(|v| v.to_str().ok())
-}
-
-fn bad_request(message: &str) -> Response {
-    (
-        StatusCode::BAD_REQUEST,
-        Json(json!({ "success": false, "message": message })),
-    )
-        .into_response()
 }
 
 // ─── GET /api/settings/google/oauth/url ──────────────────────────────────────

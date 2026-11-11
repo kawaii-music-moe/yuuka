@@ -11,6 +11,8 @@
 //! （`desktop_tokens`）へ sha256 で永続化する（[`desktop::add_desktop_token`]）。store は main で 1 度
 //! 生成して router へ注入し、web 再起動を跨いで保持する（webhook の crypto と同方式の Extension）。
 
+use yuuka_web::error::server_error;
+
 use std::collections::{HashMap, VecDeque};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -476,14 +478,6 @@ fn as_opt_string(v: Option<Value>) -> Option<String> {
 /// `Duration` を秒へ切り上げる（`Retry-After` は整数秒）。
 fn ceil_secs(d: Duration) -> u64 {
     d.as_secs() + u64::from(d.subsec_nanos() > 0)
-}
-
-fn server_error() -> Response {
-    (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        Json(json!({ "success": false, "message": "内部エラーが発生しました。" })),
-    )
-        .into_response()
 }
 
 /// §1.1: device_code / user_code を発行する（auth:none）。

@@ -6,6 +6,8 @@
 //! `?` で [`ApiError`] に写像（500・内部詳細は丸められる）。ロール変更・ユーザー削除では
 //! `destroy_all_for_user` でセッションを一括失効し、セッション内ロールの陳腐化を防ぐ。
 
+use yuuka_web::error::{bad_request, not_found};
+
 use std::sync::Arc;
 
 use axum::extract::{Query, State};
@@ -277,24 +279,6 @@ fn json_ok(body: serde_json::Value) -> Response {
 /// 200 `{success:true, message}`。
 fn ok_message(message: &str) -> Response {
     json_ok(json!({ "success": true, "message": message }))
-}
-
-/// 400 `{success:false, message}`。
-fn bad_request(message: &str) -> Response {
-    (
-        StatusCode::BAD_REQUEST,
-        Json(json!({ "success": false, "message": message })),
-    )
-        .into_response()
-}
-
-/// 404 `{success:false, message}`。
-fn not_found(message: &str) -> Response {
-    (
-        StatusCode::NOT_FOUND,
-        Json(json!({ "success": false, "message": message })),
-    )
-        .into_response()
 }
 
 /// `Some(非空文字列)` のみ通す（Node の `value || fallback` で空文字がフォールバックする挙動）。

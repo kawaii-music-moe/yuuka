@@ -14,6 +14,8 @@
 //! （`yuuka_services::NotifierDeliveryRunner`＝定時配信と同じ生成・送信経路）は supervisor が
 //! [`routes_with`] で注入する。[`routes`] の既定は [`NullDeliveryRunner`]（常に `false`＝未配信）。
 
+use yuuka_web::error::bad_request;
+
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -260,30 +262,17 @@ fn json_ok(body: Value) -> Response {
     (StatusCode::OK, Json(body)).into_response()
 }
 
-fn bad_request(message: &str) -> Response {
-    (
-        StatusCode::BAD_REQUEST,
-        Json(json!({ "success": false, "message": message })),
-    )
-        .into_response()
-}
-
 fn not_found() -> Response {
-    (
-        StatusCode::NOT_FOUND,
-        Json(json!({ "success": false, "message": "定期報告が見つかりません。" })),
-    )
-        .into_response()
+    yuuka_web::error::not_found("定期報告が見つかりません。")
 }
 
 /// DB 失敗は 500（内部エラー文字列は応答に出さない）。
 fn server_error(err: &DbError) -> Response {
     tracing::error!(error = %err, "定期報告 API の DB 操作に失敗");
-    (
+    yuuka_web::error::status_json(
         StatusCode::INTERNAL_SERVER_ERROR,
-        Json(json!({ "success": false, "message": "内部エラーが発生しました。" })),
+        "内部エラーが発生しました。",
     )
-        .into_response()
 }
 
 #[cfg(test)]
