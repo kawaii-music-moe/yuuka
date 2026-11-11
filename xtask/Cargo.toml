@@ -18,6 +18,7 @@ yuuka-personal.workspace = true
 yuuka-credential.workspace = true
 yuuka-playbook.workspace = true
 yuuka-persona.workspace = true
+yuuka-db.workspace = true    # salvage-snapshot（yuuka_db::snapshot を共用）
 rusqlite.workspace = true    # salvage-import（旧スナップショット → 新 DB）
 getrandom.workspace = true   # salvage-import（新しい秘書 Bot の id）
 

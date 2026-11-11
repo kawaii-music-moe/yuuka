@@ -86,6 +86,37 @@ pnpm run deploy:logs                  # journal を追う
 
 ---
 
+## DB のバックアップ
+
+サーバー全体のデータは `data/yuuka.db` の 1 ファイルにある（利用者ごとの Google Drive バックアップとは別）。
+`yuuka backup` が、稼働中のサービスを止めずに一貫したコピーを書く。
+
+```bash
+deploy/prod/bin/yuuka backup                      # data/backups/yuuka-<日時>.db に書き、新しい 14 件を残す
+deploy/prod/bin/yuuka backup --to /mnt/backup/yuuka --keep 30
+```
+
+- `VACUUM INTO` で WAL の内容も含めた読み取りスナップショットを取り、`PRAGMA integrity_check` を通してから保存する。
+  検査に失敗したコピーは残さない。保存したファイルは持ち主だけが読める（0600）。
+- DB のパスは `--db` か、サーバーと同じ `config.yaml` / 環境変数の `DB_PATH` から読む（作業ディレクトリで実行する）。
+- 定期実行は `deploy/systemd/yuuka-backup.service.example` と `yuuka-backup.timer.example`（毎日 04:00）を
+  `~/.config/systemd/user/` に置いて `systemctl --user enable --now yuuka-backup.timer`。
+- **`deploy/prod/secret.key` は一緒に控える。** 暗号化された値（Gemini キー・Discord トークン・Google の
+  リフレッシュトークン・Webhook シークレット等）は、同じ鍵が無いと戻しても読めない。鍵は DB とは別の場所に
+  保管し、`yuuka backup` はコピーしない。
+- 保存先を同じディスクに置くなら、別のホストやオブジェクトストレージへも写す（`rsync` など）。`data/backups/`
+  は `data/` ごと git 管理外。
+
+### 戻し方
+
+1. `systemctl --user stop yuuka.service`
+2. 今の DB を退避する: `mv data/yuuka.db data/yuuka.db.broken`（`data/yuuka.db-wal` / `-shm` があれば一緒に）
+3. 戻したい世代をコピーする: `cp data/backups/yuuka-<日時>.db data/yuuka.db`
+4. `systemctl --user start yuuka.service`。バックアップより新しいバイナリで起動すると、不足分のマイグレーションが
+   起動時に当たる（前方専用。古いバイナリへ戻すときは、そのバイナリの時点のバックアップを使う）。
+5. 別のホストへ移すときは `secret.key` と `config.yaml` も同じ内容で置く。鍵が違うと保存済みのトークン類は読めない
+   （利用者に再登録してもらう）。
+
 ## 外部公開（リバースプロキシ / Cloudflare Tunnel）
 
 yuuka は `config.yaml` の `HOST` / `PORT`（例: `127.0.0.1:3402`）で待ち受けます。トンネル / プロキシはこのポートへ

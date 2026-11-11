@@ -226,41 +226,9 @@ pub fn snapshot(args: &[String]) -> Result<(), String> {
     }
     let from = from.ok_or_else(|| format!("--from が必要です\n{SNAPSHOT_USAGE}"))?;
     let to = to.ok_or_else(|| format!("--to が必要です\n{SNAPSHOT_USAGE}"))?;
-    if to.exists() {
-        return Err(format!(
-            "{} は既にあります。別の保存先を指定してください。",
-            to.display()
-        ));
-    }
-    if let Some(dir) = to.parent() {
-        std::fs::create_dir_all(dir).map_err(|e| format!("{} を作れません: {e}", dir.display()))?;
-    }
-    let source = Connection::open_with_flags(&from, OpenFlags::SQLITE_OPEN_READ_ONLY)
-        .map_err(|e| format!("{} を開けません: {e}", from.display()))?;
-    let target = to
-        .to_str()
-        .ok_or_else(|| format!("保存先のパスが UTF-8 ではありません: {}", to.display()))?;
-    source
-        .execute("VACUUM INTO ?1", [target])
-        .map_err(|e| format!("スナップショットに失敗: {e}"))?;
-    let copy = Connection::open_with_flags(&to, OpenFlags::SQLITE_OPEN_READ_WRITE).map_err(sql)?;
-    // 1 ファイルで持ち運べるよう、WAL を使わない形にしておく。
-    copy.execute_batch("PRAGMA journal_mode = DELETE;")
-        .map_err(sql)?;
-    let check: String = copy
-        .query_row("PRAGMA integrity_check", [], |r| r.get(0))
-        .map_err(sql)?;
-    if check != "ok" {
-        return Err(format!("スナップショットの整合性検査に失敗: {check}"));
-    }
-    drop(copy);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        // パスワードハッシュや会話ログを含むため、持ち主だけが読めるようにする。
-        std::fs::set_permissions(&to, std::fs::Permissions::from_mode(0o600))
-            .map_err(|e| format!("権限を設定できません: {e}"))?;
-    }
+    // 本体は yuuka-db の snapshot（`yuuka backup` と同じ: VACUUM INTO → journal_mode=DELETE →
+    // integrity_check → 0600）。
+    yuuka_db::snapshot(&from, &to).map_err(|e| e.to_string())?;
     println!(
         "スナップショットを保存しました: {}（整合性検査 ok）",
         to.display()

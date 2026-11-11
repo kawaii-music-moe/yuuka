@@ -1,0 +1,25 @@
+# DB の定期バックアップ（ユーザー systemd・yuuka-backup.timer から起動する）。
+#   cp deploy/systemd/yuuka-backup.service.example ~/.config/systemd/user/yuuka-backup.service
+#   cp deploy/systemd/yuuka-backup.timer.example   ~/.config/systemd/user/yuuka-backup.timer
+#   systemctl --user daemon-reload && systemctl --user enable --now yuuka-backup.timer
+#   手で 1 回: systemctl --user start yuuka-backup.service
+# 稼働中の yuuka.service を止めずに、data/yuuka.db の一貫したコピーを data/backups/yuuka-<日時>.db に書き、
+# 古い世代を --keep 件だけ残す（docs/guide/deployment.md「DB のバックアップ」）。
+# 暗号化シークレット（deploy/prod/secret.key）はここではコピーしない。別の場所に控えておくこと。
+[Unit]
+Description=Yuuka DB backup
+After=yuuka.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/yuuka
+# サーバーと同じ config.yaml から DB_PATH を読む。保存先と世代数は引数で変える。
+ExecStart=%h/yuuka/deploy/prod/bin/yuuka backup --to %h/yuuka/data/backups --keep 14
+# 他のディスクへ置くなら: ExecStart=... backup --to /mnt/backup/yuuka --keep 30
+Nice=10
+IOSchedulingClass=idle
+ProtectHome=read-only
+ReadWritePaths=%h/yuuka/data
+ProtectSystem=strict
+PrivateTmp=yes
+NoNewPrivileges=yes

@@ -13,6 +13,7 @@ use yuuka_web::{
     apply_common_layers, framework_routes, mount_pwa, mount_static, mount_tts_models, AppState,
 };
 
+pub mod backup;
 pub mod desktop_dist;
 pub mod discord;
 pub mod services;

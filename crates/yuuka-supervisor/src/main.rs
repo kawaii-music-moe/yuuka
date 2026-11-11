@@ -43,12 +43,53 @@ const PWA_DIST_DIR: &str = "dist/public/pwa";
 
 #[tokio::main]
 async fn main() -> ExitCode {
+    // サブコマンド（サーバーを起動しないもの）。引数なしが従来どおりのサーバー起動。
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    match args.first().map(String::as_str) {
+        None => {}
+        Some("backup") => return run_backup(args.get(1..).unwrap_or(&[])),
+        Some("--version" | "-V" | "version") => {
+            println!("yuuka {}", env!("CARGO_PKG_VERSION"));
+            return ExitCode::SUCCESS;
+        }
+        Some(other) => {
+            eprintln!(
+                "不明な引数: {other}\nusage: yuuka [backup ... | --version]\n{}",
+                yuuka_supervisor::backup::USAGE
+            );
+            return ExitCode::FAILURE;
+        }
+    }
     init_telemetry();
     match run().await {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             // 起動失敗は fail-fast（非ゼロ終了）。設定/DB 不備で中途半端に動かさない（§5.6）。
             tracing::error!(error = %e, "起動に失敗しました");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// `yuuka backup`（issue #241）。DB のパスは `--db` か、サーバーと同じ config.yaml / 環境変数から取る。
+fn run_backup(args: &[String]) -> ExitCode {
+    let result = Config::load_and_validate(Path::new(CONFIG_PATH))
+        .map_err(|e| format!("config load failed: {e}"))
+        .and_then(|cfg| yuuka_supervisor::backup::parse_args(args, cfg.db_path))
+        .and_then(|opts| yuuka_supervisor::backup::run(&opts, chrono::Local::now()));
+    match result {
+        Ok(report) => {
+            println!(
+                "バックアップを保存しました: {}（整合性検査 ok）",
+                report.written.display()
+            );
+            for old in &report.removed {
+                println!("古い世代を消しました: {}", old.display());
+            }
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("バックアップに失敗しました: {e}");
             ExitCode::FAILURE
         }
     }

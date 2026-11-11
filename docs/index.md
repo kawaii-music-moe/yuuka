@@ -23,7 +23,10 @@ docs/
 ├── design/                  ← 設計方針（旧 Node 実装時点の記述を含む。下記「設計文書」の注記参照）
 │   ├── function_modularization.md          ← 機能モジュール化（P1〜P6 実装済み）
 │   ├── synapse_cognitive_architecture.md   ← 設計思想・研究裏付け（R0/R1 実装済み）
+│   ├── self_hosting.md                     ← セルフホスト化の設計（ログイン・配布・上限・TZ・バックアップ。提案）
+│   ├── memory_retention.md                 ← 会話記憶（シナプス）の評価と選別（入口フィルタ・LLM 評価・忘却。段階 1〜4 実装済み）
 │   └── desktop_client/                     ← 汎用チャットAPI/デスクトップ（Phase 0/1 実装済み）
+├── audits/                  ← 調査記録（日付付き。機能差分・重複整理・障害の時系列）
 └── rust-rewrite/            ← Rust 移行の計画・実施記録（2026-07-16 時点のアーカイブ）
 ```
 
@@ -39,6 +42,10 @@ docs/
 | 現行の実装（バックエンド）・DB スキーマ | `crates/`（クレート一覧は [../Cargo.toml](../Cargo.toml)）/ `crates/yuuka-db/migrations/`（V17 baseline〜V36） |
 | ローカルセットアップ・本番デプロイ（systemd）・機能一覧 | [guide/setup.md](guide/setup.md) / [guide/deployment.md](guide/deployment.md) / [guide/features.md](guide/features.md) |
 | PWA クライアント（Vue）の開発手順 | [../clients/pwa/README.md](../clients/pwa/README.md) |
+| セルフホスト化の設計（ログイン方式・設定項目・着手順・利用者ごとの上限） | [design/self_hosting.md](design/self_hosting.md) |
+| 会話記憶（シナプス）を全部残さず評価して選別する計画 | [design/memory_retention.md](design/memory_retention.md) |
+| Gemini 503・応答遅延の時系列と対策案の比較（2026-11-11） | [audits/2026-11-11-gemini-503-countermeasures.md](audits/2026-11-11-gemini-503-countermeasures.md) |
+| DB の定期バックアップ（`yuuka backup`・timer・戻し方） | [guide/deployment.md](guide/deployment.md#db-のバックアップ) |
 | 旧 Node 実装時点の不変条件・DB スキーマ v16・ファイル所有マップ（**履歴資料**） | [architecture/architecture_v2.md](architecture/architecture_v2.md) |
 | 各機能の詳細仕様（ToDo・家計・ブラウザ操作 等） | [spec/discordbot_spec.md](spec/discordbot_spec.md) |
 | Bot の動作モード（秘書 / MCP アシスタント）・能力 | [spec/bot_attributes_requirements.md](spec/bot_attributes_requirements.md) |

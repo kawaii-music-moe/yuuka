@@ -1,0 +1,15 @@
+# yuuka-backup.service を毎日 04:00 に起動する（ユーザー systemd）。
+#   cp deploy/systemd/yuuka-backup.timer.example ~/.config/systemd/user/yuuka-backup.timer
+#   systemctl --user daemon-reload && systemctl --user enable --now yuuka-backup.timer
+#   次回の予定: systemctl --user list-timers yuuka-backup.timer
+[Unit]
+Description=Daily Yuuka DB backup
+
+[Timer]
+OnCalendar=*-*-* 04:00:00
+# 停止中に予定を過ぎていたら、起動後に 1 回実行する。
+Persistent=true
+RandomizedDelaySec=10min
+
+[Install]
+WantedBy=timers.target

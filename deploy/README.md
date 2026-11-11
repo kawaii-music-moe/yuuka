@@ -13,6 +13,8 @@ deploy/
     yuuka-dev.service.example     dev API（作業ディレクトリ = deploy/dev/runtime）
     yuuka-redis.service.example   セッション用 Redis（本番と dev で共有・保存しない）
     yuuka-tts.service.example     サーバーでの音声生成（本番と dev で共有）
+    yuuka-backup.service.example  DB の定期バックアップ（yuuka backup → data/backups/）
+    yuuka-backup.timer.example    同上の timer（毎日 04:00）
   prod/
     config.yaml.example         本番の設定の雛形（config.yaml は git 管理外。作業ディレクトリの config.yaml からリンクする）
     secret.key                  暗号化シークレット（YUUKA_ENCRYPTION_SECRET）※git 管理外
@@ -26,8 +28,9 @@ deploy/
     runtime/                    dev API の実行ディレクトリ（config.yaml・.env・data/・bin/yuuka）※git 管理外
 ```
 
-本番の作業ディレクトリ（チェックアウト）には、ほかに `data/`（DB `yuuka.db`・音声モデル `tts-models/` など）と
-`dist/public`（管理画面と PWA のビルド結果）がある。どちらも git 管理外。
+本番の作業ディレクトリ（チェックアウト）には、ほかに `data/`（DB `yuuka.db`・定期バックアップ `backups/`・音声モデル
+`tts-models/` など）と `dist/public`（管理画面と PWA のビルド結果）がある。どちらも git 管理外。
+DB の定期バックアップと戻し方は [docs/guide/deployment.md](../docs/guide/deployment.md#db-のバックアップ)。
 
 ## 本番のデプロイ
 
