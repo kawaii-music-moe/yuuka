@@ -25,10 +25,15 @@ scripts/run-build.sh pnpm build:front
 ```
 
 The runner verifies `git branch --show-current` immediately before executing
-the command, allows only `develop`, holds `/tmp/yuuka-codex-build.lock` until
+the command, locally allows only `develop`, holds `/tmp/yuuka-codex-build.lock` until
 completion, and exports `CARGO_BUILD_JOBS=1`. A busy lock or another branch
 causes a skip with an explanation and exit code 2. The branch check uses the
 command's working directory; use an absolute runner path in subdirectories.
+
+Isolated GitHub-hosted CI also permits PR merge commits and pushes to
+`develop` / `main` when HEAD matches `GITHUB_SHA`. See `AGENTS.md` for the
+event/ref checks. This exception does not apply to self-hosted runners and
+must not be enabled locally by setting CI environment variables.
 
 Do not run builds in the background or concurrently, or override the job limit
 inside a command/script. The hook detects common commands conservatively and

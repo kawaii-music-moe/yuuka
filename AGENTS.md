@@ -18,7 +18,7 @@ These rules apply to Codex and any subagents working in this repository.
   The guard detects common build commands, not arbitrary script internals or
   aliases. These build rules apply even when hooks are unavailable or untrusted.
 
-- Run build or compilation-producing commands only when the current Git branch is
+- Locally (including self-hosted runners), run compilation only when the current Git branch is
   exactly `develop`. Immediately before running one, verify the branch with
   `git branch --show-current`. If it is not `develop` (including detached HEAD),
   do not run the command; report that verification was skipped because of this
@@ -41,3 +41,20 @@ These rules apply to Codex and any subagents working in this repository.
   `xtask` or another script.
 - For Rust compilation, also limit compiler parallelism to one job, for example
   with `CARGO_BUILD_JOBS=1` or `--jobs 1`.
+
+## Isolated PR validation on GitHub Actions
+
+- `.github/workflows/ci.yml` may compile on GitHub-hosted Ubuntu runners for
+  `pull_request` events targeting `develop` / `main`, and pushes to those branches.
+  The shared runner recognizes `GITHUB_ACTIONS=true`,
+  `RUNNER_ENVIRONMENT=github-hosted`, an allowed event/ref, and HEAD equal to
+  `GITHUB_SHA`. Never set these variables locally to bypass branch restrictions.
+- PR validation checks the default synthetic merge commit in detached HEAD.
+  Never rename a branch to `develop` or check out only the PR head to pass the guard.
+- CI still invokes compilation through `scripts/run-build.sh`, uses the shared
+  non-blocking lock on its VM, and sets `CARGO_BUILD_JOBS=1`. All compilation steps
+  within a validation run are serial. Separate hosted VMs do not share memory.
+- `pr-gate` must run for every PR. Only `validate=success` passes; failure,
+  cancellation, skipped, and missing results must not permit merging.
+- Require `pr-gate` and an up-to-date branch in GitHub branch protection before
+  enabling automated merging. A green gate does not replace CL's review.

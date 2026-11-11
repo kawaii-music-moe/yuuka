@@ -29,13 +29,11 @@ pnpm dev:start      # dev API（yuuka-dev.service）+ PWA・管理画面の Vite
 
 設定（環境変数・config.yaml 等）の詳細は [`docs/guide/setup.md`](docs/guide/setup.md) を参照してください。
 
-### ビルドはブランチを選んで行う
+### ローカルのビルド制限
 
-開発サーバーのメモリ（15 GB）は、複数の worktree で並列に Rust をビルドすると足りなくなります。そのため:
+開発ホストのメモリを守るため、コンパイルを伴う操作は `develop` のみで実行します。`cargo check`・`cargo clippy`・テスト・フロントエンドのビルドも対象です。必ず `scripts/run-build.sh <command> [args...]` を使い、共有ロックと Rust 1ジョブを適用してください。作業ブランチでは検証をスキップした理由を記録し、GitHub-hosted CI に検証を任せます。制限回避のためのブランチ変更は禁止です。
 
-- 開発中の確認は `cargo check`（必要に応じて `cargo clippy` / `cargo fmt`）だけで行います。
-- `cargo build` / `cargo test` / `cargo run` / `cargo nextest`、それらを呼ぶ `pnpm build` / `pnpm dev:update` などの実ビルドは、`develop` ブランチでの検証時だけ行います。
-- Claude Code では `.claude/hooks/guard-cargo-build.sh` が develop 以外でのこれらのコマンドを止めます。
+隔離した GitHub-hosted CI の例外は [AGENTS.md](AGENTS.md) を参照してください。ローカルの制限は self-hosted runner にも適用します。
 
 ## ブランチ運用
 
@@ -56,32 +54,29 @@ git worktree add .claude/worktrees/something -b fix/something origin/develop
 
 本体のチェックアウト（`/home/suki/apps/yuuka`）は develop のまま保ちます。本番の `yuuka.service` と dev の Vite がここを作業ディレクトリにしているためです。作業は worktree で行ってください。
 
-## コミット前のチェック
+## PR の検証
 
-PR を出す前に、作業ブランチで以下が通ることを確認してください。
-
-```bash
-cargo fmt --all -- --check
-cargo fmt --manifest-path clients/desktop/Cargo.toml --all -- --check   # workspace 外のデスクトップクライアント
-cargo clippy --workspace --all-targets --all-features -- -D warnings
-pnpm check                      # = pnpm typecheck:front && pnpm lint
-npm --prefix clients/pwa run check
-```
-
-- `pnpm typecheck:front` … `svelte-check`（型エラー 0）
-- `pnpm lint` … `biome check .`（リポジトリ全体。PWA の `.vue` も含む。`pnpm lint:fix` で自動修正）
-- `npm --prefix clients/pwa run check` … `vue-tsc --noEmit`
-
-テスト（`cargo test --workspace`・`pnpm test:front`・`npm --prefix clients/pwa test`）は develop での検証時に実行します。
+作業ブランチでは差分の確認とコンパイルを伴わない整形確認を行います。コンパイルはローカルで実行せず、PR を作成して CI の結果を確認してください。develop で実行する場合も共通ランナーを使用します。
 
 ### CI
 
-| ワークフロー | PR で毎回 | develop → main の PR だけ |
-|---|---|---|
-| `ci.yml` | `svelte-check`・`biome`・`vue-tsc` | 管理画面・PWA のビルド、PWA のテスト |
-| `rust-ci.yml`（Rust 関係のファイルを変えたとき） | `cargo fmt --check`・cargo-deny・マイグレーション回帰（`verify-sd07.py` / `verify-r13.mjs`） | clippy・release ビルド・`cargo test` |
+検証は [ci.yml](.github/workflows/ci.yml) に統合しました。develop / main 向けの全 PR（ドキュメントのみも含む）と両ブランチへの push で動きます。PR では先端だけでなく、ベースブランチとの仮マージコミットを検証します。
 
-clippy とテストは CI では develop → main の PR でしか走らないので、ローカルで clippy を通し、develop で `cargo test` を確認してください。
+| 対象 | 毎回実施する検証 |
+|---|---|
+| Rust workspace | fmt、cargo-deny、clippy（全 target / feature）、test・build（全 feature、locked） |
+| 管理画面 | 型検査、lint、テスト、ビルド |
+| PWA | 型検査、テスト、配信ディレクトリへのビルド（管理画面の後） |
+| dev スクリプト | 既存テスト |
+| DB / 添付スキーマ | verify-sd07.py、verify-r13.mjs |
+| デスクトップ | Linux で fmt と全 feature の clippy / test / build（audio を含む） |
+| 検証制御 | 共通ランナーとゲートの回帰テスト |
+
+各ビルドは同一ジョブで直列実行し、Rust は1ジョブです。デスクトップの Windows 固有コード・GUI 操作、実サービス連携、本番 release 最適化の検証はこの CI の保証範囲外です。必要な確認は PR に記録してください。CI に本番の秘密情報を渡さず、デプロイや本番DBの更新も行いません。
+
+最後の必須チェック `pr-gate` は `validate` が success の場合だけ成功します。失敗・中断・スキップ・結果不明はマージ不可です。CI を通すためにチェックを無効化したり、失敗を無視したりしないでください。既存コードの問題で通らない場合は原因を Issue に記録し、解決までマージを止めます。
+
+GitHub 側の保護設定と試運転手順は [PR 検証の運用](docs/guide/pr-validation.md) を参照してください。最新のベースブランチとの CI 成功と、CL による最新差分のレビューをそろえてからマージします。
 
 ### コミットメッセージ
 
@@ -98,7 +93,7 @@ clippy とテストは CI では develop → main の PR でしか走らない�
 ## ビルドとデプロイ
 
 ```bash
-pnpm build          # Rust バイナリ（target/release/yuuka）+ 管理画面 SPA（dist/public）+ PWA（dist/public/pwa）
+scripts/run-build.sh pnpm build          # Rust バイナリ（target/release/yuuka）+ 管理画面 SPA（dist/public）+ PWA（dist/public/pwa）
 # 個別に実行する場合は build:front → build:pwa の順（build:front は dist/public を空にするため、
 # 先に build:pwa を実行すると dist/public/pwa が消える）。PWA のビルド成果物はコミットしない（#46）。
 ```
