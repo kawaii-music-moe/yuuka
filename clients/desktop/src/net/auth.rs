@@ -34,6 +34,7 @@ pub trait LoginProgress: Send {
 }
 
 /// 何もしない `LoginProgress`（テスト/ヘッドレス用）。
+#[expect(dead_code, reason = "Reserved for headless login callers")]
 pub struct NoopProgress;
 impl LoginProgress for NoopProgress {
     fn on_code(&mut self, _user_code: &str, _uri: &str) {}
@@ -73,6 +74,7 @@ pub struct DeviceCodeResp {
     /// ポーリング最小間隔（秒）。
     pub interval: u64,
     /// 失効までの秒数。
+    #[expect(dead_code, reason = "Wire field; expiry is reported by token polling")]
     pub expires_in: u64,
 }
 

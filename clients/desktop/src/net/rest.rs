@@ -22,6 +22,7 @@ pub enum RestError {
 
 /// `GET /api/devices` の 1 要素（backend_api.md §4）。
 #[derive(Debug, Clone, Deserialize)]
+#[expect(dead_code, reason = "Reserved for the device-management UI")]
 pub struct DeviceInfo {
     pub id: String,
     #[serde(default)]
@@ -83,6 +84,7 @@ pub async fn fetch_avatar(client: &reqwest::Client, url: &str) -> Result<Vec<u8>
 }
 
 /// `GET /api/devices` — 端末一覧（端末管理・自端末判定）。
+#[expect(dead_code, reason = "Reserved for the device-management UI")]
 pub async fn get_devices(
     client: &reqwest::Client,
     token: &str,
@@ -94,6 +96,7 @@ pub async fn get_devices(
 }
 
 /// `POST /api/devices/revoke` — 自端末トークンの失効（ログアウト時。client_design.md §8）。
+#[expect(dead_code, reason = "Reserved for the device-management UI")]
 pub async fn revoke_device(
     client: &reqwest::Client,
     token: &str,
