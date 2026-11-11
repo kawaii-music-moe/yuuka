@@ -666,10 +666,10 @@ mod tests {
         assert_eq!(cfg.google_client_id, None, "空文字は未設定に畳む");
         assert_tuning_defaults(&cfg);
 
-        for instance in ["dev", "prod"] {
+        for (instance, port) in [("dev", 3403), ("prod", 3402)] {
             let path = root.join(format!("deploy/{instance}/config.yaml.example"));
             let cfg = Config::load_and_validate(&path).expect("deploy example");
-            assert_eq!(cfg.port, 7854);
+            assert_eq!(cfg.port, port, "{instance} example port");
             assert_tuning_defaults(&cfg);
         }
     }
