@@ -50,6 +50,9 @@ impl AuthRuntime {
         admin_discord_ids: Vec<String>,
         oidc: Option<Arc<OidcClient>>,
     ) -> Self {
+        if admin_discord_ids.is_empty() {
+            tracing::warn!("ADMIN_DISCORD_IDS が未設定です。新規利用者に管理者権限は付与されません。初回ログイン前に管理者の Discord ID を設定してください。");
+        }
         Self {
             sessions,
             session_ttl_secs: u64::from(session_ttl_days) * 24 * 60 * 60,

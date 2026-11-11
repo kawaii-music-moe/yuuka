@@ -1109,7 +1109,7 @@ User {
 
 - 利用者の登録はプロバイダー側で行う。ID トークンの `OIDC_DISCORD_ID_CLAIM`（既定 `discord_id`）に Discord ユーザー ID が入っている必要がある
 - 初回ログイン時、Yuuka は ID トークンの Discord ユーザー ID で利用者を作る（または既存の利用者に `sk_account_id` を紐付ける）
-- 最初の利用者、および `ADMIN_DISCORD_IDS` に含まれる Discord ID の新規利用者は `Admin`、それ以外は `User` とする
+- `ADMIN_DISCORD_IDS` に含まれる Discord ID の新規利用者のみは `Admin`、それ以外は `User` とする
 - 同じ Discord ID が別のプロバイダーアカウントに紐付いている場合、ログインを拒否する（乗っ取り防止）
 - プロバイダーアカウントに紐付いていない旧アカウントは所有データごと削除する（V25）
 

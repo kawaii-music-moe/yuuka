@@ -35,7 +35,7 @@ REPLY_CHAIN_MAX_DEPTH: 10
 SESSION_TTL_DAYS: 7
 
 # 初期Adminロールを付与するDiscordユーザーID（カンマ区切り、任意。
-# 未設定の場合は最初に登録したユーザーがAdminになります）
+# 未設定の場合は全員Userになります。管理者の初回ログイン前に指定してください）
 # ADMIN_DISCORD_IDS: ""
 
 # Redis接続用URL (インメモリDBキャッシュ・セッション管理用)
@@ -89,7 +89,7 @@ OIDC_CLIENT_SECRET: ""
 # OIDC_DISCORD_ID_CLAIM: "discord_id"
 # ログインボタンの表示名（省略時は標準なら "sk-9 Account"、それ以外は issuer のホスト名）
 # OIDC_LABEL: "sk-9 Account"
-# 初回ログイン時に Admin として作成する Discord ID（任意。未設定なら最初のログイン者が Admin）
+# 初回ログイン時に Admin として作成する Discord ID（未設定なら全員 User。管理者の初回ログイン前に指定）
 # ADMIN_DISCORD_IDS:
 #   - "123456789012345678"
 

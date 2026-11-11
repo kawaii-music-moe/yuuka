@@ -54,7 +54,7 @@ pnpm run deploy            # ビルド → deploy/prod/bin/yuuka と dist/public
 systemctl --user unset-environment YUUKA_INIT_DB
 ```
 
-最初にログインした利用者（または `ADMIN_DISCORD_IDS` に含まれる利用者）が管理者になります。
+初回ログイン前に `ADMIN_DISCORD_IDS` に管理者の Discord ID を設定してください。指定した ID の新規利用者だけが管理者になります。未設定なら、最初のログイン者も一般利用者になります。既存の権限は維持され、設定を後から追加しても既存利用者は自動昇格しません。既存の一般利用者を管理者にする場合は、既存管理者が管理画面から権限を変更してください。
 
 > **既存の DB を持ってくるとき**: `data/yuuka.db` に置きます。V22 以前の DB は V25 で sk-account に紐付いていない利用者が
 > 所有データごと削除されるので、[setup.md](setup.md) の「既存 DB を新しい版で開くとき」を先に確認してください。

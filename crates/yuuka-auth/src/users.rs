@@ -97,9 +97,9 @@ pub async fn discord_id_by_sk_account(
 ///
 /// 利用者は sk-account ID で引き当て、Discord ID との組み合わせも一致する場合だけプロフィール名を
 /// 同期する。sk-account に未紐付けのデータ行（旧環境から移した行）は、sk-account が確認した Discord ID
-/// が一致すれば一度だけ引き受ける。新規利用者は、最初の利用者または `admin_ids` に含まれる
+/// が一致すれば一度だけ引き受ける。新規利用者は、`admin_ids` に含まれる
 /// Discord ID だけを admin にする。
-/// COUNT→INSERT は単一 writer トランザクション内で行い、初回 admin 判定の競合を閉じる。
+/// 未設定時は最初の利用者も User とし、既存利用者のロールは変更しない。
 ///
 /// # Errors
 /// sk-account ID と Discord ID の組み合わせ不一致・一意制約違反・salt/DB 失敗時 [`DbError`]。
@@ -162,10 +162,7 @@ pub async fn upsert_from_sk_account(
                 return Ok(role_from_str(&role));
             }
 
-            let count: i64 = tx
-                .query_row("SELECT COUNT(*) FROM users", [], |r| r.get(0))
-                .map_err(map_sqlite)?;
-            let role = if count == 0 || is_admin_id {
+            let role = if is_admin_id {
                 Role::Admin
             } else {
                 Role::User
