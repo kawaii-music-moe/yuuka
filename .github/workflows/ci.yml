@@ -20,7 +20,6 @@ env:
 
 jobs:
   validate:
-    if: ${{ false }} # Temporary negative test; removed before final validation.
     name: validate
     runs-on: ubuntu-24.04
     timeout-minutes: 120
