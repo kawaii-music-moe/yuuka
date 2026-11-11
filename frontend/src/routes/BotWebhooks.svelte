@@ -1,4 +1,6 @@
 <script lang="ts">
+import { onDestroy } from "svelte";
+import { asyncState } from "$lib/asyncState";
 // ─────────────────────────────────────────────────────────────────────────
 // Webhook タブ（旧 app.js fetchWebhooksList / fetchWebhookDeliveries +
 //  index.html #tab-webhooks を移植）。webhookApi 使用（一覧・作成・受信履歴は選択中 Bot）。
@@ -41,23 +43,29 @@ let deliveries = $state<WebhookDeliveryRecord[]>([]);
 let adding = $state(false);
 
 async function loadEndpoints() {
-	try {
-		const res = await webhookApi.list();
-		endpoints = res.endpoints ?? [];
-	} catch (e) {
-		toastError(e);
-		endpoints = [];
-	}
+	await loadEndpointsRequest.run(
+		async () => await webhookApi.list(),
+		(res) => {
+			endpoints = res.endpoints ?? [];
+		},
+		(e) => {
+			toastError(e);
+			endpoints = [];
+		},
+	);
 }
 
 async function loadDeliveries() {
-	try {
-		const res = await webhookApi.deliveries();
-		deliveries = res.deliveries ?? [];
-	} catch (e) {
-		toastError(e);
-		deliveries = [];
-	}
+	await loadDeliveriesRequest.run(
+		async () => await webhookApi.deliveries(),
+		(res) => {
+			deliveries = res.deliveries ?? [];
+		},
+		(e) => {
+			toastError(e);
+			deliveries = [];
+		},
+	);
 }
 
 // 選択中 Bot のエンドポイント・受信履歴を取得（Bot 切り替えで取り直す）。
@@ -124,6 +132,13 @@ async function createEndpoint(payload: {
 }
 
 setHeaderExtra(headerTabs);
+
+const loadEndpointsRequest = asyncState();
+const loadDeliveriesRequest = asyncState();
+onDestroy(() => {
+	loadEndpointsRequest.cancel();
+	loadDeliveriesRequest.cancel();
+});
 </script>
 
 {#snippet headerTabs()}

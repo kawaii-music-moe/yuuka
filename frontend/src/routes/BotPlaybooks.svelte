@@ -1,4 +1,6 @@
 <script lang="ts">
+import { onDestroy } from "svelte";
+import { asyncState } from "$lib/asyncState";
 // ─────────────────────────────────────────────────────────────────────────
 // Playbook タブ（旧 app.js playbook 系 + index.html #tab-playbooks を移植）。
 // 一度に出す量を減らすため、次の 3 つをページ内タブで切り替える:
@@ -81,34 +83,43 @@ function resetScheduleForm() {
 }
 
 async function loadPlaybooks(query?: string) {
-	try {
-		const res = await playbookApi.list(query ? { query } : undefined);
-		playbooks = res.playbooks ?? [];
-	} catch (e) {
-		toastError(e);
-		playbooks = [];
-	}
+	await loadPlaybooksRequest.run(
+		async () => await playbookApi.list(query ? { query } : undefined),
+		(res) => {
+			playbooks = res.playbooks ?? [];
+		},
+		(e) => {
+			toastError(e);
+			playbooks = [];
+		},
+	);
 }
 
 async function loadSchedules() {
-	try {
-		const res = await playbookApi.schedules();
-		schedules = res.schedules ?? [];
-	} catch (e) {
-		toastError(e);
-		schedules = [];
-	}
+	await loadSchedulesRequest.run(
+		async () => await playbookApi.schedules(),
+		(res) => {
+			schedules = res.schedules ?? [];
+		},
+		(e) => {
+			toastError(e);
+			schedules = [];
+		},
+	);
 }
 
 async function loadRuns() {
-	try {
-		const res = await playbookApi.runs();
-		runs = res.runs ?? [];
-		runsPage = 0;
-	} catch (e) {
-		toastError(e);
-		runs = [];
-	}
+	await loadRunsRequest.run(
+		async () => await playbookApi.runs(),
+		(res) => {
+			runs = res.runs ?? [];
+			runsPage = 0;
+		},
+		(e) => {
+			toastError(e);
+			runs = [];
+		},
+	);
 }
 
 $effect(() => {
@@ -240,6 +251,15 @@ async function deleteSchedule(s: PlaybookScheduleRecord) {
 
 // タブはシェルのヘッダーに出す（Discord ページと同じ）。
 setHeaderExtra(headerTabs);
+
+const loadPlaybooksRequest = asyncState();
+const loadSchedulesRequest = asyncState();
+const loadRunsRequest = asyncState();
+onDestroy(() => {
+	loadPlaybooksRequest.cancel();
+	loadSchedulesRequest.cancel();
+	loadRunsRequest.cancel();
+});
 </script>
 
 {#snippet headerTabs()}

@@ -1,4 +1,6 @@
 <script lang="ts">
+import { onDestroy } from "svelte";
+import { asyncState } from "$lib/asyncState";
 // ─────────────────────────────────────────────────────────────────────────
 // スケジュール タブ（旧 app.js fetchSchedulesList / scheduleForm submit /
 // handleDeleteSchedule + index.html #tab-schedules / #modal-schedule を移植）。
@@ -27,16 +29,16 @@ let modalOpen = $state(false);
 
 // ── 一覧取得（旧 fetchSchedulesList） ──
 async function load() {
-	loading = true;
-	try {
-		const res = await scheduleApi.list(days);
-		schedules = res.schedules ?? [];
-	} catch (e) {
-		toastError(e);
-		schedules = [];
-	} finally {
-		loading = false;
-	}
+	await loadRequest.run(
+		async () => await scheduleApi.list(days),
+		(res) => {
+			schedules = res.schedules ?? [];
+		},
+		(e) => {
+			toastError(e);
+			schedules = [];
+		},
+	);
 }
 
 // activeBot（bot-scoped）変更 or days 変更で再取得。
@@ -79,6 +81,13 @@ async function saveSchedule(payload: {
 		toastError(e);
 	}
 }
+
+const loadRequest = asyncState((value) => {
+	loading = value;
+});
+onDestroy(() => {
+	loadRequest.cancel();
+});
 </script>
 
 <section class="tab-view">

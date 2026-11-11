@@ -1,4 +1,6 @@
 <script lang="ts">
+import { onDestroy } from "svelte";
+import { asyncState } from "$lib/asyncState";
 // ─────────────────────────────────────────────────────────────────────────
 // リマインダー タブ（旧 app.js fetchRemindersList / reminder-form + index.html
 // #tab-reminders を移植）。reminderApi 使用（bot-scoped）。
@@ -50,31 +52,35 @@ function resetTarget() {
 }
 
 async function loadReminders() {
-	loading = true;
-	try {
-		const res = await reminderApi.list({ all: showAll });
-		reminders = res.reminders ?? [];
-	} catch (e) {
-		toastError(e);
-		reminders = [];
-	} finally {
-		loading = false;
-	}
+	await loadRemindersRequest.run(
+		async () => await reminderApi.list({ all: showAll }),
+		(res) => {
+			reminders = res.reminders ?? [];
+		},
+		(e) => {
+			toastError(e);
+			reminders = [];
+		},
+	);
 }
 
 async function loadDefaultTarget() {
 	defaultTarget = null;
-	try {
-		const res = (await settingsApi.status()) as StatusConfigResponse;
-		const t = res.config?.notifyTarget;
-		defaultTarget =
-			t?.type === "channel"
-				? { type: "channel", id: t.id ?? "" }
-				: { type: "dm", id: "" };
-	} catch {
-		defaultTarget = null;
-	}
-	resetTarget();
+	await loadDefaultTargetRequest.run(
+		async () => (await settingsApi.status()) as StatusConfigResponse,
+		(res) => {
+			const t = res.config?.notifyTarget;
+			defaultTarget =
+				t?.type === "channel"
+					? { type: "channel", id: t.id ?? "" }
+					: { type: "dm", id: "" };
+			resetTarget();
+		},
+		() => {
+			defaultTarget = null;
+			resetTarget();
+		},
+	);
 }
 
 // activeBot（bot-scoped）変更 or showAll 変更で再取得。
@@ -133,6 +139,17 @@ async function onCancel(id: number) {
 		toastError(e);
 	}
 }
+
+const loadRemindersRequest = asyncState((value) => {
+	loading = value;
+});
+onDestroy(() => {
+	loadRemindersRequest.cancel();
+});
+const loadDefaultTargetRequest = asyncState();
+onDestroy(() => {
+	loadDefaultTargetRequest.cancel();
+});
 </script>
 
 <section class="tab-view">

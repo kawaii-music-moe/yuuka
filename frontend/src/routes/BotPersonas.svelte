@@ -1,4 +1,6 @@
 <script lang="ts">
+import { onDestroy } from "svelte";
+import { asyncState } from "$lib/asyncState";
 // ─────────────────────────────────────────────────────────────────────────
 // 人格（Bot設定 › このBot。旧 app.js persona 系 + index.html #tab-personas を移植）。
 //   - マイペルソナ一覧（適用中ID をハイライト）: GET /api/personas
@@ -45,25 +47,31 @@ let previewPrompt = $state("");
 let previewId = $state<number | null>(null);
 
 async function loadPersonas() {
-	try {
-		const res = await personaApi.list();
-		personas = res.personas ?? [];
-		activePersonaId = res.active_persona_id ?? null;
-		maxLength = res.max_length || 20000;
-	} catch (e) {
-		toastError(e);
-		personas = [];
-	}
+	await loadPersonasRequest.run(
+		async () => await personaApi.list(),
+		(res) => {
+			personas = res.personas ?? [];
+			activePersonaId = res.active_persona_id ?? null;
+			maxLength = res.max_length || 20000;
+		},
+		(e) => {
+			toastError(e);
+			personas = [];
+		},
+	);
 }
 
 async function loadMarketplace() {
-	try {
-		const res = await personaApi.marketplace();
-		marketplace = res.personas ?? [];
-	} catch (e) {
-		toastError(e);
-		marketplace = [];
-	}
+	await loadMarketplaceRequest.run(
+		async () => await personaApi.marketplace(),
+		(res) => {
+			marketplace = res.personas ?? [];
+		},
+		(e) => {
+			toastError(e);
+			marketplace = [];
+		},
+	);
 }
 
 // activeBot（適用中ID が Bot 単位）変更で再取得。
@@ -198,6 +206,13 @@ async function clearHistory() {
 		toastError(e);
 	}
 }
+
+const loadPersonasRequest = asyncState();
+const loadMarketplaceRequest = asyncState();
+onDestroy(() => {
+	loadPersonasRequest.cancel();
+	loadMarketplaceRequest.cancel();
+});
 </script>
 
 <section class="tab-view">
