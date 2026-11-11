@@ -10,6 +10,7 @@ export { deviceApi } from "./deviceApi";
 export { financeApi } from "./financeApi";
 export { integratedApi } from "./integratedApi";
 export { mcpApi } from "./mcpApi";
+export { memoryApi } from "./memoryApi";
 export { personaApi } from "./personaApi";
 export { personalApi } from "./personalApi";
 export { playbookApi } from "./playbookApi";

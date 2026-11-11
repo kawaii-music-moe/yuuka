@@ -36,6 +36,7 @@ tracing.workspace = true
 tokio.workspace = true
 tower.workspace = true
 yuuka-types.workspace = true
+yuuka-web = { workspace = true, features = ["test-support"] }  # memory_routes / memory_tools の Bot 認可テスト
 tempfile = "3"
 
 [lints]

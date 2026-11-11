@@ -28,6 +28,7 @@ import { currentUser } from "$lib/stores/session";
 import { setTheme, type Theme, theme } from "$lib/stores/theme";
 import { pushToast, toastError } from "$lib/stores/toast";
 import BackupCard from "../routes/config/BackupCard.svelte";
+import MemoryCard from "../routes/config/MemoryCard.svelte";
 import UserSettingsCard from "../routes/config/UserSettingsCard.svelte";
 import HelpTip from "../routes/delivery/HelpTip.svelte";
 import AccountDevices from "./account/AccountDevices.svelte";
@@ -258,6 +259,11 @@ async function downloadPackage(e: SubmitEvent): Promise<void> {
 							<button type="submit" disabled={!llmLoaded} class="btn btn-primary">AI 設定を保存</button>
 						</form>
 					</div>
+				{/if}
+
+				<!-- 記憶（Bot があなたについて覚えていることの一覧・削除。docs/design/memory_retention.md §4-E） -->
+				{#if section === "memory"}
+					<MemoryCard />
 				{/if}
 
 				<!-- バックアップと移行（旧 Bot基本設定 > バックアップ + アカウント管理 > 移行パッケージ） -->

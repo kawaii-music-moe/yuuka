@@ -64,6 +64,13 @@ export const ACCOUNT_SECTIONS: ManagementSection[] = [
 		scope: "user",
 	},
 	{
+		key: "memory",
+		label: "記憶",
+		desc: "Bot があなたについて覚えていることの一覧と削除",
+		category: "データ",
+		scope: "user_bot",
+	},
+	{
 		key: "data",
 		label: "バックアップと移行",
 		desc: "Google Drive への自動バックアップと、Bot移行パッケージ",

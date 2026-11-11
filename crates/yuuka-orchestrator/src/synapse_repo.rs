@@ -420,6 +420,144 @@ pub async fn select_over_cap(db: &Db, scope: &ScopeKey, cap: usize) -> Result<Ve
         .await
 }
 
+/// 利用者に見せる kept の 1 件（docs/design/memory_retention.md §4-E）。内部スコープ列は持たない。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct MemoryRow {
+    pub id: i64,
+    /// 評価器が書いた事実文（評価前からある行は発話の生テキスト）。
+    pub content: String,
+    pub kind: Option<String>,
+    pub durability: String,
+    pub strength: f64,
+    pub use_count: i64,
+    pub useful_count: i64,
+    pub last_used_at: Option<String>,
+    pub created_at: String,
+}
+
+const MEMORY_ROW_COLUMNS: &str =
+    "id, content, kind, durability, strength, use_count, useful_count, \
+     last_used_at, created_at";
+
+fn map_memory_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<MemoryRow> {
+    Ok(MemoryRow {
+        id: r.get(0)?,
+        content: r.get(1)?,
+        kind: r.get(2)?,
+        durability: r.get(3)?,
+        strength: r.get(4)?,
+        use_count: r.get(5)?,
+        useful_count: r.get(6)?,
+        last_used_at: r.get(7)?,
+        created_at: r.get(8)?,
+    })
+}
+
+/// 利用者 × Bot の kept を強度の高い順に返す（ギルドの別は問わない＝本人の分は全部）。
+///
+/// # Errors
+/// 読み取り失敗時 [`DbError`]。
+pub async fn list_kept(db: &Db, user_id: &str, bot_id: &str) -> Result<Vec<MemoryRow>, DbError> {
+    let (uid, bid) = (user_id.to_owned(), bot_id.to_owned());
+    db.read
+        .read(move |conn| {
+            let mut stmt = conn
+                .prepare(&format!(
+                    "SELECT {MEMORY_ROW_COLUMNS} FROM synapses \
+                     WHERE user_id = ?1 AND bot_id = ?2 AND status = 'kept' \
+                     ORDER BY strength DESC, id DESC"
+                ))
+                .map_err(map_sqlite)?;
+            let rows = stmt
+                .query_map(params![uid, bid], map_memory_row)
+                .map_err(map_sqlite)?;
+            rows.collect::<Result<Vec<_>, _>>().map_err(map_sqlite)
+        })
+        .await
+}
+
+/// 利用者 × Bot の kept のうち、内容に `needle` を含むもの（最大 `limit` 件・強い順）。
+/// `%` と `_` はリテラルとして扱う。
+///
+/// # Errors
+/// 読み取り失敗時 [`DbError`]。
+pub async fn find_kept_by_content(
+    db: &Db,
+    user_id: &str,
+    bot_id: &str,
+    needle: &str,
+    limit: usize,
+) -> Result<Vec<MemoryRow>, DbError> {
+    let (uid, bid) = (user_id.to_owned(), bot_id.to_owned());
+    let escaped = needle
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_");
+    let pattern = format!("%{escaped}%");
+    let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+    db.read
+        .read(move |conn| {
+            let mut stmt = conn
+                .prepare(&format!(
+                    "SELECT {MEMORY_ROW_COLUMNS} FROM synapses \
+                     WHERE user_id = ?1 AND bot_id = ?2 AND status = 'kept' \
+                       AND content LIKE ?3 ESCAPE '\\' \
+                     ORDER BY strength DESC, id DESC LIMIT ?4"
+                ))
+                .map_err(map_sqlite)?;
+            let rows = stmt
+                .query_map(params![uid, bid, pattern, limit], map_memory_row)
+                .map_err(map_sqlite)?;
+            rows.collect::<Result<Vec<_>, _>>().map_err(map_sqlite)
+        })
+        .await
+}
+
+/// 利用者 × Bot の評価待ち（`status='candidate'`）の件数。
+///
+/// # Errors
+/// 読み取り失敗時 [`DbError`]。
+pub async fn count_candidates(db: &Db, user_id: &str, bot_id: &str) -> Result<i64, DbError> {
+    let (uid, bid) = (user_id.to_owned(), bot_id.to_owned());
+    db.read
+        .read(move |conn| {
+            conn.query_row(
+                "SELECT count(*) FROM synapses \
+                 WHERE user_id = ?1 AND bot_id = ?2 AND status = 'candidate'",
+                params![uid, bid],
+                |r| r.get::<_, i64>(0),
+            )
+            .map_err(map_sqlite)
+        })
+        .await
+}
+
+/// 本人 × Bot の kept を 1 件消す。他人の行・候補の行は消さず `false`。RAM 索引からの除去は
+/// 呼び出し側が行う（`true` のときだけ）。
+///
+/// # Errors
+/// 書き込み失敗時 [`DbError`]。
+pub async fn delete_kept_owned(
+    db: &Db,
+    user_id: &str,
+    bot_id: &str,
+    id: i64,
+) -> Result<bool, DbError> {
+    let (uid, bid) = (user_id.to_owned(), bot_id.to_owned());
+    db.writer
+        .transaction(move |tx| {
+            let n = tx
+                .execute(
+                    "DELETE FROM synapses \
+                     WHERE id = ?1 AND user_id = ?2 AND bot_id = ?3 AND status = 'kept'",
+                    params![id, uid, bid],
+                )
+                .map_err(map_sqlite)?;
+            Ok(n > 0)
+        })
+        .await
+}
+
 /// `{ids}` を id の数だけのプレースホルダに展開して実行する。空配列は no-op。
 async fn update_by_ids(db: &Db, ids: Vec<i64>, sql_template: &str) -> Result<(), DbError> {
     if ids.is_empty() {
@@ -647,5 +785,73 @@ mod tests {
         let over = select_over_cap(&db, &scope(), 1).await.expect("cap");
         assert_eq!(over.len(), 2);
         assert!(!over.contains(&strong), "一番強いものは残る");
+    }
+
+    /// 利用者向けの一覧は本人 × Bot の kept だけを強い順に返し、削除は本人の kept にしか効かない。
+    #[tokio::test]
+    async fn user_facing_list_find_count_and_scoped_delete() {
+        let (db, _dir) = open_db().await;
+        let weak = insert_synapse(&db, args("利用者は紅茶が好き", STATUS_KEPT, None))
+            .await
+            .expect("weak");
+        let strong = insert_synapse(&db, args("利用者は金曜は在宅", STATUS_KEPT, None))
+            .await
+            .expect("strong");
+        let pending = insert_synapse(&db, args("今日は疲れた", STATUS_CANDIDATE, None))
+            .await
+            .expect("pending");
+        let other = insert_synapse(
+            &db,
+            InsertArgs {
+                user_id: "u2".into(),
+                ..args("他人の記憶 紅茶", STATUS_KEPT, None)
+            },
+        )
+        .await
+        .expect("other");
+        db.writer
+            .transaction(move |tx| {
+                tx.execute(
+                    "UPDATE synapses SET strength = 5.0 WHERE id = ?1",
+                    params![strong],
+                )
+                .map_err(map_sqlite)?;
+                Ok(())
+            })
+            .await
+            .expect("seed");
+
+        let rows = list_kept(&db, "u1", "b1").await.expect("list");
+        assert_eq!(
+            rows.iter().map(|r| r.id).collect::<Vec<_>>(),
+            vec![strong, weak],
+            "候補と他人の行は出ず、強い順"
+        );
+        assert_eq!(count_candidates(&db, "u1", "b1").await.expect("count"), 1);
+
+        let found = find_kept_by_content(&db, "u1", "b1", "紅茶", 10)
+            .await
+            .expect("find");
+        assert_eq!(found.iter().map(|r| r.id).collect::<Vec<_>>(), vec![weak]);
+        assert!(
+            find_kept_by_content(&db, "u1", "b1", "%", 10)
+                .await
+                .expect("find")
+                .is_empty(),
+            "% はワイルドカードではなくリテラル"
+        );
+
+        // 他人の行・候補の行は本人として消せない。
+        assert!(!delete_kept_owned(&db, "u1", "b1", other)
+            .await
+            .expect("del"));
+        assert!(!delete_kept_owned(&db, "u1", "b1", pending)
+            .await
+            .expect("del"));
+        // 本人の kept は消える（二度目は false）。
+        assert!(delete_kept_owned(&db, "u1", "b1", weak).await.expect("del"));
+        assert!(!delete_kept_owned(&db, "u1", "b1", weak).await.expect("del"));
+        assert_eq!(list_kept(&db, "u1", "b1").await.expect("list").len(), 1);
+        assert_eq!(list_kept(&db, "u2", "b1").await.expect("list").len(), 1);
     }
 }

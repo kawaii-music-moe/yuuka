@@ -55,7 +55,9 @@ pub use ws::{ws_routes, ws_routes_with_interactions};
 /// `DeliveryRunner` を `Extension` で内包済み・issue #99）。
 ///
 /// `member_share_routes` は利用申請 + Bot 共有招待ルータ（[`yuuka_orchestrator::member_request_routes_with`]
-/// と [`yuuka_orchestrator::bot_share_routes_with`] を merge したもの・DM sender を `Extension` で内包済み）。
+/// と [`yuuka_orchestrator::bot_share_routes_with`] を merge したもの・DM sender を `Extension` で内包済み）に、
+/// 会話記憶の一覧・削除（[`yuuka_orchestrator::memory_routes_with`]・RAM 索引を `Extension` で内包済み）を
+/// 足したもの。
 ///
 /// `pwa_dist_dir` を渡すと PWA（issue #33・`clients/pwa`）を [`mount_pwa`] で明示ルート群として
 /// 載せる。`dist_dir`（admin SPA・`fallback_service`）とは独立に効くため、両方 `Some` でも

@@ -195,12 +195,31 @@ async fn run() -> Result<(), String> {
     // 会話エンジン（＝このレジストリ）を受け取る Discord マネージャから作られるため、ここでは空の
     // LateDeliveryRunner を渡し、Messenger 生成後（配信設定ルータの配線時）に同じ runner を設定する。
     let briefing_delivery = Arc::new(yuuka_briefing::LateDeliveryRunner::new());
+    // 4.6.5) シナプス認知エンジン（in-process・旧 rust_synapse daemon をライブラリ吸収）。起動時に DB を
+    //        read-only で読み RAM ベクトル索引を 1 度だけ構築する（Node「DB から N 件のシナプスを RAM
+    //        索引へロード」相当）。DB が読めなくても空索引で起動を継続する（想起は "" へデグレード・
+    //        panic 厳禁）。ChatEngine の想起（read）と抽出（write）、forgetMemory ツールと
+    //        /api/memories の削除で単一の索引を Arc<Mutex> 共有する。
+    let synapse_engine = {
+        let (engine, outcome) =
+            yuuka_synapse::SynapseEngine::boot(cfg.db_path.clone(), yuuka_synapse::DEFAULT_DIM);
+        match outcome {
+            yuuka_synapse::LoadOutcome::Loaded(n) => {
+                tracing::info!(loaded = n, db = ?cfg.db_path, "DB から {n} 件のシナプスを RAM 索引へロードしました");
+            }
+            yuuka_synapse::LoadOutcome::Empty(e) => {
+                tracing::warn!(error = %e, db = ?cfg.db_path, "シナプス索引を読めませんでした（空索引で起動を継続します）");
+            }
+        }
+        Arc::new(tokio::sync::Mutex::new(engine))
+    };
     let tool_registry = build_tool_registry(
         &db,
         crypto.clone(),
         Some(action_recorder.clone()),
         Some(google_events.clone()),
         Some(briefing_delivery.clone()),
+        Some(synapse_engine.clone()),
     )
     .map_err(|e| format!("build tool registry: {e}"))?;
     let mcp_client: Arc<dyn yuuka_mcp::McpClient> = match yuuka_mcp::RmcpClient::new(
@@ -214,23 +233,6 @@ async fn run() -> Result<(), String> {
             tracing::warn!(error = %e, "MCP クライアントを構築できないため、MCP を無効にして起動を続けます");
             Arc::new(yuuka_mcp::NullMcpClient)
         }
-    };
-    // 4.6.5) シナプス認知エンジン（in-process・旧 rust_synapse daemon をライブラリ吸収）。起動時に DB を
-    //        read-only で読み RAM ベクトル索引を 1 度だけ構築する（Node「DB から N 件のシナプスを RAM
-    //        索引へロード」相当）。DB が読めなくても空索引で起動を継続する（想起は "" へデグレード・
-    //        panic 厳禁）。ChatEngine の想起（read）と抽出（write）で単一の索引を Arc<Mutex> 共有する。
-    let synapse_engine = {
-        let (engine, outcome) =
-            yuuka_synapse::SynapseEngine::boot(cfg.db_path.clone(), yuuka_synapse::DEFAULT_DIM);
-        match outcome {
-            yuuka_synapse::LoadOutcome::Loaded(n) => {
-                tracing::info!(loaded = n, db = ?cfg.db_path, "DB から {n} 件のシナプスを RAM 索引へロードしました");
-            }
-            yuuka_synapse::LoadOutcome::Empty(e) => {
-                tracing::warn!(error = %e, db = ?cfg.db_path, "シナプス索引を読めませんでした（空索引で起動を継続します）");
-            }
-        }
-        Arc::new(tokio::sync::Mutex::new(engine))
     };
     // 実利用メトリクス（Node `services/metrics.ts`）。会話エンジンが書き込み、cron の定期ログ
     // （`MetricsLogService`）が同じインスタンスの snapshot を 5 分毎に出す（R23・#120）。
@@ -447,7 +449,11 @@ async fn run() -> Result<(), String> {
     // messenger（共有デフォルト Bot）から送り、入口（Web / Discord）によらず同じ通知が届くようにする。
     // gateway ゲート非依存（REST 送信のみ）。デフォルト Bot 未起動なら送信 false → warn のみで応答は成功。
     let member_share_routes = yuuka_orchestrator::member_request_routes_with(messenger.clone())
-        .merge(yuuka_orchestrator::bot_share_routes_with(messenger.clone()));
+        .merge(yuuka_orchestrator::bot_share_routes_with(messenger.clone()))
+        // 会話記憶の一覧・削除（docs/design/memory_retention.md §4-E）。削除は会話エンジンと同じ RAM 索引からも除く。
+        .merge(yuuka_orchestrator::memory_routes_with(
+            synapse_engine.clone(),
+        ));
 
     // デバイスフロー（RFC 8628）ルータ。device_code の一時状態はインメモリ store（web 再起動を跨ぐよう
     // main で 1 度だけ生成し注入）。承認 URL ベースは公開 URL（3.5 の public_base）。
