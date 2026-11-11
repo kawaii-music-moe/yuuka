@@ -88,13 +88,13 @@ jobs:
       - name: Workspace clippy
         run: scripts/run-build.sh cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
       - name: Workspace tests
-        run: scripts/run-build.sh cargo test --locked --workspace --all-features
+        run: scripts/run-build.sh cargo test --locked --workspace --all-features --no-fail-fast
       - name: Build workspace binaries
         run: scripts/run-build.sh cargo build --locked --workspace --all-features
       - name: Desktop clippy (Linux, including audio)
         run: scripts/run-build.sh cargo clippy --locked --manifest-path clients/desktop/Cargo.toml --all-targets --all-features -- -D warnings
       - name: Desktop tests (Linux, including audio)
-        run: scripts/run-build.sh cargo test --locked --manifest-path clients/desktop/Cargo.toml --all-features
+        run: scripts/run-build.sh cargo test --locked --manifest-path clients/desktop/Cargo.toml --all-features --no-fail-fast
       - name: Build desktop client (Linux, including audio)
         run: scripts/run-build.sh cargo build --locked --manifest-path clients/desktop/Cargo.toml --all-features
 
