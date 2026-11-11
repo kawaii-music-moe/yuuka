@@ -48,6 +48,7 @@ jobs:
         run: scripts/run-build.sh rustup show active-toolchain
       - uses: Swatinem/rust-cache@v2
         with:
+          cache-on-failure: true
           workspaces: |
             . -> target
             clients/desktop -> target

@@ -26,6 +26,8 @@ expect() {
 }
 run() { bash "$fixture/runner.sh" "$@"; }
 expect 0 run true
+# The child shell must observe the environment exported by the runner.
+# shellcheck disable=SC2016
 expect 0 run bash -c 'test "$CARGO_BUILD_JOBS" = 1'
 expect 7 run bash -c 'exit 7'
 expect 2 run true --jobs 2
