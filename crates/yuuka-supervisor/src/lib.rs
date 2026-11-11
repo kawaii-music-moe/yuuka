@@ -16,6 +16,7 @@ use yuuka_web::{
 pub mod backup;
 pub mod desktop_dist;
 pub mod discord;
+pub mod memory;
 pub mod services;
 pub mod supervisor;
 pub mod tenants;

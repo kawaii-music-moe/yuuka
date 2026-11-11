@@ -243,7 +243,7 @@ async fn run() -> Result<(), String> {
             tool_registry,
             Some(action_recorder),
             mcp_client.clone(),
-            Some(synapse_engine),
+            Some(synapse_engine.clone()),
         )
         // L2 想起の取得件数・recency ブースト（config `SYNAPSE_*`・R26）。
         .with_recall_settings(RecallSettings::from_config(&cfg))
@@ -590,6 +590,18 @@ async fn run() -> Result<(), String> {
         for svc in cron {
             supervisor = supervisor.service(svc);
         }
+        // 会話記憶の評価・減衰・忘却（memory_retention.md）。評価は秘書なら本人キー、ギルドなら Bot キー。
+        let memory_service = yuuka_supervisor::memory::SynapseMaintenanceService::new(
+            synapse_engine.clone(),
+            Arc::new(yuuka_supervisor::memory::GeminiMemoryLlm::new(
+                db.clone(),
+                crypto.clone(),
+            )),
+        );
+        supervisor = supervisor.service(Arc::new(yuuka_supervisor::CronSupervised::new(
+            Arc::new(memory_service),
+            service_ctx.clone(),
+        )));
     } else {
         tracing::info!(
             "Rust cron は無効（既定・Node が cron を所有）。有効化は YUUKA_RUST_CRON=1（Node cron 停止後）"

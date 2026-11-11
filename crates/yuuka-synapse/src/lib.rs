@@ -235,7 +235,8 @@ mod tests {
                created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
                last_used_at TEXT, use_count INTEGER NOT NULL DEFAULT 0,
                decay_score REAL NOT NULL DEFAULT 1.0,
-               ctx_tod INTEGER, ctx_dow INTEGER
+               ctx_tod INTEGER, ctx_dow INTEGER,
+               status TEXT NOT NULL DEFAULT 'kept'
              );",
         )
         .expect("create");

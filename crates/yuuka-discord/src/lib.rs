@@ -41,6 +41,7 @@ pub use presence::build_presence;
 pub use tenant::{default_intents, run_tenant, GatewayBotUser, TenantConfig, TenantStatus};
 pub use turn_gate::TurnGate;
 // supervisor（twilight 非依存）が REST クライアントを型名で扱えるよう再エクスポート。
+pub use message_flow::strip_reply_prefix;
 pub use text::{split_message, to_discord_markdown};
 pub use twilight_http::Client as HttpClient;
 

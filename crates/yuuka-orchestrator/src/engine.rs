@@ -42,6 +42,7 @@ use crate::guild_prompt::{self, GuildScope};
 use crate::message_log::{self, ContextEntry};
 use crate::receipt_extract::{ReceiptDraft, ReceiptExtractError, ReceiptOcr};
 use crate::synapse_extract::{self, ExtractScope};
+use crate::synapse_maintain;
 use crate::synapse_recall::{self, RecallSettings};
 use crate::turn_plan::{self, TurnPlan};
 use crate::{bot_repo, persona, system_prompt, user};
@@ -713,8 +714,14 @@ impl ChatEngine {
         //    カレンダー・コンテキストノート・想起といった個人向けの文脈を入れず、案内用の固定プロンプトで組む。
         let is_system_bot = bid == BotId::SYSTEM_DEFAULT;
         let bot_row = bot_repo::get_bot(&self.db, bid).await.map_err(db_fail)?;
-        let mut sys = if is_system_bot {
-            system_prompt::build_system_bot_instruction(rich, &system_prompt::now_date_time_ja())
+        let (mut sys, recalled) = if is_system_bot {
+            (
+                system_prompt::build_system_bot_instruction(
+                    rich,
+                    &system_prompt::now_date_time_ja(),
+                ),
+                Vec::new(),
+            )
         } else {
             self.personal_system_instruction(bot_row.as_ref(), uid, bid, rich, &msg, &reply_chain)
                 .await
@@ -881,7 +888,10 @@ impl ChatEngine {
             }
         };
 
-        // R1: 確定した最終ターンからシナプス（記憶の断片）を抽出して長期記憶へ蓄積する（Node `onFinal`）。
+        // 想起した記憶のうち返答に使われたものを強める（memory_retention.md §4-D・best-effort）。
+        synapse_maintain::record_usefulness(&self.db, &recalled, &reply_text).await;
+
+        // R1: 確定した最終ターンから記憶の候補を取り出す（評価器が後で kept にするか消す）。
         //     ユーザー発話が空（添付のみ等 log_text="" ）なら抽出しない（Node は logText 有りで呼ぶ）。
         //     fire-and-forget＝ターンの戻りをブロックせず、失敗も呼び出し側へ投げない（Node パリティ）。
         self.spawn_extraction(
@@ -1079,6 +1089,7 @@ impl ChatEngine {
         //      **Node からの意図的拡張**（Node の guild/DM 経路は想起を組まないが、本タスク指示で
         //      経路×能力の 2 軸スコープ（guild_id 付き）を活かして記憶を共有する）。スコープは
         //      guild 経路は (uid, bid, guildId)・DM 経路は (uid, bid, None)。想起 0 件/未配線は不変。
+        let mut recalled: Vec<(i64, String)> = Vec::new();
         if let Some(engine) = &self.synapse {
             let sscope = SynapseScope {
                 user_id: uid.to_owned(),
@@ -1086,7 +1097,7 @@ impl ChatEngine {
                 guild_id: gid.map(str::to_owned),
             };
             let query = synapse_recall::build_recall_query(&msg.text, &reply_chain);
-            let section = synapse_recall::build_recall_section(
+            let recall = synapse_recall::build_recall(
                 &self.db,
                 engine,
                 &self.recall,
@@ -1095,7 +1106,8 @@ impl ChatEngine {
                 self.metrics.as_deref(),
             )
             .await;
-            sys.push_str(&section);
+            sys.push_str(&recall.section);
+            recalled = recall.recalled;
         }
 
         // 4. Bot 専用 Gemini キー（未設定: guild は黙殺・DM は ⚠️ 応答）。
@@ -1201,7 +1213,10 @@ impl ChatEngine {
         .await
         .map_err(db_fail)?;
 
-        // R1: 汎用モードのターンからもシナプス抽出（**Node からの意図的拡張**・本タスク指示）。
+        // 想起した記憶のうち返答に使われたものを強める（memory_retention.md §4-D・best-effort）。
+        synapse_maintain::record_usefulness(&self.db, &recalled, &reply_text).await;
+
+        // R1: 汎用モードのターンからも記憶の候補を取り出す（**Node からの意図的拡張**・本タスク指示）。
         //     スコープは guild 経路は (uid, bid, guildId)・DM 経路は (uid, bid, None)。fire-and-forget。
         self.spawn_extraction(
             ExtractScope {
@@ -1236,7 +1251,7 @@ impl ChatEngine {
         rich: bool,
         msg: &IncomingChat,
         reply_chain: &[String],
-    ) -> Result<String, DbError> {
+    ) -> Result<(String, Vec<(i64, String)>), DbError> {
         let persona_uid = bot_row.map_or(uid, |bot| bot.owner_id.as_str());
         let persona_prompt = persona::active_persona_prompt(&self.db, persona_uid, bid).await?;
         let mut sys = system_prompt::build_system_instruction(
@@ -1257,6 +1272,7 @@ impl ChatEngine {
 
         // L2 連想想起（シナプス・Node `buildRecallSection`）。スコープは (userId, botId)・guild_id なし。
         // 返信チェーンを想起クエリへ含める。エンジン未配線/想起 0 件なら "" で不変。
+        let mut recalled = Vec::new();
         if let Some(engine) = &self.synapse {
             let scope = SynapseScope {
                 user_id: uid.to_owned(),
@@ -1264,19 +1280,19 @@ impl ChatEngine {
                 guild_id: None,
             };
             let query = synapse_recall::build_recall_query(&msg.text, reply_chain);
-            sys.push_str(
-                &synapse_recall::build_recall_section(
-                    &self.db,
-                    engine,
-                    &self.recall,
-                    &scope,
-                    &query,
-                    self.metrics.as_deref(),
-                )
-                .await,
-            );
+            let recall = synapse_recall::build_recall(
+                &self.db,
+                engine,
+                &self.recall,
+                &scope,
+                &query,
+                self.metrics.as_deref(),
+            )
+            .await;
+            sys.push_str(&recall.section);
+            recalled = recall.recalled;
         }
-        Ok(sys)
+        Ok((sys, recalled))
     }
 
     /// 非 LLM エラー時のペルソナ入りエラー報告を生成する（best-effort・失敗は `None`＝固定文へ）。

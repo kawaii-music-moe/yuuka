@@ -1027,6 +1027,48 @@ fn bot_uid_str(rt: &RuntimeBot) -> String {
     rt.bot_user_id.get().to_string()
 }
 
+/// `[返信先メッセージ (…): "…"]\n` の返信先プレフィックスを剥がして本文だけを返す。
+///
+/// プレフィックスは上の `context_prefix` が本文の前に付ける（Bot 自身の返答を含む）。会話記憶の抽出は
+/// 利用者本人の発話だけを見たいので、この関数で分離する。プレフィックスが無ければそのまま返す。
+#[must_use]
+pub fn strip_reply_prefix(text: &str) -> &str {
+    const HEAD: &str = "[返信先メッセージ (";
+    const TAIL: &str = "\"]\n";
+    let Some(rest) = text.strip_prefix(HEAD) else {
+        return text;
+    };
+    // 引用本文に `"]` が含まれることは稀。最初の終端で切る（残った引用の断片は候補の選別で落ちる）。
+    match rest.find(TAIL) {
+        Some(pos) => rest.get(pos + TAIL.len()..).unwrap_or(""),
+        None => text,
+    }
+}
+
+#[cfg(test)]
+mod reply_prefix_tests {
+    use super::strip_reply_prefix;
+
+    #[test]
+    fn strips_prefix_and_keeps_body() {
+        let text = "[返信先メッセージ (あなた): \"昨日の\n返答です\"]\n私はカレーが好き";
+        assert_eq!(strip_reply_prefix(text), "私はカレーが好き");
+    }
+
+    #[test]
+    fn prefix_only_becomes_empty_and_plain_text_is_unchanged() {
+        assert_eq!(
+            strip_reply_prefix("[返信先メッセージ (太郎): \"やあ\"]\n"),
+            ""
+        );
+        assert_eq!(strip_reply_prefix("私はカレーが好き"), "私はカレーが好き");
+        assert_eq!(
+            strip_reply_prefix("[返信先メッセージ (壊れた"),
+            "[返信先メッセージ (壊れた"
+        );
+    }
+}
+
 /// 与えられたユーザーがメンションされているか（現行 `message.mentions.has(botClient.user)`）。
 ///
 /// discord.js の `has()` は直接メンションに加え **@everyone/@here**（`mention_everyone`）と
