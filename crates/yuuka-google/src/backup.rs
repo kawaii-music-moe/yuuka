@@ -669,11 +669,7 @@ fn copy_rows_from_select(
             return Err(e);
         }
     };
-    let columns: Vec<String> = stmt
-        .column_names()
-        .iter()
-        .map(|c| (*c).to_owned())
-        .collect();
+    let columns: Vec<String> = stmt.column_names().map(str::to_owned).collect();
     if columns.is_empty() {
         return Ok(());
     }
