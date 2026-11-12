@@ -77,6 +77,31 @@ pub fn apply_common_layers<S>(
 where
     S: Clone + Send + Sync + 'static,
 {
+    apply_common_layers_with(router, https, allowed_host, None)
+}
+
+/// 本体 CSP の `frame-src` に `extra_frame_origin` を足す（MCP Apps のサンドボックス用オリジンを
+/// 管理画面の iframe で開くため）。`None` なら [`CSP`] そのまま。
+#[must_use]
+pub fn csp_with_frame_origin(extra_frame_origin: Option<&str>) -> String {
+    match extra_frame_origin {
+        Some(origin) => CSP.replace("frame-src 'self';", &format!("frame-src 'self' {origin};")),
+        None => CSP.to_owned(),
+    }
+}
+
+/// [`apply_common_layers`] に、本体 CSP の `frame-src` へ足すオリジンを渡せるようにしたもの。
+pub fn apply_common_layers_with<S>(
+    router: Router<S>,
+    https: bool,
+    allowed_host: Option<String>,
+    extra_frame_origin: Option<&str>,
+) -> Router<S>
+where
+    S: Clone + Send + Sync + 'static,
+{
+    let csp = HeaderValue::from_str(&csp_with_frame_origin(extra_frame_origin))
+        .unwrap_or_else(|_| HeaderValue::from_static(CSP));
     let router = router
         .layer(axum::middleware::from_fn(
             move |req: Request, next: Next| csrf::csrf_guard(allowed_host.clone(), req, next),
@@ -96,9 +121,10 @@ where
             REFERRER_POLICY,
             HeaderValue::from_static("strict-origin-when-cross-origin"),
         ))
-        .layer(SetResponseHeaderLayer::overriding(
+        // 自前の CSP を付けたルート（MCP Apps のサンドボックスプロキシ）はそれを残す。他は本体の CSP。
+        .layer(SetResponseHeaderLayer::if_not_present(
             CONTENT_SECURITY_POLICY,
-            HeaderValue::from_static(CSP),
+            csp,
         ));
     // HSTS: HTTPS 本番のみ。2 年・サブドメイン込み（preload は運用判断で含めない）。
     if https {
@@ -142,6 +168,18 @@ mod tests {
     use yuuka_types::{Role, SessionUser};
 
     static TEST_DB_SEQ: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn csp_frame_src_can_add_sandbox_origin() {
+        assert_eq!(super::csp_with_frame_origin(None), super::CSP);
+        let csp = super::csp_with_frame_origin(Some("https://mcp-sandbox.example"));
+        assert!(csp.contains("frame-src 'self' https://mcp-sandbox.example;"));
+        assert_ne!(
+            csp,
+            super::CSP,
+            "置換対象の frame-src が CSP から消えていないこと"
+        );
+    }
 
     /// 一意な一時 DB パスを払い出す。
     fn fresh_db_path() -> std::path::PathBuf {

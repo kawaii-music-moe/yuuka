@@ -129,3 +129,13 @@ TERMS_URL: "/terms"
 # またはメタタグの content 属性の値を指定します。
 # 空欄の場合、メタタグは挿入されません。
 GOOGLE_SITE_VERIFICATION: ""
+
+# ==============================================================================
+# MCP Apps のサンドボックス用オリジン (MCP_SANDBOX_ORIGIN)
+# ==============================================================================
+# MCP サーバーが返す画面（MCP Apps）を、本体と別のオリジンで動かすためのオリジンです。
+# 例: https://mcp-sandbox.example.com （BASE_URL と別のホスト名を同じ Yuuka に向けておく）
+# 空欄の場合は不透明オリジン（iframe の sandbox に allow-same-origin を付けない）で動かします。
+# 本体からは隔離されますが、画面の中で localStorage 等は使えません。
+# 詳しくは docs/design/mcp_standard_protocol.md を参照してください。
+MCP_SANDBOX_ORIGIN: ""

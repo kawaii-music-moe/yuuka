@@ -73,6 +73,12 @@ pub const ENCRYPTED_COLUMNS: &[EncryptedColumnSpec] = &[
         user_scoped_by: None,
     },
     EncryptedColumnSpec {
+        table: "mcp_oauth_credentials",
+        key_columns: &["server_id"],
+        columns: ["credentials_encrypted", "credentials_iv", "credentials_tag"],
+        user_scoped_by: None,
+    },
+    EncryptedColumnSpec {
         table: "credentials",
         key_columns: &["user_id", "service_name"],
         columns: ["encrypted_password", "iv", "auth_tag"],

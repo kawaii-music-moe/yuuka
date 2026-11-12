@@ -164,7 +164,8 @@ impl McpProvider {
             let tools = Self::ensure_fresh_tools(&db, client.as_ref(), server).await;
 
             for tool in tools {
-                if tool.name.is_empty() {
+                // 画面専用（`_meta.ui.visibility` に "model" が無い）ツールは AI に見せない（MCP Apps の MUST）。
+                if tool.name.is_empty() || !tool.visible_to_model() {
                     continue;
                 }
                 // (3) Function 名（衝突は退避名で一意化・Node buildMcpFunctionModule）。
@@ -286,6 +287,10 @@ pub(crate) fn tools_to_cache_json(tools: &[McpTool]) -> String {
             }
             if let Some(schema) = &t.input_schema {
                 obj.insert("inputSchema".to_owned(), schema.clone());
+            }
+            // MCP Apps の `_meta.ui`（画面の URI と公開先）。ツール定義と同じ形で持つ。
+            if let Some(ui) = &t.ui {
+                obj.insert("_meta".to_owned(), json!({ "ui": ui }));
             }
             Value::Object(obj)
         })
@@ -635,12 +640,11 @@ mod provider_tests {
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::Mutex;
 
-    use axum::body::Bytes;
     use rusqlite::{params, Connection};
     use yuuka_core::{BotId, CapabilitySet, TurnMode, UserId};
 
     use super::*;
-    use crate::ProxyResponse;
+    use crate::{AuthorizationCallback, AuthorizationStart};
 
     static SEQ: AtomicU64 = AtomicU64::new(0);
 
@@ -655,15 +659,6 @@ mod provider_tests {
 
     #[async_trait]
     impl McpClient for FakeMcpClient {
-        async fn probe_dashboard(&self, _s: &McpServerRecord) -> bool {
-            false
-        }
-        async fn fetch_dashboard_html(
-            &self,
-            _s: &McpServerRecord,
-        ) -> Result<(u16, String), String> {
-            Err("unused".to_owned())
-        }
         async fn refresh_tools(&self, _s: &McpServerRecord) -> Result<Vec<McpTool>, String> {
             // discover はキャッシュ鮮度で分岐する。ここでは常に「再取得」できるが、テストは
             // tools_cache_updated を新鮮にしてキャッシュヒット経路（DB 由来）で検証する。
@@ -685,12 +680,25 @@ mod provider_tests {
             let replies = self.replies.lock().unwrap();
             Ok(replies.get(tool_name).cloned().unwrap_or_default())
         }
-        async fn proxy(
+        async fn call_tool_result(
             &self,
             _s: &McpServerRecord,
-            _b: Bytes,
-            _a: Option<&str>,
-        ) -> Result<ProxyResponse, String> {
+            _t: &str,
+            _a: Value,
+        ) -> Result<Value, String> {
+            Err("unused".to_owned())
+        }
+        async fn read_resource(&self, _s: &McpServerRecord, _u: &str) -> Result<Value, String> {
+            Err("unused".to_owned())
+        }
+        async fn start_authorization(
+            &self,
+            _s: &McpServerRecord,
+            _a: AuthorizationStart,
+        ) -> Result<String, String> {
+            Err("unused".to_owned())
+        }
+        async fn complete_authorization(&self, _c: AuthorizationCallback) -> Result<i64, String> {
             Err("unused".to_owned())
         }
     }
@@ -807,6 +815,41 @@ mod provider_tests {
         // inputSchema はそのまま parametersJsonSchema へ。
         assert_eq!(decls[0].parameters_json_schema["type"], json!("object"));
         assert!(decls[0].parameters_json_schema["properties"]["x"].is_object());
+    }
+
+    /// MCP Apps の画面専用ツール（`visibility: ["app"]`）は AI に見せない。画面付きでも
+    /// `"model"` を含むツールは見せる。
+    #[tokio::test]
+    async fn discover_hides_app_only_tools() {
+        let (db, path) = fresh_db();
+        let sid = seed_server(
+            &path,
+            Some("alice"),
+            "Apps",
+            r#"[{"name":"show","_meta":{"ui":{"resourceUri":"ui://apps/show"}}},{"name":"save","_meta":{"ui":{"resourceUri":"ui://apps/show","visibility":["app"]}}}]"#,
+            1,
+        );
+        grant(&path, BOT, "alice", sid);
+
+        let provider = McpProvider::discover(db, Arc::new(FakeMcpClient::default()), BOT).await;
+        let names: Vec<String> = provider
+            .list(&secretary_ctx())
+            .iter()
+            .map(|d| d.name.as_str().to_owned())
+            .collect();
+        assert_eq!(names, vec![format!("mcp:mcp{sid}_show")]);
+    }
+
+    /// tools_cache へは `_meta.ui` も保存し、読み戻せる。
+    #[test]
+    fn tools_cache_json_keeps_ui_meta() {
+        let tools = vec![McpTool {
+            name: "show".to_owned(),
+            ui: Some(json!({ "resourceUri": "ui://apps/show", "visibility": ["app"] })),
+            ..McpTool::default()
+        }];
+        let cached: Value = serde_json::from_str(&tools_to_cache_json(&tools)).unwrap();
+        assert_eq!(cached[0]["_meta"]["ui"]["resourceUri"], "ui://apps/show");
     }
 
     #[tokio::test]

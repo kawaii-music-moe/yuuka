@@ -151,7 +151,7 @@ pnpm check              # typecheck:front + lint をまとめて実行
 | `yuuka-core` | 全 crate の土台: 層別エラー（`AppError`/`WebError`/`DbError` 等）・`Config`（`config.yaml`＋環境変数）・`UserId`/`BotId`/`GuildId`・`Tool`/`ToolProvider` 契約・`UserScope`/`CronScan`（データ分離）・secrets・telemetry |
 | `yuuka-types` | フロント⇄Rust の wire DTO と `Envelope<T>`、ts-rs による型 export |
 | `yuuka-crypto` | 保存時暗号化（システム鍵 scrypt + AES-256-GCM / ユーザー鍵 Argon2id + AES-256-GCM）と鍵ローテーション（`rotate`・`ENCRYPTED_COLUMNS`） |
-| `yuuka-db` | SQLite: 単一 writer actor + read pool + `refinery` マイグレーション（`migrations/V17__baseline.sql` 〜 `V36__*.sql`） |
+| `yuuka-db` | SQLite: 単一 writer actor + read pool + `refinery` マイグレーション（`migrations/V17__baseline.sql` 〜 `V38__*.sql`） |
 
 **Web / 認証**
 
@@ -170,7 +170,7 @@ pnpm check              # typecheck:front + lint をまとめて実行
 | `yuuka-orchestrator` | `ChatEngine`（秘書ターン `secretary_turn*`・汎用モード `generic_turn*`）、システムプロンプト組立（`system_prompt.rs`）、Bot 管理/属性/共有/利用申請の Web API、機能モジュールのカタログ（`module_catalog.rs`）、シナプス連携（`synapse_*`） |
 | `yuuka-synapse` | シナプス認知エンジン（インプロセス。ハッシュ n-gram 埋め込み + RAM ベクトル索引 + KNN 想起） |
 | `yuuka-tools` | `ToolProvider` 中央レジストリ（`ToolRegistry`/`NativeProvider`）。能力（capability）と経路（秘書/汎用）による露出制御 |
-| `yuuka-mcp` | MCP サーバー管理 API、ダッシュボードプロキシ（`/api/mcp-servers*`・`/proxy/mcp/:id/mcp`）、MCP ツール provider（[mcp_dashboard_proxy.md](architecture/mcp_dashboard_proxy.md)） |
+| `yuuka-mcp` | MCP クライアント（公式 SDK `rmcp`）・MCP サーバー管理 API（`/api/mcp-servers*`）・OAuth 2.1 認可・MCP Apps のホスト API とサンドボックスプロキシ（`/mcp-apps/sandbox`）・MCP ツール provider（[mcp_standard_protocol.md](design/mcp_standard_protocol.md)） |
 
 **ドメイン**（多くは `repo.rs`・`dto.rs`・`routes.rs`〔Web API〕・`tools.rs`〔LLM ツール〕を縦に持つ。参照実装は `yuuka-todo`）
 

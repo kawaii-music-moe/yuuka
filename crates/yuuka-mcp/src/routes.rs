@@ -1,38 +1,43 @@
-//! MCP 管理 + プロキシ ルートハンドラ（Node `mcpRoutes.ts` パリティ）。
+//! MCP 管理ルートハンドラ（登録・ツール取得・有効/無効・削除・OAuth 認可・MCP Apps）。
 //!
-//! 管理系 7 ルートは [`AuthenticatedUser`] extractor で `auth:"user"` を型強制する。proxy 2 ルートは
-//! `auth:"none"`（proxyToken 主体・Cookie 非依存）。レスポンス本文・日本語メッセージ・ステータスコードは
-//! Node と**バイト単位一致**。想定内の業務エラー（400/401/403/404/502）は明示 JSON、想定外の
-//! [`DbError`](yuuka_core::DbError) のみ `?` で [`ApiError`] に写像（500）。
-//!
-//! ダッシュボード HTML の書き換えパイプライン（`<base>` 除去 → `MCP_PATH` 差替 → `tokenFromHash` 差替 →
-//! トークン注入 → akizakura CSS インライン化）は実クライアント配線時に正しく効くよう忠実に実装する。
-//! [`NullMcpClient`] は `fetch_dashboard_html` が常に `Err` のため success 経路は実行時に到達しないが、
-//! パイプライン自体はユニットテストで検証する。
+//! すべて [`AuthenticatedUser`] extractor で認証を型強制する（例外は認可サーバーが読む Client ID
+//! Metadata Document と、サンドボックスプロキシの静的ページ）。想定内の業務エラー
+//! （400/403/404/409/502）は明示 JSON、想定外の [`DbError`](yuuka_core::DbError) のみ `?` で
+//! [`ApiError`] に写像（500）。
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
-use axum::body::Bytes;
-use axum::extract::{Path, State};
-use axum::http::header::{
-    CACHE_CONTROL, CONTENT_SECURITY_POLICY, CONTENT_TYPE, VARY, X_CONTENT_TYPE_OPTIONS,
-};
-use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode};
+use axum::extract::{Path, Query, State};
+use axum::http::header::{CACHE_CONTROL, LOCATION};
+use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::{Extension, Json};
 use serde_json::{json, Value};
 use yuuka_web::{ApiError, AppState, AuthenticatedUser};
 
+use crate::provider::tools_to_cache_json;
 use crate::repo::{self, McpServerRecord};
-use crate::McpRuntime;
+use crate::{oauth, sandbox, AuthorizationCallback, AuthorizationStart, McpRuntime, McpTool};
 
 // ─── 共通ヘルパ ───────────────────────────────────────────────────────────────
 
-/// Node `toSafeView`：認証情報・暗号化列を除いた安全なビュー（`granted_bot_ids` は呼び出し側で足す）。
+/// 一覧に載せるツール 1 件（MCP Apps の画面の有無と公開先を含む）。
+fn tool_view(t: &McpTool) -> Value {
+    json!({
+        "name": t.name,
+        "description": t.description.clone().unwrap_or_default(),
+        "ui_resource_uri": t.ui_resource_uri(),
+        "visible_to_model": t.visible_to_model(),
+        "callable_from_app": t.callable_from_app(),
+    })
+}
+
+/// Node `toSafeView`：認証情報・暗号化列を除いた安全なビュー（`granted_bot_ids`・`auth` は呼び出し側で足す）。
 fn to_safe_view(server: &McpServerRecord) -> Value {
-    let tools: Vec<Value> = repo::parse_tools_cache(server)
-        .into_iter()
-        .map(|t| json!({ "name": t.name, "description": t.description }))
+    let tools: Vec<Value> = repo::parse_tools_cache_full(server)
+        .iter()
+        .map(tool_view)
         .collect();
     json!({
         "id": server.id,
@@ -89,31 +94,59 @@ fn trimmed_string(v: Option<&Value>) -> String {
 
 pub(crate) async fn list(
     user: AuthenticatedUser,
+    Extension(rt): Extension<Arc<McpRuntime>>,
     State(state): State<AppState>,
 ) -> Result<Response, ApiError> {
     let uid = &user.0.discord_id;
+    let admin = repo::is_admin(&state.db, uid).await?;
     let own = repo::list_servers_for_owner(&state.db, uid).await?;
     let system = repo::list_system_servers(&state.db).await?;
+    let oauth_ids = repo::list_oauth_server_ids(&state.db).await?;
 
     let mut servers: Vec<Value> = Vec::with_capacity(own.len() + system.len());
-    for s in &own {
+    for (s, is_own) in own
+        .iter()
+        .map(|s| (s, true))
+        .chain(system.iter().map(|s| (s, false)))
+    {
         let mut view = to_safe_view(s);
-        let bot_ids = repo::list_bot_ids_for_server(&state.db, s.id).await?;
+        let bot_ids = if is_own {
+            repo::list_bot_ids_for_server(&state.db, s.id).await?
+        } else {
+            Vec::new()
+        };
+        let oauth_connected = oauth_ids.contains(&s.id);
+        let mode = if s.has_auth() {
+            "bearer"
+        } else if oauth_connected {
+            "oauth"
+        } else {
+            "none"
+        };
         if let Some(obj) = view.as_object_mut() {
             obj.insert("granted_bot_ids".to_owned(), json!(bot_ids));
-        }
-        servers.push(view);
-    }
-    for s in &system {
-        let mut view = to_safe_view(s);
-        if let Some(obj) = view.as_object_mut() {
-            obj.insert("granted_bot_ids".to_owned(), json!(Vec::<String>::new()));
+            obj.insert(
+                "can_manage".to_owned(),
+                json!(repo::can_manage(s, uid, admin)),
+            );
+            obj.insert(
+                "auth".to_owned(),
+                json!({
+                    "mode": mode,
+                    "oauth_connected": oauth_connected,
+                    "authorization_required": rt.client.authorization_required(s.id).await,
+                }),
+            );
         }
         servers.push(view);
     }
     Ok((
         StatusCode::OK,
-        Json(json!({ "success": true, "servers": servers })),
+        Json(json!({
+            "success": true,
+            "servers": servers,
+            "apps": { "sandbox": sandbox_info(&state) },
+        })),
     )
         .into_response())
 }
@@ -219,29 +252,6 @@ pub(crate) async fn add(
         .into_response())
 }
 
-/// [`McpTool`](crate::McpTool) 一覧を tools_cache 用 JSON（`{name, description?, inputSchema?}[]`）へ整形する。
-///
-/// Node `updateToolsCache(JSON.stringify(McpToolDef[]))` パリティ: `description`/`inputSchema` は
-/// 存在時のみ載せる。`inputSchema` を保持することで、FC ループの動的ツール登録（[`crate::McpProvider`]）が
-/// キャッシュヒット時にもパラメータスキーマを復元できる。
-fn tools_to_cache_json(tools: &[crate::McpTool]) -> String {
-    let arr: Vec<Value> = tools
-        .iter()
-        .map(|t| {
-            let mut obj = serde_json::Map::new();
-            obj.insert("name".to_owned(), json!(t.name));
-            if let Some(d) = &t.description {
-                obj.insert("description".to_owned(), json!(d));
-            }
-            if let Some(schema) = &t.input_schema {
-                obj.insert("inputSchema".to_owned(), schema.clone());
-            }
-            Value::Object(obj)
-        })
-        .collect();
-    serde_json::to_string(&arr).unwrap_or_else(|_| "[]".to_owned())
-}
-
 // ─── POST /api/mcp-servers/refresh（ツール一覧の再取得） ───────────────────────
 
 pub(crate) async fn refresh(
@@ -317,10 +327,6 @@ pub(crate) async fn toggle(
     if !enabled {
         rt.client.forget(id).await;
     }
-    // 無効化したら発行済みプロキシトークンを即時失効させる。
-    if !enabled {
-        rt.tokens.revoke_for_server(id);
-    }
     let message = if enabled {
         "MCPサーバーを有効化しました。"
     } else {
@@ -349,7 +355,6 @@ pub(crate) async fn delete(
     let server = repo::get_server_by_id(&state.db, id).await?;
     let ok = repo::delete_server(&state.db, id, &user.0.discord_id, admin).await?;
     if ok {
-        rt.tokens.revoke_for_server(id);
         rt.client.forget(id).await;
         if let Some(s) = &server {
             if s.user_id.is_none() {
@@ -376,27 +381,7 @@ pub(crate) async fn delete(
         .into_response())
 }
 
-// ─── GET /api/mcp-servers/:id/dashboard/status（管理ページ提供の有無） ──────────
-
-pub(crate) async fn dashboard_status(
-    user: AuthenticatedUser,
-    Extension(rt): Extension<Arc<McpRuntime>>,
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-) -> Result<Response, ApiError> {
-    let Some(server) = resolve_manageable(&state, &user, &id).await? else {
-        return Ok(err_json(
-            StatusCode::NOT_FOUND,
-            "MCPサーバーが見つかりません。",
-        ));
-    };
-    let available = rt.client.probe_dashboard(&server).await;
-    Ok((
-        StatusCode::OK,
-        Json(json!({ "success": true, "available": available })),
-    )
-        .into_response())
-}
+// ─── 共通: パスの :id から管理可能なサーバーを引く ─────────────────────────────
 
 /// `:id` パス値から number へ、行取得・canManage まで通す共通前段（不成立は `Ok(None)`）。
 async fn resolve_manageable(
@@ -404,7 +389,6 @@ async fn resolve_manageable(
     user: &AuthenticatedUser,
     id_str: &str,
 ) -> Result<Option<McpServerRecord>, ApiError> {
-    // Node: Number(ctx.params.id) → Number.isInteger 判定（小数・非数は不成立）。
     let Some(id) = id_str.trim().parse::<i64>().ok() else {
         return Ok(None);
     };
@@ -413,597 +397,391 @@ async fn resolve_manageable(
     Ok(server.filter(|s| repo::can_manage(s, &user.0.discord_id, admin)))
 }
 
-// ─── GET /api/mcp-servers/:id/dashboard（管理ページ HTML・iframe 用） ───────────
+fn not_found() -> Response {
+    err_json(StatusCode::NOT_FOUND, "MCPサーバーが見つかりません。")
+}
 
-pub(crate) async fn dashboard(
+// ─── OAuth 2.1 認可（MCP 仕様 Authorization） ─────────────────────────────────
+
+/// `BASE_URL` のオリジン。OAuth のコールバック URL に使うため、未設定なら `None`（Host ヘッダからは
+/// 組み立てない：認可サーバーに登録する URL を偽装されないため）。
+fn configured_origin(state: &AppState) -> Option<String> {
+    state
+        .config
+        .base_url
+        .as_deref()
+        .and_then(sandbox::url_origin)
+}
+
+/// `POST /api/mcp-servers/:id/oauth/start` — 認可 URL を返す（フロントはそこへ遷移する）。
+///
+/// body（任意）: `{ clientId, clientSecret }`（認可サーバーに事前登録したクライアントを使う場合）。
+pub(crate) async fn oauth_start(
     user: AuthenticatedUser,
     Extension(rt): Extension<Arc<McpRuntime>>,
     State(state): State<AppState>,
     Path(id_str): Path<String>,
-    headers: HeaderMap,
+    body: Option<Json<Value>>,
 ) -> Result<Response, ApiError> {
     let Some(server) = resolve_manageable(&state, &user, &id_str).await? else {
-        return Ok(frame_error(
-            StatusCode::NOT_FOUND,
-            "MCPサーバーが見つかりません。",
+        return Ok(not_found());
+    };
+    let Some(origin) = configured_origin(&state) else {
+        return Ok(err_json(
+            StatusCode::BAD_REQUEST,
+            "OAuth 認可には BASE_URL の設定が必要です。",
         ));
     };
-    if !rt.client.probe_dashboard(&server).await {
-        return Ok(frame_error(
-            StatusCode::NOT_FOUND,
-            "このMCPサーバーは管理ページを提供していません。",
-        ));
-    }
-    let (status, html) = match rt.client.fetch_dashboard_html(&server).await {
-        Ok(v) => v,
-        Err(e) => {
-            return Ok(frame_error(
-                StatusCode::BAD_GATEWAY,
-                &format!("管理ページの取得に失敗しました: {e}"),
-            ));
-        }
+    let body = body.map(|Json(v)| v).unwrap_or(Value::Null);
+    let client_id = Some(trimmed_string(body.get("clientId"))).filter(|s| !s.is_empty());
+    let client_secret = Some(trimmed_string(body.get("clientSecret"))).filter(|s| !s.is_empty());
+    let start = AuthorizationStart {
+        user_id: user.0.discord_id.clone(),
+        redirect_uri: format!("{origin}{}", oauth::CALLBACK_PATH),
+        // Client ID Metadata Document は HTTPS で公開しているときだけ使える（SEP-991）。
+        client_metadata_url: origin
+            .starts_with("https://")
+            .then(|| format!("{origin}{}", oauth::CLIENT_METADATA_PATH)),
+        client_id,
+        client_secret,
     };
-    if status != 200 {
-        return Ok(frame_error(
-            StatusCode::BAD_GATEWAY,
-            &format!("管理ページの取得に失敗しました (HTTP {status})。"),
-        ));
-    }
-
-    // 自己オリジン（config.base_url 由来・未設定時は Host ヘッダ）。
-    let self_origin = self_origin(&state, &headers);
-    let proxy_token = rt.tokens.issue(server.id, &user.0.discord_id);
-    let akizakura = rt.client.fetch_akizakura_css().await;
-
-    match rewrite_dashboard(
-        &html,
-        server.id,
-        &self_origin,
-        &proxy_token,
-        akizakura.as_deref(),
-    ) {
-        Ok(final_html) => {
-            let frame_csp = frame_csp(&self_origin);
-            let mut resp = (StatusCode::OK, final_html).into_response();
-            let h = resp.headers_mut();
-            h.insert(
-                CONTENT_TYPE,
-                HeaderValue::from_static("text/html; charset=utf-8"),
-            );
-            h.insert(X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
-            if let Ok(v) = HeaderValue::from_str(&frame_csp) {
-                h.insert(CONTENT_SECURITY_POLICY, v);
-            }
-            h.insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
-            Ok(resp)
-        }
-        Err(msg) => Ok(frame_error(StatusCode::BAD_GATEWAY, &msg)),
+    match rt.client.start_authorization(&server, start).await {
+        Ok(url) => Ok((
+            StatusCode::OK,
+            Json(json!({ "success": true, "authorizationUrl": url })),
+        )
+            .into_response()),
+        Err(e) => Ok(err_json(StatusCode::BAD_GATEWAY, &e)),
     }
 }
 
-/// config.base_url のオリジン、未設定時は `http://{host}`（Node `selfOrigin`）。
-fn self_origin(state: &AppState, headers: &HeaderMap) -> String {
-    if let Some(base) = state.config.base_url.as_deref() {
-        if let Some(origin) = url_origin(base) {
-            return origin;
-        }
+/// `GET /api/mcp-servers/oauth/callback` — 認可サーバーから戻ってくる先（ブラウザの遷移）。
+/// 結果をクエリに付けて管理画面（`/integrated/mcp`）へ戻す。
+pub(crate) async fn oauth_callback(
+    user: AuthenticatedUser,
+    Extension(rt): Extension<Arc<McpRuntime>>,
+    State(state): State<AppState>,
+    Query(q): Query<HashMap<String, String>>,
+) -> Response {
+    let back = |result: &str, message: &str| {
+        let query = url::form_urlencoded::Serializer::new(String::new())
+            .append_pair("mcp_oauth", result)
+            .append_pair("message", message)
+            .finish();
+        let location = format!("/integrated/mcp?{query}");
+        (
+            StatusCode::SEE_OTHER,
+            [(LOCATION, location), (CACHE_CONTROL, "no-store".to_owned())],
+        )
+            .into_response()
+    };
+    if let Some(error) = q.get("error") {
+        // 認可サーバーが返した文言はそのまま画面に出るので短く切る（表示側でエスケープされる）。
+        let error: String = error.chars().take(100).collect();
+        let detail = q.get("error_description").map_or(String::new(), |d| {
+            format!("（{}）", d.chars().take(200).collect::<String>())
+        });
+        return back("error", &format!("認可されませんでした: {error}{detail}"));
     }
-    let host = headers
-        .get(axum::http::header::HOST)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("localhost");
-    format!("http://{host}")
-}
-
-/// URL の origin（`scheme://host[:port]`）を素朴に抽出する（Node `new URL(base).origin`）。
-fn url_origin(url: &str) -> Option<String> {
-    let (scheme, rest) = url.split_once("://")?;
-    if scheme.is_empty() || rest.is_empty() {
-        return None;
-    }
-    // authority はパス・クエリ・フラグメント境界まで。
-    let authority = rest
-        .split(['/', '?', '#'])
-        .next()
-        .filter(|a| !a.is_empty())?;
-    Some(format!("{scheme}://{authority}"))
-}
-
-/// frame 用 CSP（Node `frameCsp`・末尾セミコロン付き）。
-fn frame_csp(self_origin: &str) -> String {
-    [
-        "default-src 'none'".to_owned(),
-        "base-uri 'none'".to_owned(),
-        "script-src 'unsafe-inline'".to_owned(),
-        "style-src 'unsafe-inline' https://akizakura.pages.dev https://fonts.googleapis.com"
-            .to_owned(),
-        "font-src https://fonts.gstatic.com data:".to_owned(),
-        format!("img-src 'self' data: {self_origin}"),
-        format!("connect-src {self_origin}"),
-        "frame-ancestors 'self'".to_owned(),
-    ]
-    .join("; ")
-        + ";"
-}
-
-// ─── ダッシュボード HTML 書き換えパイプライン（Node パリティ） ─────────────────
-
-/// HTML を iframe 用に書き換える（`<base>` 除去 → `MCP_PATH` 差替 → `tokenFromHash` 差替 →
-/// トークン注入 → akizakura CSS インライン化）。書き換えに失敗した段があれば `Err(message)`。
-fn rewrite_dashboard(
-    html: &str,
-    id: i64,
-    self_origin: &str,
-    proxy_token: &str,
-    akizakura_css: Option<&str>,
-) -> Result<String, String> {
-    // 1) `<base ...>` の最初の 1 個を除去（Node `/<base\b[^>]*>/i` replace ""）。
-    let rewritten = remove_first_base_tag(html);
-
-    // 2) `var MCP_PATH = "..."` をプロキシ絶対 URL へ差替。不一致（不発）は 502。
-    let proxy_mcp_url = format!("{self_origin}/proxy/mcp/{id}/mcp");
-    let replacement = format!("var MCP_PATH = \"{proxy_mcp_url}\"");
-    let (rewritten, replaced) = replace_mcp_path(&rewritten, &replacement);
-    if !replaced {
-        return Err("管理ページの形式が想定と異なるため表示できません（MCP_PATH）。".to_owned());
-    }
-
-    // 3) `function tokenFromHash() {...}` を window 変数返却へ差替。不発は 502。
-    let (rewritten, replaced) = replace_token_from_hash(&rewritten);
-    if !replaced {
-        return Err(
-            "管理ページの形式が想定と異なるため表示できません（tokenFromHash）。".to_owned(),
-        );
-    }
-
-    // 4) akizakura の <link> を <style> でインライン化（取得できたときのみ・見つからなければ残置）。
-    let rewritten = match akizakura_css {
-        Some(css) => inline_akizakura(&rewritten, css),
-        None => rewritten,
+    let (Some(code), Some(csrf_state)) = (q.get("code"), q.get("state")) else {
+        return back("error", "認可サーバーからの応答が不正です。");
     };
-
-    // 5) `<head ...>` 直後にトークン注入スクリプトを差し込む（無ければ先頭へ prepend）。
-    let auto_token_script =
-        format!("<script>window.__mcpProxyToken__ = \"{proxy_token}\";</script>");
-    let final_html = inject_after_head(&rewritten, &auto_token_script);
-    Ok(final_html)
-}
-
-/// `<base\b[^>]*>` の最初の 1 個を除去する（大小無視・Node `/<base\b[^>]*>/i`）。
-fn remove_first_base_tag(html: &str) -> String {
-    let lower = html.to_ascii_lowercase();
-    let mut search = 0usize;
-    while let Some(rel) = lower.get(search..).and_then(|s| s.find("<base")) {
-        let start = search + rel;
-        // `\b` 境界: `<base` の直後は「単語構成文字（英数字/_）でない」こと（`<basefoo>` を除外）。
-        let after = lower.as_bytes().get(start + 5).copied();
-        let is_boundary = match after {
-            Some(b) => !(b.is_ascii_alphanumeric() || b == b'_'),
-            None => true,
-        };
-        if is_boundary {
-            // `>` まで（`[^>]*>`）。見つからなければ除去不能として原文維持。
-            if let Some(end_rel) = lower.get(start..).and_then(|s| s.find('>')) {
-                let end = start + end_rel + 1;
-                let mut out = String::with_capacity(html.len());
-                if let (Some(head), Some(tail)) = (html.get(..start), html.get(end..)) {
-                    out.push_str(head);
-                    out.push_str(tail);
-                    return out;
-                }
-            }
-            return html.to_owned();
-        }
-        search = start + 5;
-    }
-    html.to_owned()
-}
-
-/// `var MCP_PATH = "[^"]*"` の最初の 1 個を差替（Node `/var MCP_PATH = "[^"]*"/`）。
-/// 返り値 `(新文字列, 置換が起きたか)`。
-fn replace_mcp_path(html: &str, replacement: &str) -> (String, bool) {
-    const PREFIX: &str = "var MCP_PATH = \"";
-    let Some(start) = html.find(PREFIX) else {
-        return (html.to_owned(), false);
+    let callback = AuthorizationCallback {
+        code: code.clone(),
+        state: csrf_state.clone(),
+        issuer: q.get("iss").cloned(),
+        user_id: user.0.discord_id.clone(),
     };
-    let value_start = start + PREFIX.len();
-    // `[^"]*` は次の `"` まで（同一行・改行を跨いでも Node 正規表現の `.` 除外に該当しないため `"` のみ境界）。
-    let Some(rel_end) = html.get(value_start..).and_then(|s| s.find('"')) else {
-        return (html.to_owned(), false);
+    let server_id = match rt.client.complete_authorization(callback).await {
+        Ok(id) => id,
+        Err(e) => return back("error", &e),
     };
-    let end = value_start + rel_end + 1; // 閉じ `"` を含む。
-    let (Some(head), Some(tail)) = (html.get(..start), html.get(end..)) else {
-        return (html.to_owned(), false);
+    // 新しい資格情報で tools/list を取り直す（失敗しても認可自体は完了している）。
+    let server = repo::get_server_by_id(&state.db, server_id)
+        .await
+        .ok()
+        .flatten();
+    let Some(server) = server else {
+        return back("success", "認可が完了しました。");
     };
-    let mut out = String::with_capacity(head.len() + replacement.len() + tail.len());
-    out.push_str(head);
-    out.push_str(replacement);
-    out.push_str(tail);
-    (out, true)
-}
-
-/// `function tokenFromHash() {...}`（`\s*` + `{[^}]*}`）を window 変数返却へ差替。
-/// Node `/function tokenFromHash\(\)\s*\{[^}]*\}/`。返り値 `(新文字列, 置換が起きたか)`。
-fn replace_token_from_hash(html: &str) -> (String, bool) {
-    const REPLACEMENT: &str =
-        "function tokenFromHash() { return window.__mcpProxyToken__ || null; }";
-    const HEAD: &str = "function tokenFromHash()";
-    let Some(start) = html.find(HEAD) else {
-        return (html.to_owned(), false);
-    };
-    // HEAD 後の `\s*`（空白）をスキップして `{` を要求。
-    let after_head = start + HEAD.len();
-    let ws_len = html
-        .get(after_head..)
-        .map(|s| s.len() - s.trim_start().len())
-        .unwrap_or(0);
-    let brace_pos = after_head + ws_len;
-    if html.as_bytes().get(brace_pos).copied() != Some(b'{') {
-        return (html.to_owned(), false);
-    }
-    // `[^}]*}` は次の `}` まで。
-    let Some(rel_close) = html.get(brace_pos..).and_then(|s| s.find('}')) else {
-        return (html.to_owned(), false);
-    };
-    let end = brace_pos + rel_close + 1; // 閉じ `}` を含む。
-    let (Some(head), Some(tail)) = (html.get(..start), html.get(end..)) else {
-        return (html.to_owned(), false);
-    };
-    let mut out = String::with_capacity(head.len() + REPLACEMENT.len() + tail.len());
-    out.push_str(head);
-    out.push_str(REPLACEMENT);
-    out.push_str(tail);
-    (out, true)
-}
-
-/// akizakura の `<link ... href="https://akizakura.pages.dev/akizakura.css" ...>` を `<style>` へ置換。
-/// Node `/<link\b[^>]*href="https:\/\/akizakura\.pages\.dev\/akizakura\.css"[^>]*>/i`。
-/// 見つからなければ原文維持（Node は console.error のみ）。
-fn inline_akizakura(html: &str, css: &str) -> String {
-    const AKIZAKURA_HREF: &str = "https://akizakura.pages.dev/akizakura.css";
-    let lower = html.to_ascii_lowercase();
-    // href の位置を探し、そこから前方の `<link`（単語境界）・後方の `>` を確定する。
-    let Some(href_pos) = lower.find(&AKIZAKURA_HREF.to_ascii_lowercase()) else {
-        return html.to_owned();
-    };
-    // href_pos より前で最も近い `<link`（境界）を探す。
-    let Some(link_rel) = lower.get(..href_pos).and_then(|s| s.rfind("<link")) else {
-        return html.to_owned();
-    };
-    let start = link_rel;
-    let after = lower.as_bytes().get(start + 5).copied();
-    let is_boundary = match after {
-        Some(b) => !(b.is_ascii_alphanumeric() || b == b'_'),
-        None => true,
-    };
-    if !is_boundary {
-        return html.to_owned();
-    }
-    // start から次の `>` までがタグ（`[^>]*>` はタグ内に `>` を含まない前提）。
-    let Some(gt_rel) = lower.get(start..).and_then(|s| s.find('>')) else {
-        return html.to_owned();
-    };
-    let end = start + gt_rel + 1;
-    // タグ内に href が含まれることを確認（別 <link>...><link href=akizakura> の誤爆防止）。
-    if href_pos >= end {
-        return html.to_owned();
-    }
-    let (Some(head), Some(tail)) = (html.get(..start), html.get(end..)) else {
-        return html.to_owned();
-    };
-    let mut out = String::with_capacity(head.len() + css.len() + tail.len() + 40);
-    out.push_str(head);
-    out.push_str("<style data-akizakura>");
-    out.push_str(css);
-    out.push_str("</style>");
-    out.push_str(tail);
-    out
-}
-
-/// `<head ...>` の最初の 1 個の直後にスクリプトを差し込む（`<header>` を誤検出しないよう境界を要求）。
-/// Node `/<head(\s[^>]*)?>/i`。無ければ先頭へ prepend。
-fn inject_after_head(html: &str, script: &str) -> String {
-    let lower = html.to_ascii_lowercase();
-    let mut search = 0usize;
-    while let Some(rel) = lower.get(search..).and_then(|s| s.find("<head")) {
-        let start = search + rel;
-        let after = lower.as_bytes().get(start + 5).copied();
-        // Node `<head(\s[^>]*)?>`: `<head` の直後は `>` か 空白（`<header>` は `r` で不一致）。
-        match after {
-            Some(b'>') => {
-                let end = start + 6; // `<head>`
-                return splice(html, end, script);
-            }
-            Some(b) if b.is_ascii_whitespace() => {
-                if let Some(gt_rel) = lower.get(start..).and_then(|s| s.find('>')) {
-                    let end = start + gt_rel + 1;
-                    return splice(html, end, script);
-                }
-                return format!("{script}{html}");
-            }
-            _ => {
-                // `<header` 等 → 次の候補へ。
-                search = start + 5;
+    let tools_message = match rt.client.refresh_tools(&server).await {
+        Ok(tools) => {
+            let json_str = tools_to_cache_json(&tools);
+            match repo::update_tools_cache(&state.db, server.id, &json_str).await {
+                Ok(()) => format!("提供Tool {} 件を取得しました。", tools.len()),
+                Err(e) => format!("Tool一覧を保存できませんでした: {e}"),
             }
         }
-    }
-    format!("{script}{html}")
-}
-
-/// `at` バイト位置に `insert` を差し込む（境界不正時は原文維持で prepend しない）。
-fn splice(html: &str, at: usize, insert: &str) -> String {
-    let (Some(head), Some(tail)) = (html.get(..at), html.get(at..)) else {
-        return html.to_owned();
+        Err(e) => format!("Tool一覧の取得に失敗しました: {e}"),
     };
-    let mut out = String::with_capacity(head.len() + insert.len() + tail.len());
-    out.push_str(head);
-    out.push_str(insert);
-    out.push_str(tail);
-    out
-}
-
-/// iframe 用エラーページ（text/html・Node `sendFrameError`）。`&<>` を HTML エスケープし最小 CSP を付与。
-fn frame_error(status: StatusCode, message: &str) -> Response {
-    let safe = message
-        .replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;");
-    let body = format!(
-        "<!doctype html><html lang=\"ja\"><head><meta charset=\"utf-8\"><meta name=\"color-scheme\" content=\"light dark\"></head><body style=\"font-family:system-ui,-apple-system,sans-serif;padding:24px;color:#52525b;font-size:0.9rem;\">{safe}</body></html>"
-    );
-    let mut resp = (status, body).into_response();
-    let h = resp.headers_mut();
-    h.insert(
-        CONTENT_TYPE,
-        HeaderValue::from_static("text/html; charset=utf-8"),
-    );
-    h.insert(X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
-    h.insert(
-        CONTENT_SECURITY_POLICY,
-        HeaderValue::from_static(
-            "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'self';",
+    back(
+        "success",
+        &format!(
+            "MCPサーバー「{}」の認可が完了しました。{tools_message}",
+            server.name
         ),
-    );
-    h.insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
-    resp
+    )
 }
 
-// ─── OPTIONS /proxy/mcp/:id/mcp（CORS プリフライト） ───────────────────────────
-
-pub(crate) async fn proxy_preflight(headers: HeaderMap) -> Response {
-    // 要求されたヘッダをそのまま許可リストへ反映（無ければ既定・Node）。
-    let req_headers = headers
-        .get("access-control-request-headers")
-        .and_then(|v| v.to_str().ok())
-        .filter(|s| !s.is_empty())
-        .unwrap_or("authorization, content-type, accept, mcp-protocol-version")
-        .to_owned();
-
-    let mut resp = StatusCode::NO_CONTENT.into_response();
-    let h = resp.headers_mut();
-    h.insert(
-        HeaderName::from_static("access-control-allow-origin"),
-        HeaderValue::from_static("null"),
-    );
-    h.insert(
-        HeaderName::from_static("access-control-allow-methods"),
-        HeaderValue::from_static("POST, OPTIONS"),
-    );
-    if let Ok(v) = HeaderValue::from_str(&req_headers) {
-        h.insert(HeaderName::from_static("access-control-allow-headers"), v);
+/// `GET /api/mcp-servers/oauth/client-metadata.json`（認証なし）— Client ID Metadata Document。
+pub(crate) async fn oauth_client_metadata(State(state): State<AppState>) -> Response {
+    match configured_origin(&state) {
+        Some(origin) if origin.starts_with("https://") => (
+            StatusCode::OK,
+            [(CACHE_CONTROL, "public, max-age=3600")],
+            Json(oauth::client_metadata_document(&origin)),
+        )
+            .into_response(),
+        _ => StatusCode::NOT_FOUND.into_response(),
     }
-    h.insert(
-        HeaderName::from_static("access-control-max-age"),
-        HeaderValue::from_static("600"),
-    );
-    h.insert(VARY, HeaderValue::from_static("Origin"));
-    // NO Allow-Credentials（ACAO:null + 資格情報無しの安全な組合せ）。
-    resp
 }
 
-// ─── POST /proxy/mcp/:id/mcp（エンドポイント中継） ─────────────────────────────
-
-pub(crate) async fn proxy_post(
+/// `POST /api/mcp-servers/:id/oauth/disconnect` — 保存した OAuth 資格情報を消す。
+pub(crate) async fn oauth_disconnect(
+    user: AuthenticatedUser,
     Extension(rt): Extension<Arc<McpRuntime>>,
     State(state): State<AppState>,
     Path(id_str): Path<String>,
-    headers: HeaderMap,
-    body: Bytes,
 ) -> Result<Response, ApiError> {
-    // Node: Number(ctx.params.id) → Number.isInteger（不成立は 400）。
-    let Some(id) = id_str.trim().parse::<i64>().ok() else {
-        return Ok(proxy_cors(err_json(
-            StatusCode::BAD_REQUEST,
-            "不正なサーバーIDです。",
-        )));
+    let Some(server) = resolve_manageable(&state, &user, &id_str).await? else {
+        return Ok(not_found());
     };
+    repo::delete_oauth_credentials(&state.db, server.id).await?;
+    rt.client.forget(server.id).await;
+    Ok((
+        StatusCode::OK,
+        Json(json!({ "success": true, "message": "OAuth の認可を解除しました。" })),
+    )
+        .into_response())
+}
 
-    // Authorization: Bearer <proxyToken> を検証。
-    let bearer = headers
-        .get(axum::http::header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.strip_prefix("Bearer "))
-        .unwrap_or("");
-    let Some(token_user_id) = rt.tokens.validate(bearer, id) else {
-        return Ok(proxy_cors(err_json(
-            StatusCode::UNAUTHORIZED,
-            "プロキシトークンが無効または期限切れです。",
-        )));
-    };
+// ─── MCP Apps ─────────────────────────────────────────────────────────────────
 
-    // 発行ユーザーの現在の実在・ロールを DB から引き直して再検証する。
-    let Some(is_admin) = repo::lookup_user_admin(&state.db, &token_user_id).await? else {
-        return Ok(proxy_cors(err_json(
-            StatusCode::FORBIDDEN,
-            "トークン発行ユーザーが存在しません。",
-        )));
-    };
+/// UI リソースの HTML の上限（巨大な応答で管理画面を固めない）。
+const MAX_UI_HTML_BYTES: usize = 5 * 1024 * 1024;
 
-    let Some(server) = repo::get_server_by_id(&state.db, id).await? else {
-        return Ok(proxy_cors(err_json(
-            StatusCode::NOT_FOUND,
-            "MCPサーバーが見つかりません。",
-        )));
-    };
-    if !repo::can_manage(&server, &token_user_id, is_admin) {
-        return Ok(proxy_cors(err_json(
-            StatusCode::FORBIDDEN,
-            "このMCPサーバーを操作する権限がありません。",
-        )));
+/// tools_cache から名前でツールを引く。
+fn cached_tool(server: &McpServerRecord, name: &str) -> Option<McpTool> {
+    repo::parse_tools_cache_full(server)
+        .into_iter()
+        .find(|t| t.name == name)
+}
+
+/// `ReadResourceResult` から MCP Apps の HTML と、リソースの `_meta.ui` を取り出す。
+fn ui_html_from(result: &Value, uri: &str) -> Result<(String, Value), String> {
+    let contents = result
+        .get("contents")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "UI リソースの内容がありません。".to_owned())?;
+    let item = contents
+        .iter()
+        .find(|c| c.get("uri").and_then(Value::as_str) == Some(uri))
+        .or_else(|| contents.first())
+        .ok_or_else(|| "UI リソースの内容がありません。".to_owned())?;
+    let mime = item.get("mimeType").and_then(Value::as_str).unwrap_or("");
+    // `text/html;profile=mcp-app`（空白の有無・大小は揺れを許す）。
+    let normalized: String = mime
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect::<String>()
+        .to_ascii_lowercase();
+    if normalized != crate::UI_RESOURCE_MIME_TYPE {
+        return Err(format!(
+            "UI リソースの種類が MCP Apps ではありません（{mime}）。"
+        ));
     }
-    if server.enabled != 1 {
-        return Ok(proxy_cors(err_json(
-            StatusCode::FORBIDDEN,
-            "このMCPサーバーは無効化されています。",
-        )));
+    let html = if let Some(text) = item.get("text").and_then(Value::as_str) {
+        text.to_owned()
+    } else if let Some(blob) = item.get("blob").and_then(Value::as_str) {
+        let bytes =
+            decode_base64(blob).ok_or_else(|| "UI リソースを復号できません。".to_owned())?;
+        String::from_utf8(bytes).map_err(|_| "UI リソースが UTF-8 ではありません。".to_owned())?
+    } else {
+        return Err("UI リソースの内容がありません。".to_owned());
+    };
+    if html.len() > MAX_UI_HTML_BYTES {
+        return Err("UI リソースが大きすぎます。".to_owned());
     }
+    let meta = item
+        .get("_meta")
+        .and_then(|m| m.get("ui"))
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    Ok((html, meta))
+}
 
-    let accept = headers
-        .get(axum::http::header::ACCEPT)
-        .and_then(|v| v.to_str().ok());
-
-    match rt.client.proxy(&server, body, accept).await {
-        Ok(up) => {
-            let status = StatusCode::from_u16(up.status).unwrap_or(StatusCode::BAD_GATEWAY);
-            let mut resp = (status, up.body).into_response();
-            let h = resp.headers_mut();
-            if let Ok(ct) = HeaderValue::from_str(&up.content_type) {
-                h.insert(CONTENT_TYPE, ct);
-            }
-            h.insert(X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
-            if let Some(sid) = up.mcp_session_id.as_deref() {
-                if let Ok(v) = HeaderValue::from_str(sid) {
-                    h.insert(HeaderName::from_static("mcp-session-id"), v);
-                }
-            }
-            // sandbox="allow-scripts allow-forms"（allow-same-origin 無し）の iframe は
-            // オリジンが null になるため、成功応答にも ACAO:null が必要。
-            h.insert(
-                HeaderName::from_static("access-control-allow-origin"),
-                HeaderValue::from_static("null"),
-            );
-            h.insert(VARY, HeaderValue::from_static("Origin"));
-            Ok(resp)
+/// 標準 base64（パディングあり・なし両対応）を復号する。
+fn decode_base64(s: &str) -> Option<Vec<u8>> {
+    fn val(c: u8) -> Option<u32> {
+        match c {
+            b'A'..=b'Z' => Some(u32::from(c - b'A')),
+            b'a'..=b'z' => Some(u32::from(c - b'a') + 26),
+            b'0'..=b'9' => Some(u32::from(c - b'0') + 52),
+            b'+' | b'-' => Some(62),
+            b'/' | b'_' => Some(63),
+            _ => None,
         }
-        Err(e) => Ok(proxy_cors(err_json(
-            StatusCode::BAD_GATEWAY,
-            &format!("MCPサーバーへの接続に失敗しました: {e}"),
-        ))),
+    }
+    let clean: Vec<u8> = s
+        .bytes()
+        .filter(|b| !b.is_ascii_whitespace() && *b != b'=')
+        .collect();
+    let mut out = Vec::with_capacity(clean.len() * 3 / 4);
+    for chunk in clean.chunks(4) {
+        let mut acc = 0u32;
+        for (i, &c) in chunk.iter().enumerate() {
+            acc |= val(c)? << (18 - 6 * i);
+        }
+        let bytes = acc.to_be_bytes();
+        match chunk.len() {
+            4 => out.extend_from_slice(&bytes[1..4]),
+            3 => out.extend_from_slice(&bytes[1..3]),
+            2 => out.push(bytes[1]),
+            _ => return None,
+        }
+    }
+    Some(out)
+}
+
+/// サンドボックスプロキシの URL と、別オリジンで隔離しているか。
+fn sandbox_info(state: &AppState) -> Value {
+    match state
+        .config
+        .mcp_sandbox_origin
+        .as_deref()
+        .and_then(sandbox::url_origin)
+    {
+        Some(origin) => json!({
+            "url": format!("{origin}{}", sandbox::SANDBOX_PATH),
+            "origin": origin,
+            "isolated": true,
+        }),
+        None => json!({ "url": sandbox::SANDBOX_PATH, "origin": Value::Null, "isolated": false }),
     }
 }
 
-/// プロキシのエラー応答に付ける CORS ヘッダ（Node: ACAO:null・Allow-Credentials 無し・Vary:Origin）。
-fn proxy_cors(mut resp: Response) -> Response {
-    let h = resp.headers_mut();
-    h.insert(
-        HeaderName::from_static("access-control-allow-origin"),
-        HeaderValue::from_static("null"),
-    );
-    h.insert(VARY, HeaderValue::from_static("Origin"));
-    resp
+/// `POST /api/mcp-servers/:id/apps/resource` — ツールに紐づく UI リソース（HTML と `_meta.ui`）を返す。
+///
+/// body: `{ tool }`（tools_cache のツール名）または `{ uri }`（画面からの `resources/read` 用）。
+/// `tool` のときは、そのツールの `_meta.ui.resourceUri` を読む。
+pub(crate) async fn apps_resource(
+    user: AuthenticatedUser,
+    Extension(rt): Extension<Arc<McpRuntime>>,
+    State(state): State<AppState>,
+    Path(id_str): Path<String>,
+    Json(body): Json<Value>,
+) -> Result<Response, ApiError> {
+    let Some(server) = resolve_manageable(&state, &user, &id_str).await? else {
+        return Ok(not_found());
+    };
+    if server.enabled != 1 {
+        return Ok(err_json(
+            StatusCode::CONFLICT,
+            "MCPサーバーが無効化されています。",
+        ));
+    }
+    // 画面からの resources/read：ReadResourceResult をそのまま返す。
+    if let Some(uri) = body.get("uri").and_then(Value::as_str) {
+        return Ok(match rt.client.read_resource(&server, uri).await {
+            Ok(result) => (
+                StatusCode::OK,
+                Json(json!({ "success": true, "result": result })),
+            )
+                .into_response(),
+            Err(e) => err_json(StatusCode::BAD_GATEWAY, &e),
+        });
+    }
+    let tool_name = trimmed_string(body.get("tool"));
+    let Some(tool) = cached_tool(&server, &tool_name) else {
+        return Ok(err_json(StatusCode::NOT_FOUND, "ツールが見つかりません。"));
+    };
+    let Some(uri) = tool.ui_resource_uri() else {
+        return Ok(err_json(
+            StatusCode::BAD_REQUEST,
+            "このツールには画面（MCP Apps）がありません。",
+        ));
+    };
+    let result = match rt.client.read_resource(&server, uri).await {
+        Ok(r) => r,
+        Err(e) => {
+            return Ok(err_json(
+                StatusCode::BAD_GATEWAY,
+                &format!("UI リソースの取得に失敗しました: {e}"),
+            ))
+        }
+    };
+    match ui_html_from(&result, uri) {
+        Ok((html, ui)) => Ok((
+            StatusCode::OK,
+            Json(json!({
+                "success": true,
+                "html": html,
+                "ui": ui,
+                "tool": {
+                    "name": tool.name,
+                    "description": tool.description,
+                    "inputSchema": tool.input_schema,
+                    "_meta": { "ui": tool.ui },
+                },
+                "sandbox": sandbox_info(&state),
+            })),
+        )
+            .into_response()),
+        Err(e) => Ok(err_json(StatusCode::BAD_GATEWAY, &e)),
+    }
+}
+
+/// `POST /api/mcp-servers/:id/apps/call` — `tools/call` を実行して `CallToolResult` を返す。
+///
+/// body: `{ name, arguments, from }`。`from` は `"host"`（管理画面が画面を開くときの呼び出し）か
+/// `"app"`（画面の中からの呼び出し）。`"app"` は `_meta.ui.visibility` に `"app"` があるツールだけ、
+/// `"host"` は画面（`resourceUri`）を持つツールだけ受け付ける。
+pub(crate) async fn apps_call(
+    user: AuthenticatedUser,
+    Extension(rt): Extension<Arc<McpRuntime>>,
+    State(state): State<AppState>,
+    Path(id_str): Path<String>,
+    Json(body): Json<Value>,
+) -> Result<Response, ApiError> {
+    let Some(server) = resolve_manageable(&state, &user, &id_str).await? else {
+        return Ok(not_found());
+    };
+    if server.enabled != 1 {
+        return Ok(err_json(
+            StatusCode::CONFLICT,
+            "MCPサーバーが無効化されています。",
+        ));
+    }
+    let name = trimmed_string(body.get("name"));
+    let Some(tool) = cached_tool(&server, &name) else {
+        return Ok(err_json(StatusCode::NOT_FOUND, "ツールが見つかりません。"));
+    };
+    let from_app = body.get("from").and_then(Value::as_str) == Some("app");
+    let allowed = if from_app {
+        tool.callable_from_app()
+    } else {
+        tool.ui_resource_uri().is_some()
+    };
+    if !allowed {
+        return Ok(err_json(
+            StatusCode::FORBIDDEN,
+            "このツールは画面から呼び出せません。",
+        ));
+    }
+    let arguments = body.get("arguments").cloned().unwrap_or(Value::Null);
+    match rt.client.call_tool_result(&server, &name, arguments).await {
+        Ok(result) => Ok((
+            StatusCode::OK,
+            Json(json!({ "success": true, "result": result })),
+        )
+            .into_response()),
+        Err(e) => Ok(err_json(StatusCode::BAD_GATEWAY, &e)),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    // ── HTML 書き換えパイプライン ──────────────────────────────────────────────
-
-    const SAMPLE: &str = concat!(
-        "<!doctype html><html><head><base href=\"https://mcp.example/dashboard/\">",
-        "<link rel=\"stylesheet\" href=\"https://akizakura.pages.dev/akizakura.css\">",
-        "</head><body><script>var MCP_PATH = \"https://mcp.example/mcp\";",
-        "function tokenFromHash() { return location.hash.slice(1); }</script></body></html>",
-    );
-
-    #[test]
-    fn rewrite_success_path() {
-        let out = rewrite_dashboard(
-            SAMPLE,
-            42,
-            "https://yuuka.test",
-            "TOKEN123",
-            Some(":root{--x:1}"),
-        )
-        .expect("rewrite ok");
-        // <base> 除去。
-        assert!(!out.contains("<base "));
-        // MCP_PATH がプロキシ URL へ。
-        assert!(out.contains("var MCP_PATH = \"https://yuuka.test/proxy/mcp/42/mcp\""));
-        assert!(!out.contains("\"https://mcp.example/mcp\""));
-        // tokenFromHash 差替。
-        assert!(out.contains("return window.__mcpProxyToken__ || null;"));
-        assert!(!out.contains("location.hash.slice(1)"));
-        // akizakura インライン化。
-        assert!(out.contains("<style data-akizakura>:root{--x:1}</style>"));
-        assert!(!out.contains("akizakura.css\">"));
-        // トークン注入が <head> 直後。
-        assert!(out.contains("<head><script>window.__mcpProxyToken__ = \"TOKEN123\";</script>"));
-    }
-
-    #[test]
-    fn rewrite_fails_on_missing_mcp_path() {
-        let html = "<html><head></head><body>function tokenFromHash() {return null;}</body></html>";
-        let err = rewrite_dashboard(html, 1, "https://y.test", "T", None).unwrap_err();
-        assert_eq!(
-            err,
-            "管理ページの形式が想定と異なるため表示できません（MCP_PATH）。"
-        );
-    }
-
-    #[test]
-    fn rewrite_fails_on_missing_token_fn() {
-        let html = "<html><head></head><body><script>var MCP_PATH = \"x\";</script></body></html>";
-        let err = rewrite_dashboard(html, 1, "https://y.test", "T", None).unwrap_err();
-        assert_eq!(
-            err,
-            "管理ページの形式が想定と異なるため表示できません（tokenFromHash）。"
-        );
-    }
-
-    #[test]
-    fn header_not_head_boundary() {
-        // <header> は誤検出しない（トークンは先頭へ prepend される）。
-        let html = "<header>x</header>var MCP_PATH = \"y\";function tokenFromHash() {return 1;}";
-        let out = rewrite_dashboard(html, 1, "https://y.test", "T", None).unwrap();
-        assert!(out.starts_with("<script>window.__mcpProxyToken__ = \"T\";</script><header>"));
-    }
-
-    #[test]
-    fn base_tag_boundary_not_basefoo() {
-        // `<basefoo>` は `<base>` 境界に一致しない（除去されない）。
-        let html = "<basefoo>keep</basefoo>";
-        assert_eq!(remove_first_base_tag(html), html);
-        // 本物の <base ...> は除去。
-        assert_eq!(remove_first_base_tag("a<base href=\"x\">b"), "ab");
-    }
-
-    #[test]
-    fn url_origin_extract() {
-        assert_eq!(
-            url_origin("https://yuuka.test/path?q=1#h").as_deref(),
-            Some("https://yuuka.test")
-        );
-        assert_eq!(
-            url_origin("http://localhost:3000").as_deref(),
-            Some("http://localhost:3000")
-        );
-        assert_eq!(url_origin("not-a-url"), None);
-    }
-
-    #[test]
-    fn frame_error_escapes_and_headers() {
-        let resp = frame_error(StatusCode::NOT_FOUND, "a<b>&c");
-        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
-        assert_eq!(
-            resp.headers().get(CONTENT_TYPE).unwrap(),
-            "text/html; charset=utf-8"
-        );
-        assert_eq!(
-            resp.headers().get(CONTENT_SECURITY_POLICY).unwrap(),
-            "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'self';"
-        );
-    }
 
     #[test]
     fn parse_body_id_semantics() {
@@ -1030,9 +808,18 @@ mod tests {
         use yuuka_types::{Role, SessionUser};
         use yuuka_web::{AppState, AuthBackend, Db, WebConfig};
 
-        use crate::{routes, McpRuntime, NullMcpClient, ProxyTokenManager};
+        use crate::{routes, McpRuntime, NullMcpClient};
 
         static SEQ: AtomicU64 = AtomicU64::new(0);
+
+        /// サーバー 1 の tools_cache: 画面付き（dash）・画面専用（save）・画面なし（plain）・
+        /// AI 専用の画面付き（model_only）。
+        const TOOLS: &str = r#"[
+            {"name":"dash","_meta":{"ui":{"resourceUri":"ui://a/dash"}}},
+            {"name":"save","_meta":{"ui":{"resourceUri":"ui://a/dash","visibility":["app"]}}},
+            {"name":"plain","description":"no ui"},
+            {"name":"model_only","_meta":{"ui":{"resourceUri":"ui://a/dash","visibility":["model"]}}}
+        ]"#;
 
         struct FakeAuth;
 
@@ -1074,9 +861,9 @@ mod tests {
                 .expect("seed users");
                 // alice 所有のサーバー 1 件（enabled）。
                 conn.execute(
-                    "INSERT INTO mcp_servers (id, user_id, name, endpoint_url) \
-                     VALUES (1, 'alice', 'a', 'https://x/mcp')",
-                    [],
+                    "INSERT INTO mcp_servers (id, user_id, name, endpoint_url, tools_cache) \
+                     VALUES (1, 'alice', 'a', 'https://x/mcp', ?1)",
+                    [TOOLS],
                 )
                 .expect("seed server");
             }
@@ -1084,12 +871,12 @@ mod tests {
         }
 
         fn app() -> axum::Router {
-            let state = AppState::new(Arc::new(FakeAuth), WebConfig::default(), seed_db());
-            let rt = Arc::new(McpRuntime::new(
-                None,
-                Arc::new(NullMcpClient),
-                Arc::new(ProxyTokenManager::new()),
-            ));
+            app_with(WebConfig::default())
+        }
+
+        fn app_with(config: WebConfig) -> axum::Router {
+            let state = AppState::new(Arc::new(FakeAuth), config, seed_db());
+            let rt = Arc::new(McpRuntime::new(None, Arc::new(NullMcpClient)));
             routes(rt).with_state(state)
         }
 
@@ -1267,119 +1054,185 @@ mod tests {
             assert_eq!(j["message"], Value::String("id は必須です。".to_owned()));
         }
 
+        // ── OAuth 認可 ────────────────────────────────────────────────────────
+
         #[tokio::test]
-        async fn dashboard_status_null_probe_false() {
+        async fn list_reports_auth_state_ui_tools_and_sandbox() {
             let app = app();
-            let (st, j) = get(&app, "/api/mcp-servers/1/dashboard/status", "alice").await;
+            let (st, j) = get(&app, "/api/mcp-servers", "alice").await;
             assert_eq!(st, StatusCode::OK);
-            assert_eq!(j["success"], Value::Bool(true));
-            assert_eq!(j["available"], Value::Bool(false));
+            let s = &j["servers"][0];
+            assert_eq!(s["auth"]["mode"], "none");
+            assert_eq!(s["auth"]["oauth_connected"], false);
+            assert_eq!(s["can_manage"], true);
+            let tools = s["tools"].as_array().unwrap();
+            assert_eq!(tools[0]["ui_resource_uri"], "ui://a/dash");
+            assert_eq!(tools[1]["visible_to_model"], false);
+            assert_eq!(tools[2]["ui_resource_uri"], Value::Null);
+            // MCP_SANDBOX_ORIGIN 未設定 → 本体の不透明オリジン。
+            assert_eq!(j["apps"]["sandbox"]["isolated"], false);
+            assert_eq!(j["apps"]["sandbox"]["url"], "/mcp-apps/sandbox");
+
+            let app = app_with(WebConfig {
+                mcp_sandbox_origin: Some("https://mcp-sandbox.example".to_owned()),
+                ..WebConfig::default()
+            });
+            let (_, j) = get(&app, "/api/mcp-servers", "alice").await;
+            assert_eq!(j["apps"]["sandbox"]["isolated"], true);
+            assert_eq!(
+                j["apps"]["sandbox"]["url"],
+                "https://mcp-sandbox.example/mcp-apps/sandbox"
+            );
         }
 
         #[tokio::test]
-        async fn dashboard_html_null_probe_404_frame() {
+        async fn oauth_start_needs_base_url_and_ownership() {
             let app = app();
+            // BASE_URL 未設定 → コールバック URL を作れない。
+            let (st, j) = post(&app, "/api/mcp-servers/1/oauth/start", "alice", "{}").await;
+            assert_eq!(st, StatusCode::BAD_REQUEST);
+            assert!(j["message"].as_str().unwrap().contains("BASE_URL"));
+
+            let app = app_with(WebConfig {
+                base_url: Some("https://yuuka.example".to_owned()),
+                ..WebConfig::default()
+            });
+            // 所有者以外 → 404。
+            let (st, _) = post(&app, "/api/mcp-servers/1/oauth/start", "root", "{}").await;
+            assert_eq!(st, StatusCode::NOT_FOUND);
+            // 所有者 → NullMcpClient なので 502（認可サーバーへ到達しない）。
+            let (st, _) = post(&app, "/api/mcp-servers/1/oauth/start", "alice", "{}").await;
+            assert_eq!(st, StatusCode::BAD_GATEWAY);
+        }
+
+        async fn location_of(app: &axum::Router, uri: &str) -> (StatusCode, String) {
             let resp = app
                 .clone()
                 .oneshot(
                     Request::builder()
-                        .method("GET")
-                        .uri("/api/mcp-servers/1/dashboard")
+                        .uri(uri)
                         .header("cookie", "__Host-yuuka-session=alice")
                         .body(Body::empty())
                         .unwrap(),
                 )
                 .await
                 .unwrap();
-            assert_eq!(resp.status(), StatusCode::NOT_FOUND);
-            assert_eq!(
-                resp.headers().get("content-type").unwrap(),
-                "text/html; charset=utf-8"
-            );
-            let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
-            let html = String::from_utf8_lossy(&bytes);
-            assert!(html.contains("このMCPサーバーは管理ページを提供していません。"));
+            let location = resp
+                .headers()
+                .get("location")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or_default()
+                .to_owned();
+            (resp.status(), location)
         }
 
         #[tokio::test]
-        async fn proxy_preflight_204_cors() {
+        async fn oauth_callback_redirects_back_with_result() {
             let app = app();
+            let (st, location) =
+                location_of(&app, "/api/mcp-servers/oauth/callback?error=access_denied").await;
+            assert_eq!(st, StatusCode::SEE_OTHER);
+            assert!(location.starts_with("/integrated/mcp?mcp_oauth=error"));
+            assert!(location.contains("access_denied"));
+
+            // 未知の state → エラーで戻す（NullMcpClient）。
+            let (st, location) =
+                location_of(&app, "/api/mcp-servers/oauth/callback?code=c&state=s").await;
+            assert_eq!(st, StatusCode::SEE_OTHER);
+            assert!(location.contains("mcp_oauth=error"));
+        }
+
+        #[tokio::test]
+        async fn client_metadata_only_on_https() {
+            let (st, _) = get(&app(), "/api/mcp-servers/oauth/client-metadata.json", "").await;
+            assert_eq!(st, StatusCode::NOT_FOUND);
+            let app = app_with(WebConfig {
+                base_url: Some("https://yuuka.example/".to_owned()),
+                ..WebConfig::default()
+            });
+            let (st, j) = get(&app, "/api/mcp-servers/oauth/client-metadata.json", "").await;
+            assert_eq!(st, StatusCode::OK);
+            assert_eq!(
+                j["client_id"],
+                "https://yuuka.example/api/mcp-servers/oauth/client-metadata.json"
+            );
+        }
+
+        #[tokio::test]
+        async fn oauth_disconnect_ok_for_owner() {
+            let app = app();
+            let (st, j) = post(&app, "/api/mcp-servers/1/oauth/disconnect", "alice", "").await;
+            assert_eq!(st, StatusCode::OK);
+            assert_eq!(j["success"], true);
+            let (st, _) = post(&app, "/api/mcp-servers/1/oauth/disconnect", "root", "").await;
+            assert_eq!(st, StatusCode::NOT_FOUND);
+        }
+
+        // ── MCP Apps ──────────────────────────────────────────────────────────
+
+        #[tokio::test]
+        async fn apps_resource_checks_tool_has_ui() {
+            let app = app();
+            let url = "/api/mcp-servers/1/apps/resource";
+            let (st, _) = post(&app, url, "alice", r#"{"tool":"missing"}"#).await;
+            assert_eq!(st, StatusCode::NOT_FOUND);
+            let (st, _) = post(&app, url, "alice", r#"{"tool":"plain"}"#).await;
+            assert_eq!(st, StatusCode::BAD_REQUEST);
+            // 画面付き → NullMcpClient なので取得失敗 502。
+            let (st, _) = post(&app, url, "alice", r#"{"tool":"dash"}"#).await;
+            assert_eq!(st, StatusCode::BAD_GATEWAY);
+            // 他人のサーバー → 404。
+            let (st, _) = post(&app, url, "root", r#"{"tool":"dash"}"#).await;
+            assert_eq!(st, StatusCode::NOT_FOUND);
+        }
+
+        #[tokio::test]
+        async fn apps_call_enforces_visibility() {
+            let app = app();
+            let url = "/api/mcp-servers/1/apps/call";
+            // 画面からの呼び出しは visibility に "app" が要る。
+            let (st, _) = post(&app, url, "alice", r#"{"name":"model_only","from":"app"}"#).await;
+            assert_eq!(st, StatusCode::FORBIDDEN);
+            // ホスト（画面を開く）からは画面付きツールだけ。
+            let (st, _) = post(&app, url, "alice", r#"{"name":"plain","from":"host"}"#).await;
+            assert_eq!(st, StatusCode::FORBIDDEN);
+            // 許可された呼び出し → NullMcpClient なので 502。
+            let (st, _) = post(&app, url, "alice", r#"{"name":"save","from":"app"}"#).await;
+            assert_eq!(st, StatusCode::BAD_GATEWAY);
+            let (st, _) = post(&app, url, "alice", r#"{"name":"dash","from":"host"}"#).await;
+            assert_eq!(st, StatusCode::BAD_GATEWAY);
+        }
+
+        #[tokio::test]
+        async fn sandbox_page_has_own_csp_and_host_origin() {
+            let app = app_with(WebConfig {
+                base_url: Some("https://yuuka.example".to_owned()),
+                ..WebConfig::default()
+            });
             let resp = app
                 .clone()
                 .oneshot(
                     Request::builder()
-                        .method("OPTIONS")
-                        .uri("/proxy/mcp/1/mcp")
-                        .header("access-control-request-headers", "authorization, x-custom")
+                        .uri("/mcp-apps/sandbox")
                         .body(Body::empty())
                         .unwrap(),
                 )
                 .await
                 .unwrap();
-            assert_eq!(resp.status(), StatusCode::NO_CONTENT);
-            let h = resp.headers();
-            assert_eq!(h.get("access-control-allow-origin").unwrap(), "null");
-            assert_eq!(
-                h.get("access-control-allow-methods").unwrap(),
-                "POST, OPTIONS"
-            );
-            assert_eq!(
-                h.get("access-control-allow-headers").unwrap(),
-                "authorization, x-custom"
-            );
-            assert_eq!(h.get("access-control-max-age").unwrap(), "600");
-            assert!(h.get("access-control-allow-credentials").is_none());
-        }
-
-        #[tokio::test]
-        async fn proxy_post_bad_id_400() {
-            let app = app();
-            let resp = app
-                .clone()
-                .oneshot(
-                    Request::builder()
-                        .method("POST")
-                        .uri("/proxy/mcp/abc/mcp")
-                        .body(Body::from("{}"))
-                        .unwrap(),
-                )
-                .await
-                .unwrap();
-            assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-            let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
-            let j: Value = serde_json::from_slice(&bytes).unwrap();
-            assert_eq!(
-                j["message"],
-                Value::String("不正なサーバーIDです。".to_owned())
-            );
-        }
-
-        #[tokio::test]
-        async fn proxy_post_missing_token_401() {
-            let app = app();
-            let resp = app
-                .clone()
-                .oneshot(
-                    Request::builder()
-                        .method("POST")
-                        .uri("/proxy/mcp/1/mcp")
-                        .body(Body::from("{}"))
-                        .unwrap(),
-                )
-                .await
-                .unwrap();
-            assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
-            // ACAO:null は付く（Cookie 非依存の安全な組合せ）。
-            assert_eq!(
-                resp.headers().get("access-control-allow-origin").unwrap(),
-                "null"
-            );
-            let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
-            let j: Value = serde_json::from_slice(&bytes).unwrap();
-            assert_eq!(
-                j["message"],
-                Value::String("プロキシトークンが無効または期限切れです。".to_owned())
-            );
+            assert_eq!(resp.status(), StatusCode::OK);
+            let csp = resp.headers()["content-security-policy"]
+                .to_str()
+                .unwrap()
+                .to_owned();
+            assert!(csp.contains("frame-ancestors https://yuuka.example"));
+            let html = String::from_utf8(
+                to_bytes(resp.into_body(), usize::MAX)
+                    .await
+                    .unwrap()
+                    .to_vec(),
+            )
+            .unwrap();
+            assert!(html.contains(r#"content="https://yuuka.example""#));
         }
     }
 }

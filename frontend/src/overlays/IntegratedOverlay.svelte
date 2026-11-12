@@ -24,6 +24,7 @@ import type {
 	IntegratedCredentialView,
 	IntegratedGoogleAccountView,
 	IntegratedMcpServerView,
+	McpServerView,
 } from "$lib/api/types";
 import {
 	Button,
@@ -40,7 +41,6 @@ import {
 import { INTEGRATED_SECTIONS } from "$lib/managementSections";
 import { isAdmin } from "$lib/stores/session";
 import { pushToast, toastError } from "$lib/stores/toast";
-import McpDashboardModal from "../routes/mcp/McpDashboardModal.svelte";
 import IntCalendarsModal from "./integrated/IntCalendarsModal.svelte";
 import IntGrantChips from "./integrated/IntGrantChips.svelte";
 import ManagementOverlayShell from "./ManagementOverlayShell.svelte";
@@ -53,16 +53,21 @@ let googleAccounts = $state<IntegratedGoogleAccountView[]>([]);
 const assignOptions = $derived(googleAssignOptions(googleAccounts));
 let loading = $state(false);
 
-// dashboard 提供有無キャッシュ（serverId → available）
-let dashAvailable = $state<Record<number, boolean>>({});
+// MCP の詳細（認証の状態・画面付きツール）。overview には無いので mcpApi.list で引く（serverId → view）。
+let mcpDetails = $state<Record<number, McpServerView>>({});
 
 // カレンダーモーダル
 let calOpen = $state(false);
 let calAccount = $state<IntegratedGoogleAccountView | null>(null);
 
-// MCP ダッシュボードモーダル
-let dashOpen = $state(false);
-let dashServer = $state<{ id: number; name: string } | null>(null);
+// MCP Apps（ツールの画面）モーダル
+let appOpen = $state(false);
+let appTarget = $state<{
+	serverId: number;
+	serverName: string;
+	tool: string;
+	requiresConfirmation: boolean;
+} | null>(null);
 
 // 認証情報フォーム
 let credService = $state("");
@@ -90,7 +95,7 @@ async function loadOverview() {
 		mcpServers = data.mcpServers ?? [];
 		credentials = data.credentials ?? [];
 		googleAccounts = data.googleAccounts ?? [];
-		void probeDashboards();
+		void loadMcpDetails();
 	} catch (e) {
 		toastError(e);
 	} finally {
@@ -98,22 +103,38 @@ async function loadOverview() {
 	}
 }
 
-// dashboard 提供有無を各 MCP サーバについて判定（旧 fire-and-forget probe）。
-// overview には含まれないため mcpApi.dashboardStatus を個別に叩く。
-async function probeDashboards() {
-	const next: Record<number, boolean> = {};
-	await Promise.all(
-		mcpServers.map(async (s) => {
-			try {
-				const r = await mcpApi.dashboardStatus(s.id);
-				next[s.id] = r.available === true;
-			} catch {
-				next[s.id] = false;
-			}
-		}),
-	);
-	dashAvailable = next;
+// MCP の詳細（認証の状態・画面付きツール）を取得する。失敗しても一覧は overview で出せる。
+async function loadMcpDetails() {
+	try {
+		const res = await mcpApi.list();
+		const next: Record<number, McpServerView> = {};
+		for (const s of res.servers ?? []) next[s.id] = s;
+		mcpDetails = next;
+	} catch {
+		mcpDetails = {};
+	}
 }
+
+// OAuth の認可から戻ってきたとき（/integrated/mcp?mcp_oauth=...）に結果を知らせ、クエリを消す。
+$effect(() => {
+	const params = new URLSearchParams(window.location.search);
+	const result = params.get("mcp_oauth");
+	if (!result) return;
+	const message = params.get("message") ?? "";
+	pushToast(
+		message ||
+			(result === "success" ? "認可が完了しました。" : "認可に失敗しました。"),
+		result === "success" ? "success" : "error",
+	);
+	params.delete("mcp_oauth");
+	params.delete("message");
+	const q = params.toString();
+	history.replaceState(
+		history.state,
+		"",
+		`${window.location.pathname}${q ? `?${q}` : ""}`,
+	);
+});
 
 // 初回・再表示時に取得。
 $effect(() => {
@@ -232,9 +253,67 @@ async function deleteMcpServer(server: IntegratedMcpServerView) {
 		toastError(e);
 	}
 }
-function openDashboard(server: IntegratedMcpServerView) {
-	dashServer = { id: server.id, name: server.name };
-	dashOpen = true;
+
+// MCP Apps のモーダル。公式 SDK（AppBridge・zod）を含み大きいので、初めて開くときに読み込む。
+let McpAppModal = $state<
+	typeof import("../routes/mcp/McpAppModal.svelte").default | null
+>(null);
+
+// MCP Apps：ツールの画面を開く。
+async function openApp(server: IntegratedMcpServerView, tool: string) {
+	try {
+		McpAppModal ??= (await import("../routes/mcp/McpAppModal.svelte")).default;
+	} catch (e) {
+		toastError(e);
+		return;
+	}
+	appTarget = {
+		serverId: server.id,
+		serverName: server.name,
+		tool,
+		requiresConfirmation: mcpDetails[server.id]?.requires_confirmation ?? true,
+	};
+	appOpen = true;
+}
+
+// 画面（ui:// リソース）を持つツール。
+function appTools(serverId: number) {
+	return (mcpDetails[serverId]?.tools ?? []).filter((t) => t.ui_resource_uri);
+}
+
+// ── OAuth 2.1 認可 ──
+// 認可 URL へ画面ごと遷移する。認可サーバーから戻ると /integrated/mcp に結果付きで戻ってくる。
+async function startOAuth(server: IntegratedMcpServerView) {
+	try {
+		const res = await mcpApi.oauthStart(server.id);
+		window.location.assign(res.authorizationUrl);
+	} catch (e) {
+		toastError(e);
+	}
+}
+async function disconnectOAuth(server: IntegratedMcpServerView) {
+	const ok = await confirmDialog({
+		message: "このMCPサーバーの OAuth 認可を解除しますか？",
+		danger: true,
+		confirmLabel: "解除",
+	});
+	if (!ok) return;
+	try {
+		await mcpApi.oauthDisconnect(server.id);
+		pushToast("OAuth の認可を解除しました。", "success");
+		await loadOverview();
+	} catch (e) {
+		toastError(e);
+	}
+}
+
+/** 認証の状態の表示文言。 */
+function authLabel(serverId: number): string {
+	const auth = mcpDetails[serverId]?.auth;
+	if (!auth) return "";
+	if (auth.mode === "bearer") return "トークン認証";
+	if (auth.mode === "oauth") return "OAuth 認可済み";
+	return auth.authorization_required ? "認可が必要" : "認証なし";
 }
 
 // ── MCP 登録フォーム（旧 int-mcp-form） ──
@@ -465,12 +544,24 @@ async function connectGoogle() {
 										<span class="int-mcp-state" class:on={s.enabled}
 											>{s.enabled ? "有効" : "無効"}</span
 										>
+										{#if authLabel(s.id)}
+											<span
+												class="int-mcp-state"
+												class:warn={mcpDetails[s.id]?.auth.authorization_required &&
+													mcpDetails[s.id]?.auth.mode === "none"}>{authLabel(s.id)}</span
+											>
+										{/if}
 										<div class="int-mcp-url">{s.endpoint_url} ・ {s.tools} tools</div>
 									</div>
 									<div class="int-mcp-actions">
-										{#if dashAvailable[s.id]}
-											<Button variant="secondary" small onclick={() => openDashboard(s)}
-												>管理ページ</Button
+										{#if mcpDetails[s.id]?.can_manage && mcpDetails[s.id]?.auth.mode === "none"}
+											<Button variant="secondary" small onclick={() => startOAuth(s)}
+												>OAuthで認可</Button
+											>
+										{/if}
+										{#if mcpDetails[s.id]?.can_manage && mcpDetails[s.id]?.auth.mode === "oauth"}
+											<Button variant="secondary" small onclick={() => disconnectOAuth(s)}
+												>認可を解除</Button
 											>
 										{/if}
 										<Button variant="secondary" small onclick={() => refreshMcpTools(s)}
@@ -484,6 +575,19 @@ async function connectGoogle() {
 										>
 									</div>
 								</div>
+								{#if mcpDetails[s.id]?.can_manage && s.enabled && appTools(s.id).length > 0}
+									<div class="int-mcp-apps">
+										<span class="int-mcp-apps-label">画面:</span>
+										{#each appTools(s.id) as t (t.name)}
+											<Button
+												variant="secondary"
+												small
+												title={t.description || t.name}
+												onclick={() => openApp(s, t.name)}>{t.name}</Button
+											>
+										{/each}
+									</div>
+								{/if}
 								<IntGrantChips
 									{bots}
 									grantedIds={mcpGrantedIds(s.id)}
@@ -560,7 +664,9 @@ async function connectGoogle() {
 </ManagementOverlayShell>
 
 <IntCalendarsModal bind:open={calOpen} account={calAccount} onsave={saveCalendars} />
-<McpDashboardModal bind:open={dashOpen} server={dashServer} />
+{#if McpAppModal}
+	<McpAppModal bind:open={appOpen} target={appTarget} />
+{/if}
 
 <style>
 	.int-cols {
@@ -601,6 +707,20 @@ async function connectGoogle() {
 	}
 	.int-mcp-state.on {
 		color: #10b981;
+	}
+	.int-mcp-state.warn {
+		color: #f59e0b;
+	}
+	.int-mcp-apps {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 6px;
+		margin: 8px 0 4px;
+	}
+	.int-mcp-apps-label {
+		font-size: 0.72rem;
+		color: var(--color-zinc-muted, #a1a1aa);
 	}
 	.int-mcp-url {
 		font-size: 0.72rem;

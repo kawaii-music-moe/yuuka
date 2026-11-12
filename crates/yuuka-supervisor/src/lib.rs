@@ -10,7 +10,7 @@ use std::path::Path;
 
 use axum::Router;
 use yuuka_web::{
-    apply_common_layers, framework_routes, mount_pwa, mount_static, mount_tts_models, AppState,
+    apply_common_layers_with, framework_routes, mount_pwa, mount_static, mount_tts_models, AppState,
 };
 
 pub mod backup;
@@ -131,7 +131,18 @@ pub fn build_app(
     };
     let https = state.config.https;
     let allowed_host = state.config.allowed_host.clone();
-    apply_common_layers(routes, https, allowed_host).with_state(state)
+    // MCP Apps のサンドボックス用オリジン（設定時）。管理画面から iframe で開けるよう本体 CSP の
+    // frame-src に足し、そのホスト名ではサンドボックスプロキシ以外を返さない。
+    let sandbox_origin = state.config.mcp_sandbox_origin.clone();
+    let sandbox_host: Option<std::sync::Arc<str>> =
+        yuuka_mcp::sandbox_host(sandbox_origin.as_deref()).map(Into::into);
+    apply_common_layers_with(routes, https, allowed_host, sandbox_origin.as_deref())
+        .layer(axum::middleware::from_fn(
+            move |req: axum::extract::Request, next: axum::middleware::Next| {
+                yuuka_mcp::sandbox_host_guard(sandbox_host.clone(), req, next)
+            },
+        ))
+        .with_state(state)
 }
 
 #[cfg(test)]
@@ -270,11 +281,10 @@ mod tests {
             yuuka_auth::device_auth_routes(yuuka_auth::DeviceAuthStore::new(String::new())),
             // WS ルータは merge 検証には不要（ChatEngine 構築を避け空ルータを渡す）。
             axum::Router::new(),
-            // MCP ルータ（NullMcpClient・暗号なし・in-memory token）を merge して検証する。
+            // MCP ルータ（NullMcpClient・暗号なし）を merge して検証する。
             yuuka_mcp::routes(std::sync::Arc::new(yuuka_mcp::McpRuntime::new(
                 None,
                 std::sync::Arc::new(yuuka_mcp::NullMcpClient),
-                std::sync::Arc::new(yuuka_mcp::ProxyTokenManager::new()),
             ))),
             // 統合設定ルータ（NullBotLifecycle・NullCalendar）を merge して検証する。
             yuuka_integrated::routes(std::sync::Arc::new(

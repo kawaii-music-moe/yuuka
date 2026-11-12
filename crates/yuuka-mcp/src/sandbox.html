@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="yuuka-host-origin" content="__HOST_ORIGIN__">
+<title>MCP App sandbox</title>
+<style>
+html, body { margin: 0; padding: 0; height: 100%; background: transparent; }
+iframe { display: block; width: 100%; height: 100%; border: 0; }
+</style>
+</head>
+<body>
+<script>
+// MCP Apps のサンドボックスプロキシ（ext-apps 仕様 2026-01-26「Sandbox proxy」）。
+// ホスト（yuuka の管理画面）と、MCP サーバーが返した画面（内側の iframe）の間で postMessage を中継する。
+// - 起動したら ui/notifications/sandbox-proxy-ready をホストへ送る。
+// - ホストから ui/notifications/sandbox-resource-ready（HTML・CSP・権限）を受けたら、
+//   申告された CSP を meta で先頭に差し込んだ HTML を内側の iframe（srcdoc）に読み込む。
+// - ui/notifications/sandbox-* 以外のメッセージは双方向にそのまま中継する。
+(() => {
+	const meta = document.querySelector('meta[name="yuuka-host-origin"]');
+	const HOST_ORIGIN = meta ? meta.getAttribute("content") : "";
+	const SANDBOX_PREFIX = "ui/notifications/sandbox-";
+	const DEFAULT_SANDBOX = "allow-scripts allow-same-origin allow-forms";
+	let inner = null;
+
+	// CSP に入れてよいのはスキーム付きのオリジン（ワイルドカードのサブドメインを含む）だけ。
+	// 「;」や空白を含む値で別のディレクティブを差し込まれないようにする。
+	const SOURCE_RE = /^(https?|wss?):\/\/(\*\.)?[A-Za-z0-9.-]+(:[0-9]{1,5})?$/;
+	const sources = (list) =>
+		Array.isArray(list) ? list.filter((s) => typeof s === "string" && SOURCE_RE.test(s)) : [];
+
+	const buildCsp = (csp) => {
+		const c = csp || {};
+		const res = sources(c.resourceDomains).join(" ");
+		const connect = sources(c.connectDomains);
+		const frame = sources(c.frameDomains);
+		const base = sources(c.baseUriDomains);
+		return [
+			"default-src 'none'",
+			`script-src 'self' 'unsafe-inline' ${res}`,
+			`style-src 'self' 'unsafe-inline' ${res}`,
+			`img-src 'self' data: ${res}`,
+			`font-src 'self' data: ${res}`,
+			`media-src 'self' data: ${res}`,
+			`connect-src ${connect.length ? connect.join(" ") : "'none'"}`,
+			`frame-src ${frame.length ? frame.join(" ") : "'none'"}`,
+			`base-uri ${base.length ? base.join(" ") : "'self'"}`,
+			"object-src 'none'",
+		].join("; ");
+	};
+
+	const escapeAttr = (s) =>
+		s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+
+	// 申告された CSP を最初に解釈されるよう <head> 直後（無ければ doctype の後・先頭）へ差し込む。
+	const withCsp = (html, csp) => {
+		const tag = `<meta http-equiv="Content-Security-Policy" content="${escapeAttr(buildCsp(csp))}">`;
+		const head = /<head(\s[^>]*)?>/i.exec(html);
+		const doctype = /^\s*<!doctype[^>]*>/i.exec(html);
+		let at = 0;
+		if (head) at = head.index + head[0].length;
+		else if (doctype) at = doctype[0].length;
+		return html.slice(0, at) + tag + html.slice(at);
+	};
+
+	const allowAttr = (permissions) => {
+		const p = permissions || {};
+		const out = [];
+		if (p.camera) out.push("camera");
+		if (p.microphone) out.push("microphone");
+		if (p.geolocation) out.push("geolocation");
+		if (p.clipboardWrite) out.push("clipboard-write");
+		return out.join("; ");
+	};
+
+	const load = (params) => {
+		if (inner || !params || typeof params.html !== "string") return;
+		inner = document.createElement("iframe");
+		const sandbox = typeof params.sandbox === "string" ? params.sandbox : DEFAULT_SANDBOX;
+		inner.setAttribute("sandbox", sandbox);
+		const allow = allowAttr(params.permissions);
+		if (allow) inner.setAttribute("allow", allow);
+		inner.setAttribute("title", "MCP App");
+		inner.srcdoc = withCsp(params.html, params.csp);
+		document.body.appendChild(inner);
+	};
+
+	const isSandboxMethod = (data) =>
+		Boolean(data) && typeof data.method === "string" && data.method.startsWith(SANDBOX_PREFIX);
+
+	window.addEventListener("message", (ev) => {
+		const data = ev.data;
+		if (ev.source === window.parent) {
+			if (ev.origin !== HOST_ORIGIN) return;
+			if (isSandboxMethod(data)) {
+				if (data.method === "ui/notifications/sandbox-resource-ready") load(data.params);
+				return;
+			}
+			inner?.contentWindow?.postMessage(data, "*");
+			return;
+		}
+		if (inner && ev.source === inner.contentWindow) {
+			if (isSandboxMethod(data)) return;
+			window.parent.postMessage(data, HOST_ORIGIN);
+		}
+	});
+
+	if (HOST_ORIGIN && window.parent !== window) {
+		window.parent.postMessage(
+			{ jsonrpc: "2.0", method: "ui/notifications/sandbox-proxy-ready", params: {} },
+			HOST_ORIGIN,
+		);
+	}
+})();
+</script>
+</body>
+</html>

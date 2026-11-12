@@ -224,7 +224,6 @@ async fn run() -> Result<(), String> {
     .map_err(|e| format!("build tool registry: {e}"))?;
     let mcp_client: Arc<dyn yuuka_mcp::McpClient> = match yuuka_mcp::RmcpClient::new(
         crypto.clone(),
-        http_client.clone(),
         db.clone(),
     ) {
         Ok(client) => Arc::new(client),
@@ -360,15 +359,13 @@ async fn run() -> Result<(), String> {
     ));
     let settings_routes = yuuka_settings::routes(settings_runtime);
 
-    // MCP ルータ（サーバー管理 + ダッシュボードプロキシ）。auth_credential 暗号化に crypto を注入し、
-    // proxy token は in-memory（web 再起動を跨ぐよう main で 1 度生成）。MCP サーバーへの実 HTTP
-    // （tools/list・dashboard・proxy）は RmcpClient（rmcp + SSRF ガード付き HTTP）で処理する。
+    // MCP ルータ（サーバー管理・OAuth 認可・MCP Apps）。auth_credential 暗号化に crypto を注入する。
+    // MCP サーバーへの通信は RmcpClient（rmcp + SSRF ガード付き HTTP）で処理する。
     let mcp_routes = yuuka_mcp::routes(Arc::new(yuuka_mcp::McpRuntime::new(
         crypto.clone(),
-        // ChatEngine と同一の RmcpClient を共有（tools/list・dashboard・proxy と動的ツール探索で
-        // MCP 接続キャッシュを 1 つに統一する）。
+        // ChatEngine と同一の RmcpClient を共有（管理 API と動的ツール探索で MCP 接続キャッシュと
+        // OAuth の認可待ちを 1 つに統一する）。
         mcp_client.clone(),
-        Arc::new(yuuka_mcp::ProxyTokenManager::new()),
     )));
 
     // 統合設定ルータ（overview / bot lifecycle / grants / google accounts）。Bot 起動停止は Rust が
@@ -918,7 +915,7 @@ struct WebService {
     device_auth_routes: Router<AppState>,
     /// 会話 WS ルータ（`ChatEngine` を `Extension` で内包済み・`/ws/chat`）。
     ws_routes: Router<AppState>,
-    /// MCP ルータ（`McpRuntime` を `Extension` で内包済み・`/api/mcp-servers*` + `/proxy/mcp/:id/mcp`）。
+    /// MCP ルータ（`McpRuntime` を `Extension` で内包済み・`/api/mcp-servers*` + `/mcp-apps/sandbox`）。
     mcp_routes: Router<AppState>,
     /// 統合設定ルータ（`IntegratedRuntime` を `Extension` で内包済み・`/api/integrated/*`）。
     integrated_routes: Router<AppState>,

@@ -13,8 +13,7 @@ docs/
 ├── project_overview.md      ← AI/開発者向けの全体像・クレート/ディレクトリマップ（現行の入口）
 ├── guide/                   ← 現行の利用・運用ガイド（features / setup / deployment）
 ├── architecture/            ← 設計資料
-│   ├── architecture_v2.md   ← ⚠️ 旧 Node/TS 実装（schema v16）時点の履歴資料（現行の規範ではない）
-│   └── mcp_dashboard_proxy.md ← MCP ダッシュボード埋め込み方式（旧 Node 実装時点の設計。冒頭の注記参照）
+│   └── architecture_v2.md   ← ⚠️ 旧 Node/TS 実装（schema v16）時点の履歴資料（現行の規範ではない）
 ├── spec/                    ← 機能仕様・要件
 │   ├── discordbot_spec.md
 │   └── bot_attributes_requirements.md
@@ -25,6 +24,7 @@ docs/
 │   ├── synapse_cognitive_architecture.md   ← 設計思想・研究裏付け（R0/R1 実装済み）
 │   ├── self_hosting.md                     ← セルフホスト化の設計（ログイン・配布・上限・TZ・バックアップ。提案）
 │   ├── memory_retention.md                 ← 会話記憶（シナプス）の評価と選別（入口フィルタ・LLM 評価・忘却。段階 1〜4 実装済み）
+│   ├── mcp_standard_protocol.md            ← MCP を標準仕様どおりに使う（OAuth 2.1・MCP Apps。実装済み）
 │   └── desktop_client/                     ← 汎用チャットAPI/デスクトップ（Phase 0/1 実装済み）
 ├── audits/                  ← 調査記録（日付付き。機能差分・重複整理・障害の時系列）
 └── rust-rewrite/            ← Rust 移行の計画・実施記録（2026-07-16 時点のアーカイブ）
@@ -44,6 +44,7 @@ docs/
 | PWA クライアント（Vue）の開発手順 | [../clients/pwa/README.md](../clients/pwa/README.md) |
 | セルフホスト化の設計（ログイン方式・設定項目・着手順・利用者ごとの上限） | [design/self_hosting.md](design/self_hosting.md) |
 | 会話記憶（シナプス）を全部残さず評価して選別する計画 | [design/memory_retention.md](design/memory_retention.md) |
+| MCP の認可（OAuth 2.1）と画面（MCP Apps）・サンドボックスのオリジン | [design/mcp_standard_protocol.md](design/mcp_standard_protocol.md) |
 | Gemini 503・応答遅延の時系列と対策案の比較（2026-11-11） | [audits/2026-11-11-gemini-503-countermeasures.md](audits/2026-11-11-gemini-503-countermeasures.md) |
 | DB の定期バックアップ（`yuuka backup`・timer・戻し方） | [guide/deployment.md](guide/deployment.md#db-のバックアップ) |
 | 旧 Node 実装時点の不変条件・DB スキーマ v16・ファイル所有マップ（**履歴資料**） | [architecture/architecture_v2.md](architecture/architecture_v2.md) |
