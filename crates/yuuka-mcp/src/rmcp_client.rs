@@ -30,7 +30,9 @@ use async_trait::async_trait;
 use axum::body::Bytes;
 use reqwest13::dns::{Addrs, Name, Resolve, Resolving};
 use rmcp::handler::client::ClientHandler;
-use rmcp::model::{CallToolRequestParams, PaginatedRequestParams, Tool};
+use rmcp::model::{
+    CallToolRequestParams, ClientConfig, PaginatedRequestParams, ProtocolVersion, Tool,
+};
 use rmcp::service::{NotificationContext, RunningService, ServiceError};
 use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
 use rmcp::transport::StreamableHttpClientTransport;
@@ -148,6 +150,13 @@ struct ToolsCacheHandler {
 }
 
 impl ClientHandler for ToolsCacheHandler {
+    fn get_info(&self) -> ClientConfig {
+        // Preserve the protocol used by rmcp 2.x: initialize, session recovery,
+        // and unscoped tools/list_changed notifications. The 2026 revision uses
+        // a different lifecycle and explicit notification subscriptions.
+        ClientConfig::default().with_protocol_version(ProtocolVersion::V_2025_11_25)
+    }
+
     async fn on_tool_list_changed(&self, context: NotificationContext<RoleClient>) {
         // MCP サーバーは利用者が登録する外部サーバーなので、通知を連打されてもタスクを積み上げない。
         // 動いている再取得があれば、そのタスクが通知をまとめて拾う。
