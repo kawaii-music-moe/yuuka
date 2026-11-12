@@ -12,12 +12,14 @@
 
 pub mod pool;
 pub mod schema;
+pub mod snapshot;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
 pub mod writer;
 
 pub use pool::{open_conn, ReadPool};
 pub use schema::run_migrations;
+pub use snapshot::snapshot;
 pub use writer::WriterHandle;
 
 use yuuka_core::DbError;

@@ -27,6 +27,7 @@ pub mod preset;
 pub mod receipt_extract;
 pub mod share_routes;
 pub mod synapse_extract;
+pub mod synapse_maintain;
 pub mod synapse_recall;
 pub mod synapse_repo;
 pub mod system_prompt;
@@ -52,5 +53,7 @@ pub use receipt_extract::{ReceiptDraft, ReceiptExtractError};
 pub use share_routes::{
     routes as bot_share_routes, routes_with as bot_share_routes_with, NullShareInviteDm,
 };
+pub use synapse_maintain::{MemoryLlm, NullMemoryLlm};
 pub use synapse_recall::RecallSettings;
+pub use synapse_repo::ScopeKey as MemoryScope;
 pub use tool_outcome::DbToolOutcomeSink;

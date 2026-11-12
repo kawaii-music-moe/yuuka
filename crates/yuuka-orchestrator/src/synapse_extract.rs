@@ -1,7 +1,12 @@
-//! シナプス抽出（write 経路）— Node `src/services/synapseExtractor.ts` `maybeExtractSynapse` パリティ。
+//! シナプス抽出（write 経路）— 会話記憶の **入口フィルタ**（docs/design/memory_retention.md §4-A）。
 //!
-//! **完全ヒューリスティック・LLM コストゼロ**。会話ターン確定後にユーザー発話から「記憶に値する断片」を
-//! 選別し、`synapses` へ挿入 + [`yuuka_synapse`] で埋め込み + embedding 列を更新する（fire-and-forget）。
+//! **ヒューリスティック・LLM コストゼロ**。会話ターン確定後にユーザー発話から「記憶に値するかもしれない
+//! 断片」を選び、`synapses` へ **候補（`status='candidate'`）** として入れる（fire-and-forget）。候補は
+//! 想起に出さず、評価器（[`crate::synapse_maintain`]）が短い事実文に書き直して kept にする。
+//!
+//! 以前（Node `maybeExtractSynapse` パリティ）は「80 文字以上なら何でも」保存し、Discord の返信先
+//! プレフィックス（Bot 自身の返答）まで記憶していた。ここでは返信先を剥がし、長さだけの基準を廃止し、
+//! 引用・貼り付け・重複・1 日の上限で候補を絞る。
 //!
 //! 秘匿値ガード（Node `src/utils/secretGuard.ts` `containsSecretValue`）は Rust に既存実装が無いため
 //! ここへ移植する（キーワード `SECRET_GUARD_RE` + 値の形状 `contains_secret_value` の二層防御・§9.3）。
@@ -9,23 +14,36 @@
 use std::sync::Arc;
 
 use tokio::sync::Mutex;
-use yuuka_synapse::{FormationContext, Scope, SynapseEngine};
+use yuuka_synapse::SynapseEngine;
 
-use crate::synapse_repo::{self, InsertArgs};
+use crate::synapse_repo::{self, InsertArgs, ScopeKey, STATUS_CANDIDATE};
 use yuuka_web::Db;
 
-// ─── Node 定数（synapseExtractor.ts）を逐語移植 ──────────────────────────────────
+// ─── 定数 ─────────────────────────────────────────────────────────────────────
 
-/// シナプス content の最大長（トークン肥大を避ける・Node `MAX_CONTENT_LEN`）。
+/// 候補 content の最大長（評価器へ渡す入力の上限。kept になるときは事実文に書き直される）。
 const MAX_CONTENT_LEN: usize = 300;
 
-/// 抽出対象から除外する最小文字数（trim 後・Node `MIN_USER_TEXT_LEN`）。**文字数**で数える
-/// （Node `string.length` は UTF-16 code unit 長だが、CJK/BMP 中心の入力では char 数と一致し、
-/// 短文の足切りという用途では十分に等価）。
+/// 抽出対象から除外する最小文字数（trim 後・Node `MIN_USER_TEXT_LEN`）。**文字数**で数える。
 const MIN_USER_TEXT_LEN: usize = 8;
 
-/// マーカー語を含まない発話を「長さだけ」で記憶する下限（trim 後・Node `MEMORABLE_MIN_LEN`）。
-const MEMORABLE_MIN_LEN: usize = 80;
+/// 1 スコープ（利用者 × Bot × ギルド）が 1 日に入れられる候補の上限。
+pub const DAILY_CANDIDATE_CAP: i64 = 20;
+
+/// 一人称の断定文とみなす主語（これに続く文は本人についての情報の可能性が高い）。
+const FIRST_PERSON_SUBJECTS: &[&str] = &[
+    "私は",
+    "私の",
+    "わたしは",
+    "僕は",
+    "僕の",
+    "俺は",
+    "俺の",
+    "自分は",
+    "自分の",
+    "うちは",
+    "うちの",
+];
 
 /// 「記憶に値する」意味マーカー（Node `MEMORABLE_RE`・逐語）。嗜好・習慣・事実・制約・記憶依頼。
 const MEMORABLE_MARKERS: &[&str] = &[
@@ -82,8 +100,63 @@ fn secret_guard_hit(text: &str) -> bool {
 }
 
 /// Node `MEMORABLE_RE.test()` パリティ: 意味マーカーのいずれかを含むか。
-fn is_memorable_marker(text: &str) -> bool {
+pub(crate) fn is_memorable_marker(text: &str) -> bool {
     MEMORABLE_MARKERS.iter().any(|m| text.contains(m))
+}
+
+/// 一人称の断定文か（「私は〜」「俺の〜」）。本人についての情報の手がかりとして候補にする。
+fn is_first_person_statement(text: &str) -> bool {
+    FIRST_PERSON_SUBJECTS.iter().any(|s| text.contains(s))
+}
+
+/// 引用・貼り付け・定型の繰り返しらしい入力か。本人の発話ではない可能性が高いので候補にしない。
+///
+/// - 行の半分以上が `>` で始まる（引用）
+/// - コードフェンス（```）を含む
+/// - URL を 2 つ以上含む
+/// - 同じ行（trim 後・10 文字以上）が 3 回以上現れる（歌詞・コピペ）
+/// - 先頭が `[返信先メッセージ` のまま残っている（剥がせなかった返信先）
+pub(crate) fn looks_like_paste(text: &str) -> bool {
+    if text.starts_with("[返信先メッセージ") || text.contains("```") {
+        return true;
+    }
+    let lines: Vec<&str> = text
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect();
+    if !lines.is_empty() {
+        let quoted = lines.iter().filter(|l| l.starts_with('>')).count();
+        if quoted * 2 >= lines.len() {
+            return true;
+        }
+        let mut counts = std::collections::HashMap::new();
+        for line in &lines {
+            if line.chars().count() >= 10 {
+                let n = counts.entry(*line).or_insert(0usize);
+                *n += 1;
+                if *n >= 3 {
+                    return true;
+                }
+            }
+        }
+    }
+    text.matches("http://").count() + text.matches("https://").count() >= 2
+}
+
+/// 重複排除用のハッシュ（小文字化・空白を 1 つに潰した内容の FNV-1a 64bit・16 進）。
+pub(crate) fn content_hash(text: &str) -> String {
+    let normalized: String = text
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase();
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in normalized.as_bytes() {
+        hash ^= u64::from(*b);
+        hash = hash.wrapping_mul(0x0100_0000_01b3);
+    }
+    format!("{hash:016x}")
 }
 
 /// 純粋なコマンドっぽい入力（先頭が記号トリガ）を雑に判定（Node `looksLikeCommand`）。
@@ -322,12 +395,58 @@ pub struct ExtractScope {
     pub guild_id: Option<String>,
 }
 
-/// 会話ターンからシナプスを抽出し SQLite + RAM 索引へ永続化する（Node `maybeExtractSynapse`）。
+/// 入口フィルタの判定結果（テストと観測のため理由を返す）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Screen {
+    /// 候補にする（正規化済みの内容）。
+    Candidate(String),
+    /// 候補にしない理由。
+    Skip(&'static str),
+}
+
+/// 発話を候補にするかを決める（DB を見ない純粋な部分）。
 ///
-/// 抽出はヒューリスティック（LLM コストゼロ）。呼び出し側は **fire-and-forget**（await せず・失敗を
-/// 投げない）で呼ぶ。`user_text` が非 memorable / 秘匿 / 短すぎ / コマンドなら何もしない。
+/// 返信先プレフィックスを剥がし、秘匿・短文・コマンド・貼り付けを落とし、意味マーカーか一人称の断定文を
+/// 含むものだけを候補にする。
+#[must_use]
+pub fn screen(user_text: &str) -> Screen {
+    let body = yuuka_discord::strip_reply_prefix(user_text);
+    let trimmed = body.trim();
+
+    // 秘匿除外不変条件（§9.3）: (1) キーワード / (2) 値形状。いずれかで記憶しない。
+    if secret_guard_hit(trimmed) || contains_secret_value(trimmed) {
+        return Screen::Skip("secret");
+    }
+    if trimmed.chars().count() < MIN_USER_TEXT_LEN {
+        return Screen::Skip("short");
+    }
+    if looks_like_command(trimmed) {
+        return Screen::Skip("command");
+    }
+    if looks_like_paste(trimmed) {
+        return Screen::Skip("paste");
+    }
+    if !(is_memorable_marker(trimmed) || is_first_person_statement(trimmed)) {
+        return Screen::Skip("not_memorable");
+    }
+    let content = cap_content(trimmed);
+    if content.is_empty() {
+        return Screen::Skip("short");
+    }
+    // 切り詰めた content 側も両ガードを通す（念のため）。
+    if secret_guard_hit(&content) || contains_secret_value(&content) {
+        return Screen::Skip("secret");
+    }
+    Screen::Candidate(content)
+}
+
+/// 会話ターンから記憶の候補を取り出して `synapses` に `candidate` として入れる。
 ///
-/// 失敗（DB/索引）は握って `warn` ログのみ（Node の catch と同じく呼び出し側へ伝播しない）。
+/// 呼び出し側は **fire-and-forget**（await せず・失敗を投げない）で呼ぶ。候補は想起に出さない（埋め込みも
+/// 索引登録もしない）。評価器（`synapse_maintain`）が後で kept にするか消す。`engine` は今は使わないが、
+/// 呼び出し側の配線（エンジン未配線なら抽出もしない）を保つために受け取る。
+///
+/// 失敗（DB）は握って `warn` ログのみ（呼び出し側へ伝播しない）。
 pub async fn maybe_extract_synapse(
     db: &Db,
     engine: &Arc<Mutex<SynapseEngine>>,
@@ -335,86 +454,66 @@ pub async fn maybe_extract_synapse(
     user_text: &str,
     source_msg_id: Option<i64>,
 ) {
-    if let Err(e) = extract_inner(db, engine, scope, user_text, source_msg_id).await {
-        tracing::warn!(error = %e, "[Synapse] シナプス抽出に失敗しました（無視）");
+    let _ = engine;
+    if let Err(e) = extract_inner(db, scope, user_text, source_msg_id).await {
+        tracing::warn!(error = %e, "[Synapse] 記憶の候補の保存に失敗しました（無視）");
     }
 }
 
 /// [`maybe_extract_synapse`] の本体（Result を返し、呼び出し側が warn へ落とす）。
 async fn extract_inner(
     db: &Db,
-    engine: &Arc<Mutex<SynapseEngine>>,
     scope: ExtractScope,
     user_text: &str,
     source_msg_id: Option<i64>,
 ) -> Result<(), yuuka_core::DbError> {
-    let trimmed = user_text.trim();
-
-    // 秘匿除外不変条件（§9.3）: (1) キーワード / (2) 値形状。いずれかで記憶しない。
-    if secret_guard_hit(user_text) || contains_secret_value(user_text) {
+    let content = match screen(user_text) {
+        Screen::Candidate(content) => content,
+        Screen::Skip(reason) => {
+            tracing::trace!(reason, "[Synapse] 候補にしない");
+            return Ok(());
+        }
+    };
+    let key = ScopeKey {
+        user_id: scope.user_id.clone(),
+        bot_id: scope.bot_id.clone(),
+        guild_id: scope.guild_id.clone(),
+    };
+    let hash = content_hash(&content);
+    if synapse_repo::has_content_hash(db, &key, &hash).await? {
+        tracing::trace!("[Synapse] 同じ内容が既にあるので候補にしない");
         return Ok(());
     }
-    // 短すぎ / コマンドっぽい入力はスキップ。
-    if trimmed.chars().count() < MIN_USER_TEXT_LEN || looks_like_command(trimmed) {
+    if synapse_repo::count_created_today(db, &key).await? >= DAILY_CANDIDATE_CAP {
+        tracing::debug!(
+            user = %scope.user_id,
+            bot = %scope.bot_id,
+            "[Synapse] 今日の候補が上限に達したので保存しない"
+        );
         return Ok(());
     }
-
-    // memorable 判定: 意味マーカーを含むか、十分に長い実質発話のみ。
-    let is_memorable = is_memorable_marker(trimmed) || trimmed.chars().count() >= MEMORABLE_MIN_LEN;
-    if !is_memorable {
-        return Ok(());
-    }
-
-    let content = cap_content(user_text);
-    if content.is_empty() {
-        return Ok(());
-    }
-    // content 側も両ガードを通す（念のため）。
-    if secret_guard_hit(&content) || contains_secret_value(&content) {
-        return Ok(());
-    }
-    let topic_id = derive_topic_id(trimmed);
+    let topic_id = derive_topic_id(&content);
 
     // 形成時の時刻文脈（再ランキング専用・現地時刻）。意味埋め込みには混ぜない。
-    let (ctx_tod, ctx_dow, now_epoch) = local_time_context();
+    let (ctx_tod, ctx_dow, _now_epoch) = local_time_context();
 
-    // 永続化（Rust が唯一の書き手＝単一 writer actor）。
-    let id = synapse_repo::insert_synapse(
+    // 永続化（Rust が唯一の書き手＝単一 writer actor）。候補は埋め込みを付けない。
+    synapse_repo::insert_synapse(
         db,
         InsertArgs {
-            user_id: scope.user_id.clone(),
-            bot_id: scope.bot_id.clone(),
-            guild_id: scope.guild_id.clone(),
-            content: content.clone(),
-            topic_id: topic_id.clone(),
+            user_id: scope.user_id,
+            bot_id: scope.bot_id,
+            guild_id: scope.guild_id,
+            content,
+            topic_id,
             source_msg_id,
             ctx_tod: Some(ctx_tod),
             ctx_dow: Some(ctx_dow),
+            status: STATUS_CANDIDATE,
+            content_hash: Some(hash),
         },
     )
     .await?;
-
-    // RAM 索引へ登録し、埋め込みバイト列を受け取って永続化する（in-process・エンジンは Mutex 越し）。
-    let indexed = {
-        let mut eng = engine.lock().await;
-        eng.index(
-            Scope {
-                user_id: scope.user_id,
-                bot_id: scope.bot_id,
-                guild_id: scope.guild_id,
-            },
-            id,
-            topic_id,
-            content,
-            FormationContext {
-                ctx_tod: Some(ctx_tod),
-                ctx_dow: Some(ctx_dow),
-                created_at: Some(now_epoch),
-            },
-        )
-    };
-    synapse_repo::update_synapse_embedding(db, id, indexed.embedding, indexed.model_version)
-        .await?;
     Ok(())
 }
 
@@ -441,11 +540,55 @@ mod tests {
     }
 
     #[test]
-    fn long_input_is_memorable_by_length() {
-        let long = "あ".repeat(MEMORABLE_MIN_LEN);
-        assert!(long.chars().count() >= MEMORABLE_MIN_LEN);
-        // マーカー無しでも長さ >= 80 で memorable（extract_inner の分岐と同条件）。
-        assert!(!is_memorable_marker(&long));
+    fn long_input_without_marker_is_no_longer_a_candidate() {
+        // 以前は 80 文字以上なら何でも記憶していた。長さだけでは候補にしない。
+        let long = "あ".repeat(120);
+        assert_eq!(screen(&long), Screen::Skip("not_memorable"));
+        // 一人称の断定文は短くても候補になる。
+        assert!(matches!(
+            screen("私は金曜日は在宅で仕事をしている"),
+            Screen::Candidate(_)
+        ));
+    }
+
+    #[test]
+    fn reply_prefix_is_stripped_before_screening() {
+        let text =
+            "[返信先メッセージ (あなた): \"好きな食べ物は何ですか？\"]\n今日は雨が降っていて寒いね";
+        // Bot の返答（「好き」を含む）は見ない。本文だけで判定して候補にしない。
+        assert_eq!(screen(text), Screen::Skip("not_memorable"));
+        let text = "[返信先メッセージ (あなた): \"元気？\"]\n私は毎朝コーヒーを飲む習慣がある";
+        assert_eq!(
+            screen(text),
+            Screen::Candidate("私は毎朝コーヒーを飲む習慣がある".to_owned())
+        );
+        // 剥がすと空になる返信先だけの入力は候補にしない。
+        assert_eq!(
+            screen("[返信先メッセージ (太郎): \"私の好きな曲\"]\n"),
+            Screen::Skip("short")
+        );
+    }
+
+    #[test]
+    fn pastes_and_quotes_are_skipped() {
+        assert!(looks_like_paste("> 引用\n> 引用\n本文"));
+        assert!(looks_like_paste("好きなコード\n```rust\nfn main() {}\n```"));
+        assert!(looks_like_paste(
+            "好きなサイト https://a.example/ と https://b.example/"
+        ));
+        let chorus = "田所浩二！田所浩二！王道を征く\n".repeat(3);
+        assert!(looks_like_paste(&chorus));
+        assert!(!looks_like_paste("私は毎朝コーヒーを飲む習慣がある"));
+        assert_eq!(screen(&format!("好き\n{chorus}")), Screen::Skip("paste"));
+    }
+
+    #[test]
+    fn content_hash_ignores_case_and_whitespace() {
+        assert_eq!(
+            content_hash("Curry  が好き\n"),
+            content_hash("curry が好き")
+        );
+        assert_ne!(content_hash("カレーが好き"), content_hash("うどんが好き"));
     }
 
     #[test]

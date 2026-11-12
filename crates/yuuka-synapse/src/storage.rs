@@ -48,7 +48,7 @@ pub fn load_index(
         .prepare(
             "SELECT id, user_id, bot_id, guild_id, content, topic_id, embedding, ctx_tod, ctx_dow, \
              CAST(strftime('%s', created_at, 'utc') AS INTEGER) AS created_epoch \
-             FROM synapses WHERE embedding IS NOT NULL",
+             FROM synapses WHERE embedding IS NOT NULL AND status = 'kept'",
         )
         .map_err(|e| format!("クエリ準備に失敗: {e}"))?;
 

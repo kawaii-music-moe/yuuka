@@ -115,9 +115,31 @@ pub async fn build_recall_section(
     query: &str,
     metrics: Option<&dyn MetricsSink>,
 ) -> String {
+    build_recall(db, engine, settings, scope, query, metrics)
+        .await
+        .section
+}
+
+/// 想起の結果。`section` は systemInstruction へ追記する文字列、`recalled` は想起した記憶の id と内容
+/// （返答確定後に「返答に使われたか」を判定して強めるのに使う・[`crate::synapse_maintain::record_usefulness`]）。
+#[derive(Debug, Default, Clone)]
+pub struct Recall {
+    pub section: String,
+    pub recalled: Vec<(i64, String)>,
+}
+
+/// [`build_recall_section`] の本体。想起した id と内容も返す。
+pub async fn build_recall(
+    db: &Db,
+    engine: &Arc<Mutex<SynapseEngine>>,
+    settings: &RecallSettings,
+    scope: &Scope,
+    query: &str,
+    metrics: Option<&dyn MetricsSink>,
+) -> Recall {
     let q = query.trim();
     if q.is_empty() {
-        return String::new();
+        return Recall::default();
     }
     let started = Instant::now();
 
@@ -149,7 +171,7 @@ pub async fn build_recall_section(
         );
     }
     if neighbors.is_empty() {
-        return String::new();
+        return Recall::default();
     }
 
     // 想起されたシナプスの鮮度を更新（id 群はスコープ済み assemble の結果）。失敗は無視。
@@ -163,11 +185,15 @@ pub async fn build_recall_section(
         .map(|n| format!("- {}", n.content))
         .collect::<Vec<_>>()
         .join("\n");
-    format!(
+    let section = format!(
         "\n# 関連する過去の記憶（連想想起／参考情報）\n\
          以下はあなたが過去の会話から記憶した、現在の発話に関連し得る事項です。\
          関連する場合のみ参考にし、無関係なら無視してください（古い情報の可能性があります）。\n{lines}"
-    )
+    );
+    Recall {
+        section,
+        recalled: neighbors.into_iter().map(|n| (n.id, n.content)).collect(),
+    }
 }
 
 /// 現地時刻の (時間帯 0-23, 曜日 0=日〜6=土, Unix エポック秒)。
@@ -333,6 +359,8 @@ mod tests {
                 source_msg_id: None,
                 ctx_tod: None,
                 ctx_dow: None,
+                status: synapse_repo::STATUS_KEPT,
+                content_hash: None,
             },
         )
         .await

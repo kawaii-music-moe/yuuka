@@ -43,12 +43,53 @@ const PWA_DIST_DIR: &str = "dist/public/pwa";
 
 #[tokio::main]
 async fn main() -> ExitCode {
+    // サブコマンド（サーバーを起動しないもの）。引数なしが従来どおりのサーバー起動。
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    match args.first().map(String::as_str) {
+        None => {}
+        Some("backup") => return run_backup(args.get(1..).unwrap_or(&[])),
+        Some("--version" | "-V" | "version") => {
+            println!("yuuka {}", env!("CARGO_PKG_VERSION"));
+            return ExitCode::SUCCESS;
+        }
+        Some(other) => {
+            eprintln!(
+                "不明な引数: {other}\nusage: yuuka [backup ... | --version]\n{}",
+                yuuka_supervisor::backup::USAGE
+            );
+            return ExitCode::FAILURE;
+        }
+    }
     init_telemetry();
     match run().await {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             // 起動失敗は fail-fast（非ゼロ終了）。設定/DB 不備で中途半端に動かさない（§5.6）。
             tracing::error!(error = %e, "起動に失敗しました");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// `yuuka backup`（issue #241）。DB のパスは `--db` か、サーバーと同じ config.yaml / 環境変数から取る。
+fn run_backup(args: &[String]) -> ExitCode {
+    let result = Config::load_and_validate(Path::new(CONFIG_PATH))
+        .map_err(|e| format!("config load failed: {e}"))
+        .and_then(|cfg| yuuka_supervisor::backup::parse_args(args, cfg.db_path))
+        .and_then(|opts| yuuka_supervisor::backup::run(&opts, chrono::Local::now()));
+    match result {
+        Ok(report) => {
+            println!(
+                "バックアップを保存しました: {}（整合性検査 ok）",
+                report.written.display()
+            );
+            for old in &report.removed {
+                println!("古い世代を消しました: {}", old.display());
+            }
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("バックアップに失敗しました: {e}");
             ExitCode::FAILURE
         }
     }
@@ -202,7 +243,7 @@ async fn run() -> Result<(), String> {
             tool_registry,
             Some(action_recorder),
             mcp_client.clone(),
-            Some(synapse_engine),
+            Some(synapse_engine.clone()),
         )
         // L2 想起の取得件数・recency ブースト（config `SYNAPSE_*`・R26）。
         .with_recall_settings(RecallSettings::from_config(&cfg))
@@ -549,6 +590,18 @@ async fn run() -> Result<(), String> {
         for svc in cron {
             supervisor = supervisor.service(svc);
         }
+        // 会話記憶の評価・減衰・忘却（memory_retention.md）。評価は秘書なら本人キー、ギルドなら Bot キー。
+        let memory_service = yuuka_supervisor::memory::SynapseMaintenanceService::new(
+            synapse_engine.clone(),
+            Arc::new(yuuka_supervisor::memory::GeminiMemoryLlm::new(
+                db.clone(),
+                crypto.clone(),
+            )),
+        );
+        supervisor = supervisor.service(Arc::new(yuuka_supervisor::CronSupervised::new(
+            Arc::new(memory_service),
+            service_ctx.clone(),
+        )));
     } else {
         tracing::info!(
             "Rust cron は無効（既定・Node が cron を所有）。有効化は YUUKA_RUST_CRON=1（Node cron 停止後）"
