@@ -209,8 +209,7 @@ impl Settings {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let text = serde_json::to_string_pretty(self)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        let text = serde_json::to_string_pretty(self).map_err(std::io::Error::other)?;
         std::fs::write(&path, text)
     }
 }
@@ -275,8 +274,10 @@ mod tests {
 
     #[test]
     fn resolve_bot_id_priority() {
-        let mut settings = Settings::default();
-        settings.last_bot_id = Some("saved".into());
+        let settings = Settings {
+            last_bot_id: Some("saved".into()),
+            ..Settings::default()
+        };
 
         // 1. --bot が最優先
         let args = CliArgs {

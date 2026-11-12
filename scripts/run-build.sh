@@ -19,7 +19,18 @@ if ! flock -n 9; then
   exit 2
 fi
 branch=$(git branch --show-current)
-if [[ "$branch" != develop ]]; then
+# Hosted CI checks the actual PR merge commit in detached HEAD. These
+# environment checks distinguish execution contexts, not a security sandbox.
+hosted_ci=false
+if [[ "${GITHUB_ACTIONS:-}" == true && "${RUNNER_ENVIRONMENT:-}" == github-hosted ]]; then
+  case "${GITHUB_EVENT_NAME:-}:${GITHUB_REF:-}" in
+    pull_request:refs/pull/*/merge|push:refs/heads/develop|push:refs/heads/main)
+      if [[ -n "${GITHUB_SHA:-}" && "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]; then
+        hosted_ci=true
+      fi ;;
+  esac
+fi
+if [[ "$branch" != develop && "$hosted_ci" != true ]]; then
   echo "yuuka ルール: 現在のブランチは ${branch:-detached HEAD} のため、検証をスキップしました。コンパイルは develop 限定です。" >&2
   exit 2
 fi
