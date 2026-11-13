@@ -125,7 +125,8 @@ mod tests {
                 )
                 .map_err(yuuka_db::map_sqlite)?;
                 tx.execute(
-                    "INSERT INTO bot_shares (bot_id, shared_user_id, status) VALUES (?1, 'userB', 'active')",
+                    "INSERT INTO bot_shares (bot_id, owner_id, shared_user_id, status) \
+                     VALUES (?1, 'userA', 'userB', 'active')",
                     [TEST_BOT_ID],
                 )
                 .map_err(yuuka_db::map_sqlite)?;
