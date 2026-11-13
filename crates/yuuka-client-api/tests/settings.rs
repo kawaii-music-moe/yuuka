@@ -253,7 +253,10 @@ async fn get_ignores_legacy_google_refresh_token_column() {
 
     let (status, body) = get(&app, USER_WITH_ROW).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["googleConnected"], false, "旧列は連携の判定材料にしない");
+    assert_eq!(
+        body["googleConnected"], false,
+        "旧列は連携の判定材料にしない"
+    );
     assert_eq!(body["googleAccount"], Value::Null);
 }
 
