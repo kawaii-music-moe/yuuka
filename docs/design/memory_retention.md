@@ -1,6 +1,6 @@
 # 会話記憶（シナプス）の評価と選別の計画（2026-11-11）
 
-- ステータス: **段階 1〜4 を実装済み**（§11）。段階 5（管理画面の一覧・削除）は未着手。
+- ステータス: **段階 1〜5 を実装済み**（§11）。段階 5（管理画面の一覧・削除・`forgetMemory`）は 2026-11-11 に追加。
 - 対象: `crates/yuuka-orchestrator/src/synapse_extract.rs`（抽出）・`synapse_recall.rs`（想起）・`synapse_repo.rs`、`crates/yuuka-synapse`（索引）、`synapses` テーブル（`crates/yuuka-db/migrations/V17__baseline.sql`）。
 - 上位の設計: [synapse_cognitive_architecture.md](synapse_cognitive_architecture.md)（§5.1 で「減衰/強化」を予定していたが、減衰と忘却は未実装）。
 
@@ -166,7 +166,8 @@ A を入れる前に、今の DB で上の「今」の値を取ってベース�
 | B 評価器 | `crates/yuuka-orchestrator/src/synapse_maintain.rs` の `evaluate_scope`（プロンプトは `eval_prompt`、応答の読み取りは `parse_verdicts`）。LLM は `MemoryLlm` ポート越し。実装は `crates/yuuka-supervisor/src/memory.rs` の `GeminiMemoryLlm`（秘書は本人キー・ギルドは Bot キー）。LLM が使えないスコープは 24 時間後に意味マーカーで振り分け |
 | C 忘却 | 同 `decay_and_prune`。定数は `DAILY_DECAY` 0.97・`LONG_DECAY` 0.985・`FORGET_THRESHOLD` 0.2・`FORGET_MIN_AGE_DAYS` 14・`CAP_SECRETARY` 500・`CAP_GUILD` 300。cron は `SynapseMaintenanceService`（毎時。候補 10 件以上か最古 12 時間超のスコープを評価、日付が変わったら減衰と忘却を 1 回） |
 | D 有用性 | `synapse_recall::build_recall` が想起 id を返し、返答確定後に `synapse_maintain::record_usefulness`（内容語の包含で判定）が `mark_useful`（`strength += 1.0`）。想起だけは `touch`（`+0.1`） |
+| E 利用者から見える | API は `crates/yuuka-orchestrator/src/memory_routes.rs`（`GET /api/memories?botId=` が本人 × Bot の kept を `strength` 降順で返し、候補は `pendingCount` の件数だけ。`DELETE /api/memories/{id}?botId=` は本人 × Bot の kept だけ消して RAM 索引からも `forget`。他人の行・候補は 200 `{success:false}`）。読み書きは `synapse_repo` の `list_kept` / `count_candidates` / `find_kept_by_content` / `delete_kept_owned`。LLM ツールは同 `memory_tools.rs` の `forgetMemory`（`id` か `query` の部分一致。複数当たれば消さずに候補を返す。`memory` 能力・秘書/汎用モード両経路）。管理画面は「あなたの設定 › 記憶」（`frontend/src/routes/config/MemoryCard.svelte`。Bot を選んで一覧・事実文・種類・持続性・最終利用・強度の目盛り・評価待ち件数・確認ダイアログ付き 1 件削除） |
 | スキーマ | `crates/yuuka-db/migrations/V37__memory_retention.sql`。RAM 索引は `status='kept'` だけ読む |
 | 指標 | `[Metrics]` に `synapse_kept` / `synapse_dropped` / `synapse_forgotten` |
 
-定数の設定化（`SYNAPSE_*` の環境変数）と、近い重複の併合（コサイン 0.92）は未実装。管理画面の一覧・削除（E）も未着手。
+定数の設定化（`SYNAPSE_*` の環境変数）と、近い重複の併合（コサイン 0.92）は未実装。§4-E の「これは覚えないで」のトグル（記憶の抽出そのものを止める設定）も未実装。
