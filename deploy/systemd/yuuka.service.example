@@ -17,10 +17,43 @@ WorkingDirectory=%h/yuuka
 Environment=TZ=Asia/Tokyo
 # ブラウザ操作に使う Chromium（既知のパスに無いときだけ指定する）。
 #Environment=CHROME_EXECUTABLE_PATH=/usr/bin/chromium
+# Chromium の同時起動数の上限（対話セッションと 1 回きりの起動の合計）。未設定なら上限なし。
+#Environment=YUUKA_BROWSER_MAX_PROCESSES=3
 ExecStart=%h/yuuka/deploy/prod/run-yuuka.sh
 Restart=on-failure
 RestartSec=5
 LimitNOFILE=65536
+
+# ─── 資源の上限（Chromium もこの枠に入る。ホストのメモリに合わせて変える） ───
+MemoryHigh=2G
+MemoryMax=3G
+TasksMax=512
+
+# ─── 隔離（Bot やブラウザ操作が破られてもホームの他の場所に届かないようにする） ───
+# ホームは空に見せ、チェックアウトは読み取りのみ、data/ だけ書き込める。
+ProtectHome=tmpfs
+BindReadOnlyPaths=%h/yuuka
+BindPaths=%h/yuuka/data
+# Nix で入れた Chromium（~/.nix-profile）や puppeteer の Chrome を使うとき用（無ければ無視される）。
+BindReadOnlyPaths=-%h/.nix-profile -%h/.local/state/nix -%h/.cache/puppeteer
+ProtectSystem=strict
+PrivateTmp=yes
+# Chromium の既定プロファイル（1 回きりの起動で使う）を、ホームではなく /tmp に置く。
+Environment=XDG_CONFIG_HOME=/tmp/xdg/config XDG_CACHE_HOME=/tmp/xdg/cache
+NoNewPrivileges=yes
+RestrictSUIDSGID=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictRealtime=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+# Chromium のサンドボックスは名前空間と JIT を使うので、RestrictNamespaces・
+# MemoryDenyWriteExecute は付けない。
 
 [Install]
 WantedBy=default.target

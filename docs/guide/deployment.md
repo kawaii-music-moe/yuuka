@@ -42,6 +42,9 @@ systemctl --user enable yuuka.service
   API キー等を読めなくなるので、別の場所にも控えておきます。
 - `config.yaml` — キーの一覧は [.env.example](../../.env.example)。
 - サーバーでの音声生成を使うなら `deploy/systemd/yuuka-tts.service.example` も置きます（[deploy/README.md](../../deploy/README.md#音声モデルpwa-の音声チャット)）。
+- ユニットの例はメモリの上限（`MemoryHigh` / `MemoryMax`、Chromium も含む）と隔離を設定しています。ホームは空に見え、
+  チェックアウトは読み取りのみで、書き込めるのは `data/` だけです（無いと起動しないので先に作ります）。メモリの上限は
+  ホストに合わせて変えてください。Chromium の同時起動数は `YUUKA_BROWSER_MAX_PROCESSES` で制限できます（未設定なら上限なし）。
 
 ### 初回のデプロイ
 

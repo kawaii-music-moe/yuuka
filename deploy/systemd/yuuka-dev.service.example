@@ -22,5 +22,29 @@ Restart=on-failure
 RestartSec=5
 LimitNOFILE=65536
 
+# ─── 資源の上限と隔離（内容は yuuka.service.example と同じ。説明もそちら） ───
+MemoryHigh=2G
+MemoryMax=3G
+TasksMax=512
+ProtectHome=tmpfs
+BindReadOnlyPaths=%h/yuuka/deploy/dev/runtime
+BindPaths=%h/yuuka/deploy/dev/runtime/data
+BindReadOnlyPaths=-%h/.nix-profile -%h/.local/state/nix -%h/.cache/puppeteer
+ProtectSystem=strict
+PrivateTmp=yes
+Environment=XDG_CONFIG_HOME=/tmp/xdg/config XDG_CACHE_HOME=/tmp/xdg/cache
+NoNewPrivileges=yes
+RestrictSUIDSGID=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictRealtime=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+
 [Install]
 WantedBy=default.target

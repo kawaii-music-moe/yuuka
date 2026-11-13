@@ -56,7 +56,9 @@ pub fn find_chrome() -> Result<PathBuf, String> {
 pub async fn dump_dom(url: &str) -> Result<String, String> {
     let chrome = find_chrome()?;
     let proxy_args = crate::proxy::chromium_proxy_args()?;
+    let _slot = crate::limit::acquire().await?;
     let output = tokio::process::Command::new(&chrome)
+        .kill_on_drop(true)
         .args(crate::proxy::sandbox_args())
         .args(&proxy_args)
         .args([
@@ -84,6 +86,7 @@ pub async fn dump_dom(url: &str) -> Result<String, String> {
 /// chrome 不在・起動失敗・画像未生成時。
 pub async fn screenshot(url: &str, out_path: &Path) -> Result<(), String> {
     let chrome = find_chrome()?;
+    let _slot = crate::limit::acquire().await?;
 
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -95,6 +98,7 @@ pub async fn screenshot(url: &str, out_path: &Path) -> Result<(), String> {
 
     let proxy_args = crate::proxy::chromium_proxy_args()?;
     let output = tokio::process::Command::new(&chrome)
+        .kill_on_drop(true)
         .args(crate::proxy::sandbox_args())
         .args(&proxy_args)
         .args([

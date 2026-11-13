@@ -9,6 +9,7 @@
 
 mod chromium;
 mod interactive;
+mod limit;
 mod markdown;
 mod proxy;
 mod search;

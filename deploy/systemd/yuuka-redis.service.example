@@ -12,5 +12,27 @@ ExecStart=/usr/bin/redis-server %h/yuuka/deploy/prod/redis.conf
 Restart=always
 RestartSec=3
 
+# ─── 資源の上限と隔離（何も書き込まない。読むのは redis.conf だけ） ───
+MemoryMax=512M
+ProtectHome=tmpfs
+BindReadOnlyPaths=%h/yuuka/deploy/prod/redis.conf
+BindReadOnlyPaths=-%h/.nix-profile -%h/.local/state/nix
+ProtectSystem=strict
+PrivateTmp=yes
+NoNewPrivileges=yes
+RestrictSUIDSGID=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
 [Install]
 WantedBy=default.target

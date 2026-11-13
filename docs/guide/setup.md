@@ -11,7 +11,7 @@
 - **Rust ツールチェイン** — バックエンド本体（`crates/`）のビルド・起動に使用します。`rust-toolchain.toml` でバージョンを固定しているため、[rustup](https://rustup.rs/) を入れておけば `cargo` 実行時に自動で該当バージョンが解決されます。
 - **Node.js 24 以上** / **pnpm 9** — 管理画面 SPA（`frontend/`）のビルド・開発用のみに使用します（バックエンドの実行には不要）。
 - **Redis**（推奨・任意） — ログインセッションの保存に使用します（会話履歴の正本は SQLite）。未接続・到達不能でも起動は継続し、セッションは Cookie のみへ縮退します。
-- **Chromium 実行環境**（任意） — ブラウザ自動操作ツール（`fetchDynamicPage` 等）用。`CHROME_EXECUTABLE_PATH` で明示するか、システムの `/usr/bin/chromium` 等が自動検出されます。未検出でもそれ以外の機能は動作します。
+- **Chromium 実行環境**（任意） — ブラウザ自動操作ツール（`fetchDynamicPage` 等）用。`CHROME_EXECUTABLE_PATH` で明示するか、システムの `/usr/bin/chromium` 等が自動検出されます。未検出でもそれ以外の機能は動作します。同時に起動する Chromium の数は `YUUKA_BROWSER_MAX_PROCESSES` で制限できます（未設定なら上限なし）。
 
 ---
 

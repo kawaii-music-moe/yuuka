@@ -41,6 +41,8 @@ struct Session {
     browser: Browser,
     page: Page,
     last_interaction: Instant,
+    /// 同時起動数の枠（セッションを閉じて落とすと空く）。
+    _slot: crate::limit::Slot,
 }
 
 /// 対話ブラウザの per-user セッション管理（プロセス内共有 `Arc<BrowserManager>`）。
@@ -346,6 +348,7 @@ impl SiteCredentialFiller for BrowserManager {
 /// 新規 chromium を起動してページを整える（viewport/UA/Accept-Language）。
 async fn launch_session(user: &str) -> Result<Session, String> {
     let chrome = find_chrome()?;
+    let slot = crate::limit::acquire().await?;
     let profile = std::path::Path::new("data")
         .join("browser_profiles")
         .join(user);
@@ -377,6 +380,7 @@ async fn launch_session(user: &str) -> Result<Session, String> {
         browser,
         page,
         last_interaction: Instant::now(),
+        _slot: slot,
     })
 }
 

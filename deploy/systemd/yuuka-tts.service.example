@@ -24,5 +24,26 @@ RestartSec=5
 # 生成中のピークは 5 GB 前後。超えたら止めて再起動する（ホストのメモリを守る）。
 MemoryMax=6G
 
+# ─── 隔離（読むのは clients/pwa とモデルだけ。tsx のキャッシュは /tmp に書く） ───
+ProtectHome=tmpfs
+BindReadOnlyPaths=%h/yuuka/clients/pwa %h/yuuka/data/tts-models
+BindReadOnlyPaths=-%h/.nix-profile -%h/.local/state/nix
+ProtectSystem=strict
+PrivateTmp=yes
+NoNewPrivileges=yes
+RestrictSUIDSGID=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+# Node は JIT を使うので MemoryDenyWriteExecute は付けない。
+
 [Install]
 WantedBy=default.target
