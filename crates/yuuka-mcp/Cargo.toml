@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
-description = "yuuka MCP サーバー管理 + ダッシュボードプロキシ API（/api/mcp-servers*, /proxy/mcp/:id/mcp）— Node mcpRoutes.ts パリティ"
+description = "yuuka MCP クライアント（公式 SDK rmcp）・OAuth 2.1 認可・MCP Apps ホスト API（/api/mcp-servers*）"
 
 [dependencies]
 yuuka-core.workspace = true
@@ -22,17 +22,16 @@ async-trait.workspace = true
 getrandom.workspace = true
 hex.workspace = true
 sha1 = "0.10"                       # 動的ツール名の衝突退避に使う決定的短ハッシュ（Node createHash("sha1") パリティ・lockfile 既存版）
-# 実 MCP HTTP クライアント（HttpMcpClient）: tools/list JSON-RPC + SSE + ダッシュボード取得 + プロキシ中継。
-reqwest.workspace = true            # 外部 MCP サーバーへの HTTP（json/stream/rustls・workspace 固定）
-# rmcp 3.9 は reqwest 0.13 を要求する（workspace は 0.12）。rmcp transport に差し込む SSRF ガード付き Client 専用で、
-# ダッシュボード/プロキシ用の素の HTTP は従来どおり workspace の reqwest 0.12 を使う。
+# MCP の通信（Streamable HTTP・OAuth 2.1 認可）はすべて公式 SDK rmcp に任せる。rmcp は reqwest 0.13 を
+# 要求する（workspace は 0.12）ため、このクレートだけ 0.13 を直接使う。workspace の 0.12 は使わない。
 # TLS は rustls-no-provider（aws-lc-rs を入れない）。workspace の reqwest 0.12・twilight が使う ring と
 # 両方有効になると rustls が既定の CryptoProvider を決められず、ClientConfig::builder() が panic するため。
-# provider は build_guarded_http で ring を明示的に入れる。
-reqwest13 = { package = "reqwest", version = "0.13.2", default-features = false, features = ["rustls-no-provider", "stream"] }
+# provider は guarded_http で ring を明示的に入れる。
+reqwest = { version = "0.13.2", default-features = false, features = ["rustls-no-provider", "stream"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
-rmcp = { workspace = true, features = ["transport-streamable-http-client-reqwest"] }
-url = "2"                           # endpoint_url の origin 抽出
+rmcp = { workspace = true, features = ["transport-streamable-http-client-reqwest", "auth"] }
+http = "1"                          # rmcp の OAuth HTTP シーム（OAuthHttpClient）の要求/応答型
+url = "2"                           # OAuth の redirect URI・origin 判定
 tokio.workspace = true              # async HTTP とテスト（workspace は features=full）
 tracing.workspace = true            # 復号失敗等の縮退ログ（Node console.error パリティ）
 

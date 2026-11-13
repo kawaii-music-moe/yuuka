@@ -51,6 +51,10 @@ pub struct Config {
     /// 音声生成サーバーは対応する公開鍵（`TTS_VERIFY_KEYS`）で確かめる。未設定なら署名を付けない
     /// （音声生成サーバーが同じホストの 127.0.0.1 で待ち受けるときだけ使える）。
     pub tts_signing_key: Option<SecretString>,
+    /// MCP Apps の画面を動かすサンドボックス用オリジン（`MCP_SANDBOX_ORIGIN`・例 `https://mcp-sandbox.example.com`）。
+    /// 本体と別のホスト名を同じ yuuka に向けておくと、MCP サーバーの画面を本体と別の実オリジンで動かす
+    /// （MCP Apps 仕様どおり）。未設定なら不透明オリジン（`sandbox` の `allow-same-origin` なし）で動かす。
+    pub mcp_sandbox_origin: Option<String>,
     /// プライバシーポリシー URL（`PRIVACY_POLICY_URL`・`/api/me` で返す）。
     pub privacy_policy_url: String,
     /// 利用規約 URL（`TERMS_URL`・同上）。
@@ -137,6 +141,8 @@ impl Config {
             google_site_verification: non_empty(get("GOOGLE_SITE_VERIFICATION")),
             tts_server_url: non_empty(get("TTS_SERVER_URL")),
             tts_signing_key: non_empty(get("TTS_SIGNING_KEY")).map(SecretString::from),
+            mcp_sandbox_origin: non_empty(get("MCP_SANDBOX_ORIGIN"))
+                .map(|s| s.trim().trim_end_matches('/').to_owned()),
             privacy_policy_url: get("PRIVACY_POLICY_URL").unwrap_or_default(),
             terms_url: get("TERMS_URL").unwrap_or_default(),
             encryption_secret: non_empty(get("YUUKA_ENCRYPTION_SECRET")).map(SecretString::from),
@@ -233,6 +239,9 @@ impl Config {
                 });
             }
         }
+        if let Some(origin) = &self.mcp_sandbox_origin {
+            validate_sandbox_origin(origin, self.base_url.as_deref())?;
+        }
         Ok(())
     }
 
@@ -243,6 +252,52 @@ impl Config {
             .as_deref()
             .is_some_and(|u| u.to_ascii_lowercase().starts_with("https://"))
     }
+}
+
+/// `MCP_SANDBOX_ORIGIN` を検証する。`https://host[:port]`（開発用に `http://localhost` 系も可）で、
+/// パス・認証情報を含まず、本体（`BASE_URL`）と同じオリジンでないこと。
+fn validate_sandbox_origin(origin: &str, base_url: Option<&str>) -> Result<(), ConfigError> {
+    let invalid = |reason: &str| ConfigError::InvalidValue {
+        field: "MCP_SANDBOX_ORIGIN",
+        reason: reason.to_owned(),
+    };
+    let lower = origin.to_ascii_lowercase();
+    let rest = if let Some(r) = lower.strip_prefix("https://") {
+        r
+    } else if let Some(r) = lower.strip_prefix("http://") {
+        let host = r.split(':').next().unwrap_or_default();
+        if !matches!(host, "localhost" | "127.0.0.1" | "[::1]") {
+            return Err(invalid(
+                "must use https:// (http:// is allowed only for localhost)",
+            ));
+        }
+        r
+    } else {
+        return Err(invalid("must start with https://"));
+    };
+    if rest.is_empty()
+        || rest.contains(['/', '?', '#', '@'])
+        || rest.chars().any(char::is_whitespace)
+    {
+        return Err(invalid(
+            "must be an origin like https://mcp-sandbox.example.com (no path or credentials)",
+        ));
+    }
+    if let Some(base) = base_url {
+        let base = base.to_ascii_lowercase();
+        let base_origin = base
+            .find("://")
+            .map(|i| {
+                let after = &base[i + 3..];
+                let end = after.find(['/', '?', '#']).unwrap_or(after.len());
+                &base[..i + 3 + end]
+            })
+            .unwrap_or(base.as_str());
+        if base_origin == lower {
+            return Err(invalid("must differ from the BASE_URL origin"));
+        }
+    }
+    Ok(())
 }
 
 /// 標準のログイン先（sk-account）。`OIDC_ISSUER` 未設定のときに使う。
@@ -481,6 +536,32 @@ mod tests {
         assert_eq!(cfg.host.to_string(), "127.0.0.1");
         assert_eq!(cfg.session_ttl_days, 7);
         assert_eq!(cfg.redis_url, "redis://127.0.0.1:6379");
+    }
+
+    #[test]
+    fn mcp_sandbox_origin_must_be_a_separate_origin() {
+        let ok = write_yaml(
+            "BASE_URL: \"https://yuuka.example\"\nMCP_SANDBOX_ORIGIN: \"https://mcp-sandbox.example/\"\n",
+        );
+        assert_eq!(
+            Config::load_and_validate(ok.path())
+                .expect("load")
+                .mcp_sandbox_origin
+                .as_deref(),
+            Some("https://mcp-sandbox.example")
+        );
+        let local = write_yaml("MCP_SANDBOX_ORIGIN: \"http://localhost:3001\"\n");
+        assert!(Config::load_and_validate(local.path()).is_ok());
+        for bad in [
+            "BASE_URL: \"https://yuuka.example/app\"\nMCP_SANDBOX_ORIGIN: \"https://yuuka.example\"\n",
+            "MCP_SANDBOX_ORIGIN: \"http://mcp-sandbox.example\"\n",
+            "MCP_SANDBOX_ORIGIN: \"https://mcp-sandbox.example/path\"\n",
+            "MCP_SANDBOX_ORIGIN: \"https://user@mcp-sandbox.example\"\n",
+            "MCP_SANDBOX_ORIGIN: \"mcp-sandbox.example\"\n",
+        ] {
+            let f = write_yaml(bad);
+            assert!(Config::load_and_validate(f.path()).is_err(), "{bad}");
+        }
     }
 
     #[test]

@@ -35,6 +35,8 @@ pub struct WebConfig {
     pub tts_server_url: Option<String>,
     /// 音声生成サーバーへの要求に付ける署名の秘密鍵（`config.tts_signing_key`・検証済み）。`None` は署名しない。
     pub tts_signing_key: Option<yuuka_core::secrets::SecretString>,
+    /// MCP Apps のサンドボックス用オリジン（`config.mcp_sandbox_origin`・検証済み）。`None` は不透明オリジンで動かす。
+    pub mcp_sandbox_origin: Option<String>,
 }
 
 impl WebConfig {
@@ -54,6 +56,7 @@ impl WebConfig {
             google_site_verification: cfg.google_site_verification.clone(),
             tts_server_url: cfg.tts_server_url.clone(),
             tts_signing_key: cfg.tts_signing_key.clone(),
+            mcp_sandbox_origin: cfg.mcp_sandbox_origin.clone(),
         }
     }
 }

@@ -279,22 +279,72 @@ export interface McpToolDef {
 	description?: string;
 	inputSchema?: unknown;
 }
-/** GET /api/mcp-servers の toSafeView 出力（mcpRoutes.ts）。 */
+/** MCP サーバーが公開するツール（GET /api/mcp-servers の tools 要素）。 */
+export interface McpToolView {
+	name: string;
+	description: string;
+	/** MCP Apps の画面（`ui://...`）。画面が無いツールは null。 */
+	ui_resource_uri: string | null;
+	/** AI（Function Calling）に見せるか（`_meta.ui.visibility` に "model"）。 */
+	visible_to_model: boolean;
+	/** 画面の中から呼べるか（`_meta.ui.visibility` に "app"）。 */
+	callable_from_app: boolean;
+}
+/** MCP サーバーの認証の状態。 */
+export interface McpAuthView {
+	/** 固定トークン（bearer）・OAuth（oauth）・なし（none）。 */
+	mode: "bearer" | "oauth" | "none";
+	oauth_connected: boolean;
+	/** 直近の接続でサーバーが認可（401/403）を求めた。 */
+	authorization_required: boolean;
+}
+/** GET /api/mcp-servers の 1 件（crates/yuuka-mcp/src/routes.rs）。 */
 export interface McpServerView {
 	id: number;
 	scope: "system" | "user";
 	name: string;
 	endpoint_url: string;
 	has_auth: boolean;
-	tools: { name: string; description: string }[];
+	tools: McpToolView[];
 	tools_cache_updated: string | null;
 	requires_confirmation: boolean;
 	enabled: boolean;
 	created_at: string;
 	/** 許可済み Bot（一覧ハンドラで付与） */
 	granted_bot_ids?: string[];
+	/** 操作できるか（自分の登録、またはシステム登録かつ Admin）。 */
+	can_manage: boolean;
+	auth: McpAuthView;
 }
-export type McpServersResponse = ApiResponse<{ servers: McpServerView[] }>;
+/** MCP Apps の画面を動かすサンドボックスプロキシ。 */
+export interface McpAppsSandbox {
+	/** iframe の src。 */
+	url: string;
+	/** 別オリジン（MCP_SANDBOX_ORIGIN）のときそのオリジン。未設定なら null（不透明オリジン）。 */
+	origin: string | null;
+	isolated: boolean;
+}
+export type McpServersResponse = ApiResponse<{
+	servers: McpServerView[];
+	apps: { sandbox: McpAppsSandbox };
+}>;
+/** POST /api/mcp-servers/:id/apps/resource（tool 指定）の応答。 */
+export type McpAppResourceResponse = ApiResponse<{
+	html: string;
+	/** UI リソースの `_meta.ui`（csp・permissions・prefersBorder など）。 */
+	ui: Record<string, unknown>;
+	tool: {
+		name: string;
+		description: string | null;
+		inputSchema: Record<string, unknown> | null;
+		_meta: { ui: Record<string, unknown> | null };
+	};
+	sandbox: McpAppsSandbox;
+}>;
+/** POST /api/mcp-servers/:id/apps/call・apps/resource（uri 指定）の応答（MCP の結果をそのまま）。 */
+export type McpAppResultResponse = ApiResponse<{
+	result: Record<string, unknown>;
+}>;
 
 // ─── credentials（credentialRepo） ───────────────────────────────────────────
 

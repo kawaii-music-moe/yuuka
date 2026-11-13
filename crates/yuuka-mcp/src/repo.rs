@@ -146,10 +146,15 @@ pub fn parse_tools_cache_full(server: &McpServerRecord) -> Vec<crate::McpTool> {
                 .filter(|s| !s.is_empty())
                 .map(str::to_owned);
             let input_schema = obj.get("inputSchema").filter(|s| s.is_object()).cloned();
+            let ui = obj
+                .get("_meta")
+                .and_then(Value::as_object)
+                .and_then(crate::ui_meta_from_meta);
             Some(crate::McpTool {
                 name: name.to_owned(),
                 description,
                 input_schema,
+                ui,
             })
         })
         .collect()
@@ -456,6 +461,111 @@ pub async fn delete_server(
         .await
 }
 
+// ─── OAuth 資格情報（mcp_oauth_credentials・V38） ───────────────────────────────
+
+/// 暗号化済みの OAuth 資格情報（`[暗号文, IV, authTag]`）。中身は rmcp の `StoredCredentials` の JSON。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EncryptedOAuthCredentials {
+    /// 暗号文。
+    pub encrypted: String,
+    /// IV。
+    pub iv: String,
+    /// authTag。
+    pub tag: String,
+}
+
+/// OAuth 資格情報を読む。未保存は `None`。
+///
+/// # Errors
+/// 読み取り失敗時 [`DbError`]。
+pub async fn load_oauth_credentials(
+    db: &Db,
+    server_id: i64,
+) -> Result<Option<EncryptedOAuthCredentials>, DbError> {
+    db.read
+        .read(move |conn| {
+            conn.query_row(
+                "SELECT credentials_encrypted, credentials_iv, credentials_tag \
+                 FROM mcp_oauth_credentials WHERE server_id = ?1",
+                params![server_id],
+                |r| {
+                    Ok(EncryptedOAuthCredentials {
+                        encrypted: r.get(0)?,
+                        iv: r.get(1)?,
+                        tag: r.get(2)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(map_sqlite)
+        })
+        .await
+}
+
+/// OAuth 資格情報を保存する（あれば置き換える）。サーバーが削除済みなら何もしない。
+///
+/// # Errors
+/// 書き込み失敗時 [`DbError`]。
+pub async fn save_oauth_credentials(
+    db: &Db,
+    server_id: i64,
+    creds: EncryptedOAuthCredentials,
+) -> Result<(), DbError> {
+    db.writer
+        .transaction(move |tx| {
+            // 認可の途中でサーバーが削除された場合に外部キー違反で失敗させず、保存しないだけにする。
+            tx.execute(
+                "INSERT INTO mcp_oauth_credentials \
+                 (server_id, credentials_encrypted, credentials_iv, credentials_tag) \
+                 SELECT ?1, ?2, ?3, ?4 WHERE EXISTS (SELECT 1 FROM mcp_servers WHERE id = ?1) \
+                 ON CONFLICT(server_id) DO UPDATE SET \
+                   credentials_encrypted = excluded.credentials_encrypted, \
+                   credentials_iv = excluded.credentials_iv, \
+                   credentials_tag = excluded.credentials_tag, \
+                   updated_at = datetime('now', 'localtime')",
+                params![server_id, creds.encrypted, creds.iv, creds.tag],
+            )
+            .map_err(map_sqlite)?;
+            Ok(())
+        })
+        .await
+}
+
+/// OAuth 資格情報を消す（認可の解除・資格情報の失効時）。
+///
+/// # Errors
+/// 書き込み失敗時 [`DbError`]。
+pub async fn delete_oauth_credentials(db: &Db, server_id: i64) -> Result<(), DbError> {
+    db.writer
+        .transaction(move |tx| {
+            tx.execute(
+                "DELETE FROM mcp_oauth_credentials WHERE server_id = ?1",
+                params![server_id],
+            )
+            .map_err(map_sqlite)?;
+            Ok(())
+        })
+        .await
+}
+
+/// OAuth 資格情報を持っているサーバー ID の一覧（一覧画面の表示用）。
+///
+/// # Errors
+/// 読み取り失敗時 [`DbError`]。
+pub async fn list_oauth_server_ids(db: &Db) -> Result<Vec<i64>, DbError> {
+    db.read
+        .read(move |conn| {
+            let mut stmt = conn
+                .prepare("SELECT server_id FROM mcp_oauth_credentials")
+                .map_err(map_sqlite)?;
+            let rows = stmt
+                .query_map([], |r| r.get::<_, i64>(0))
+                .map_err(map_sqlite)?;
+            rows.collect::<Result<Vec<_>, _>>().map_err(map_sqlite)
+        })
+        .await
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
@@ -516,6 +626,56 @@ mod tests {
         let fetched = get_server_by_id(&db, rec.id).await.unwrap().unwrap();
         assert_eq!(fetched.endpoint_url, "https://mcp.example/mcp");
         assert!(get_server_by_id(&db, 9999).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn oauth_credentials_save_replace_and_cascade() {
+        let (db, path) = fresh_db();
+        seed_user(&path, "alice", "user");
+        let rec = add_server(
+            &db,
+            Some("alice".to_owned()),
+            "a",
+            "https://x/mcp",
+            None,
+            true,
+        )
+        .await
+        .unwrap();
+        let creds = |s: &str| EncryptedOAuthCredentials {
+            encrypted: format!("enc-{s}"),
+            iv: "iv".to_owned(),
+            tag: "tag".to_owned(),
+        };
+        assert_eq!(load_oauth_credentials(&db, rec.id).await.unwrap(), None);
+        save_oauth_credentials(&db, rec.id, creds("1"))
+            .await
+            .unwrap();
+        save_oauth_credentials(&db, rec.id, creds("2"))
+            .await
+            .unwrap();
+        assert_eq!(
+            load_oauth_credentials(&db, rec.id).await.unwrap(),
+            Some(creds("2"))
+        );
+        assert_eq!(list_oauth_server_ids(&db).await.unwrap(), vec![rec.id]);
+
+        // 存在しないサーバーには保存しない（外部キー違反で失敗もしない）。
+        save_oauth_credentials(&db, 9999, creds("x")).await.unwrap();
+        assert_eq!(load_oauth_credentials(&db, 9999).await.unwrap(), None);
+
+        // サーバー削除で資格情報も消える。
+        assert!(delete_server(&db, rec.id, "alice", false).await.unwrap());
+        assert_eq!(load_oauth_credentials(&db, rec.id).await.unwrap(), None);
+
+        let rec2 = add_server(&db, None, "s", "https://y/mcp", None, true)
+            .await
+            .unwrap();
+        save_oauth_credentials(&db, rec2.id, creds("3"))
+            .await
+            .unwrap();
+        delete_oauth_credentials(&db, rec2.id).await.unwrap();
+        assert_eq!(load_oauth_credentials(&db, rec2.id).await.unwrap(), None);
     }
 
     #[tokio::test]

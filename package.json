@@ -33,7 +33,11 @@
 		"test:dev": "node --test scripts/dev.test.mjs"
 	},
 	"dependencies": {
-		"chart.js": "^4.5.1"
+		"@modelcontextprotocol/client": "2.4.0",
+		"@modelcontextprotocol/core": "2.4.0",
+		"@modelcontextprotocol/ext-apps": "2.0.4",
+		"chart.js": "^4.5.1",
+		"zod": "4.6.7"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^2.5.0",
