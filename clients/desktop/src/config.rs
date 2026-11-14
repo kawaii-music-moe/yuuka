@@ -13,7 +13,8 @@ use serde::{Deserialize, Serialize};
 
 /// ビルド時に焼き込まれる公開 API ベース URL。
 ///
-/// 本番: `YUUKA_API_BASE=https://yuuka.kawaii-music.moe cargo build --release`
+/// 本番: 自分の Yuuka の公開 URL を渡して焼き込む
+/// （例 `YUUKA_API_BASE=https://yuuka.example.com cargo build --release`）。
 /// 開発（未設定時）: ローカル backend（コンテナ PORT 7854）。
 pub const API_BASE: &str = match option_env!("YUUKA_API_BASE") {
     Some(v) => v,

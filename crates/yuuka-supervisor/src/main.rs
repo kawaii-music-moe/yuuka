@@ -254,6 +254,8 @@ async fn run() -> Result<(), String> {
             db.clone(),
         )))
         .with_metrics(metrics.clone())
+        // システム Bot の案内に出すログイン先の名前（config `OIDC_LABEL`）。運用者ごとに違う。
+        .with_login_label(cfg.oidc.label.clone())
         .with_rate_limiter(rate_limiter.clone()),
     );
 
