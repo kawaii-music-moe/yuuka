@@ -193,8 +193,71 @@ async fn get_returns_persisted_state_without_generation_fields() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["model"], "gemini-2.5-pro");
     assert_eq!(body["googleConnected"], false);
+    assert_eq!(body["googleAccount"], Value::Null);
     assert_eq!(body["persona"], "");
     assert_no_generation_fields(&body);
+}
+
+/// issue #272: 現在の OAuth フロー（`yuuka_google::repo::add_or_update_account`）が書く先と同じ
+/// `user_google_accounts` に連携行を作る。旧列 `users.google_refresh_token_encrypted` は触らない。
+fn seed_google_account(path: &std::path::Path, discord_id: &str, email: Option<&str>) {
+    let conn = rusqlite::Connection::open(path).expect("open seed");
+    conn.execute(
+        "INSERT INTO user_google_accounts \
+           (user_id, email, refresh_token_encrypted, refresh_token_iv, refresh_token_tag, \
+            is_primary) \
+         VALUES (?1, ?2, 'enc', 'iv', 'tag', 1)",
+        rusqlite::params![discord_id, email],
+    )
+    .expect("seed google account");
+}
+
+#[tokio::test]
+async fn get_reports_google_connected_with_account_email() {
+    let (db, path) = fresh_db();
+    seed_user(&path, USER_WITH_ROW, Some("gemini-2.5-pro"));
+    seed_google_account(&path, USER_WITH_ROW, Some("linked@example.com"));
+    let app = app(db);
+
+    let (status, body) = get(&app, USER_WITH_ROW).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["googleConnected"], true);
+    assert_eq!(body["googleAccount"], "linked@example.com");
+}
+
+#[tokio::test]
+async fn get_reports_google_connected_without_email() {
+    let (db, path) = fresh_db();
+    seed_user(&path, USER_WITH_ROW, Some("gemini-2.5-pro"));
+    seed_google_account(&path, USER_WITH_ROW, None);
+    let app = app(db);
+
+    let (status, body) = get(&app, USER_WITH_ROW).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["googleConnected"], true);
+    assert_eq!(body["googleAccount"], Value::Null);
+}
+
+#[tokio::test]
+async fn get_ignores_legacy_google_refresh_token_column() {
+    let (db, path) = fresh_db();
+    seed_user(&path, USER_WITH_ROW, Some("gemini-2.5-pro"));
+    let conn = rusqlite::Connection::open(&path).expect("open seed");
+    conn.execute(
+        "UPDATE users SET google_refresh_token_encrypted = 'enc' WHERE discord_id = ?1",
+        rusqlite::params![USER_WITH_ROW],
+    )
+    .expect("seed legacy column");
+    drop(conn);
+    let app = app(db);
+
+    let (status, body) = get(&app, USER_WITH_ROW).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body["googleConnected"], false,
+        "旧列は連携の判定材料にしない"
+    );
+    assert_eq!(body["googleAccount"], Value::Null);
 }
 
 #[tokio::test]

@@ -372,14 +372,17 @@ async fn settings_view(
         .and_then(|c| c.model.clone())
         .filter(|m| !m.is_empty())
         .unwrap_or_else(|| yuuka_gemini::LlmSettings::default().model);
-    let google_connected = current.map(|c| c.google_connected).unwrap_or(false);
+    let (google_connected, google_account) = current
+        .map(|c| (c.google_connected, c.google_account))
+        .unwrap_or((false, None));
     let persona = active_persona_prompt(db, scope).await?;
     Ok(SettingsView {
         google_connected,
-        // issue #47: Node はここに生の calendarId を返していた。人間可読な代替（連携先の表示名）が
-        // 無いため、内部 ID を漏らすくらいなら省略する（クライアントは未設定時の案内文にフォール
-        // バックする・`clients/pwa/src/pages/SettingsPage.vue`）。
-        google_account: None,
+        // issue #47: Node はここに生の calendarId を返していた。内部 ID は漏らさないまま、人間可読な
+        // 連携先の表示名として `user_google_accounts.email` を返す（issue #272）。email が NULL の
+        // 行では `None` のままにする（クライアントは未設定時の案内文にフォールバックする・
+        // `clients/pwa/src/pages/SettingsPage.vue`）。
+        google_account,
         model,
         persona,
     })
