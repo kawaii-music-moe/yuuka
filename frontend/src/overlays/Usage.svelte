@@ -1,9 +1,24 @@
 <script lang="ts">
-// 利用ガイド（旧 index.html #usage-overlay）。公開ルート・API 不要。
+// 利用ガイド（旧 index.html #usage-overlay）。公開ルート。
 // App.svelte が /usage で本コンポーネントを描画する（.active は常時付与）。
+// ログイン先の名前だけは運用者ごとに違うので、Login.svelte と同じ公開 API（設定の `OIDC_LABEL`）から取る。
 
+import { onMount } from "svelte";
+import { authApi } from "$lib/api/services";
 import { Icon } from "$lib/components/ui";
 import { goto } from "$lib/router";
+
+const FALLBACK_LABEL = "OIDC プロバイダー";
+let loginLabel = $state(FALLBACK_LABEL);
+
+onMount(async () => {
+	try {
+		const res = await authApi.provider();
+		if (res.label) loginLabel = res.label;
+	} catch {
+		// 取得できなくてもガイドは読める（中立な表記のまま）。
+	}
+});
 </script>
 
 <div class="overlay active">
@@ -47,7 +62,8 @@ import { goto } from "$lib/router";
 					</li>
 					<li>
 						<strong>一般ユーザー登録：</strong>
-						「sk-9 Accountでログイン」から sk-account でログインすると、初回ログイン時に Yuuka の利用者として登録されます。
+						ログイン画面の「{loginLabel}でログイン」から {loginLabel} でログインすると、初回ログイン時に Yuuka
+						の利用者として登録されます。
 					</li>
 				</ul>
 			</div>
