@@ -23,6 +23,9 @@ yanked = "deny"
 # ignore する（advisories クリーン必須方針の唯一の例外・ユーザー承認済み）。
 ignore = [
     "RUSTSEC-2026-0192", # ttf-parser unmaintained（ab_glyph 経由・sendChart のラベル描画）
+    # 逸脱#4（2026-11-26・ユーザー承認）: chrono は全バージョン unmaintained 指定。脆弱性ではなく、
+    # 12 クレートで使用中のため jiff/time への移行は別対応とし、それまで ignore する。
+    "RUSTSEC-2026-0543", # chrono unmaintained
 ]
 
 [licenses]
