@@ -11,7 +11,7 @@ use std::future::Future;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use chrono::Local;
+use jiff::ZonedDateTime;
 
 use crate::context::ServiceContext;
 use yuuka_core::cron_util;
@@ -47,14 +47,16 @@ impl Schedule {
     ///
     /// cron 整列は次回ローカル発火時刻まで、`FixedSecs` は固定間隔。式が壊れている等で解けない
     /// 場合は 60 秒後に再評価する（サービス定義の式は健全な前提だが安全側で沈黙しない）。
-    fn delay_from(&self, now: chrono::DateTime<Local>) -> Duration {
+    fn delay_from(&self, now: &ZonedDateTime) -> Duration {
         match self {
             Schedule::FixedSecs(secs) => Duration::from_secs(*secs),
             _ => match self
                 .cron_expr()
                 .and_then(|e| cron_util::next_after(&e, now))
             {
-                Some(next) => (next - now).to_std().unwrap_or(Duration::from_secs(1)),
+                Some(next) => {
+                    Duration::try_from(next.duration_since(now)).unwrap_or(Duration::from_secs(1))
+                }
                 None => Duration::from_secs(60),
             },
         }
@@ -98,7 +100,7 @@ where
 
     let schedule = svc.schedule();
     loop {
-        let delay = schedule.delay_from(Local::now());
+        let delay = schedule.delay_from(&ZonedDateTime::now());
         tokio::select! {
             () = &mut cancel => break,
             () = tokio::time::sleep(delay) => svc.tick(ctx).await,
@@ -112,24 +114,24 @@ mod tests {
 
     #[test]
     fn daily_delay_is_within_a_day() {
-        let now = Local::now();
-        let d = Schedule::DailyAt { hour: 8, minute: 0 }.delay_from(now);
+        let now = ZonedDateTime::now();
+        let d = Schedule::DailyAt { hour: 8, minute: 0 }.delay_from(&now);
         assert!(d <= Duration::from_secs(24 * 60 * 60 + 1));
     }
 
     #[test]
     fn fixed_secs_delay_is_exact() {
-        let now = Local::now();
+        let now = ZonedDateTime::now();
         assert_eq!(
-            Schedule::FixedSecs(300).delay_from(now),
+            Schedule::FixedSecs(300).delay_from(&now),
             Duration::from_secs(300)
         );
     }
 
     #[test]
     fn every_minute_delay_is_under_a_minute() {
-        let now = Local::now();
-        assert!(Schedule::EveryMinute.delay_from(now) <= Duration::from_secs(60));
+        let now = ZonedDateTime::now();
+        assert!(Schedule::EveryMinute.delay_from(&now) <= Duration::from_secs(60));
     }
 
     use std::sync::atomic::{AtomicUsize, Ordering};

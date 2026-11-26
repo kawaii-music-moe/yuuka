@@ -8,7 +8,6 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use chrono::Local;
 use serde_json::{json, Map, Value};
 use yuuka_core::aux_text::{AuxTextGenerator, NullAuxTextGenerator};
 use yuuka_core::tool::FunctionDeclaration;
@@ -393,10 +392,14 @@ impl Tool for RunPeriodicReportNowTool {
                  deliver=true で DM へ送ってください。"
             )));
         }
-        let embed =
-            compose::build_report_embed(&self.db, self.aux_text.as_ref(), &report, Local::now())
-                .await
-                .map_err(exec_err)?;
+        let embed = compose::build_report_embed(
+            &self.db,
+            self.aux_text.as_ref(),
+            &report,
+            jiff::ZonedDateTime::now(),
+        )
+        .await
+        .map_err(exec_err)?;
         Ok(ToolOutcome {
             payload: json!({ "success": true, "message": format!("定期報告「{name}」を生成しました📋") }),
             parts: vec![ResponsePart::Embed(embed)],

@@ -3,7 +3,7 @@
 //! 構成: タイトル「📋 名前 期間」→ 説明に活動データのまとめ（補助生成・使えなければ生データ）→
 //! 件数のインラインフィールド → 天気 → ニュース。フッタにデータの出どころを並べる。
 
-use chrono::{DateTime, Local};
+use jiff::ZonedDateTime;
 use yuuka_core::aux_text::AuxTextGenerator;
 use yuuka_core::{DbError, EmbedFieldPart, EmbedPart};
 use yuuka_web::Db;
@@ -29,7 +29,7 @@ pub async fn build_report_embed(
     db: &Db,
     aux_text: &dyn AuxTextGenerator,
     report: &PeriodicReport,
-    now: DateTime<Local>,
+    now: ZonedDateTime,
 ) -> Result<EmbedPart, DbError> {
     let settings = &report.settings;
     let window = ReportWindow::for_schedule(&settings.schedule_cron, now);

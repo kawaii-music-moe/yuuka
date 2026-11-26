@@ -3,8 +3,8 @@
 //! 並行性ハザードの構造的排除（R-1/R-2・§11.4）:
 //! - 書き込みは [`WriterHandle`]（1 タスク・1 コネクションに直列化）へ一本化し、
 //!   プロセス内の並行 writer 競合（即-BUSY）を型で排除する。
-//! - 読み取りは [`ReadPool`]（deadpool-sqlite、複数リーダー並行）。同期呼び出しは
-//!   deadpool の `interact`（内部 `spawn_blocking`）でブロッキングプールへ逃がす。
+//! - 読み取りは [`ReadPool`]（内製プール・複数リーダー並行）。同期呼び出しは
+//!   `spawn_blocking` でブロッキングプールへ逃がす。
 //! - PRAGMA（WAL / foreign_keys / busy_timeout=5000 / synchronous=NORMAL）は
 //!   [`pool::open_conn`] で明示。全書込 Tx は BEGIN IMMEDIATE（[`WriterHandle::transaction`]）。
 //! - DDL 所有権は Rust 側に移行済み。`refinery` による前方専用マイグレーションを

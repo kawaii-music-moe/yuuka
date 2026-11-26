@@ -64,10 +64,11 @@ async fn read_meta(dir: &Path) -> DesktopMeta {
                 .map(|s| s.trim().to_owned())
                 .filter(|s| !s.is_empty())
                 .unwrap_or_else(|| "unknown".to_owned());
-            let built_at = stat.modified().ok().map(|t| {
-                chrono::DateTime::<chrono::Utc>::from(t)
-                    .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
-            });
+            let built_at = stat
+                .modified()
+                .ok()
+                .and_then(|t| jiff::Timestamp::try_from(t).ok())
+                .map(yuuka_core::time::iso_millis);
             DesktopMeta {
                 available: true,
                 size: stat.len(),

@@ -10,16 +10,16 @@
 //! 日時（時刻つき）の入出力変換は `yuuka_core::datetime`（`browser_local_to_db` / `db_to_utc_iso`）に
 //! 共通化した（D05）。ここには PWA の日付・月キーと範囲境界だけを置く。
 
-use chrono::NaiveDate;
+use jiff::civil::Date;
 
 /// サーバーのローカル暦（本番は JST 固定）で `YYYY-MM-DD` を厳密パースする。
 ///
 /// 存在しない日付（例: `2026-02-30`）・書式違反は `None`（呼び出し側で 400 に倒す）。
-pub fn parse_local_date(s: &str) -> Option<NaiveDate> {
-    NaiveDate::parse_from_str(s.trim(), "%Y-%m-%d").ok()
+pub fn parse_local_date(s: &str) -> Option<Date> {
+    Date::strptime("%Y-%m-%d", s.trim()).ok()
 }
 
-/// `YYYY-MM` を厳密パースする（`1` 日を補って [`NaiveDate`] にする・月境界計算の起点用）。
+/// `YYYY-MM` を厳密パースする（`1` 日を補って [`Date`] にする・月境界計算の起点用）。
 pub fn parse_local_month(s: &str) -> Option<(i32, u32)> {
     let s = s.trim();
     let (y, m) = s.split_once('-')?;
@@ -36,13 +36,13 @@ pub fn parse_local_month(s: &str) -> Option<(i32, u32)> {
 
 /// `date` の「翌日 0 時」を `'YYYY-MM-DD HH:MM:SS'` で返す（範囲クエリの排他的上限・issue #43:
 /// 文字列 `<=` 比較だと最終日の予定が抜け落ちる旧 Node バグを避ける）。
-pub fn day_start(date: NaiveDate) -> String {
-    format!("{} 00:00:00", date.format("%Y-%m-%d"))
+pub fn day_start(date: Date) -> String {
+    format!("{} 00:00:00", date.strftime("%Y-%m-%d"))
 }
 
 /// [`day_start`] の翌日版（範囲の排他的上限）。
-pub fn next_day_start(date: NaiveDate) -> String {
-    let next = date.succ_opt().unwrap_or(date);
+pub fn next_day_start(date: Date) -> String {
+    let next = date.tomorrow().unwrap_or(date);
     day_start(next)
 }
 

@@ -459,7 +459,7 @@ impl ChatEngine {
         status: &StatusSink,
         heavy: Option<Arc<PlanningSignal>>,
     ) -> Result<TurnReply, TurnError> {
-        let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+        let today = jiff::ZonedDateTime::now().strftime("%Y-%m-%d").to_string();
         let ocr = match self
             .receipt_ocr(user_id, &image.data_base64, &image.mime_type, &today)
             .await

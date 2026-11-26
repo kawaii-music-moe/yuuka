@@ -105,7 +105,7 @@ pub fn summarize_args(args: &Value) -> String {
 
 /// ISO 8601（UTC・ミリ秒・`Z`）の現在時刻（Node `new Date().toISOString()`）。
 fn now_iso() -> String {
-    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+    crate::time::now_iso_millis()
 }
 
 /// ユーザ 1 人ぶんの記録（TTL 付き）。

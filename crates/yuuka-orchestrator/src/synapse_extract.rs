@@ -520,11 +520,10 @@ async fn extract_inner(
 /// 現地時刻の (時間帯 0-23, 曜日 0=日〜6=土, Unix エポック秒)。Node `new Date()` の
 /// `getHours()`/`getDay()`/`getTime()/1000` に対応する。
 fn local_time_context() -> (i64, i64, i64) {
-    use chrono::{Datelike, Local, Timelike};
-    let now = Local::now();
+    let now = jiff::ZonedDateTime::now();
     let tod = i64::from(now.hour());
-    let dow = i64::from(now.weekday().num_days_from_sunday());
-    let epoch = now.timestamp();
+    let dow = i64::from(now.weekday().to_sunday_zero_offset());
+    let epoch = now.timestamp().as_second();
     (tod, dow, epoch)
 }
 

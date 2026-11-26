@@ -76,7 +76,9 @@ fn run_backup(args: &[String]) -> ExitCode {
     let result = Config::load_and_validate(Path::new(CONFIG_PATH))
         .map_err(|e| format!("config load failed: {e}"))
         .and_then(|cfg| yuuka_supervisor::backup::parse_args(args, cfg.db_path))
-        .and_then(|opts| yuuka_supervisor::backup::run(&opts, chrono::Local::now()));
+        .and_then(|opts| {
+            yuuka_supervisor::backup::run(&opts, jiff::ZonedDateTime::now().datetime())
+        });
     match result {
         Ok(report) => {
             println!(
@@ -642,7 +644,7 @@ impl yuuka_services::CalendarSyncRunner for CalendarSyncAdapter {
                 return;
             }
         };
-        let now = chrono::Local::now().naive_local();
+        let now = jiff::ZonedDateTime::now().datetime();
         for target in targets {
             let scope = yuuka_core::UserScope::new(
                 yuuka_core::UserId::new(target.user_id.as_str()),

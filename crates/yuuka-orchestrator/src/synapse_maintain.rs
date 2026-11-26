@@ -285,7 +285,7 @@ async fn keep(
             FormationContext {
                 ctx_tod: None,
                 ctx_dow: None,
-                created_at: Some(chrono::Local::now().timestamp()),
+                created_at: Some(jiff::Timestamp::now().as_second()),
             },
         )
     };

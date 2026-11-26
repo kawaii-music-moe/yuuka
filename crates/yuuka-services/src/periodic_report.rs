@@ -14,7 +14,6 @@
 //! それ以外は登録した本人への DM（[`yuuka_briefing::ReportSettings::channel_target`]）。
 
 use async_trait::async_trait;
-use chrono::Local;
 use yuuka_briefing::{build_report_embed, list_enabled_reports, PeriodicReport};
 use yuuka_core::aux_text::AuxTextGenerator;
 use yuuka_core::{cron_util, BotId, DbError, UserId};
@@ -53,9 +52,9 @@ impl CronService for PeriodicReportService {
 /// 有効な定期報告を走査し、現在分に一致するものを配信する。
 async fn process_due_reports(ctx: &ServiceContext) -> Result<(), DbError> {
     let reports = list_enabled_reports(&ctx.db, ctx.cross).await?;
-    let now = Local::now();
+    let now = jiff::ZonedDateTime::now();
     for report in reports {
-        if !cron_util::cron_matches_now(&report.settings.schedule_cron, now) {
+        if !cron_util::cron_matches_now(&report.settings.schedule_cron, &now) {
             continue;
         }
         tracing::info!(user = %report.user_id, report = report.id, name = %report.settings.name,
@@ -86,7 +85,7 @@ pub(crate) async fn deliver(
     aux_text: &dyn AuxTextGenerator,
     report: &PeriodicReport,
 ) -> Result<bool, DbError> {
-    let embed = build_report_embed(db, aux_text, report, Local::now()).await?;
+    let embed = build_report_embed(db, aux_text, report, jiff::ZonedDateTime::now()).await?;
     let target = match report.settings.channel_target() {
         Some(id) => NotifyTarget::Channel(id.to_owned()),
         None => NotifyTarget::Dm,
@@ -112,7 +111,6 @@ pub(crate) async fn deliver(
 mod tests {
     use std::sync::Arc;
 
-    use chrono::{Datelike, Timelike};
     use rusqlite::params;
     use yuuka_core::datetime;
     use yuuka_db::map_sqlite;
@@ -274,7 +272,7 @@ mod tests {
 
     #[tokio::test]
     async fn non_due_and_disabled_reports_are_not_delivered() {
-        let now = Local::now();
+        let now = jiff::ZonedDateTime::now();
         let is_new_year_midnight =
             now.month() == 1 && now.day() == 1 && now.hour() == 0 && now.minute() == 0;
         if !is_new_year_midnight {
@@ -473,7 +471,7 @@ mod tests {
             let insert = |user: &str, bot: &str, guild: Option<&str>, role: &str, content: &str, date: &str| {
                 conn.execute("INSERT INTO message_logs (user_id, bot_id, guild_id, role, content, created_at) VALUES (?1,?2,?3,?4,?5,?6)", params![user, bot, guild, role, content, date]).map_err(map_sqlite)
             };
-            let now = datetime::local_to_db(Local::now());
+            let now = datetime::local_to_db(&jiff::ZonedDateTime::now());
             // 40件窓から落ちる発言。
             insert("u", "system_default", None, "user", "古い発言", &now)?;
             for i in 0..40 {

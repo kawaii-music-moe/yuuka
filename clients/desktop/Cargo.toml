@@ -50,13 +50,15 @@ serde_json = "1.0"
 base64 = "0.22"
 
 # --- OS 統合 ------------------------------------------------------------
-tray-icon = "0.19"        # トレイ常駐メニュー
-global-hotkey = "0.6"     # グローバルホットキー（呼び出し）
+# トレイ常駐メニュー（tray-icon）は未実装のため依存を外している（2026-11-26）。tray-icon の Linux
+# バックエンドは libappindicator（非推奨 gtk3-rs → proc-macro-error RUSTSEC-2024-0370）・ksni（zbus 5 →
+# zvariant 等 RUSTSEC-2026-0370〜0372）のいずれも非メンテ依存を引く。実装時に改めて選定する。
+global-hotkey = "0.10"    # グローバルホットキー（呼び出し）
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
 arboard = "3"             # クリップボード（画像貼り付け）。クロスプラットフォーム
-# 画像添付のファイル選択ダイアログ。Windows=ネイティブ / Linux=GTK3（バックエンドは
-# OS 別で常にコンパイルされ、gtk3 feature は Linux のみ有効）。
-rfd = { version = "0.15", default-features = false, features = ["gtk3"] }
+# 画像添付のファイル選択ダイアログ。Windows=ネイティブ / Linux=XDG Desktop Portal（D-Bus）。
+# 旧 gtk3 バックエンドは非推奨 gtk3-rs（→ 非メンテ proc-macro-error RUSTSEC-2024-0370）を引くため使わない。
+rfd = { version = "0.18", default-features = false, features = ["xdg-portal"] }
 open = "5"                # 既定ブラウザ起動（OAuth verification_uri）
 directories = "5"         # 設定保存ディレクトリ（非機微設定のみ）
 

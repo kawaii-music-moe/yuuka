@@ -17,7 +17,6 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
-use chrono::Local;
 use rusqlite::{params, OptionalExtension};
 use secrecy::SecretString;
 use yuuka_core::{BotId, DbError, GuildId, UserId};
@@ -407,7 +406,7 @@ fn parse_positive_int(raw: &str) -> Option<u32> {
 /// ローカル暦日の `YYYYMMDD`（Node `todaySuffix`＝`new Date()` のローカル年月日）。日窓カウンタを暦日
 /// 境界でリセットするためのキーサフィックス（TTL 25h は日跨ぎの掃除用）。
 fn today_suffix() -> String {
-    Local::now().format("%Y%m%d").to_string()
+    jiff::ZonedDateTime::now().strftime("%Y%m%d").to_string()
 }
 
 #[async_trait]

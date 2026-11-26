@@ -368,7 +368,7 @@ impl BackupPort for GoogleBackupClient {
 
         // 3) アクセストークンを解決し、Drive へ multipart アップロードする（新規ファイル・世代管理のため上書きしない）。
         let access = self.access_token_for(user_id).await?;
-        let file_name = backup_file_name(chrono::Local::now());
+        let file_name = backup_file_name(jiff::ZonedDateTime::now().datetime());
         let url = self
             .upload_zip(&access, &file_name, config.folder_id.as_deref(), zip_bytes)
             .await?;
@@ -696,8 +696,7 @@ fn copy_rows_from_select(
 
 /// タイムスタンプ付きバックアップファイル名（Node `backupFileName`＝`yuuka_backup_YYYYMMDD_HHMMSS.zip`）。
 #[must_use]
-fn backup_file_name(now: chrono::DateTime<chrono::Local>) -> String {
-    use chrono::{Datelike, Timelike};
+fn backup_file_name(now: jiff::civil::DateTime) -> String {
     format!(
         "{BACKUP_PREFIX}{:04}{:02}{:02}_{:02}{:02}{:02}.zip",
         now.year(),
@@ -881,7 +880,6 @@ use rusqlite::OptionalExtension as _;
 
 #[cfg(test)]
 mod tests {
-    use chrono::TimeZone;
     use rusqlite::Connection;
 
     use super::{
@@ -1124,16 +1122,13 @@ mod tests {
 
     #[test]
     fn backup_file_name_format() {
-        let dt = chrono::Local
-            .with_ymd_and_hms(2026, 6, 12, 4, 30, 5)
-            .single()
-            .expect("valid");
+        let dt = jiff::civil::date(2026, 6, 12).at(4, 30, 5, 0);
         assert_eq!(backup_file_name(dt), "yuuka_backup_20260612_043005.zip");
     }
 
     #[test]
     fn backup_file_name_always_has_prefix_and_ext() {
-        let now = chrono::Local::now();
+        let now = jiff::ZonedDateTime::now().datetime();
         let name = backup_file_name(now);
         assert!(name.starts_with(BACKUP_PREFIX));
         assert!(name.ends_with(".zip"));

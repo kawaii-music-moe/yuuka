@@ -423,16 +423,18 @@ impl CalendarPort for GoogleHttpClient {
 
 /// ローカル暦（`'YYYY-MM-DD HH:MM:SS'`・JST）を Google API の RFC 3339（`+09:00`）にする。
 fn local_to_rfc3339(local: &str) -> Option<String> {
-    let naive = chrono::NaiveDateTime::parse_from_str(local, "%Y-%m-%d %H:%M:%S").ok()?;
-    Some(naive.format("%Y-%m-%dT%H:%M:%S+09:00").to_string())
+    let naive = jiff::civil::DateTime::strptime("%Y-%m-%d %H:%M:%S", local).ok()?;
+    Some(naive.strftime("%Y-%m-%dT%H:%M:%S+09:00").to_string())
 }
 
 /// 開始から 1 時間後のローカル暦（終了が省略された予定用・Node `createCalendarEvent` と同じ）。
 fn one_hour_after(local: &str) -> Option<String> {
-    let naive = chrono::NaiveDateTime::parse_from_str(local, "%Y-%m-%d %H:%M:%S").ok()?;
+    let naive = jiff::civil::DateTime::strptime("%Y-%m-%d %H:%M:%S", local).ok()?;
     Some(
-        (naive + chrono::Duration::hours(1))
-            .format("%Y-%m-%d %H:%M:%S")
+        naive
+            .checked_add(jiff::SignedDuration::from_hours(1))
+            .ok()?
+            .strftime("%Y-%m-%d %H:%M:%S")
             .to_string(),
     )
 }
@@ -440,23 +442,22 @@ fn one_hour_after(local: &str) -> Option<String> {
 /// Google の `start`/`end`（`dateTime` か終日の `date`）をローカル暦にする。終日予定の `end.date` は
 /// 翌日（排他的）なので、`exclusive_end` のときは前日の 23:59:59 にする。
 fn google_time_to_local(value: &serde_json::Value, exclusive_end: bool) -> Option<String> {
-    let offset = chrono::FixedOffset::east_opt(9 * 3600)?;
     if let Some(dt) = value.get("dateTime").and_then(serde_json::Value::as_str) {
-        let parsed = chrono::DateTime::parse_from_rfc3339(dt).ok()?;
+        let parsed: jiff::Timestamp = dt.parse().ok()?;
         return Some(
-            parsed
-                .with_timezone(&offset)
-                .format("%Y-%m-%d %H:%M:%S")
+            yuuka_core::datetime::jst()
+                .to_datetime(parsed)
+                .strftime("%Y-%m-%d %H:%M:%S")
                 .to_string(),
         );
     }
     let date = value.get("date").and_then(serde_json::Value::as_str)?;
-    let day = chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d").ok()?;
+    let day = jiff::civil::Date::strptime("%Y-%m-%d", date).ok()?;
     if exclusive_end {
-        let last = day.pred_opt()?;
-        return Some(format!("{} 23:59:59", last.format("%Y-%m-%d")));
+        let last = day.yesterday().ok()?;
+        return Some(format!("{} 23:59:59", last.strftime("%Y-%m-%d")));
     }
-    Some(format!("{} 00:00:00", day.format("%Y-%m-%d")))
+    Some(format!("{} 00:00:00", day.strftime("%Y-%m-%d")))
 }
 
 /// events.list 応答の `items` を [`GoogleEvent`] にする（キャンセル済み・開始の無いものは除く）。

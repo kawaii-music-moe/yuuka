@@ -4,7 +4,6 @@
 //! で同一年の重複通知を防止する。送信失敗はマークせず翌日 tick で再試行する。
 
 use async_trait::async_trait;
-use chrono::{Datelike, Duration, Local};
 use yuuka_core::{BotId, UserId};
 use yuuka_personal::repo::ContactRepo;
 
@@ -38,11 +37,11 @@ impl CronService for BirthdayReminderService {
 }
 
 async fn run(ctx: &ServiceContext) -> Result<(), yuuka_core::DbError> {
-    let now = Local::now();
-    let tomorrow = now + Duration::days(1);
-    let month_day = tomorrow.format("%m-%d").to_string();
-    let current_year = i64::from(now.year());
-    let tomorrow_year = tomorrow.year();
+    let today = jiff::ZonedDateTime::now().date();
+    let tomorrow = today.tomorrow().unwrap_or(today);
+    let month_day = tomorrow.strftime("%m-%d").to_string();
+    let current_year = i64::from(today.year());
+    let tomorrow_year = i32::from(tomorrow.year());
 
     let repo = ContactRepo::new(&ctx.db);
     let contacts = repo
@@ -169,7 +168,7 @@ mod tests {
     #[tokio::test]
     async fn already_reminded_this_year_is_skipped() {
         let (db, _dir) = seeded_db(CONTACTS_DDL);
-        let this_year = Local::now().year();
+        let this_year = jiff::ZonedDateTime::now().year();
         db.writer
             .execute(move |conn| {
                 conn.execute(

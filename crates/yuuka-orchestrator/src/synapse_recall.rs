@@ -198,12 +198,11 @@ pub async fn build_recall(
 
 /// 現地時刻の (時間帯 0-23, 曜日 0=日〜6=土, Unix エポック秒)。
 fn local_now() -> (i64, i64, i64) {
-    use chrono::{Datelike, Local, Timelike};
-    let now = Local::now();
+    let now = jiff::ZonedDateTime::now();
     (
         i64::from(now.hour()),
-        i64::from(now.weekday().num_days_from_sunday()),
-        now.timestamp(),
+        i64::from(now.weekday().to_sunday_zero_offset()),
+        now.timestamp().as_second(),
     )
 }
 

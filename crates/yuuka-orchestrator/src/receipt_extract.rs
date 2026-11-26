@@ -119,8 +119,7 @@ fn parse_draft(args: &Value) -> ReceiptDraft {
             .unwrap_or_default()
             .to_owned()
     };
-    let date =
-        Some(text("date")).filter(|d| chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d").is_ok());
+    let date = Some(text("date")).filter(|d| jiff::civil::Date::strptime("%Y-%m-%d", d).is_ok());
     let kind = if text("kind") == "income" {
         "income"
     } else {
