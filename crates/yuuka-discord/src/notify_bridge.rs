@@ -60,7 +60,7 @@ impl ServicesNotifier for DiscordMessenger {
             embeds: notification.embeds.into_iter().map(to_rich_embed).collect(),
             ..TurnReply::default()
         };
-        // discord ポートへ委譲: クライアント解決（bot_id 本人→default フォールバック）・
+        // discord ポートへ委譲: クライアント解決（bot_id 本人のみ・既定 Bot へはフォールバックしない）・
         // チャンネル露出ガード（第三者チャンネルへの流入防止）・分割送信は委譲先が担う。
         DiscordNotifierPort::send_to_user(
             self,

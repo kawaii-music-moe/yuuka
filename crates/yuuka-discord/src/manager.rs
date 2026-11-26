@@ -246,24 +246,22 @@ impl DiscordMessenger {
     }
 
     /// bot_id 指定時のクライアント解決（現行 `resolveClientForUser` の botId 経路）。
-    /// 当該 Bot のクライアントがあればそれ、無ければデフォルト（system_default）へフォールバック。
+    ///
+    /// `system_default` なら既定クライアント、custom Bot なら**当該 Bot のクライアントのみ**を返す。
+    /// 当該 Bot が未登録（停止中・トークン欠落など）でも既定 Bot へはフォールバックせず `None`
+    /// （利用者の Bot 宛の通知が共有の既定 Bot アカウントから届くのを防ぐ）。
     ///
     /// **意図的 divergence**: Node は `readyAt`（gateway 接続済み）を要求するが、twilight の HTTP
     /// クライアントはトークンだけで REST 送信できる（gateway 非依存）ため readiness ゲートを設けない。
     /// gateway 未接続でも DM/チャンネル送信は成功する＝Node が拒否するケースでも配信できる（改善側）。
     fn resolve_client(&self, bot_id: &BotId) -> Option<Arc<Client>> {
-        if bot_id.as_str() != BotId::SYSTEM_DEFAULT {
-            if let Some(c) = self
-                .clients
-                .read()
-                .ok()
-                .and_then(|m| m.get(bot_id).cloned())
-            {
-                return Some(c);
-            }
-            // 当該 Bot がオフラインでもデフォルトへ届ける（現行フォールバック）。
+        if bot_id.as_str() == BotId::SYSTEM_DEFAULT {
+            return self.default_client();
         }
-        self.default_client()
+        self.clients
+            .read()
+            .ok()
+            .and_then(|m| m.get(bot_id).cloned())
     }
 
     /// DM チャンネルを開いて channel id を得る。
@@ -556,7 +554,8 @@ impl Notifier for DiscordMessenger {
         bot_id: &BotId,
     ) -> bool {
         let Some(client) = self.resolve_client(bot_id) else {
-            tracing::warn!(user = %user_id, "利用可能な Bot クライアントがありません");
+            tracing::warn!(user = %user_id, bot = %bot_id,
+                "当該 Bot のクライアントが無いため配信しません（既定 Bot へはフォールバックしない）");
             return false;
         };
         // Channel 宛が解決不能（不明チャンネル / 対象ユーザーが閲覧不可）なら DM へフォールバックする
@@ -960,12 +959,12 @@ mod tests {
 
     // twilight `Client::new` は ratelimiter で Tokio ランタイムを要求するため tokio::test で回す。
     #[tokio::test]
-    async fn resolve_client_prefers_custom_then_default() {
+    async fn resolve_client_never_falls_back_to_default() {
         let m = messenger_with(&["system_default", "botX"], Some("system_default"));
         // custom がある → custom（None にならない）。
         assert!(m.resolve_client(&BotId::new("botX")).is_some());
-        // 未知の custom → デフォルトへフォールバック。
-        assert!(m.resolve_client(&BotId::new("unknown")).is_some());
+        // 未知（停止中など）の custom → 既定 Bot があってもフォールバックしない。
+        assert!(m.resolve_client(&BotId::new("unknown")).is_none());
         // system_default → デフォルト。
         assert!(m.resolve_client(&BotId::system_default()).is_some());
     }
@@ -988,12 +987,13 @@ mod tests {
         m.register_client(&BotId::new("botX"), Arc::new(Client::new(String::new())));
         assert!(m.resolve_client(&BotId::new("botX")).is_some());
         assert!(m.resolve_client(&BotId::new("unknown")).is_none());
-        // system_default を動的登録 → デフォルトも更新され、未知 Bot がフォールバック解決可能に。
+        // system_default を動的登録 → デフォルトは解決可・未知 Bot は引き続きフォールバックしない。
         m.register_client(
             &BotId::system_default(),
             Arc::new(Client::new(String::new())),
         );
-        assert!(m.resolve_client(&BotId::new("unknown")).is_some());
+        assert!(m.resolve_client(&BotId::system_default()).is_some());
+        assert!(m.resolve_client(&BotId::new("unknown")).is_none());
     }
 
     // 最小ダミー directory（resolve_client のテストでは実際には呼ばれない）。
