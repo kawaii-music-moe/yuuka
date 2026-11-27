@@ -46,6 +46,19 @@
 					}
 				}
 			}
+		},
+		{
+			"includes": ["frontend/src/styles.css"],
+			"linter": {
+				"rules": {
+					"complexity": {
+						"noImportantStyles": "off"
+					},
+					"style": {
+						"noDescendingSpecificity": "off"
+					}
+				}
+			}
 		}
 	]
 }

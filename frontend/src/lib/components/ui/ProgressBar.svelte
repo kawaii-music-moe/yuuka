@@ -15,7 +15,7 @@ let { percent, showText = false, color, class: klass = "" }: Props = $props();
 
 const clamped = $derived(Math.max(0, Math.min(100, percent)));
 const fillStyle = $derived(
-	`width:${clamped}%` + (color ? `;background-color:${color}` : ""),
+	`width:${clamped}%${color ? `;background-color:${color}` : ""}`,
 );
 </script>
 

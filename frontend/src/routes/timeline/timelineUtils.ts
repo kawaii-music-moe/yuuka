@@ -5,7 +5,7 @@ const DAY_NAMES = ["日", "月", "火", "水", "木", "金", "土"];
 
 /** 'YYYY-MM-DD' → 'YYYY-MM-DD (曜)'（旧 tlFmtDate）。 */
 export function fmtTimelineDate(iso: string): string {
-	const d = new Date(iso + "T00:00:00");
+	const d = new Date(`${iso}T00:00:00`);
 	return `${iso} (${DAY_NAMES[d.getDay()]})`;
 }
 

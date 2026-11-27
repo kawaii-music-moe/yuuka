@@ -2587,8 +2587,6 @@ input[type="checkbox"]:disabled,
 		   where supported. */
 		height: 100dvh;
 		max-height: 100vh;
-		/* biome-ignore lint/suspicious/noDuplicateProperties: same dvh fallback
-		   pattern as height above. */
 		max-height: 100dvh;
 		padding: 12px;
 		border: 0;

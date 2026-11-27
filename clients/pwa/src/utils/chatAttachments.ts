@@ -57,7 +57,7 @@ export async function prepareChatAttachment(
 		const resized = await downscaleImage(file, IMAGE_MAX_EDGE);
 		if (resized)
 			return {
-				name: file.name.replace(/\.[^.]+$/, "") + ".jpg",
+				name: `${file.name.replace(/\.[^.]+$/, "")}.jpg`,
 				mimeType: "image/jpeg",
 				dataBase64: await readAsBase64(resized),
 			};
