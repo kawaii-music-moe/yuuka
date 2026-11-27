@@ -1,0 +1,145 @@
+/* 汎用モード API 使用量ダッシュボード。 */
+
+/* ==============================================================================
+   汎用モード API使用量ダッシュボード
+   ============================================================================= */
+
+/* サマリカードは4枚並べる（基底の .stats-grid は3列のため上書き） */
+.usage-stats-grid {
+	grid-template-columns: repeat(4, 1fr);
+}
+
+/* チャートを単一カラムで全幅表示する */
+.dashboard-columns-single {
+	grid-template-columns: 1fr;
+}
+
+/* チャート凡例 */
+.usage-chart-legend {
+	display: flex;
+	align-items: center;
+	gap: 14px;
+	flex-wrap: wrap;
+}
+
+.usage-legend-item {
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+	font-family: var(--font-family-mono);
+	font-size: 0.68rem;
+	color: var(--text-medium);
+}
+
+.usage-legend-dot {
+	display: inline-block;
+	width: 9px;
+	height: 9px;
+	border-radius: 50%;
+}
+
+.usage-dot-req {
+	background-color: #a78bfa;
+}
+.usage-dot-res {
+	background-color: #34d399;
+}
+
+/* SVGチャートの線・面（preserveAspectRatio=none による線幅の歪みを vector-effect で防ぐ） */
+.usage-chart-req-line {
+	fill: none;
+	stroke: #a78bfa;
+	stroke-width: 2;
+	stroke-linejoin: round;
+	stroke-linecap: round;
+}
+
+.usage-chart-req-area {
+	fill: rgba(167, 139, 250, 0.16);
+	stroke: none;
+}
+
+.usage-chart-res-line {
+	fill: none;
+	stroke: #34d399;
+	stroke-width: 1.6;
+	stroke-linejoin: round;
+	stroke-linecap: round;
+	stroke-dasharray: 4 3;
+}
+
+.usage-chart-grid-line {
+	stroke: var(--border-divider);
+	stroke-width: 0.7;
+	stroke-dasharray: 3 3;
+}
+
+.usage-chart-dot {
+	fill: #a78bfa;
+}
+
+/* レート制限グリッド */
+.usage-ratelimit-grid {
+	display: grid;
+	grid-template-columns: repeat(3, 1fr);
+	gap: 16px;
+}
+
+.usage-ratelimit-item {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 4px;
+	padding: 16px 18px;
+	border: 1px solid var(--border-divider);
+	border-radius: var(--radius);
+	background-color: var(--bg-primary);
+}
+
+.usage-rl-value {
+	font-family: var(--font-family-mono);
+	font-size: 1.6rem;
+	font-weight: 800;
+	color: var(--color-primary);
+	line-height: 1;
+}
+
+.usage-rl-label {
+	font-size: 0.7rem;
+	font-weight: 600;
+	color: var(--text-medium);
+	letter-spacing: 0.04em;
+}
+
+.usage-empty-note {
+	font-size: 0.85rem;
+	color: var(--text-disabled);
+	padding: 8px 2px;
+}
+
+.usage-ratelimit-note {
+	margin-top: 14px;
+	font-size: 0.78rem;
+	line-height: 1.6;
+	color: var(--text-medium);
+}
+
+.usage-ratelimit-note strong {
+	color: var(--color-primary);
+	font-weight: 700;
+}
+
+@media (max-width: 1024px) {
+	.usage-stats-grid {
+		grid-template-columns: repeat(2, 1fr);
+	}
+}
+
+@media (max-width: 768px) {
+	.usage-stats-grid {
+		grid-template-columns: 1fr;
+	}
+	.usage-ratelimit-grid {
+		grid-template-columns: 1fr;
+	}
+}

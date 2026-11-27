@@ -1,0 +1,182 @@
+/* ランディング（未ログイン時のスプリットレイアウト）。 */
+
+/* ==============================================================================
+   LANDING PAGE SPLIT LAYOUT (OAuth Branding Verification Support)
+   ============================================================================== */
+.landing-container {
+	display: flex;
+	flex-direction: column;
+	width: 100%;
+	max-width: 1000px;
+	margin: auto;
+	gap: 40px;
+	align-items: stretch;
+}
+
+/* 左側：機能紹介セクション */
+.landing-info-section {
+	display: flex;
+	flex-direction: column;
+	color: var(--text-high);
+	text-align: left;
+	padding: 20px;
+}
+
+.landing-logo-header {
+	display: flex;
+	align-items: center;
+	gap: 16px;
+	margin-bottom: 12px;
+}
+
+.landing-logo-icon-container {
+	width: 48px;
+	height: 48px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	background-color: var(--surface-1dp);
+	border: 1px solid var(--border-matte);
+	border-radius: 50%;
+}
+
+.landing-logo-icon {
+	font-size: 24px !important;
+	color: var(--color-primary);
+}
+
+.landing-title-container h2 {
+	font-size: 2.2rem;
+	font-weight: 800;
+	color: var(--color-white);
+	line-height: 1;
+}
+
+.landing-subtitle {
+	font-size: 0.8rem;
+	text-transform: uppercase;
+	letter-spacing: 0.1em;
+	color: var(--color-primary);
+	font-weight: 600;
+	margin-top: 4px;
+	display: block;
+}
+
+.landing-tagline {
+	font-size: 1.1rem;
+	color: var(--text-medium);
+	margin-bottom: 32px;
+	line-height: 1.5;
+}
+
+.landing-features {
+	display: grid;
+	grid-template-columns: 1fr;
+	gap: 20px;
+}
+
+.landing-feature-card {
+	display: flex;
+	gap: 16px;
+	padding: 16px 0;
+	background-color: transparent;
+	border: none;
+	border-bottom: 1px solid var(--border-divider);
+	transition: var(--transition-smooth);
+}
+
+.landing-feature-card:last-child {
+	border-bottom: none;
+}
+
+.landing-feature-card:hover {
+	background-color: transparent;
+}
+
+.landing-feature-card:hover .feature-icon {
+	color: var(--discord-blurple-hover);
+	transform: scale(1.05);
+}
+
+.landing-feature-card:hover .feature-text h3 {
+	color: var(--color-primary);
+}
+
+.feature-icon-wrapper {
+	width: 36px;
+	height: 36px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	background-color: transparent;
+	border-radius: 50%;
+	flex-shrink: 0;
+	margin-top: 2px;
+}
+
+.feature-icon {
+	font-size: 22px !important;
+	color: var(--color-primary);
+	transition: var(--transition-smooth);
+}
+
+.feature-text h3 {
+	font-size: 0.95rem;
+	font-weight: 700;
+	color: var(--color-white);
+	margin-bottom: 8px;
+}
+
+.feature-text p {
+	font-size: 0.8rem;
+	color: var(--text-medium);
+	line-height: 1.4;
+}
+
+/* PCレイアウト用のスプリットスクリーン（画面幅 769px 以上）
+   ※ アプリシェルのモバイル切替（max-width: 768px）と境界を揃える */
+@media (min-width: 769px) {
+	.landing-container {
+		flex-direction: row;
+		align-items: center;
+	}
+
+	.landing-info-section {
+		flex: 1 1 55%;
+		border-right: 1px solid var(--border-divider);
+		padding-right: 40px;
+	}
+
+	.login-card {
+		flex: 1 1 45%;
+		max-width: 440px;
+		margin: 0;
+		padding: 0 0 0 20px;
+	}
+
+	/* PC表示ではログインカード内の重複するヘッダー（ロゴ・タイトル）を非表示にしてスッキリさせる */
+	.login-card .login-header {
+		display: none;
+	}
+}
+
+/* モバイル表示用の微調整（画面幅 768px 以下） */
+@media (max-width: 768px) {
+	.landing-container {
+		flex-direction: column-reverse; /* モバイルではログインフォームが上に来て、下スクロールで紹介 */
+		gap: 24px;
+	}
+
+	.landing-info-section {
+		padding: 10px 0;
+	}
+
+	.login-card {
+		max-width: 100%;
+		padding: 16px 0;
+	}
+
+	.landing-title-container h2 {
+		font-size: 1.8rem;
+	}
+}

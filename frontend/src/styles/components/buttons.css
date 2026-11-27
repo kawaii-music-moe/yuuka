@@ -1,0 +1,92 @@
+/* ボタン（.btn 系・アイコンボタン）とフォームのエラーメッセージ。 */
+
+/* Buttons */
+.btn {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	padding: 10px 24px;
+	border-radius: 4px;
+	font-weight: 600;
+	font-size: 0.88rem;
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+	cursor: pointer;
+	border: none;
+	outline: none;
+	transition: background-color 0.15s ease-in-out;
+	white-space: nowrap;
+}
+
+.btn-block {
+	display: flex;
+	width: 100%;
+}
+
+.btn-primary {
+	background-color: var(--color-primary);
+	color: var(--color-on-primary);
+}
+
+.btn-primary:hover {
+	background-color: #cda3ff;
+}
+
+.btn-primary:active {
+	background-color: var(--discord-blurple-active);
+}
+
+.btn-secondary {
+	background-color: transparent;
+	color: var(--color-primary);
+	border: 1px solid var(--border-divider);
+}
+
+.btn-secondary:hover {
+	background-color: rgba(187, 134, 252, 0.08);
+}
+
+.btn-danger {
+	background-color: transparent;
+	color: #ef4444;
+	border: 1px solid rgba(239, 68, 68, 0.4);
+}
+
+.btn-danger:hover {
+	background-color: rgba(239, 68, 68, 0.12);
+	border-color: rgba(239, 68, 68, 0.7);
+}
+
+/* 小サイズボタン（多数の箇所で使われているが未定義だった＝フルサイズで不揃いになっていた）。 */
+.btn-sm {
+	padding: 6px 14px;
+	font-size: 0.78rem;
+	letter-spacing: 0.03em;
+}
+
+.btn-icon {
+	background-color: transparent;
+	border: 1px solid var(--border-matte);
+	color: var(--text-primary);
+	width: 32px;
+	height: 32px;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	border-radius: 3px;
+	cursor: pointer;
+	font-weight: bold;
+	transition: var(--transition-smooth);
+}
+
+.btn-icon:hover {
+	background-color: rgba(255, 255, 255, 0.04);
+	border-color: var(--border-focus);
+}
+
+.error-msg {
+	color: #fa777c;
+	font-size: 0.85rem;
+	margin-top: 12px;
+	min-height: 20px;
+}
