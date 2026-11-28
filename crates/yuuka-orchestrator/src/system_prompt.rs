@@ -205,13 +205,26 @@ const SYSTEM_BOT_GUIDE: &str = "# Yuuka の構成（案内に使う情報）
   - Bot設定 › Discord: Bot トークン・招待リンク。汎用モードは応答する場所（ギルド・チャンネル）／応答する相手（メンバー・ロール・利用申請）／ギルドノートも。
 - **あなたの設定**: 表示名とテーマ／時刻と通知（通知先・リマインド既定・リッチ返信。利用者ごとのタイムゾーン変更は未対応）／AI モデル（秘書で使う個人の API キーとモデル）／バックアップと移行（Google Drive バックアップ・Bot移行パッケージ）／ログイン中の端末（デスクトップアプリ）／アカウントの削除。
 - **連携サービス**: Google アカウント（複数可・カレンダー設定・各 Bot で使うアカウント）／MCP サーバー（登録と使える Bot）／認証情報（パスワードマネージャ・使える Bot）。
-- **管理者設定**（管理者のみ）: システムデフォルト Bot（Discord トークン更新）／全体設定（利用規約・プライバシーポリシー）／Bot属性と利用上限（プリセット表示名・汎用モードのレート制限）／ユーザー管理／Bot モデレーション／公開ペルソナ管理／監査ログ。
-- ログインは sk-account（sk-9 Account）で行います。初回ログイン時に Yuuka の利用者として登録されます。";
+- **管理者設定**（管理者のみ）: システムデフォルト Bot（Discord トークン更新）／全体設定（利用規約・プライバシーポリシー）／Bot属性と利用上限（プリセット表示名・汎用モードのレート制限）／ユーザー管理／Bot モデレーション／公開ペルソナ管理／監査ログ。";
+
+/// ログイン先の案内文。`login_label` は設定の `OIDC_LABEL`（`yuuka_core::config::OidcSettings::label`）。
+/// 運用者ごとに違うので固定文にはしない。未指定なら提供元の名前を出さずに案内する。
+fn login_guide(login_label: Option<&str>) -> String {
+    let provider = login_label.unwrap_or("管理者が設定した OIDC プロバイダー");
+    format!(
+        "- ログインは {provider} で行います。初回ログイン時に Yuuka の利用者として登録されます。"
+    )
+}
 
 /// システム Bot（`system_default`）のシステムプロンプト。ペルソナ・個人向けの機能ルールは含めず、
-/// 役割・管理画面の構成・リッチ返信可否・現在日時だけで組む（ツールは core のみ＝個人データに触れない）。
+/// 役割・管理画面の構成・ログイン先・リッチ返信可否・現在日時だけで組む
+/// （ツールは core のみ＝個人データに触れない）。
 #[must_use]
-pub fn build_system_bot_instruction(rich_reply: bool, date_time_str: &str) -> String {
+pub fn build_system_bot_instruction(
+    rich_reply: bool,
+    date_time_str: &str,
+    login_label: Option<&str>,
+) -> String {
     let rich = if rich_reply {
         "
 # リッチ返信
@@ -222,6 +235,7 @@ pub fn build_system_bot_instruction(rich_reply: bool, date_time_str: &str) -> St
     [
         SYSTEM_BOT_ROLE,
         SYSTEM_BOT_GUIDE,
+        &login_guide(login_label),
         rich,
         &format!("# 現在の日時\n{date_time_str}"),
     ]
@@ -292,13 +306,14 @@ mod tests {
 
     #[test]
     fn system_bot_instruction_excludes_search_skills() {
-        let sys = build_system_bot_instruction(true, "d");
+        let sys = build_system_bot_instruction(true, "d", None);
         assert!(!sys.contains("検索クロールスキル仕様書"));
     }
 
     #[test]
     fn system_bot_instruction_is_a_guide_without_personal_features() {
-        let sys = build_system_bot_instruction(true, "2026年1月1日 (木) 00時00分00秒");
+        let now = "2026年1月1日 (木) 00時00分00秒";
+        let sys = build_system_bot_instruction(true, now, Some("Example ID"));
         assert!(sys.contains("システム案内役"));
         assert!(sys.contains("管理者設定"));
         assert!(sys.contains("2026年1月1日"));
@@ -306,7 +321,16 @@ mod tests {
         assert!(!sys.contains(DEFAULT_PERSONA));
         assert!(!sys.contains("addTodo"));
         assert!(!sys.contains("appendContextNote"));
-        let plain = build_system_bot_instruction(false, "x");
+        let plain = build_system_bot_instruction(false, "x", None);
         assert!(plain.contains("リッチ返信は無効"));
+    }
+
+    #[test]
+    fn system_bot_instruction_takes_the_login_label_from_settings() {
+        let sys = build_system_bot_instruction(true, "d", Some("Example ID"));
+        assert!(sys.contains("ログインは Example ID で行います"));
+        // 運用者固有の名前を埋め込まない。
+        let fallback = build_system_bot_instruction(true, "d", None);
+        assert!(fallback.contains("管理者が設定した OIDC プロバイダー"));
     }
 }

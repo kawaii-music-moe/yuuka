@@ -194,6 +194,10 @@ pub struct ChatEngine {
     /// `MetricsRegistry`（定期ログが snapshot を出す）。`None` なら記録しない。main.rs で
     /// [`ChatEngine::with_metrics`] 注入（cron の定期ログと同一インスタンスを共有）。
     metrics: Option<Arc<dyn MetricsSink>>,
+    /// ログイン先の表示名（設定の `OIDC_LABEL`）。システム Bot の案内に出す。運用者ごとに違うので
+    /// プロンプトへ直書きしない。`None` なら提供元の名前を出さずに案内する。main.rs で
+    /// [`ChatEngine::with_login_label`] 注入。
+    login_label: Option<String>,
 }
 
 impl ChatEngine {
@@ -260,7 +264,16 @@ impl ChatEngine {
             calendar: None,
             tool_outcomes: None,
             metrics: None,
+            login_label: None,
         }
+    }
+
+    /// システム Bot の案内に出すログイン先の表示名（設定の `OIDC_LABEL`）を注入する。
+    /// 未注入なら提供元の名前を出さずに案内する。
+    #[must_use]
+    pub fn with_login_label(mut self, label: impl Into<String>) -> Self {
+        self.login_label = Some(label.into());
+        self
     }
 
     /// L2 想起のチューニング（取得件数・recency ブースト）を差し替える。未注入なら Node 既定値。
@@ -719,6 +732,7 @@ impl ChatEngine {
                 system_prompt::build_system_bot_instruction(
                     rich,
                     &system_prompt::now_date_time_ja(),
+                    self.login_label.as_deref(),
                 ),
                 Vec::new(),
             )

@@ -300,9 +300,14 @@ fn validate_sandbox_origin(origin: &str, base_url: Option<&str>) -> Result<(), C
     Ok(())
 }
 
-/// 標準のログイン先（sk-account）。`OIDC_ISSUER` 未設定のときに使う。
+/// 既定のログイン先（sk-account）。`OIDC_ISSUER` 未設定のときに使う。
+///
+/// これは本家デプロイの運用値で、Yuuka 自体が sk-account に依存しているわけではない。既定値を変えると
+/// 既存環境（`OIDC_ISSUER` を書いていない運用）のログインが壊れるため、ここは据え置く（issue #235）。
+/// 自分で立てる場合は `OIDC_ISSUER` と `OIDC_LABEL` を設定ファイルに書けば任意のプロバイダーに替えられ、
+/// 利用者に見える表記（ログインボタン・システム Bot の案内）はすべて `OIDC_LABEL` 由来になる。
 pub const DEFAULT_OIDC_ISSUER: &str = "https://account.sk-9.net";
-/// 標準のログイン先の表示名。
+/// 既定のログイン先の表示名（`DEFAULT_OIDC_ISSUER` を使うときだけの既定。`OIDC_LABEL` で上書きできる）。
 const DEFAULT_OIDC_LABEL: &str = "sk-9 Account";
 
 /// ログインに使う OIDC プロバイダー（`OIDC_*`）。

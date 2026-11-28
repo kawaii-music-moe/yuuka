@@ -3,8 +3,10 @@ import { onMount } from "svelte";
 import { authApi } from "$lib/api/services";
 import { withBasePath } from "$lib/router";
 
-// 標準のログイン先（sk-account）の表示名。サーバーから受け取るまでの仮の値。
-let label = $state("sk-9 Account");
+// ログイン先の表示名はサーバーの設定（`OIDC_LABEL`）由来なので、受け取るまでは運用者固有の名前を出さず
+// 中立な表記にしておく（GET /api/auth/oidc/provider が返す label で置き換える）。
+const FALLBACK_LABEL = "OIDC プロバイダー";
+let label = $state(FALLBACK_LABEL);
 let enabled = $state(true);
 
 onMount(async () => {
