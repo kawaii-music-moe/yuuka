@@ -141,11 +141,11 @@ mod tests {
         // Rust は存在しない DB を作らないため空ファイルを先に作る（Db::open が migrations を実行）。
         drop(rusqlite::Connection::open(&path).unwrap());
         let db = Db::open(Path::new(&path)).unwrap();
-        // context_notes.user_id は users(discord_id) への FK。
+        // context_notes.user_id は users(id) への FK。
         db.writer
             .execute(|conn| {
                 conn.execute(
-                    "INSERT INTO users (discord_id, username, salt) VALUES ('u1', 'u1', 'x')",
+                    "INSERT INTO users (id, username, salt) VALUES ('u1', 'u1', 'x')",
                     [],
                 )
                 .map_err(yuuka_db::map_sqlite)?;

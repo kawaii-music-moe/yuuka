@@ -56,7 +56,7 @@ struct FakeAuth;
 impl AuthBackend for FakeAuth {
     async fn session_user(&self, token: &str) -> Result<Option<SessionUser>, AuthError> {
         Ok((token == "u1" || token == "u2").then(|| SessionUser {
-            discord_id: token.to_owned(),
+            user_id: token.to_owned(),
             username: token.to_owned(),
             role: Role::User,
         }))
@@ -185,7 +185,7 @@ fn seed_user_with_key(path: &std::path::Path, crypto: &SystemCrypto, discord_id:
     let enc = crypto.encrypt_text("fake-gemini-key").expect("encrypt");
     let conn = rusqlite::Connection::open(path).expect("open seed");
     conn.execute(
-        "INSERT INTO users (discord_id, username, salt, role, \
+        "INSERT INTO users (id, username, salt, role, \
          gemini_api_key_encrypted, gemini_api_key_iv, gemini_api_key_tag, gemini_model) \
          VALUES (?1, ?1, '00', 'user', ?2, ?3, ?4, 'gemini-3.1-flash-lite')",
         rusqlite::params![discord_id, enc.encrypted, enc.iv, enc.auth_tag],
@@ -202,7 +202,7 @@ fn seed_user_with_key(path: &std::path::Path, crypto: &SystemCrypto, discord_id:
 fn seed_user_no_key(path: &std::path::Path, discord_id: &str) {
     let conn = rusqlite::Connection::open(path).expect("open seed");
     conn.execute(
-        "INSERT INTO users (discord_id, username, salt, role) \
+        "INSERT INTO users (id, username, salt, role) \
          VALUES (?1, 'yuu', '00', 'user')",
         rusqlite::params![discord_id],
     )
@@ -220,7 +220,7 @@ fn seed_user_no_key(path: &std::path::Path, discord_id: &str) {
 fn seed_user_with_key_but_engine_has_no_crypto(path: &std::path::Path, discord_id: &str) {
     let conn = rusqlite::Connection::open(path).expect("open seed");
     conn.execute(
-        "INSERT INTO users (discord_id, username, salt, role, \
+        "INSERT INTO users (id, username, salt, role, \
          gemini_api_key_encrypted, gemini_api_key_iv, gemini_api_key_tag, gemini_model) \
          VALUES (?1, 'yuu', '00', 'user', 'enc', 'iv', 'tag', 'gemini-3.1-flash-lite')",
         rusqlite::params![discord_id],

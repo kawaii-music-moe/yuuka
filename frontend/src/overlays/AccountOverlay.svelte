@@ -29,6 +29,7 @@ import { setTheme, type Theme, theme } from "$lib/stores/theme";
 import { pushToast, toastError } from "$lib/stores/toast";
 import BackupCard from "../routes/config/BackupCard.svelte";
 import MemoryCard from "../routes/config/MemoryCard.svelte";
+import NotificationsCard from "../routes/config/NotificationsCard.svelte";
 import UserSettingsCard from "../routes/config/UserSettingsCard.svelte";
 import HelpTip from "../routes/delivery/HelpTip.svelte";
 import AccountDevices from "./account/AccountDevices.svelte";
@@ -217,6 +218,7 @@ async function downloadPackage(e: SubmitEvent): Promise<void> {
 				<!-- 時刻と通知（旧 Bot基本設定 > アシスタント設定） -->
 				{#if section === "notifications"}
 					<UserSettingsCard />
+					<NotificationsCard />
 				{/if}
 
 				<!-- AI モデル（個人の API キーとモデル。PWA の「使用モデル」と同じ値） -->

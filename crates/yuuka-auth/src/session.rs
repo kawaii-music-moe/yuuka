@@ -139,7 +139,7 @@ impl SessionStore {
 
         if let Some(cm) = &self.redis {
             let mut cm = cm.clone();
-            match redis_create(&mut cm, &hash, &payload, &user.discord_id, ttl_secs).await {
+            match redis_create(&mut cm, &hash, &payload, &user.user_id, ttl_secs).await {
                 Ok(()) => return Ok(token),
                 Err(e) => {
                     tracing::warn!(error = %e, "Redis へのセッション保存に失敗。in-memory へフォールバック");
@@ -173,7 +173,7 @@ impl SessionStore {
                     let Ok(user) = serde_json::from_str::<SessionUser>(&json) else {
                         return Ok(None);
                     };
-                    let user_key = format!("user_sessions:{}", user.discord_id);
+                    let user_key = format!("user_sessions:{}", user.user_id);
                     let _: Result<i64, _> = cm.expire(&session_key, ttl).await;
                     let _: Result<i64, _> = cm.expire(&user_key, ttl).await;
                     return Ok(Some(user));
@@ -209,7 +209,7 @@ impl SessionStore {
             let _: Result<i64, _> = cm.del(&[&session_key, &link_key]).await;
             if let Some(json) = raw {
                 if let Ok(user) = serde_json::from_str::<SessionUser>(&json) {
-                    let user_key = format!("user_sessions:{}", user.discord_id);
+                    let user_key = format!("user_sessions:{}", user.user_id);
                     let _: Result<i64, _> = cm.srem(&user_key, hash).await;
                 }
             }
@@ -332,7 +332,7 @@ impl SessionStore {
             },
         );
         mem.user_sessions
-            .entry(user.discord_id.clone())
+            .entry(user.user_id.clone())
             .or_default()
             .insert(hash.to_owned());
     }
@@ -363,7 +363,7 @@ impl SessionStore {
     /// ロック保持中に session + user_sessions 両方から token_hash を除く（OIDC の結び付きも除く）。
     fn remove_locked(&self, mem: &mut MemoryStore, hash: &str) {
         if let Some(e) = mem.sessions.remove(hash) {
-            let uid = e.user.discord_id;
+            let uid = e.user.user_id;
             if let Some(set) = mem.user_sessions.get_mut(&uid) {
                 set.remove(hash);
                 if set.is_empty() {
@@ -442,7 +442,7 @@ mod tests {
 
     fn user() -> SessionUser {
         SessionUser {
-            discord_id: "123".to_owned(),
+            user_id: "123".to_owned(),
             username: "yuu".to_owned(),
             role: Role::User,
         }
@@ -455,7 +455,7 @@ mod tests {
         // 発行トークンを sha256hex 化して get で解決できる（発行↔検証のキー整合）。
         let hash = crate::sha256_hex(&token);
         let got = store.get(&hash, 3600).await.expect("no backend err");
-        assert_eq!(got.map(|u| u.discord_id), Some("123".to_owned()));
+        assert_eq!(got.map(|u| u.user_id), Some("123".to_owned()));
     }
 
     #[tokio::test]
@@ -482,7 +482,7 @@ mod tests {
         }
         // 別ユーザーのセッションは残る。
         let other = SessionUser {
-            discord_id: "999".to_owned(),
+            user_id: "999".to_owned(),
             username: "z".to_owned(),
             role: Role::User,
         };

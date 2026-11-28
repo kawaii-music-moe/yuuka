@@ -53,7 +53,7 @@ impl AuthBackend for FakeAuth {
     async fn session_user(&self, token: &str) -> Result<Option<SessionUser>, AuthError> {
         Ok(
             (token == USER_WITH_ROW || token == USER_WITHOUT_ROW).then(|| SessionUser {
-                discord_id: token.to_owned(),
+                user_id: token.to_owned(),
                 username: token.to_owned(),
                 role: Role::User,
             }),
@@ -81,7 +81,7 @@ impl GeminiFactory for UnusedFactory {
 fn seed_user(path: &std::path::Path, discord_id: &str, model: Option<&str>) {
     let conn = rusqlite::Connection::open(path).expect("open seed");
     conn.execute(
-        "INSERT INTO users (discord_id, username, salt, role, gemini_model) \
+        "INSERT INTO users (id, username, salt, role, gemini_model) \
          VALUES (?1, ?1, '00', 'user', ?2)",
         rusqlite::params![discord_id, model],
     )
@@ -97,7 +97,7 @@ fn seed_user(path: &std::path::Path, discord_id: &str, model: Option<&str>) {
 fn stored_model(path: &std::path::Path, discord_id: &str) -> Option<String> {
     let conn = rusqlite::Connection::open(path).expect("open");
     conn.query_row(
-        "SELECT gemini_model FROM users WHERE discord_id = ?1",
+        "SELECT gemini_model FROM users WHERE id = ?1",
         rusqlite::params![discord_id],
         |r| r.get(0),
     )
@@ -244,7 +244,7 @@ async fn get_ignores_legacy_google_refresh_token_column() {
     seed_user(&path, USER_WITH_ROW, Some("gemini-2.5-pro"));
     let conn = rusqlite::Connection::open(&path).expect("open seed");
     conn.execute(
-        "UPDATE users SET google_refresh_token_encrypted = 'enc' WHERE discord_id = ?1",
+        "UPDATE users SET google_refresh_token_encrypted = 'enc' WHERE id = ?1",
         rusqlite::params![USER_WITH_ROW],
     )
     .expect("seed legacy column");
@@ -435,7 +435,7 @@ async fn put_without_users_row_is_explicit_error_and_writes_nothing() {
     assert_eq!(
         count(
             &path,
-            "SELECT COUNT(*) FROM users WHERE discord_id = ?1",
+            "SELECT COUNT(*) FROM users WHERE id = ?1",
             USER_WITHOUT_ROW
         ),
         0,

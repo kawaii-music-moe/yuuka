@@ -427,7 +427,7 @@ async fn lookup_user(
     db.read
         .read(move |conn| {
             conn.query_row(
-                "SELECT username, role FROM users WHERE discord_id = ?1",
+                "SELECT username, role FROM users WHERE id = ?1",
                 params![uid],
                 |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
             )
@@ -525,12 +525,12 @@ async fn approve_handler(
         )
             .into_response();
     }
-    match store.approve(&user_code, &user.0.discord_id) {
+    match store.approve(&user_code, &user.0.user_id) {
         ApproveOutcome::Ok { device_name } => {
             // 監査はベストエフォート（承認自体は既にインメモリに反映済み）。
             add_audit_log(
                 &db,
-                &user.0.discord_id,
+                &user.0.user_id,
                 "desktop.device_approve",
                 device_name.as_deref(),
                 None,
@@ -715,7 +715,7 @@ mod tests {
     impl AuthBackend for FakeAuth {
         async fn session_user(&self, token: &str) -> Result<Option<SessionUser>, AuthError> {
             Ok(matches!(token, "owner" | "other").then(|| SessionUser {
-                discord_id: token.to_owned(),
+                user_id: token.to_owned(),
                 username: token.to_owned(),
                 role: Role::User,
             }))
@@ -740,7 +740,7 @@ mod tests {
         {
             let conn = rusqlite::Connection::open(&path).expect("seed conn");
             conn.execute(
-                "INSERT OR IGNORE INTO users (discord_id, username, salt, role) \
+                "INSERT OR IGNORE INTO users (id, username, salt, role) \
                  VALUES ('owner', 'owner', 'x', 'user')",
                 [],
             )

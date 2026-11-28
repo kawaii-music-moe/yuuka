@@ -44,7 +44,7 @@ pub(crate) async fn status(
     State(state): State<AppState>,
     Query(q): Query<StatusQuery>,
 ) -> Result<Response, ApiError> {
-    let user_id = &user.0.discord_id;
+    let user_id = &user.0.user_id;
 
     // ダッシュボードは選択中の Bot スコープで集計する（未指定・system_default は 403、アクセス不可は 404）。
     // 共通の resolve_scope で bot アクセス検証 + オーナー解決を行う。適用中ペルソナだけは
@@ -72,6 +72,8 @@ pub(crate) async fn status(
 
     let notify_target = if snap.notify_target_type == "channel" && snap.notify_target_id.is_some() {
         json!({ "type": "channel", "id": snap.notify_target_id })
+    } else if snap.notify_target_type == "web" {
+        json!({ "type": "web" })
     } else {
         json!({ "type": "dm" })
     };

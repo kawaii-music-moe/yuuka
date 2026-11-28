@@ -179,7 +179,7 @@ async fn get_modules(
     State(db): State<Db>,
     Query(q): Query<ModulesQuery>,
 ) -> Response {
-    let uid = user.0.discord_id;
+    let uid = user.0.user_id;
     // GET は `?botId=` で受ける（Node は body→query だが GET のボディは実質未使用）。
     let bot_id = q.bot_id.clone().unwrap_or_default();
     if bot_id.is_empty() || !access_ok(&db, &uid, &bot_id).await {
@@ -237,7 +237,7 @@ async fn set_modules(
     State(db): State<Db>,
     Json(body): Json<Value>,
 ) -> Response {
-    let uid = user.0.discord_id;
+    let uid = user.0.user_id;
     let bot_id = body
         .get("botId")
         .and_then(Value::as_str)
@@ -338,7 +338,7 @@ async fn set_llm(
     State(db): State<Db>,
     Json(body): Json<Value>,
 ) -> Response {
-    let uid = user.0.discord_id;
+    let uid = user.0.user_id;
     let bot = match owned_bot_from_body(&db, &uid, &body).await {
         Ok(b) => b,
         Err(resp) => return *resp,
@@ -378,7 +378,7 @@ async fn set_gemini_key(
     Extension(AttrCrypto(crypto)): Extension<AttrCrypto>,
     Json(body): Json<Value>,
 ) -> Response {
-    let uid = user.0.discord_id;
+    let uid = user.0.user_id;
     let bot = match owned_bot_from_body(&db, &uid, &body).await {
         Ok(b) => b,
         Err(resp) => return *resp,
@@ -481,7 +481,7 @@ async fn set_guild(
     State(db): State<Db>,
     Json(body): Json<Value>,
 ) -> Response {
-    let uid = user.0.discord_id;
+    let uid = user.0.user_id;
     let bot = match owned_bot_from_body(&db, &uid, &body).await {
         Ok(b) => b,
         Err(resp) => return *resp,
@@ -533,7 +533,7 @@ async fn set_channel(
     State(db): State<Db>,
     Json(body): Json<Value>,
 ) -> Response {
-    let uid = user.0.discord_id;
+    let uid = user.0.user_id;
     let bot = match owned_bot_from_body(&db, &uid, &body).await {
         Ok(b) => b,
         Err(resp) => return *resp,
@@ -594,7 +594,7 @@ async fn set_muted_channel(
     State(db): State<Db>,
     Json(body): Json<Value>,
 ) -> Response {
-    let uid = user.0.discord_id;
+    let uid = user.0.user_id;
     let bot = match owned_bot_from_body(&db, &uid, &body).await {
         Ok(b) => b,
         Err(resp) => return *resp,
@@ -654,7 +654,7 @@ async fn set_member(
     State(db): State<Db>,
     Json(body): Json<Value>,
 ) -> Response {
-    let uid = user.0.discord_id;
+    let uid = user.0.user_id;
     let bot = match owned_bot_from_body(&db, &uid, &body).await {
         Ok(b) => b,
         Err(resp) => return *resp,
@@ -716,7 +716,7 @@ async fn set_role(
     State(db): State<Db>,
     Json(body): Json<Value>,
 ) -> Response {
-    let uid = user.0.discord_id;
+    let uid = user.0.user_id;
     let bot = match owned_bot_from_body(&db, &uid, &body).await {
         Ok(b) => b,
         Err(resp) => return *resp,
@@ -815,7 +815,7 @@ async fn set_persona(
     Query(q): Query<BotIdQuery>,
     Json(body): Json<Value>,
 ) -> Response {
-    let uid = user.0.discord_id;
+    let uid = user.0.user_id;
     let bot_id = body
         .get("botId")
         .and_then(Value::as_str)
@@ -892,7 +892,7 @@ async fn set_recommended_persona(
     Query(q): Query<BotIdQuery>,
     Json(body): Json<Value>,
 ) -> Response {
-    let uid = user.0.discord_id;
+    let uid = user.0.user_id;
     let bot_id = body
         .get("botId")
         .and_then(Value::as_str)
@@ -984,7 +984,7 @@ async fn admin_unpublish_persona(
     if ok {
         yuuka_auth::audit::add_audit_log(
             &db,
-            &admin.0.discord_id,
+            &admin.0.user_id,
             "admin.persona_unpublish",
             Some(&format!("persona:{id}")),
             None,
@@ -1019,7 +1019,7 @@ async fn admin_delete_persona(
     if ok {
         yuuka_auth::audit::add_audit_log(
             &db,
-            &admin.0.discord_id,
+            &admin.0.user_id,
             "admin.persona_delete",
             Some(&format!("persona:{id}")),
             None,
@@ -1065,11 +1065,11 @@ async fn guild_note_get(
     State(db): State<Db>,
     Query(q): Query<GuildNoteQuery>,
 ) -> Response {
-    let bot =
-        match require_owned_bot(&db, &user.0.discord_id, q.bot_id.as_deref().unwrap_or("")).await {
-            Ok(b) => b,
-            Err(resp) => return *resp,
-        };
+    let bot = match require_owned_bot(&db, &user.0.user_id, q.bot_id.as_deref().unwrap_or("")).await
+    {
+        Ok(b) => b,
+        Err(resp) => return *resp,
+    };
     let guild_id = q.guild_id.unwrap_or_default();
     if !is_snowflake(&guild_id) {
         return bad_request("guildId が必要です。");
@@ -1101,7 +1101,7 @@ async fn guild_note_set(
         .or(q.bot_id.as_deref())
         .unwrap_or("")
         .to_owned();
-    let bot = match require_owned_bot(&db, &user.0.discord_id, &bot_id).await {
+    let bot = match require_owned_bot(&db, &user.0.user_id, &bot_id).await {
         Ok(b) => b,
         Err(resp) => return *resp,
     };
@@ -1150,7 +1150,7 @@ async fn assistant_config_get(
 ) -> Response {
     let bot = match require_owned_bot(
         &db,
-        &user.0.discord_id,
+        &user.0.user_id,
         q.bot_id.as_deref().unwrap_or_default(),
     )
     .await
@@ -1326,7 +1326,7 @@ async fn guild_options_get(
 ) -> Response {
     let bot = match require_owned_bot(
         &db,
-        &user.0.discord_id,
+        &user.0.user_id,
         q.bot_id.as_deref().unwrap_or_default(),
     )
     .await
@@ -1438,7 +1438,7 @@ async fn change_attributes(
     Query(q): Query<BotIdQuery>,
     Json(body): Json<Value>,
 ) -> Response {
-    let uid = user.0.discord_id;
+    let uid = user.0.user_id;
     // requireOwnedBot: botId 必須 → 404 → 403 の順（Node）。
     let bot_id = body
         .get("botId")
@@ -1544,7 +1544,7 @@ async fn admin_set(admin: AdminUser, State(db): State<Db>, Json(body): Json<Valu
 
     yuuka_auth::audit::add_audit_log(
         &db,
-        &admin.0.discord_id,
+        &admin.0.user_id,
         "admin.bot_attribute_settings_change",
         None,
         None,
@@ -1637,7 +1637,7 @@ mod tests {
         async fn session_user(&self, token: &str) -> Result<Option<SessionUser>, AuthError> {
             let known = ["owner", "admin", "other"];
             Ok(known.contains(&token).then(|| SessionUser {
-                discord_id: token.to_owned(),
+                user_id: token.to_owned(),
                 username: token.to_owned(),
                 role: if token == "admin" {
                     Role::Admin
@@ -1667,7 +1667,7 @@ mod tests {
             let conn = rusqlite::Connection::open(&path).expect("seed conn");
             for (uid, role) in [("owner", "user"), ("admin", "admin"), ("other", "user")] {
                 conn.execute(
-                    "INSERT OR IGNORE INTO users (discord_id, username, salt, role) \
+                    "INSERT OR IGNORE INTO users (id, username, salt, role) \
                      VALUES (?1, ?1, 'x', ?2)",
                     rusqlite::params![uid, role],
                 )
@@ -2460,7 +2460,7 @@ mod tests {
         {
             let conn = rusqlite::Connection::open(&path).expect("seed conn");
             conn.execute(
-                "INSERT OR IGNORE INTO users (discord_id, username, salt, role) \
+                "INSERT OR IGNORE INTO users (id, username, salt, role) \
                  VALUES ('owner', 'owner', 'x', 'user')",
                 [],
             )

@@ -46,7 +46,7 @@ pub async fn list_public_personas(db: &Db) -> Result<Vec<(i64, String, String)>,
             let mut stmt = conn
                 .prepare(
                     "SELECT p.id, p.name, COALESCE(u.username, '不明') AS owner_username \
-                     FROM personas p LEFT JOIN users u ON u.discord_id = p.owner_id \
+                     FROM personas p LEFT JOIN users u ON u.id = p.owner_id \
                      WHERE p.is_public = 1 ORDER BY p.updated_at DESC",
                 )
                 .map_err(map_sqlite)?;

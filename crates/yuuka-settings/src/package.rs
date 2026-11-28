@@ -48,7 +48,7 @@ pub(crate) async fn download(
 
     let database = yuuka_google::export_user_database_with_media_dir(
         &state.db,
-        &user.0.discord_id,
+        &user.0.user_id,
         &state.config.media_dir,
     )
     .await?;

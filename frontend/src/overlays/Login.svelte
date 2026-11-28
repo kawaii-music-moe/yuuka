@@ -19,8 +19,15 @@ onMount(async () => {
 	}
 });
 
+// 招待リンク（`?invite=...`）から来たら、ログイン開始にコードを引き継ぐ（REGISTRATION_MODE=invite）。
+const invite =
+	new URLSearchParams(window.location.search).get("invite")?.trim() ?? "";
+
 function login(): void {
-	window.location.assign("/api/auth/oidc/start");
+	const start = "/api/auth/oidc/start";
+	window.location.assign(
+		invite ? `${start}?invite=${encodeURIComponent(invite)}` : start,
+	);
 }
 </script>
 
@@ -29,6 +36,9 @@ function login(): void {
 		<div class="login-header">
 			<h1>Yuuka</h1>
 			<p>{label} でログインします。</p>
+			{#if invite}
+				<p class="login-note">招待リンクから登録します。初めての方もこのままログインしてください。</p>
+			{/if}
 		</div>
 		<button type="button" class="btn btn-primary login-button" onclick={login} disabled={!enabled}>
 			{label}でログイン

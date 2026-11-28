@@ -62,10 +62,10 @@ fn seed_guild_bot(
     owner: &str,
     with_key: bool,
 ) {
-    // bots.user_id は users(discord_id) を FK 参照する → オーナーを先に seed。
+    // bots.user_id は users(id) を FK 参照する → オーナーを先に seed。
     conn(path)
         .execute(
-            "INSERT OR IGNORE INTO users (discord_id, username, salt, role) \
+            "INSERT OR IGNORE INTO users (id, username, salt, role) \
              VALUES (?1, ?1, '00', 'user')",
             rusqlite::params![owner],
         )

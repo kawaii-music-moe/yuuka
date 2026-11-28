@@ -40,7 +40,7 @@ pub(crate) async fn overview(
     Extension(rt): Extension<Arc<IntegratedRuntime>>,
     State(state): State<AppState>,
 ) -> Result<Response, ApiError> {
-    let user_id = &user.0.discord_id;
+    let user_id = &user.0.user_id;
     let db = &state.db;
 
     // 対象 Bot = 所有 Bot のみ。システムデフォルト Bot は案内役で MCP・認証情報を使わないため、
@@ -125,7 +125,7 @@ pub(crate) async fn bots_start(
     State(state): State<AppState>,
     Json(body): Json<Value>,
 ) -> Result<Response, ApiError> {
-    let user_id = &user.0.discord_id;
+    let user_id = &user.0.user_id;
     let db = &state.db;
     let bot_id = body_bot_id(&body);
     let bot = repo::get_bot(db, &bot_id).await?;
@@ -159,7 +159,7 @@ pub(crate) async fn bots_stop(
     State(state): State<AppState>,
     Json(body): Json<Value>,
 ) -> Result<Response, ApiError> {
-    let user_id = &user.0.discord_id;
+    let user_id = &user.0.user_id;
     let db = &state.db;
     let bot_id = body_bot_id(&body);
     let bot = repo::get_bot(db, &bot_id).await?;
@@ -185,7 +185,7 @@ pub(crate) async fn bots_restart(
     State(state): State<AppState>,
     Json(body): Json<Value>,
 ) -> Result<Response, ApiError> {
-    let user_id = &user.0.discord_id;
+    let user_id = &user.0.user_id;
     let db = &state.db;
     let bot_id = body_bot_id(&body);
     let bot = repo::get_bot(db, &bot_id).await?;
@@ -219,7 +219,7 @@ pub(crate) async fn bots_clear_history(
     State(state): State<AppState>,
     Json(body): Json<Value>,
 ) -> Result<Response, ApiError> {
-    let user_id = &user.0.discord_id;
+    let user_id = &user.0.user_id;
     let db = &state.db;
     let bot_id = body_bot_id(&body);
     let bot = repo::get_bot(db, &bot_id).await?;
@@ -251,7 +251,7 @@ pub(crate) async fn grants_mcp(
     State(state): State<AppState>,
     Json(body): Json<Value>,
 ) -> Result<Response, ApiError> {
-    let user_id = &user.0.discord_id;
+    let user_id = &user.0.user_id;
     let db = &state.db;
     let bot_id = body_bot_id(&body);
     let granted = body.get("granted") == Some(&Value::Bool(true));
@@ -287,7 +287,7 @@ pub(crate) async fn mcp_grants(
     State(state): State<AppState>,
     axum::extract::Query(q): axum::extract::Query<BotIdQuery>,
 ) -> Result<Response, ApiError> {
-    let user_id = &user.0.discord_id;
+    let user_id = &user.0.user_id;
     let db = &state.db;
     // 共通の resolve_scope で bot アクセス検証 + オーナー解決を単一クエリで行う（空/未指定/system_default は
     // 403・未アクセスは 404＝全ルート共通の契約）。has_bot_access + get_bot の二重問い合わせを避ける。
@@ -341,7 +341,7 @@ pub(crate) async fn grants_credential(
     State(state): State<AppState>,
     Json(body): Json<Value>,
 ) -> Result<Response, ApiError> {
-    let user_id = &user.0.discord_id;
+    let user_id = &user.0.user_id;
     let db = &state.db;
     let bot_id = body_bot_id(&body);
     let granted = body.get("granted") == Some(&Value::Bool(true));
@@ -372,7 +372,7 @@ pub(crate) async fn grants_google(
     State(state): State<AppState>,
     Json(body): Json<Value>,
 ) -> Result<Response, ApiError> {
-    let user_id = &user.0.discord_id;
+    let user_id = &user.0.user_id;
     let db = &state.db;
     let bot_id = body_bot_id(&body);
     let mode = body
@@ -415,7 +415,7 @@ pub(crate) async fn google_accounts_primary(
     State(state): State<AppState>,
     Json(body): Json<Value>,
 ) -> Result<Response, ApiError> {
-    let user_id = &user.0.discord_id;
+    let user_id = &user.0.user_id;
     let db = &state.db;
     let ok = match body.get("accountId").and_then(js_int) {
         Some(id) => yuuka_google::repo::set_primary(db, user_id, id).await?,
@@ -432,7 +432,7 @@ pub(crate) async fn google_accounts_delete(
     State(state): State<AppState>,
     Json(body): Json<Value>,
 ) -> Result<Response, ApiError> {
-    let user_id = &user.0.discord_id;
+    let user_id = &user.0.user_id;
     let db = &state.db;
     let account_id = body.get("accountId").and_then(js_int);
     let ok = match account_id {
@@ -463,7 +463,7 @@ pub(crate) async fn google_accounts_calendars(
     State(state): State<AppState>,
     Json(body): Json<Value>,
 ) -> Result<Response, ApiError> {
-    let user_id = &user.0.discord_id;
+    let user_id = &user.0.user_id;
     let db = &state.db;
     let account_id = body.get("accountId").and_then(js_int);
     // calendars: 配列なら string 要素のみ抽出・それ以外は []。
@@ -497,7 +497,7 @@ pub(crate) async fn google_account_calendars_list(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Response, ApiError> {
-    let user_id = &user.0.discord_id;
+    let user_id = &user.0.user_id;
     let db = &state.db;
     // path param を JS `Number()`+`Number.isInteger` 相当でコアース（非整数は取得せず 403）。
     let account_id = js_int(&Value::String(id));
