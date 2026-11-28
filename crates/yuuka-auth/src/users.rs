@@ -157,6 +157,10 @@ pub enum LoginRejection {
     Conflict(&'static str),
     /// `REGISTRATION_MODE=closed` で、初めてログインした人。
     RegistrationClosed,
+    /// `REGISTRATION_MODE=invite` で、招待コードを持たずに初めてログインした人。
+    InviteRequired,
+    /// 招待コードが見つからない・使用済み・期限切れ。
+    InviteInvalid,
 }
 
 impl LoginRejection {
@@ -167,6 +171,12 @@ impl LoginRejection {
             Self::Conflict(message) => *message,
             Self::RegistrationClosed => {
                 "新規登録は受け付けていません。管理者に問い合わせてください。"
+            }
+            Self::InviteRequired => {
+                "新規登録には招待コードが必要です。管理者から届いた招待リンクを開いてログインしてください。"
+            }
+            Self::InviteInvalid => {
+                "招待コードが無効か、使用済み・期限切れです。管理者に新しい招待を依頼してください。"
             }
         }
     }
@@ -183,7 +193,8 @@ const DISCORD_MISMATCH: &str =
 ///    あり、まだ連携していなければ連携する。
 /// 2. 見つからなければ、claim の Discord ID で、まだ `sub` に結び付いていない利用者（旧環境から移した
 ///    行など）を一度だけ引き受ける。
-/// 3. それでも無ければ、`REGISTRATION_MODE` が許すときだけ新しく作る。利用者 ID は、Discord ID が
+/// 3. それでも無ければ、`REGISTRATION_MODE` が許すときだけ新しく作る（`invite` は招待コードが要る。
+///    `ADMIN_*` で明示した管理者は、どの方式でも登録できる）。利用者 ID は、Discord ID が
 ///    あればそれと同じ値、無ければ UUIDv7。Discord 側の境界（yuuka-discord の `identity`）が
 ///    `users.discord_id` を引くようになるまでは、連携済みの利用者は `id = discord_id` に保つ（§8-6）。
 ///
@@ -195,12 +206,14 @@ pub async fn upsert_from_oidc(
     db: &Db,
     identity: &LoginIdentity,
     policy: &LoginPolicy,
+    invite: Option<&str>,
 ) -> Result<Result<LoginUser, LoginRejection>, DbError> {
     let salt = generate_user_salt().map_err(|e| DbError::Operation(format!("salt 生成: {e}")))?;
     let new_id = new_user_id()?;
     let is_admin = policy.is_admin(identity);
     let registration = policy.registration;
     let identity = identity.clone();
+    let invite = invite.map(str::to_owned);
     db.writer
         .transaction(move |tx| {
             let LoginIdentity {
@@ -283,10 +296,22 @@ pub async fn upsert_from_oidc(
                 }
             }
 
-            // 3) 新規登録。
-            if registration == RegistrationMode::Closed {
-                return Ok(Err(LoginRejection::RegistrationClosed));
-            }
+            // 3) 新規登録。招待制なら、利用者の作成と同じトランザクションでコードを予約する。
+            // ADMIN_* で明示した管理者は、招待コードを発行する人がまだいない初回でも入れるよう、どの方式でも登録できる。
+            let reserved = match registration {
+                _ if is_admin => None,
+                RegistrationMode::Closed => return Ok(Err(LoginRejection::RegistrationClosed)),
+                RegistrationMode::Open => None,
+                RegistrationMode::Invite => {
+                    let Some(code) = invite else {
+                        return Ok(Err(LoginRejection::InviteRequired));
+                    };
+                    if !crate::invite::reserve(tx, &code)? {
+                        return Ok(Err(LoginRejection::InviteInvalid));
+                    }
+                    Some(code)
+                }
+            };
             let role = if is_admin { Role::Admin } else { Role::User };
             let user_id = discord_id.clone().unwrap_or(new_id);
             tx.execute(
@@ -295,6 +320,9 @@ pub async fn upsert_from_oidc(
                 params![user_id, discord_id, username, salt, role_text(role), subject],
             )
             .map_err(map_sqlite)?;
+            if let Some(code) = reserved {
+                crate::invite::mark_used(tx, &code, &user_id)?;
+            }
             Ok(Ok(LoginUser { user_id, role }))
         })
         .await

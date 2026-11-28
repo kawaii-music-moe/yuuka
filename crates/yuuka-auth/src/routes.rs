@@ -11,8 +11,10 @@
 //! プロバイダーでログアウトすると `POST /api/auth/oidc/backchannel-logout` に logout_token が届くので、
 //! 同じプロバイダーのセッション（`sid`）から作った Yuuka のセッションを消す。
 
+use std::collections::HashMap;
 use std::convert::Infallible;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use axum::extract::{Extension, Form, FromRequestParts, Query, State};
 use axum::http::header::{CACHE_CONTROL, LOCATION, SET_COOKIE};
@@ -24,7 +26,7 @@ use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::json;
 use yuuka_types::SessionUser;
-use yuuka_web::{ApiError, AppState, AuthenticatedUser};
+use yuuka_web::{AdminUser, ApiError, AppState, AuthenticatedUser};
 
 use yuuka_core::RegistrationMode;
 
@@ -42,7 +44,12 @@ pub struct AuthRuntime {
     session_ttl_secs: u64,
     policy: LoginPolicy,
     oidc: Option<Arc<OidcClient>>,
+    /// ログイン開始時に受け取った招待コード（ログインの `state` → コード・受け取った時刻）。
+    pending_invites: Mutex<HashMap<String, (String, Instant)>>,
 }
+
+/// 保留できる招待コードの上限（OIDC の保留ログインと同じ考え方で、溢れたら古いものから捨てる）。
+const MAX_PENDING_INVITES: usize = 1024;
 
 impl AuthRuntime {
     /// `oidc` が `None`（`OIDC_CLIENT_SECRET` 未設定）ならログインできない。
@@ -64,6 +71,7 @@ impl AuthRuntime {
                 ..LoginPolicy::default()
             },
             oidc,
+            pending_invites: Mutex::new(HashMap::new()),
         }
     }
 
@@ -73,11 +81,45 @@ impl AuthRuntime {
         if !policy.has_admin() {
             tracing::warn!("ADMIN_DISCORD_IDS・ADMIN_OIDC_SUBJECTS・ADMIN_EMAILS がどれも未設定です。新規利用者に管理者権限は付与されません。初回ログイン前に管理者を指定してください。");
         }
-        if policy.registration == RegistrationMode::Closed {
-            tracing::info!("REGISTRATION_MODE=closed: 既存の利用者だけがログインできます。");
+        match policy.registration {
+            RegistrationMode::Closed => {
+                tracing::info!("REGISTRATION_MODE=closed: 既存の利用者だけがログインできます。");
+            }
+            RegistrationMode::Invite => {
+                tracing::info!("REGISTRATION_MODE=invite: 新規登録には招待コードが要ります（管理画面で発行）。");
+            }
+            RegistrationMode::Open => {}
         }
         self.policy = policy;
         self
+    }
+
+    fn remember_invite(&self, login_state: &str, code: String) {
+        let mut pending = self
+            .pending_invites
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let now = Instant::now();
+        pending.retain(|_, (_, at)| now.duration_since(*at) < crate::oidc::LOGIN_TTL);
+        if pending.len() >= MAX_PENDING_INVITES {
+            if let Some(oldest) = pending
+                .iter()
+                .min_by_key(|(_, (_, at))| *at)
+                .map(|(k, _)| k.clone())
+            {
+                pending.remove(&oldest);
+            }
+        }
+        pending.insert(login_state.to_owned(), (code, now));
+    }
+
+    fn take_invite(&self, login_state: &str) -> Option<String> {
+        self.pending_invites
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(login_state)
+            .filter(|(_, at)| at.elapsed() < crate::oidc::LOGIN_TTL)
+            .map(|(code, _)| code)
     }
 }
 
@@ -92,6 +134,8 @@ pub fn routes(runtime: Arc<AuthRuntime>) -> Router<AppState> {
         )
         .route("/api/logout", post(logout))
         .route("/api/users", get(users_route))
+        .route("/api/admin/invites", get(list_invites).post(create_invite))
+        .route("/api/admin/invites/delete", post(delete_invite))
         .layer(Extension(runtime))
 }
 
@@ -105,9 +149,16 @@ async fn provider(Extension(rt): Extension<Arc<AuthRuntime>>) -> Response {
     .into_response()
 }
 
+#[derive(Deserialize)]
+struct StartQuery {
+    /// 招待コード（`REGISTRATION_MODE=invite` で初めてログインする人が、招待リンクから持ってくる）。
+    invite: Option<String>,
+}
+
 async fn start(
     State(state): State<AppState>,
     Extension(rt): Extension<Arc<AuthRuntime>>,
+    Query(query): Query<StartQuery>,
 ) -> Response {
     let Some(oidc) = &rt.oidc else {
         return error(
@@ -122,6 +173,9 @@ async fn start(
             return error(StatusCode::BAD_GATEWAY, "ログイン先に接続できません。");
         }
     };
+    if let Some(code) = query.invite.as_deref().and_then(crate::invite::normalize) {
+        rt.remember_invite(&login_state, code);
+    }
     let mut response = redirect(&authorize_url);
     let max_age = i64::try_from(crate::oidc::LOGIN_TTL.as_secs()).unwrap_or(i64::MAX);
     response.headers_mut().insert(
@@ -205,18 +259,22 @@ async fn exchange_and_login(
         email: identity.email,
         username: identity.display_name,
     };
-    let found = match users::upsert_from_oidc(&state.db, &login, &rt.policy).await {
-        Ok(Ok(found)) => found,
-        Ok(Err(rejection)) => {
-            tracing::warn!(reason = ?rejection, "OIDC ログインを断った");
-            let status = match rejection {
-                users::LoginRejection::Conflict(_) => StatusCode::CONFLICT,
-                users::LoginRejection::RegistrationClosed => StatusCode::FORBIDDEN,
-            };
-            return error(status, rejection.message());
-        }
-        Err(e) => return ApiError::from(e).into_response(),
-    };
+    let invite = rt.take_invite(&login_state);
+    let found =
+        match users::upsert_from_oidc(&state.db, &login, &rt.policy, invite.as_deref()).await {
+            Ok(Ok(found)) => found,
+            Ok(Err(rejection)) => {
+                tracing::warn!(reason = ?rejection, "OIDC ログインを断った");
+                let status = match rejection {
+                    users::LoginRejection::Conflict(_) => StatusCode::CONFLICT,
+                    users::LoginRejection::RegistrationClosed
+                    | users::LoginRejection::InviteRequired
+                    | users::LoginRejection::InviteInvalid => StatusCode::FORBIDDEN,
+                };
+                return error(status, rejection.message());
+            }
+            Err(e) => return ApiError::from(e).into_response(),
+        };
     let user = SessionUser {
         user_id: found.user_id,
         username: login.username,
@@ -322,6 +380,74 @@ fn redirect(location: &str) -> Response {
         response.headers_mut().insert(LOCATION, value);
     }
     response
+}
+
+// ─── 招待コード（管理者のみ・§4.1） ───────────────────────────────────────────────
+
+/// `GET /api/admin/invites`：招待コードの一覧。
+async fn list_invites(_admin: AdminUser, State(state): State<AppState>) -> Response {
+    match crate::invite::list(&state.db).await {
+        Ok(invites) => Json(json!({ "success": true, "invites": invites })).into_response(),
+        Err(e) => ApiError::from(e).into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CreateInviteBody {
+    note: Option<String>,
+    expires_in_days: Option<u32>,
+}
+
+/// `POST /api/admin/invites`：招待コードを発行する。
+async fn create_invite(
+    admin: AdminUser,
+    State(state): State<AppState>,
+    Json(body): Json<CreateInviteBody>,
+) -> Response {
+    match crate::invite::create(&state.db, &admin.0.user_id, body.note, body.expires_in_days).await
+    {
+        Ok(invite) => {
+            crate::audit::add_audit_log(
+                &state.db,
+                &admin.0.user_id,
+                "admin.invite_create",
+                Some(&invite.code),
+                None,
+            )
+            .await;
+            Json(json!({ "success": true, "invite": invite })).into_response()
+        }
+        Err(e) => ApiError::from(e).into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+struct DeleteInviteBody {
+    code: String,
+}
+
+/// `POST /api/admin/invites/delete`：招待コードを削除する。
+async fn delete_invite(
+    admin: AdminUser,
+    State(state): State<AppState>,
+    Json(body): Json<DeleteInviteBody>,
+) -> Response {
+    match crate::invite::delete(&state.db, &body.code).await {
+        Ok(true) => {
+            crate::audit::add_audit_log(
+                &state.db,
+                &admin.0.user_id,
+                "admin.invite_delete",
+                Some(&body.code),
+                None,
+            )
+            .await;
+            Json(json!({ "success": true })).into_response()
+        }
+        Ok(false) => error(StatusCode::NOT_FOUND, "招待コードが見つかりません。"),
+        Err(e) => ApiError::from(e).into_response(),
+    }
 }
 
 fn error(status: StatusCode, message: &str) -> Response {

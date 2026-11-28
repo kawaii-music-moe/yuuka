@@ -50,7 +50,7 @@ cp example.yaml config.yaml
   - `OIDC_LABEL`: ログインボタンの表示名（省略時は標準なら `sk-9 Account`、それ以外は issuer のホスト名）。
 - **`ADMIN_DISCORD_IDS`**: 初回ログイン時に Admin として作成する Discord ユーザー ID（未設定なら全員 User。初回ログイン前に管理者の ID を指定）。
 - **`ADMIN_OIDC_SUBJECTS`** / **`ADMIN_EMAILS`**: Discord を使わない管理者を、OIDC の `sub` か確認済みのメールアドレス（`email_verified` が true のときだけ照合）で指定する。`ADMIN_DISCORD_IDS` と合わせて、どれかに当たる新規利用者が管理者になる。
-- **`REGISTRATION_MODE`**（既定 `open`）: `closed` にすると、既存の利用者だけがログインでき、初めての人は登録されない。
+- **`REGISTRATION_MODE`**（既定 `invite`）: 初めてログインした人の扱い。`invite` は管理画面「招待コード」で発行した招待リンク（1 回だけ使える）を持つ人だけを登録する。`open` は誰でも登録し、`closed` は既存の利用者だけがログインできる。`ADMIN_DISCORD_IDS` / `ADMIN_OIDC_SUBJECTS` / `ADMIN_EMAILS` で指定した管理者は、どの方式でも登録できる（最初の管理者が招待コードを発行するため）。
 
 ### 環境変数（機密設定）
 

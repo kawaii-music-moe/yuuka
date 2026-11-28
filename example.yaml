@@ -95,8 +95,9 @@ OIDC_CLIENT_SECRET: ""
 # Discord を使わない管理者は OIDC の sub か、確認済みのメールアドレスで指定できます（カンマ区切り）
 # ADMIN_OIDC_SUBJECTS: ""
 # ADMIN_EMAILS: ""
-# 初めてログインした人を登録するか（open: 誰でも / closed: 既存の利用者だけ）
-# REGISTRATION_MODE: "open"
+# 初めてログインした人を登録するか（invite: 管理画面で発行した招待リンクを持つ人だけ / open: 誰でも /
+# closed: 既存の利用者だけ）。上の ADMIN_* で指定した管理者は、どの方式でも登録できます。
+# REGISTRATION_MODE: "invite"
 
 # ==============================================================================
 # Google OAuth2 システム共通設定 (System-wide Google OAuth)

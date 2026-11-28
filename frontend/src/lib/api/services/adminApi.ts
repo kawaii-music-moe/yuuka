@@ -4,6 +4,8 @@
 import { api } from "../client";
 import type {
 	AdminAuditLogsResponse,
+	AdminInviteCreateResponse,
+	AdminInvitesResponse,
 	AdminBotAttributeSettingsResponse,
 	AdminBotsResponse,
 	AdminStatsResponse,
@@ -39,6 +41,15 @@ export const adminApi = {
 	/** POST /api/admin/users/delete */
 	deleteUser: (targetUserId: string) =>
 		api.post<ApiResponse>("/api/admin/users/delete", { targetUserId }, USER),
+
+	/** GET /api/admin/invites — 招待コードの一覧 */
+	invites: () => api.get<AdminInvitesResponse>("/api/admin/invites", USER),
+	/** POST /api/admin/invites — 招待コードの発行（expiresInDays は 1〜365） */
+	createInvite: (body: { note?: string; expiresInDays?: number }) =>
+		api.post<AdminInviteCreateResponse>("/api/admin/invites", body, USER),
+	/** POST /api/admin/invites/delete — 招待コードの削除 */
+	deleteInvite: (code: string) =>
+		api.post<ApiResponse>("/api/admin/invites/delete", { code }, USER),
 
 	/** GET /api/admin/audit-logs（action フィルタ・ページング対応） */
 	auditLogs: (query?: { limit?: number; offset?: number; action?: string }) =>

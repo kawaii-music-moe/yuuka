@@ -75,7 +75,7 @@ pub struct Config {
     /// 初期 admin に昇格するメールアドレス（`ADMIN_EMAILS`・任意）。ID トークンの
     /// `email_verified` が true のときだけ照合する。大文字小文字は区別しない。
     pub admin_emails: Vec<String>,
-    /// 初めてログインした人を利用者として登録するか（`REGISTRATION_MODE`・既定 `open`）。
+    /// 初めてログインした人を利用者として登録するか（`REGISTRATION_MODE`・既定 `invite`）。
     pub registration_mode: RegistrationMode,
     /// デスクトップ `/ws/chat` の 1 メッセージ添付上限（MB・`DESKTOP_MAX_UPLOAD_MB`・既定 20・
     /// Node `config.desktopMaxUploadMb`）。
@@ -161,7 +161,7 @@ impl Config {
             admin_emails: parse_string_list(get("ADMIN_EMAILS").as_deref()),
             registration_mode: parse_field(
                 "REGISTRATION_MODE",
-                &get("REGISTRATION_MODE").unwrap_or_else(|| "open".to_owned()),
+                &get("REGISTRATION_MODE").unwrap_or_else(|| "invite".to_owned()),
             )?,
             desktop_max_upload_mb: parse_field(
                 "DESKTOP_MAX_UPLOAD_MB",
@@ -475,12 +475,14 @@ fn parse_field<T: std::str::FromStr>(field: &'static str, raw: &str) -> Result<T
 
 /// 初めてログインした人の扱い（`REGISTRATION_MODE`）。
 ///
-/// 既存の利用者（OIDC の `sub` か Discord ID で引き当たる人）は、どの値でもログインできる。
-/// 招待コード（`invite`）は docs/design/optional_discord.md §4.1 の次の段階で足す。
+/// 既存の利用者（OIDC の `sub` か Discord ID で引き当たる人）は、どの値でもログインできる
+/// （docs/design/optional_discord.md §4.1・§9）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum RegistrationMode {
-    /// 誰でも登録できる（プロバイダー側で利用者を絞る前提）。
+    /// 管理者が発行した招待コードを持つ人だけが登録できる（既定）。
     #[default]
+    Invite,
+    /// 誰でも登録できる（プロバイダー側で利用者を絞る前提）。
     Open,
     /// 新規登録を受け付けない。
     Closed,
@@ -491,6 +493,7 @@ impl std::str::FromStr for RegistrationMode {
 
     fn from_str(raw: &str) -> Result<Self, Self::Err> {
         match raw.trim().to_ascii_lowercase().as_str() {
+            "invite" => Ok(Self::Invite),
             "open" => Ok(Self::Open),
             "closed" => Ok(Self::Closed),
             _ => Err(()),
@@ -583,11 +586,11 @@ mod tests {
     }
 
     #[test]
-    fn login_policy_defaults_to_open_and_reads_admin_lists() {
+    fn login_policy_defaults_to_invite_and_reads_admin_lists() {
         let defaults =
             Config::load_and_validate(std::path::Path::new("/no/such/yuuka-config.yaml"))
                 .expect("defaults");
-        assert_eq!(defaults.registration_mode, RegistrationMode::Open);
+        assert_eq!(defaults.registration_mode, RegistrationMode::Invite);
         assert!(defaults.admin_oidc_subjects.is_empty());
         assert!(defaults.admin_emails.is_empty());
 
@@ -603,6 +606,14 @@ mod tests {
             vec!["sub-1".to_owned(), "sub-2".to_owned()]
         );
         assert_eq!(cfg.admin_emails, vec!["owner@example.com".to_owned()]);
+
+        let open = write_yaml("REGISTRATION_MODE: \"open\"\n");
+        assert_eq!(
+            Config::load_and_validate(open.path())
+                .expect("open")
+                .registration_mode,
+            RegistrationMode::Open
+        );
 
         let bad = write_yaml("REGISTRATION_MODE: \"sometimes\"\n");
         assert!(Config::load_and_validate(bad.path()).is_err());

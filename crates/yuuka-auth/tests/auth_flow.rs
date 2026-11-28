@@ -342,6 +342,7 @@ fn oidc_client(issuer: &str) -> Arc<OidcClient> {
 fn build_app(oidc: Option<Arc<OidcClient>>, admin_ids: Vec<String>, config: WebConfig) -> TestApp {
     let policy = LoginPolicy {
         admin_discord_ids: admin_ids.clone(),
+        registration: RegistrationMode::Open,
         ..LoginPolicy::default()
     };
     build_app_with_policy(oidc, admin_ids, policy, config)
@@ -433,7 +434,11 @@ fn name_value(cookie: &str) -> String {
 
 /// `start` を通して `(認可 URL, state, ブラウザが返す state Cookie)` を得る。
 async fn begin_login(router: &axum::Router) -> (String, String, String) {
-    let response = get_with(router, "/api/auth/oidc/start", None).await;
+    begin_login_at(router, "/api/auth/oidc/start").await
+}
+
+async fn begin_login_at(router: &axum::Router, start_uri: &str) -> (String, String, String) {
+    let response = get_with(router, start_uri, None).await;
     assert_eq!(response.status(), StatusCode::FOUND);
     let authorize_url = location(&response);
     let state = reqwest::Url::parse(&authorize_url)
@@ -915,6 +920,7 @@ async fn admin_can_be_named_by_oidc_subject_without_discord() {
         Vec::new(),
         LoginPolicy {
             admin_subjects: vec!["acc-admin".to_owned()],
+            registration: RegistrationMode::Open,
             ..LoginPolicy::default()
         },
         WebConfig::default(),
@@ -934,6 +940,195 @@ async fn admin_can_be_named_by_oidc_subject_without_discord() {
         user_by_subject(&t.db_path, "acc-user").expect("user").2,
         "user"
     );
+}
+
+// ---------------------------------------------------------------------------------------------
+// 招待コード（REGISTRATION_MODE=invite）
+// ---------------------------------------------------------------------------------------------
+
+/// 招待コード付きでログインを始め、callback まで戻ってくる。
+async fn login_with_invite(
+    t: &TestApp,
+    provider: &Provider,
+    account: Value,
+    invite: &str,
+) -> axum::response::Response {
+    let (authorize_url, state, cookie) =
+        begin_login_at(&t.router, &format!("/api/auth/oidc/start?invite={invite}")).await;
+    let code = provider.authorize(&authorize_url, account);
+    get_with(
+        &t.router,
+        &format!("/api/auth/oidc/callback?code={code}&state={state}"),
+        Some(&cookie),
+    )
+    .await
+}
+
+fn invite_app(provider: &Provider, admin_subjects: Vec<String>) -> TestApp {
+    build_app_with_policy(
+        Some(oidc_client(&provider.issuer)),
+        Vec::new(),
+        LoginPolicy {
+            admin_subjects,
+            registration: RegistrationMode::Invite,
+            ..LoginPolicy::default()
+        },
+        WebConfig::default(),
+    )
+}
+
+fn seed_invite(path: &PathBuf, code: &str) {
+    let conn = rusqlite::Connection::open(path).expect("open");
+    conn.execute("INSERT INTO invite_codes (code) VALUES (?1)", [code])
+        .expect("seed invite");
+}
+
+async fn json_body(response: axum::response::Response) -> Value {
+    let bytes = axum::body::to_bytes(response.into_body(), 1 << 20)
+        .await
+        .expect("body");
+    serde_json::from_slice(&bytes).expect("json")
+}
+
+async fn post_json_with(
+    router: &axum::Router,
+    uri: &str,
+    cookie: &str,
+    body: Value,
+) -> axum::response::Response {
+    send(
+        router,
+        Request::builder()
+            .method("POST")
+            .uri(uri)
+            .header(COOKIE, cookie)
+            .header(CONTENT_TYPE, "application/json")
+            .body(Body::from(body.to_string()))
+            .expect("request"),
+    )
+    .await
+}
+
+#[tokio::test]
+async fn invite_mode_requires_a_valid_single_use_code() {
+    let provider = start_provider().await;
+    let t = invite_app(&provider, Vec::new());
+    seed_invite(&t.db_path, "invite-code-0001");
+
+    // コード無し・知らないコードでは登録しない。
+    let response = login(&t, &provider, json!({ "sub": "acc-new", "name": "New" })).await;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let response = login_with_invite(
+        &t,
+        &provider,
+        json!({ "sub": "acc-new", "name": "New" }),
+        "unknown-code-0000",
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert!(user_by_subject(&t.db_path, "acc-new").is_none());
+
+    // 有効なコードで登録でき、2 人目は同じコードを使えない。
+    let response = login_with_invite(
+        &t,
+        &provider,
+        json!({ "sub": "acc-new", "name": "New" }),
+        "invite-code-0001",
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::FOUND);
+    let (id, _, _) = user_by_subject(&t.db_path, "acc-new").expect("registered");
+    let conn = rusqlite::Connection::open(&t.db_path).expect("open");
+    let used_by: Option<String> = conn
+        .query_row(
+            "SELECT used_by FROM invite_codes WHERE code = 'invite-code-0001'",
+            [],
+            |r| r.get(0),
+        )
+        .expect("invite row");
+    assert_eq!(used_by.as_deref(), Some(id.as_str()));
+
+    let response = login_with_invite(
+        &t,
+        &provider,
+        json!({ "sub": "acc-second", "name": "Second" }),
+        "invite-code-0001",
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert!(user_by_subject(&t.db_path, "acc-second").is_none());
+
+    // 登録済みの人はコード無しでログインできる。
+    login_session(&t, &provider, json!({ "sub": "acc-new", "name": "New" })).await;
+}
+
+#[tokio::test]
+async fn named_admin_registers_without_invite_and_can_issue_invites() {
+    let provider = start_provider().await;
+    let t = invite_app(&provider, vec!["acc-admin".to_owned()]);
+    let admin = login_session(
+        &t,
+        &provider,
+        json!({ "sub": "acc-admin", "name": "Admin" }),
+    )
+    .await;
+    assert_eq!(
+        user_by_subject(&t.db_path, "acc-admin").expect("admin").2,
+        "admin"
+    );
+
+    let response = post_json_with(
+        &t.router,
+        "/api/admin/invites",
+        &admin,
+        json!({ "note": "友人", "expiresInDays": 3 }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let created = json_body(response).await;
+    let code = created["invite"]["code"].as_str().expect("code").to_owned();
+    assert_eq!(created["invite"]["note"], "友人");
+    assert!(created["invite"]["expiresAt"].is_string());
+
+    let listed = json_body(get_with(&t.router, "/api/admin/invites", Some(&admin)).await).await;
+    assert_eq!(listed["invites"].as_array().expect("list").len(), 1);
+
+    // 発行したコードで新しい人が登録できる。一般利用者は発行できない。
+    let user = {
+        let response = login_with_invite(
+            &t,
+            &provider,
+            json!({ "sub": "acc-friend", "name": "Friend" }),
+            &code,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::FOUND);
+        name_value(
+            &set_cookies(&response)
+                .into_iter()
+                .find(|c| c.starts_with("yuuka-session="))
+                .expect("session cookie"),
+        )
+    };
+    let response = post_json_with(&t.router, "/api/admin/invites", &user, json!({})).await;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    let response = post_json_with(
+        &t.router,
+        "/api/admin/invites/delete",
+        &admin,
+        json!({ "code": code }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let response = post_json_with(
+        &t.router,
+        "/api/admin/invites/delete",
+        &admin,
+        json!({ "code": code }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
