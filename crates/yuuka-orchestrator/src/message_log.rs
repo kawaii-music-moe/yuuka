@@ -1198,7 +1198,7 @@ mod tests {
     fn seed_user(path: &std::path::Path, user_id: &str) {
         let conn = rusqlite::Connection::open(path).expect("open");
         conn.execute(
-            "INSERT OR IGNORE INTO users (discord_id, username, salt) \
+            "INSERT OR IGNORE INTO users (id, username, salt) \
              VALUES (?1, ?1, 'x')",
             rusqlite::params![user_id],
         )

@@ -27,7 +27,7 @@ pub enum UserNotifyTarget {
 pub(crate) fn query(conn: &Connection, user_id: &str) -> Result<UserNotifyTarget, DbError> {
     let row: Option<(String, Option<String>)> = conn
         .query_row(
-            "SELECT notify_target_type, notify_target_id FROM users WHERE discord_id = ?1",
+            "SELECT notify_target_type, notify_target_id FROM users WHERE id = ?1",
             params![user_id],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
@@ -58,7 +58,7 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(
             "CREATE TABLE users (
-                discord_id TEXT PRIMARY KEY,
+                id TEXT PRIMARY KEY,
                 notify_target_type TEXT NOT NULL DEFAULT 'dm',
                 notify_target_id TEXT
             );

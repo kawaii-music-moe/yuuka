@@ -120,7 +120,7 @@ mod tests {
         db.writer
             .transaction(|tx| {
                 tx.execute(
-                    "INSERT OR IGNORE INTO users (discord_id, username, salt) VALUES ('userB', 'userB', '')",
+                    "INSERT OR IGNORE INTO users (id, username, salt) VALUES ('userB', 'userB', '')",
                     [],
                 )
                 .map_err(yuuka_db::map_sqlite)?;

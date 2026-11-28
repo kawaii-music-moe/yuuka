@@ -854,7 +854,7 @@ mod tests {
             {
                 let conn = rusqlite::Connection::open(&path).expect("seed conn");
                 conn.execute(
-                    "INSERT INTO users (discord_id, username, salt, role) \
+                    "INSERT INTO users (id, username, salt, role) \
                      VALUES ('alice','alice','deadbeef','user'),('root','root','deadbeef','admin')",
                     [],
                 )

@@ -601,7 +601,7 @@ mod tests {
         let db = Db::open(&path).expect("open");
         let conn = rusqlite::Connection::open(&path).expect("seed conn");
         conn.execute(
-            "INSERT OR IGNORE INTO users (discord_id, username, salt) \
+            "INSERT OR IGNORE INTO users (id, username, salt) \
              VALUES ('u', 'u', '')",
             [],
         )

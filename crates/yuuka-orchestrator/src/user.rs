@@ -37,7 +37,7 @@ pub async fn user_gemini(db: &Db, user_id: &str) -> Result<Option<UserGemini>, D
             let row: Option<RawGeminiRow> = conn
                 .query_row(
                     "SELECT gemini_api_key_encrypted, gemini_api_key_iv, gemini_api_key_tag, gemini_model \
-                     FROM users WHERE discord_id = ?1",
+                     FROM users WHERE id = ?1",
                     params![user_id],
                     |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
                 )
@@ -63,7 +63,7 @@ pub async fn rich_reply_enabled(db: &Db, user_id: &str) -> bool {
         .read
         .read(move |conn| {
             conn.query_row(
-                "SELECT rich_reply_enabled FROM users WHERE discord_id = ?1",
+                "SELECT rich_reply_enabled FROM users WHERE id = ?1",
                 params![user_id],
                 |r| r.get::<_, i64>(0),
             )

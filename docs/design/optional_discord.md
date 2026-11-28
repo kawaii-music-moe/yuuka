@@ -43,9 +43,9 @@ ALTER TABLE users RENAME COLUMN discord_id TO id;
 ALTER TABLE users ADD COLUMN discord_id TEXT;
 UPDATE users SET discord_id = id;               -- 既存ユーザーは全員連携済み
 CREATE UNIQUE INDEX idx_users_discord_id ON users(discord_id) WHERE discord_id IS NOT NULL;
-ALTER TABLE users ADD COLUMN discord_linked_at INTEGER;
+ALTER TABLE users ADD COLUMN discord_linked_at TEXT;
 
--- OIDC の発行元。sk_account_id は oidc_sub に改名し、(issuer, sub) を一意にする
+-- （§8-4 で別のマイグレーションにする）OIDC の発行元。sk_account_id は oidc_sub に改名し、(issuer, sub) を一意にする
 ALTER TABLE users RENAME COLUMN sk_account_id TO oidc_sub;
 ALTER TABLE users ADD COLUMN oidc_issuer TEXT;
 UPDATE users SET oidc_issuer = :current_issuer WHERE oidc_sub IS NOT NULL;   -- 起動時の設定値で埋める（§3.3）
@@ -140,7 +140,7 @@ Discord Bot（`yuuka-discord`）を起動しない構成も正式にサポート
 ## 8. 実装ステップ（PR 単位・すべて develop から）
 
 1. **型の分離（挙動は変えない）**: `DiscordUserId` を新設し、Discord 境界での `UserId` → Discord ID の変換を関数 1 つに集める。この時点ではまだ恒等変換。
-2. **DB の改名**: V39 で `id` / `discord_id` / `oidc_issuer` を導入する。SQL 文の `users.discord_id` を `users.id` に置き換え、Discord 境界の変換を `users.discord_id` の参照に切り替える。FK と CASCADE のテストを足す。
+2. **DB の改名**: V39 で `users.discord_id`（主キー）を `id` に改名し、Discord 連携の列 `discord_id`（NULL 可・一意）と `discord_linked_at` を足す。SQL 文の `users.discord_id` を `users.id` に置き換える。既存利用者と、まだ Discord 必須のままのログインで作る利用者は `id = discord_id` なので、Discord 境界の変換（identity）は恒等のまま据え置き、§8-4 で `users.discord_id` の参照に切り替える。`oidc_issuer` と `sk_account_id` → `oidc_sub` の改名も §8-4 で行う。FK・CASCADE・トリガーの移行テストを足す。
 3. **セッションと DTO**: `SessionUser.user_id` と `discord_id: Option`、Redis の互換読み込み、ts-rs の再生成、フロントエンド・クライアントの追随。
 4. **OIDC の claim を任意にする**: §4.1・§4.2、`REGISTRATION_MODE`、`ADMIN_OIDC_SUBJECTS` / `ADMIN_EMAILS`。Discord claim の無い ID トークンでログインできることを `auth_flow.rs` でテストする。
 5. **Web 通知**: `notifications` テーブル、`WebNotifier`、既定の送り先の解決規則、WS 配信、画面の通知一覧。

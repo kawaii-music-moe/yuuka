@@ -50,7 +50,7 @@ pub async fn verify(
         .read
         .read(move |conn| {
             conn.query_row(
-                "SELECT username, role FROM users WHERE discord_id = ?1",
+                "SELECT username, role FROM users WHERE id = ?1",
                 params![uid],
                 |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
             )
@@ -211,7 +211,7 @@ mod tests {
         rusqlite::Connection::open(&path)
             .expect("seed")
             .execute(
-                "INSERT INTO users(discord_id, username, salt, role, sk_account_id) \
+                "INSERT INTO users(id, username, salt, role, sk_account_id) \
                  VALUES('123', 'alice', '00', 'admin', 'acc-123')",
                 [],
             )

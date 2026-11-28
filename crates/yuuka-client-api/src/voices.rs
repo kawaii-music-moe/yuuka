@@ -169,7 +169,7 @@ async fn create(
             // `users` 行の無いユーザー（削除済みの残存セッション等）には作らない（外部キー違反を 500 にしない）。
             let exists = tx
                 .query_row(
-                    "SELECT 1 FROM users WHERE discord_id = ?1",
+                    "SELECT 1 FROM users WHERE id = ?1",
                     params![uid],
                     |_| Ok(()),
                 )

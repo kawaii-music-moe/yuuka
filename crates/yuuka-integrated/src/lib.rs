@@ -190,7 +190,7 @@ mod tests {
         Connection::open(path)
             .expect("open")
             .execute(
-                "INSERT OR IGNORE INTO users (discord_id, username, salt) \
+                "INSERT OR IGNORE INTO users (id, username, salt) \
                  VALUES (?1, ?1, 's')",
                 params![user],
             )

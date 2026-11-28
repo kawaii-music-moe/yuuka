@@ -201,7 +201,7 @@ mod tests {
         {
             let conn = rusqlite::Connection::open(&path).expect("open users");
             conn.execute(
-                "INSERT OR REPLACE INTO users (discord_id, username, salt, role) \
+                "INSERT OR REPLACE INTO users (id, username, salt, role) \
                  VALUES ('u', 'u', '00', 'user')",
                 [],
             )

@@ -210,7 +210,7 @@ mod tests {
         let db = Db::open(&path).expect("open db"); // migrations で users 表を作成。
         let conn = rusqlite::Connection::open(&path).expect("open");
         conn.execute(
-            "INSERT OR REPLACE INTO users (discord_id, username, salt, role) \
+            "INSERT OR REPLACE INTO users (id, username, salt, role) \
              VALUES (?1, ?2, '00', ?3)",
             rusqlite::params![discord_id, username, role_text(role)],
         )

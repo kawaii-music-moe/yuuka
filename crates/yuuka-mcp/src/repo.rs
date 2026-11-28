@@ -178,11 +178,9 @@ pub async fn is_admin(db: &Db, discord_id: &str) -> Result<bool, DbError> {
     db.read
         .read(move |conn| {
             let role: Option<String> = conn
-                .query_row(
-                    "SELECT role FROM users WHERE discord_id = ?1",
-                    params![id],
-                    |r| r.get::<_, String>(0),
-                )
+                .query_row("SELECT role FROM users WHERE id = ?1", params![id], |r| {
+                    r.get::<_, String>(0)
+                })
                 .optional()
                 .map_err(map_sqlite)?;
             Ok(role.as_deref() == Some("admin"))
@@ -200,11 +198,9 @@ pub async fn lookup_user_admin(db: &Db, discord_id: &str) -> Result<Option<bool>
     db.read
         .read(move |conn| {
             let role: Option<String> = conn
-                .query_row(
-                    "SELECT role FROM users WHERE discord_id = ?1",
-                    params![id],
-                    |r| r.get::<_, String>(0),
-                )
+                .query_row("SELECT role FROM users WHERE id = ?1", params![id], |r| {
+                    r.get::<_, String>(0)
+                })
                 .optional()
                 .map_err(map_sqlite)?;
             Ok(role.map(|r| r == "admin"))
@@ -596,7 +592,7 @@ mod tests {
     fn seed_user(path: &PathBuf, discord_id: &str, role: &str) {
         raw(path)
             .execute(
-                "INSERT INTO users (discord_id, username, salt, role) \
+                "INSERT INTO users (id, username, salt, role) \
                  VALUES (?1, ?1, 'deadbeef', ?2)",
                 params![discord_id, role],
             )

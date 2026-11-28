@@ -431,7 +431,7 @@ mod tests {
             let mut conn = Connection::open(&path).unwrap();
             yuuka_db::run_migrations(&mut conn).expect("migrate");
             conn.execute(
-                "INSERT INTO users (discord_id, username, salt) VALUES ('userA', 'userA', 'x')",
+                "INSERT INTO users (id, username, salt) VALUES ('userA', 'userA', 'x')",
                 [],
             )
             .unwrap();

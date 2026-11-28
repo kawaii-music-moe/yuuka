@@ -184,7 +184,7 @@ impl<'a> PersonaRepo<'a> {
                         "SELECT p.id, p.name, p.prompt, p.updated_at, \
                             COALESCE(u.username, '不明') AS owner_username \
                          FROM personas p \
-                         LEFT JOIN users u ON u.discord_id = p.owner_id \
+                         LEFT JOIN users u ON u.id = p.owner_id \
                          WHERE p.is_public = 1 \
                          ORDER BY p.updated_at DESC",
                     )
