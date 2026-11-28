@@ -5,7 +5,7 @@
 //! 「今 〜 次回の配信予定時刻」、支払い予定は両方にまたがる日付範囲で見る。全て単一ユーザー・単一 Bot
 //! スコープの読み取り専用クエリ。
 
-use chrono::{DateTime, Duration, Local, Timelike};
+use jiff::{SignedDuration, ZonedDateTime};
 use rusqlite::params;
 use yuuka_core::{cron_util, datetime, DbError, EmbedFieldPart};
 use yuuka_db::map_sqlite;
@@ -14,14 +14,14 @@ use yuuka_web::Db;
 use crate::model::{PeriodicReport, ReportSection, ReportSettings};
 
 /// 定期報告の対象期間。
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub(crate) struct ReportWindow {
     /// 振り返りの始まり（前回の配信予定時刻）。
-    pub from: DateTime<Local>,
+    pub from: ZonedDateTime,
     /// 生成した時刻。
-    pub now: DateTime<Local>,
+    pub now: ZonedDateTime,
     /// これからの予定を載せる終わり（次回の配信予定時刻）。
-    pub until: DateTime<Local>,
+    pub until: ZonedDateTime,
 }
 
 impl ReportWindow {
@@ -29,34 +29,37 @@ impl ReportWindow {
     ///
     /// 前回は「この分」の発火を含めずに探す（定時配信の発火中に、今まさに配信している回を前回と
     /// 数えないため）。テスト配信では「直近の配信予定時刻 〜 今」になる。
-    pub(crate) fn for_schedule(schedule_cron: &str, now: DateTime<Local>) -> Self {
+    pub(crate) fn for_schedule(schedule_cron: &str, now: ZonedDateTime) -> Self {
+        let day = SignedDuration::from_hours(24);
         let this_minute = now
-            .with_second(0)
-            .and_then(|t| t.with_nanosecond(0))
-            .unwrap_or(now);
-        let from = cron_util::previous_before(schedule_cron, this_minute)
-            .unwrap_or_else(|| now - Duration::days(1));
+            .with()
+            .second(0)
+            .subsec_nanosecond(0)
+            .build()
+            .unwrap_or_else(|_| now.clone());
+        let from = cron_util::previous_before(schedule_cron, &this_minute)
+            .unwrap_or_else(|| now.saturating_sub(day));
         let until =
-            cron_util::next_after(schedule_cron, now).unwrap_or_else(|| now + Duration::days(1));
+            cron_util::next_after(schedule_cron, &now).unwrap_or_else(|| now.saturating_add(day));
         Self { from, now, until }
     }
 
     /// タイトルに付ける期間の表記。1 日程度までは今日の日付、それより長ければ開始日〜今日。
     pub(crate) fn label(&self) -> String {
-        if self.now - self.from <= Duration::hours(25) {
+        if self.now.duration_since(&self.from) <= SignedDuration::from_hours(25) {
             format!(
                 "{}/{}/{}",
-                self.now.format("%Y"),
-                self.now.format("%-m"),
-                self.now.format("%-d")
+                self.now.year(),
+                self.now.month(),
+                self.now.day()
             )
         } else {
             format!(
                 "{}/{} 〜 {}/{}",
-                self.from.format("%-m"),
-                self.from.format("%-d"),
-                self.now.format("%-m"),
-                self.now.format("%-d"),
+                self.from.month(),
+                self.from.day(),
+                self.now.month(),
+                self.now.day(),
             )
         }
     }
@@ -92,9 +95,9 @@ struct WindowStrings {
 
 impl WindowStrings {
     fn new(window: &ReportWindow) -> Self {
-        let from = datetime::local_to_db(window.from);
-        let now = datetime::local_to_db(window.now);
-        let until = datetime::local_to_db(window.until);
+        let from = datetime::local_to_db(&window.from);
+        let now = datetime::local_to_db(&window.now);
+        let until = datetime::local_to_db(&window.until);
         Self {
             from_day: from[..10].to_owned(),
             now_day: now[..10].to_owned(),
@@ -501,14 +504,14 @@ fn format_currency(amount: i64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use chrono::TimeZone;
+    use jiff::tz::TimeZone;
 
     use super::*;
 
-    fn at(y: i32, mo: u32, d: u32, h: u32, mi: u32) -> DateTime<Local> {
-        Local
-            .with_ymd_and_hms(y, mo, d, h, mi, 0)
-            .single()
+    fn at(y: i16, mo: i8, d: i8, h: i8, mi: i8) -> ZonedDateTime {
+        jiff::civil::date(y, mo, d)
+            .at(h, mi, 0, 0)
+            .to_zoned_datetime(TimeZone::system())
             .expect("valid local time")
     }
 
@@ -526,8 +529,14 @@ mod tests {
         // 壊れた式は前後 24 時間。
         let now = at(2026, 10, 27, 12, 0);
         let w = ReportWindow::for_schedule("bad", now);
-        assert_eq!(w.now - w.from, Duration::days(1));
-        assert_eq!(w.until - w.now, Duration::days(1));
+        assert_eq!(
+            w.now.duration_since(&w.from),
+            SignedDuration::from_hours(24)
+        );
+        assert_eq!(
+            w.until.duration_since(&w.now),
+            SignedDuration::from_hours(24)
+        );
     }
 
     #[test]

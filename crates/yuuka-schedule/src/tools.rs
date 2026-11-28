@@ -254,7 +254,7 @@ impl Tool for ListSchedulesTool {
                 .import_account_for(ctx.user_id.as_str(), ctx.bot_id.as_str())
                 .await
             {
-                let now = chrono::Local::now().naive_local();
+                let now = jiff::ZonedDateTime::now().datetime();
                 if let Err(e) = pull_from_google(
                     &self.db,
                     calendar,
@@ -734,12 +734,14 @@ mod tests {
     #[tokio::test]
     async fn list_imports_google_events_for_explicitly_linked_agents() {
         let db = seed_db();
-        let now = chrono::Local::now().naive_local();
-        let at = |days: i64, hour: u32| {
-            (now.date() + chrono::Duration::days(days))
-                .and_hms_opt(hour, 0, 0)
+        let now = jiff::ZonedDateTime::now().datetime();
+        let at = |days: i64, hour: i8| {
+            use jiff::ToSpan as _;
+            now.date()
+                .checked_add(days.days())
                 .unwrap()
-                .format("%Y-%m-%d %H:%M:%S")
+                .at(hour, 0, 0, 0)
+                .strftime("%Y-%m-%d %H:%M:%S")
                 .to_string()
         };
         let event = |id: &str, title: &str, start: String| GoogleEvent {

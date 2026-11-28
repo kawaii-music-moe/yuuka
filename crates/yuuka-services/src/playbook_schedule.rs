@@ -15,7 +15,9 @@
 //! のみで catch-up しないため、これは Node との意図的挙動差（復帰時に 1 回だけ多く走りうる）。
 
 use async_trait::async_trait;
-use chrono::{DateTime, Local, NaiveDateTime, TimeZone};
+use jiff::civil::DateTime;
+use jiff::tz::TimeZone;
+use jiff::ZonedDateTime;
 use yuuka_core::{BotId, DbError, UserId, UserScope};
 use yuuka_playbook::cron::DueSchedule;
 use yuuka_playbook::repo::PlaybookRepo;
@@ -54,9 +56,9 @@ impl CronService for PlaybookScheduleService {
 async fn process_due_schedules(ctx: &ServiceContext) -> Result<(), DbError> {
     let repo = PlaybookRepo::new(&ctx.db);
     let schedules = repo.list_enabled_schedules(ctx.cross).await?;
-    let now = Local::now();
+    let now = ZonedDateTime::now();
     for schedule in schedules {
-        if !is_due(&schedule, now) {
+        if !is_due(&schedule, &now) {
             continue;
         }
         if let Err(e) = execute(ctx, &repo, &schedule).await {
@@ -75,7 +77,7 @@ async fn process_due_schedules(ctx: &ServiceContext) -> Result<(), DbError> {
 /// `cron_expression` の次回発火が「基準時刻（last_run_at→created_at）より後 かつ 現在以前」か。
 ///
 /// 壊れた cron 式（`next_after` が `None`）は due としない（Node `cron.validate` が弾くのと同じ）。
-fn is_due(schedule: &DueSchedule, now: DateTime<Local>) -> bool {
+fn is_due(schedule: &DueSchedule, now: &ZonedDateTime) -> bool {
     let reference = schedule
         .last_run_at
         .as_deref()
@@ -88,7 +90,7 @@ fn is_due(schedule: &DueSchedule, now: DateTime<Local>) -> bool {
         );
         return false;
     };
-    cron_util::next_after(&schedule.cron_expression, reference).is_some_and(|next| next <= now)
+    cron_util::next_after(&schedule.cron_expression, &reference).is_some_and(|next| &next <= now)
 }
 
 /// 1 件の due スケジュールを実行する（run 記録 → マクロ取得 → 実行 → 確定 → 通知 → last_run 更新）。
@@ -182,10 +184,10 @@ async fn notify(ctx: &ServiceContext, user_id: &UserId, bot_id: &BotId, content:
     }
 }
 
-/// DB 形式 `'YYYY-MM-DD HH:MM:SS'`（ローカル）を `DateTime<Local>` へ。
-fn parse_local(s: &str) -> Option<DateTime<Local>> {
-    let naive = NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S").ok()?;
-    Local.from_local_datetime(&naive).single()
+/// DB 形式 `'YYYY-MM-DD HH:MM:SS'`（ローカル）を [`ZonedDateTime`] へ。
+fn parse_local(s: &str) -> Option<ZonedDateTime> {
+    let naive = DateTime::strptime("%Y-%m-%d %H:%M:%S", s).ok()?;
+    naive.to_zoned_datetime(TimeZone::system()).ok()
 }
 
 /// 先頭 `n` 文字に切り詰める（JS `String.prototype.slice(0, n)` 近似・BMP は一致）。

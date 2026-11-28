@@ -143,7 +143,7 @@ const crcTable = Array.from({ length: 256 }, (_, n) => {
 });
 const crc32 = (buf: Buffer) => {
 	let c = 0xffffffff;
-	for (const byte of buf) c = crcTable[(c ^ byte) & 0xff]! ^ (c >>> 8);
+	for (const byte of buf) c = (crcTable[(c ^ byte) & 0xff] ?? 0) ^ (c >>> 8);
 	return (c ^ 0xffffffff) >>> 0;
 };
 const pngChunk = (type: string, data: Buffer) => {
@@ -307,10 +307,9 @@ async function serveTtsModel(
 			root,
 			decodeURIComponent(pathname.slice("/tts-models/".length)),
 		);
-	const info =
-		file && file.startsWith(root + path.sep)
-			? await stat(file).catch(() => undefined)
-			: undefined;
+	const info = file?.startsWith(root + path.sep)
+		? await stat(file).catch(() => undefined)
+		: undefined;
 	if (!file || !info?.isFile()) {
 		res.writeHead(404);
 		return res.end();

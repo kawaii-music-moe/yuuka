@@ -193,7 +193,7 @@ function isEvery(f: CronFieldState): boolean {
 }
 
 /** 時・分が「決まった値だけ」なら、その値の一覧。 */
-function fixedValues(index: 0 | 1, f: CronFieldState): number[] | null {
+function fixedValues(f: CronFieldState): number[] | null {
 	if (isEvery(f) || f.intervals.length > 0 || f.ranges.length > 0) return null;
 	return [...f.values].sort(byNumber);
 }
@@ -201,8 +201,8 @@ function fixedValues(index: 0 | 1, f: CronFieldState): number[] | null {
 const pad = (n: number) => String(n).padStart(2, "0");
 
 function timeText(minute: CronFieldState, hour: CronFieldState): string {
-	const ms = fixedValues(0, minute);
-	const hs = fixedValues(1, hour);
+	const ms = fixedValues(minute);
+	const hs = fixedValues(hour);
 	// 時・分とも決まった値で組み合わせが少なければ「9:00・18:30」のように時刻で書く
 	if (ms && hs && ms.length * hs.length <= 6)
 		return hs.flatMap((h) => ms.map((m) => `${h}:${pad(m)}`)).join("・");
@@ -229,7 +229,7 @@ export function describeCron(state: CronState): string {
 	let date = [monthText, dayText].filter(Boolean).join(" ");
 	if (monthText && !dayText) date = `${monthText}の毎日`;
 	// 毎日決まった時に動くときだけ「毎日」を付ける（「毎時」「2時間ごと」には付けない）
-	if (!date && fixedValues(1, hour)) date = "毎日";
+	if (!date && fixedValues(hour)) date = "毎日";
 	return `${date ? `${date} ` : ""}${timeText(minute, hour)} に実行`;
 }
 

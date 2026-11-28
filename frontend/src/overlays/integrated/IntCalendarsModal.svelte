@@ -25,7 +25,7 @@ let available = $state<GoogleCalendarView[]>([]);
 let selected = $state<Set<string>>(new Set());
 
 const label = $derived(
-	account ? `アカウント: ${account.email || "#" + account.id}` : "",
+	account ? `アカウント: ${account.email || `#${account.id}`}` : "",
 );
 
 // 開くたびに最新アカウントで一覧を取得し初期選択を反映（旧 openModal 直後の fetch）。

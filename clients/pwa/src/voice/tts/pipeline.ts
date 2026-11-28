@@ -303,7 +303,6 @@ export class IrodoriTts {
 	 * 通す（上流の ref_latent と同じ）。以降の文はこの条件で作るので同じ声になる。
 	 */
 	async designVoice(caption: string, seed: number): Promise<SpeakerCondition> {
-		const cfg = this.config;
 		const made = await this.latent(VOICE_SAMPLE_TEXT, {
 			caption,
 			seed,

@@ -219,7 +219,7 @@ pub trait TurnDelivery: Send + Sync {
 /// services/WS など上位層へ注入して使わせる（リマインド・日報等の共通配信基盤）。
 #[async_trait]
 pub trait Notifier: Send + Sync {
-    /// ユーザーへ配信する（`bot_id` 本人のクライアントで届け、オフライン時は既定 Bot へフォールバック）。
+    /// ユーザーへ配信する（`bot_id` 本人のクライアントで届け、使えなければ既定 Bot へは回さず `false`）。
     /// 送信成功なら `true`（現行 `sendToUser` の戻り）。
     async fn send_to_user(
         &self,

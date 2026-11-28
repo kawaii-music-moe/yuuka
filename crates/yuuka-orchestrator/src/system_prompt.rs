@@ -7,8 +7,6 @@
 //! **検索スキル（R12・#109）**: Node は実行時に `docs/skills/search_skills.md` を読み、実行時の作業ディレクトリに
 //! `docs/` があるとは限らないため、ビルド時に `include_str!` で埋め込む（反映には再ビルドが要る）。
 
-use chrono::{Datelike, Local, TimeZone, Timelike};
-
 /// デフォルトペルソナ（Node `DEFAULT_PERSONA`・§4.1.1）。
 pub const DEFAULT_PERSONA: &str = "# あなたの役割
 あなたは、タスク管理・スケジュール管理・家計管理・ブラウザ自動操作を支援する汎用AIアシスタントです。ユーザーの日常的な生産性向上と生活管理を、的確かつ効率的にサポートしてください。
@@ -107,9 +105,9 @@ fn system_rules(date_time_str: &str) -> String {
 
 /// ローカル日時を Node `formatDateTimeJa`（`YYYY年M月D日 (曜) HH時MM分SS秒`）と同形式で表記する。
 #[must_use]
-pub fn format_date_time_ja(now: chrono::DateTime<Local>) -> String {
+pub fn format_date_time_ja(now: jiff::civil::DateTime) -> String {
     // 添字アクセス（indexing_slicing 禁止）を避け match で日→土を引く。
-    let dow = match now.weekday().num_days_from_sunday() {
+    let dow = match now.weekday().to_sunday_zero_offset() {
         0 => "日",
         1 => "月",
         2 => "火",
@@ -133,15 +131,8 @@ pub fn format_date_time_ja(now: chrono::DateTime<Local>) -> String {
 /// 現在ローカル時刻での日時表記。
 #[must_use]
 pub fn now_date_time_ja() -> String {
-    // `Local::now()` は環境依存だが、テストは `format_date_time_ja` を固定時刻で検証する。
-    let now = Local
-        .timestamp_opt(chrono::Utc::now().timestamp(), 0)
-        .single()
-        .map(|dt| dt.with_timezone(&Local));
-    match now {
-        Some(dt) => format_date_time_ja(dt),
-        None => String::new(),
-    }
+    // 現在時刻は環境依存だが、テストは `format_date_time_ja` を固定時刻で検証する。
+    format_date_time_ja(jiff::ZonedDateTime::now().datetime())
 }
 
 /// システムプロンプトを組み立てる（Node `buildSystemInstruction`）。
@@ -257,15 +248,11 @@ mod tests {
         build_system_bot_instruction, build_system_instruction, format_date_time_ja,
         search_skills_section, CAPABILITIES, DEFAULT_PERSONA, FACT_CHECK, SEARCH_SKILLS,
     };
-    use chrono::{Local, TimeZone};
 
     #[test]
     fn format_date_time_ja_matches_node_shape() {
         // 2026-07-08 21:05:30 (水) をローカルで構築して表記を確認（曜日は日付から算出）。
-        let dt = Local
-            .with_ymd_and_hms(2026, 7, 8, 21, 5, 30)
-            .single()
-            .expect("dt");
+        let dt = jiff::civil::date(2026, 7, 8).at(21, 5, 30, 0);
         let s = format_date_time_ja(dt);
         assert!(s.starts_with("2026年7月8日 ("), "s={s}");
         assert!(s.ends_with(") 21時05分30秒"), "s={s}");

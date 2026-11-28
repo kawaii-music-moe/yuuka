@@ -21,7 +21,7 @@ getrandom.workspace = true
 hex.workspace = true
 # バックアップ（BackupPort live 実装）: 一時 SQLite エクスポート + ZIP 化 + Drive multipart アップロード。
 tracing.workspace = true
-chrono.workspace = true
+jiff.workspace = true
 zip.workspace = true
 tempfile.workspace = true
 

@@ -5,7 +5,6 @@ use axum::http::header::{CONTENT_DISPOSITION, CONTENT_TYPE};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::io::Write as _;
@@ -61,11 +60,11 @@ pub(crate) async fn download(
         derive_user_key(&body.pin, &salt).map_err(|_| ApiError(yuuka_core::WebError::Internal))?;
     let encrypted = encrypt_bytes_with_key(&key, &payload)
         .map_err(|_| ApiError(yuuka_core::WebError::Internal))?;
-    let now = Utc::now();
+    let now = jiff::Timestamp::now();
     let envelope = PackageEnvelope {
         format: PACKAGE_FORMAT,
         version: PACKAGE_VERSION,
-        created_at: now.to_rfc3339(),
+        created_at: now.strftime("%Y-%m-%dT%H:%M:%S%.f+00:00").to_string(),
         kdf: "argon2id-m19456-t2-p1",
         cipher: "aes-256-gcm",
         salt,
@@ -75,7 +74,7 @@ pub(crate) async fn download(
     };
     let bytes =
         serde_json::to_vec(&envelope).map_err(|_| ApiError(yuuka_core::WebError::Internal))?;
-    let filename = format!("yuuka-bots-{}.yuuka", now.format("%Y%m%d-%H%M%S"));
+    let filename = format!("yuuka-bots-{}.yuuka", now.strftime("%Y%m%d-%H%M%S"));
     let mut headers = HeaderMap::new();
     headers.insert(
         CONTENT_TYPE,

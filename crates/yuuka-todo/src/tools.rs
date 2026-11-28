@@ -1156,7 +1156,7 @@ impl Tool for OrganizeTaskPrioritiesTool {
         }
 
         // now: Node `new Date().toISOString()`（UTC・ミリ秒・`Z`）。
-        let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        let now = yuuka_core::time::now_iso_millis();
         let entries: Vec<Value> = todos.iter().map(to_todo_entry).collect();
         let msg = format!(
             "未完了ToDo {}件を取得しました。期限の近さ・タイトルや説明から読み取れる重要度・タグを考慮して各ToDoの優先度（high/medium/low）を分析し、提案として理由付きでユーザーに提示してください。\

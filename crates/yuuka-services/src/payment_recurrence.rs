@@ -5,7 +5,6 @@
 //! 期日前通知は本サービスでは行わない（リマインド連携はユーザーが明示設定する方式）。
 
 use async_trait::async_trait;
-use chrono::Local;
 
 use crate::context::ServiceContext;
 use crate::planned_payment;
@@ -38,7 +37,8 @@ async fn run(ctx: &ServiceContext) -> Result<(), yuuka_core::DbError> {
         let Some(rule) = plan.repeat_rule.as_deref() else {
             continue; // repo フィルタの保険。
         };
-        let Some(next_due) = cron_util::next_recurring_due_date(rule, &plan.due_date, Local::now())
+        let Some(next_due) =
+            cron_util::next_recurring_due_date(rule, &plan.due_date, &jiff::ZonedDateTime::now())
         else {
             // cron 式が壊れている場合は pending のまま残し修正を待つ。
             tracing::error!(id = plan.id, rule, user = %plan.user_id, "❌ repeat_rule 解釈失敗のためスキップ");

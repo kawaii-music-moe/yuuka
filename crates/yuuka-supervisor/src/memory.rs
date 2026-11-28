@@ -12,7 +12,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use chrono::{Local, NaiveDate};
+use jiff::civil::Date;
 use tokio::sync::Mutex;
 use yuuka_core::secrets::wrap_secret;
 use yuuka_core::MetricsSink;
@@ -34,7 +34,7 @@ pub struct SynapseMaintenanceService {
     engine: Arc<Mutex<SynapseEngine>>,
     llm: Arc<dyn MemoryLlm>,
     /// 最後に減衰と忘却を行ったローカル日付（1 日 1 回にする）。
-    last_prune: Mutex<Option<NaiveDate>>,
+    last_prune: Mutex<Option<Date>>,
 }
 
 impl SynapseMaintenanceService {
@@ -89,7 +89,7 @@ impl CronService for SynapseMaintenanceService {
             Err(e) => tracing::warn!(error = %e, "[Synapse] 候補のあるスコープを読めません"),
         }
 
-        let today = Local::now().date_naive();
+        let today = jiff::ZonedDateTime::now().date();
         let mut last = self.last_prune.lock().await;
         if *last == Some(today) {
             return;

@@ -65,12 +65,13 @@ pub async fn pull_from_google(
     port: &Arc<dyn CalendarEventsPort>,
     scope: &UserScope,
     account_id: i64,
-    now_local: chrono::NaiveDateTime,
+    now_local: jiff::civil::DateTime,
     days: i64,
 ) -> Result<PullSummary, PullError> {
-    let fmt = |dt: chrono::NaiveDateTime| dt.format("%Y-%m-%d %H:%M:%S").to_string();
-    let from = fmt(now_local - chrono::Duration::days(1));
-    let to = fmt(now_local + chrono::Duration::days(days));
+    use jiff::ToSpan as _;
+    let fmt = |dt: jiff::civil::DateTime| dt.strftime("%Y-%m-%d %H:%M:%S").to_string();
+    let from = fmt(now_local.saturating_sub(1.day()));
+    let to = fmt(now_local.saturating_add(days.days()));
 
     let calendars = port
         .calendars(account_id)

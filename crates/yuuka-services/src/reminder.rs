@@ -9,7 +9,6 @@
 //! 逐次 await ループのため Node の `ticking` 多重起動防止は不要（[`crate::schedule::run_cron`]）。
 
 use async_trait::async_trait;
-use chrono::Local;
 use yuuka_core::{BotId, UserId};
 use yuuka_reminder::cron::DueReminder;
 use yuuka_reminder::repo::ReminderRepo;
@@ -91,7 +90,7 @@ async fn advance_after_send(
     reminder: &DueReminder,
 ) -> Result<(), yuuka_core::DbError> {
     match reminder.repeat_rule.as_deref() {
-        Some(rule) => match cron_util::next_reminder_trigger(rule, Local::now()) {
+        Some(rule) => match cron_util::next_reminder_trigger(rule, &jiff::ZonedDateTime::now()) {
             Some(next) => repo.reschedule_repeat(ctx.cross, reminder.id, next).await,
             // cron 式が壊れている場合は無限再送を防ぐため単発扱い（送信済み）。
             None => {

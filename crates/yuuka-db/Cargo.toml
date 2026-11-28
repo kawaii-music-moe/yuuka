@@ -13,15 +13,14 @@ description = "yuuka DB 層（rusqlite 単一writer actor + read pool + schema �
 
 [dependencies]
 yuuka-core.workspace = true
-rusqlite.workspace = true          # bundled SQLite 3.53.2（ADR アンカー）
+rusqlite.workspace = true          # bundled SQLite 3.54.x（rusqlite 0.41・RUSTSEC-2026-0459 修正版）
 tokio.workspace = true             # writer actor の mpsc/oneshot・read pool の Semaphore/spawn_blocking
 tracing.workspace = true
 refinery.workspace = true
 
-# 逸脱: deadpool-sqlite 0.13 は rusqlite ^0.38 で頭打ち（libsqlite3-sys の links 衝突で
-# rusqlite 0.40 と両立不可）。ADR は rusqlite 0.40 を優先（synapse 統一・SQLite 3.53.2）する
-# ため、read pool は Phase 0 では内製（tokio Semaphore + コネクション freelist + spawn_blocking）
-# とする。deadpool/r2d2 が rusqlite 0.40 対応版を出したら Phase 1 で差し替え可（内部実装のみ）。
+# 逸脱: deadpool-sqlite は rusqlite の最新系に追随しない（0.14 でも rusqlite ^0.40 固定・libsqlite3-sys
+# の links 衝突で 0.41 と両立不可）ため、read pool は内製（tokio Semaphore + コネクション freelist +
+# spawn_blocking）とする。rusqlite の上限は refinery 0.10（<=0.41）で決まる。
 
 [features]
 # 他クレートの単体テスト用ヘルパ（`test_support`）。本番ビルドでは有効にしない。

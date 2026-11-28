@@ -11,14 +11,14 @@
 //! | [`input_to_db_jst`] | 予定 `start_at` / `end_at`（LLM） | 同上 | JST 固定へ換算 |
 //! | [`browser_local_to_db`] | PWA の `datetime-local` | `YYYY-MM-DDTHH:MM[:SS]` のみ | 受理しない |
 //! | [`db_to_utc_iso`] | PWA 向けの出力 | DB 形式のみ | （出力は UTC `...Z`） |
-//! | [`local_to_db`] | 実行時に求めた時刻（cron 次回発火など） | `DateTime<Local>` | — |
+//! | [`local_to_db`] | 実行時に求めた時刻（cron 次回発火など） | [`ZonedDateTime`] | — |
 //!
 //! 本番は `TZ=Asia/Tokyo` 固定なので「ローカル TZ」と「JST 固定」は同じ結果になる。JST 固定側は
 //! テスト・開発機の TZ に左右されないことを優先した既存の選択で、挙動を変えないためそのまま残す。
 
-use chrono::{
-    DateTime, FixedOffset, Local, NaiveDate, NaiveDateTime, SecondsFormat, TimeZone, Utc,
-};
+use jiff::civil::{Date, DateTime};
+use jiff::tz::{Offset, TimeZone};
+use jiff::{Timestamp, ZonedDateTime};
 
 /// DB 保存形式（ローカル暦・`datetime('now','localtime')` と同形）。
 pub const DB_FORMAT: &str = "%Y-%m-%d %H:%M:%S";
@@ -33,36 +33,34 @@ const NAIVE_INPUT_FORMATS: [&str; 4] = [
 
 /// 本番デプロイのローカル暦（JST = UTC+9）。
 #[must_use]
-pub fn jst() -> Option<FixedOffset> {
-    FixedOffset::east_opt(9 * 3600)
+pub fn jst() -> TimeZone {
+    TimeZone::fixed(Offset::constant(9))
 }
 
 /// 実行時の時刻を DB 保存形式へ整形する。
 #[must_use]
-pub fn local_to_db(dt: DateTime<Local>) -> String {
-    dt.format(DB_FORMAT).to_string()
+pub fn local_to_db(dt: &ZonedDateTime) -> String {
+    dt.strftime(DB_FORMAT).to_string()
 }
 
-/// 入力の日時をローカル壁時計の [`NaiveDateTime`] に解く（オフセット付きは `tz` へ換算）。
+/// 入力の日時をローカル壁時計の [`DateTime`] に解く（オフセット付きは `tz` へ換算）。
 ///
 /// 日付のみ（`YYYY-MM-DD`）はその日の 0 時。実在しない日時・解釈できない入力は `None`。
-fn parse_input<Tz: TimeZone>(input: &str, tz: &Tz) -> Option<NaiveDateTime> {
+fn parse_input(input: &str, tz: &TimeZone) -> Option<DateTime> {
     let s = input.trim();
     if s.is_empty() {
         return None;
     }
-    if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
-        return Some(dt.with_timezone(tz).naive_local());
+    if let Ok(ts) = s.parse::<Timestamp>() {
+        return Some(tz.to_datetime(ts));
     }
     if let Some(naive) = NAIVE_INPUT_FORMATS
         .iter()
-        .find_map(|fmt| NaiveDateTime::parse_from_str(s, fmt).ok())
+        .find_map(|fmt| DateTime::strptime(fmt, s).ok())
     {
         return Some(naive);
     }
-    NaiveDate::parse_from_str(s, "%Y-%m-%d")
-        .ok()?
-        .and_hms_opt(0, 0, 0)
+    Date::strptime("%Y-%m-%d", s).ok().map(DateTime::from)
 }
 
 /// 入力の日時を DB 保存形式へ正規化する（オフセット付きは**サーバーのローカル TZ**へ換算）。
@@ -72,7 +70,11 @@ fn parse_input<Tz: TimeZone>(input: &str, tz: &Tz) -> Option<NaiveDateTime> {
 /// 崩れて発火が遅れるため（B4）、区切りを空白へ揃える。既に DB 形式なら冪等。
 #[must_use]
 pub fn input_to_db_local(input: &str) -> Option<String> {
-    Some(parse_input(input, &Local)?.format(DB_FORMAT).to_string())
+    Some(
+        parse_input(input, &TimeZone::system())?
+            .strftime(DB_FORMAT)
+            .to_string(),
+    )
 }
 
 /// 入力の日時を DB 保存形式へ正規化する（オフセット付きは **JST 固定**へ換算）。
@@ -80,7 +82,7 @@ pub fn input_to_db_local(input: &str) -> Option<String> {
 /// 予定の `start_at` / `end_at` 用。受理形式は [`input_to_db_local`] と同じ。
 #[must_use]
 pub fn input_to_db_jst(input: &str) -> Option<String> {
-    Some(parse_input(input, &jst()?)?.format(DB_FORMAT).to_string())
+    Some(parse_input(input, &jst())?.strftime(DB_FORMAT).to_string())
 }
 
 /// ブラウザの `datetime-local`（`YYYY-MM-DDTHH:MM`、秒付きも可）を DB 保存形式へ変換する。
@@ -90,10 +92,10 @@ pub fn input_to_db_jst(input: &str) -> Option<String> {
 #[must_use]
 pub fn browser_local_to_db(input: &str) -> Option<String> {
     let s = input.trim();
-    let naive = NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M")
-        .or_else(|_| NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S"))
+    let naive = DateTime::strptime("%Y-%m-%dT%H:%M", s)
+        .or_else(|_| DateTime::strptime("%Y-%m-%dT%H:%M:%S", s))
         .ok()?;
-    Some(naive.format(DB_FORMAT).to_string())
+    Some(naive.strftime(DB_FORMAT).to_string())
 }
 
 /// DB 保存形式（JST のローカル暦）を UTC の ISO 8601（`Z` 終端・ミリ秒 3 桁）へ変換する。
@@ -102,13 +104,9 @@ pub fn browser_local_to_db(input: &str) -> Option<String> {
 /// （呼び出し側は原文のまま返すか行をスキップする・issue #47）。
 #[must_use]
 pub fn db_to_utc_iso(value: &str) -> Option<String> {
-    let naive = NaiveDateTime::parse_from_str(value, DB_FORMAT).ok()?;
-    let local = jst()?.from_local_datetime(&naive).single()?;
-    Some(
-        local
-            .with_timezone(&Utc)
-            .to_rfc3339_opts(SecondsFormat::Millis, true),
-    )
+    let naive = DateTime::strptime(DB_FORMAT, value).ok()?;
+    let ts = jst().to_timestamp(naive).ok()?;
+    Some(crate::time::iso_millis(ts))
 }
 
 #[cfg(test)]
@@ -171,10 +169,11 @@ mod tests {
             "2026-07-12T09:00:00.500Z",
         ] {
             let out = input_to_db_local(input).expect("offset input should normalize");
-            let expected = DateTime::parse_from_rfc3339(input)
+            let expected = input
+                .parse::<Timestamp>()
                 .unwrap()
-                .with_timezone(&Local)
-                .format(DB_FORMAT)
+                .to_zoned_datetime(TimeZone::system())
+                .strftime(DB_FORMAT)
                 .to_string();
             assert_eq!(out, expected, "{input}");
             assert_eq!(out.len(), 19, "{out}");
@@ -228,7 +227,10 @@ mod tests {
 
     #[test]
     fn local_to_db_formats_storage_string() {
-        let dt = Local.with_ymd_and_hms(2026, 7, 9, 8, 0, 0).unwrap();
-        assert_eq!(local_to_db(dt), "2026-07-09 08:00:00");
+        let dt = jiff::civil::date(2026, 7, 9)
+            .at(8, 0, 0, 0)
+            .to_zoned_datetime(TimeZone::system())
+            .unwrap();
+        assert_eq!(local_to_db(&dt), "2026-07-09 08:00:00");
     }
 }

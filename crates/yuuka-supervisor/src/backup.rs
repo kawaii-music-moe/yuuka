@@ -10,7 +10,7 @@
 
 use std::path::{Path, PathBuf};
 
-use chrono::{DateTime, Local};
+use jiff::civil::DateTime;
 
 /// `yuuka backup` の使い方。
 pub const USAGE: &str =
@@ -95,15 +95,18 @@ fn next_value<'a>(it: &mut impl Iterator<Item = &'a String>, flag: &str) -> Resu
 
 /// 今回のファイル名（`yuuka-YYYYMMDD-HHMMSS.db`）。名前の順が時刻の順になる。
 #[must_use]
-pub fn file_name(now: DateTime<Local>) -> String {
-    format!("{FILE_PREFIX}{}{FILE_SUFFIX}", now.format("%Y%m%d-%H%M%S"))
+pub fn file_name(now: DateTime) -> String {
+    format!(
+        "{FILE_PREFIX}{}{FILE_SUFFIX}",
+        now.strftime("%Y%m%d-%H%M%S")
+    )
 }
 
 /// スナップショットを 1 つ書き、古い世代を消す。
 ///
 /// # Errors
 /// スナップショットに失敗したとき（古い世代は消さない）。掃除の失敗は警告にとどめ、エラーにしない。
-pub fn run(opts: &Options, now: DateTime<Local>) -> Result<Report, String> {
+pub fn run(opts: &Options, now: DateTime) -> Result<Report, String> {
     let written = opts.dir.join(file_name(now));
     yuuka_db::snapshot(&opts.db, &written).map_err(|e| e.to_string())?;
     let removed = prune(&opts.dir, opts.keep);
@@ -141,7 +144,6 @@ fn prune(dir: &Path, keep: usize) -> Vec<PathBuf> {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
-    use chrono::TimeZone;
 
     fn args(list: &[&str]) -> Vec<String> {
         list.iter().map(|s| (*s).to_owned()).collect()
@@ -178,8 +180,8 @@ mod tests {
 
     #[test]
     fn file_name_sorts_by_time() {
-        let early = Local.with_ymd_and_hms(2026, 11, 11, 4, 0, 0).unwrap();
-        let late = Local.with_ymd_and_hms(2026, 11, 12, 4, 0, 0).unwrap();
+        let early = jiff::civil::date(2026, 11, 11).at(4, 0, 0, 0);
+        let late = jiff::civil::date(2026, 11, 12).at(4, 0, 0, 0);
         assert_eq!(file_name(early), "yuuka-20261111-040000.db");
         assert!(file_name(early) < file_name(late));
     }
@@ -206,7 +208,7 @@ mod tests {
             dir: dir.clone(),
             keep: 2,
         };
-        let now = Local.with_ymd_and_hms(2026, 11, 11, 4, 0, 0).unwrap();
+        let now = jiff::civil::date(2026, 11, 11).at(4, 0, 0, 0);
         let report = run(&opts, now).unwrap();
 
         assert_eq!(report.written, dir.join("yuuka-20261111-040000.db"));
@@ -234,7 +236,7 @@ mod tests {
             dir: dir.clone(),
             keep: 1,
         };
-        assert!(run(&opts, Local::now()).is_err());
+        assert!(run(&opts, jiff::ZonedDateTime::now().datetime()).is_err());
         assert!(dir.join("yuuka-20260101-000000.db").exists());
     }
 }

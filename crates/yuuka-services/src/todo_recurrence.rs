@@ -5,7 +5,6 @@
 //! 終了条件（`repeat_count<=1` / 次回が `repeat_until` 超過）を満たしたら `end_routine` で単発化する。
 
 use async_trait::async_trait;
-use chrono::Local;
 use yuuka_todo::repo::TodoRepo;
 
 use crate::context::ServiceContext;
@@ -52,7 +51,9 @@ async fn run(ctx: &ServiceContext) -> Result<(), yuuka_core::DbError> {
             continue;
         }
 
-        let Some(next_due) = cron_util::next_recurring_due_date(rule, due, Local::now()) else {
+        let Some(next_due) =
+            cron_util::next_recurring_due_date(rule, due, &jiff::ZonedDateTime::now())
+        else {
             // cron 式が壊れている場合は行を残して修正を待つ。
             tracing::error!(id = todo.id, rule, user = %todo.user_id, "❌ repeat_rule 解釈失敗のためスキップ");
             continue;

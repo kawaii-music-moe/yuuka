@@ -344,7 +344,7 @@ async fn status(_user: AuthenticatedUser) -> Json<StatusView> {
 }
 
 fn now_iso() -> String {
-    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+    yuuka_core::time::now_iso_millis()
 }
 
 // ─── settings ────────────────────────────────────────────────────────────────
@@ -640,7 +640,7 @@ async fn calendar_events(
 ) -> Result<Json<Vec<CalendarEventView>>, ClientApiError> {
     // issue #43: from/to は PWA が送るローカル暦日（YYYY-MM-DD）。サーバーも同じ暦で境界を作る
     // （UTC 変換は行わない・JST 前提のデプロイと SQLite localtime 列に一致させる）。
-    let today = chrono::Local::now().date_naive();
+    let today = jiff::ZonedDateTime::now().date();
     let from = match q.from.as_deref() {
         Some(s) => parse_local_date(s)
             .ok_or_else(|| ClientApiError::bad_request("from must be YYYY-MM-DD"))?,
@@ -649,7 +649,7 @@ async fn calendar_events(
     let to = match q.to.as_deref() {
         Some(s) => parse_local_date(s)
             .ok_or_else(|| ClientApiError::bad_request("to must be YYYY-MM-DD"))?,
-        None => today + chrono::Duration::days(31),
+        None => today.saturating_add(jiff::ToSpan::days(31)),
     };
 
     let rows = ScheduleRepo::new(&db)
@@ -768,13 +768,12 @@ struct MonthQuery {
 }
 
 fn resolve_month(raw: Option<&str>) -> Result<(i64, i64), ClientApiError> {
-    use chrono::Datelike;
     match raw {
         Some(s) => parse_local_month(s)
             .map(|(y, m)| (i64::from(y), i64::from(m)))
             .ok_or_else(|| ClientApiError::bad_request("month must be YYYY-MM")),
         None => {
-            let now = chrono::Local::now();
+            let now = jiff::ZonedDateTime::now();
             Ok((i64::from(now.year()), i64::from(now.month())))
         }
     }
@@ -900,7 +899,7 @@ async fn finance_receipt(
             message: rate_limit_message(exceeded),
         })?;
 
-    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+    let today = jiff::ZonedDateTime::now().strftime("%Y-%m-%d").to_string();
     match engine.extract_receipt(permit, &image, &mime, &today).await {
         Ok(draft) => Ok(Json(draft)),
         Err(ReceiptExtractError::InvalidImage(message)) => {

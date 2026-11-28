@@ -15,7 +15,8 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use chrono::{DateTime, Duration, Local, NaiveDateTime};
+use jiff::civil::DateTime;
+use jiff::{SignedDuration, ZonedDateTime};
 use serde_json::{json, Value};
 use yuuka_core::cron_util;
 use yuuka_core::tool::FunctionDeclaration;
@@ -114,15 +115,19 @@ fn guard_past_trigger(
     trigger_db: String,
     raw: &str,
     repeat_rule: Option<&str>,
-    now: DateTime<Local>,
+    now: &ZonedDateTime,
 ) -> Result<String, String> {
-    let Ok(at) = NaiveDateTime::parse_from_str(&trigger_db, "%Y-%m-%d %H:%M:%S") else {
+    let Ok(at) = DateTime::strptime("%Y-%m-%d %H:%M:%S", &trigger_db) else {
         return Ok(trigger_db);
     };
-    if at >= (now - Duration::seconds(PAST_GRACE_SECS)).naive_local() {
+    if at
+        >= now
+            .saturating_sub(SignedDuration::from_secs(PAST_GRACE_SECS))
+            .datetime()
+    {
         return Ok(trigger_db);
     }
-    let now_db = now.format("%Y-%m-%d %H:%M:%S").to_string();
+    let now_db = now.strftime("%Y-%m-%d %H:%M:%S").to_string();
     let Some(rule) = repeat_rule else {
         return Err(format!(
             "送信日時が過去です: {raw}（現在日時: {now_db}。未来の日時を指定してください）"
@@ -288,7 +293,7 @@ impl Tool for AddReminderTool {
             trigger_db,
             &trigger_at,
             repeat_rule.as_deref(),
-            Local::now(),
+            &ZonedDateTime::now(),
         ) {
             Ok(at) => at,
             Err(msg) => return Ok(fail_payload(msg)),
@@ -653,10 +658,10 @@ mod tests {
         assert_eq!(bad.payload["success"], false);
     }
 
-    fn local(s: &str) -> DateTime<Local> {
-        NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S")
+    fn local(s: &str) -> ZonedDateTime {
+        DateTime::strptime("%Y-%m-%d %H:%M:%S", s)
             .unwrap()
-            .and_local_timezone(Local)
+            .to_zoned_datetime(jiff::tz::TimeZone::system())
             .unwrap()
     }
 
@@ -669,7 +674,7 @@ mod tests {
             "2026-07-12 09:59:00",
         ] {
             assert_eq!(
-                guard_past_trigger(at.to_owned(), at, None, now).as_deref(),
+                guard_past_trigger(at.to_owned(), at, None, &now).as_deref(),
                 Ok(at),
                 "未来・猶予 1 分以内はそのまま: {at}"
             );
@@ -683,7 +688,7 @@ mod tests {
             "2026-07-12 09:58:59".to_owned(),
             "2026-07-12T09:58:59",
             None,
-            now,
+            &now,
         )
         .unwrap_err();
         assert!(
@@ -701,7 +706,7 @@ mod tests {
             "2026-07-06 09:00:00".to_owned(),
             "2026-07-06T09:00:00",
             Some("0 9 * * 1"),
-            now,
+            &now,
         );
         assert_eq!(out.as_deref(), Ok("2026-07-13 09:00:00"));
         // 5 フィールドでも解釈できない式は cron 不正として返す。
@@ -709,7 +714,7 @@ mod tests {
             "2026-07-06 09:00:00".to_owned(),
             "2026-07-06T09:00:00",
             Some("99 9 * * 1"),
-            now,
+            &now,
         )
         .unwrap_err();
         assert!(err.contains("repeat_rule のcron式が不正です"), "{err}");
@@ -735,7 +740,9 @@ mod tests {
         assert_eq!(out.payload["reminders"].as_array().unwrap().len(), 0);
 
         // 繰り返しの過去日時は次回時刻（現在より後）へ補正して保存する。
-        let before = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+        let before = ZonedDateTime::now()
+            .strftime("%Y-%m-%d %H:%M:%S")
+            .to_string();
         let out = add
             .call(
                 &ctx(),

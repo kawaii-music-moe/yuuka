@@ -19,7 +19,9 @@
 //! [`NullBackupRunner`] へ縮退し、走査はするが実行は常に失敗（Node の Google 未連携時と同じ非致命）。
 
 use async_trait::async_trait;
-use chrono::{DateTime, Local};
+use jiff::civil::DateTime;
+use jiff::tz::TimeZone;
+use jiff::{SignedDuration, ZonedDateTime};
 use yuuka_core::{CrossUserAccess, DbError};
 use yuuka_db::map_sqlite;
 use yuuka_web::Db;
@@ -76,7 +78,7 @@ impl CronService for BackupService {
     }
 
     async fn tick(&self, ctx: &ServiceContext) {
-        if let Err(e) = process_due_backups(ctx, Local::now()).await {
+        if let Err(e) = process_due_backups(ctx, &ZonedDateTime::now()).await {
             tracing::error!(error = %e, "❌ バックアップ走査でエラー");
         }
     }
@@ -92,7 +94,7 @@ struct UserBackupState {
 }
 
 /// 全ユーザーを走査し、間隔を経過した有効ユーザーのバックアップを実行する（Node `backupTick`）。
-async fn process_due_backups(ctx: &ServiceContext, now: DateTime<Local>) -> Result<(), DbError> {
+async fn process_due_backups(ctx: &ServiceContext, now: &ZonedDateTime) -> Result<(), DbError> {
     let states = list_backup_states(&ctx.db, ctx.cross).await?;
     for state in states {
         if !is_due(&state, now) {
@@ -117,7 +119,7 @@ async fn process_due_backups(ctx: &ServiceContext, now: DateTime<Local>) -> Resu
 ///
 /// `intervalMs = max(1, intervalHours || 24) * 3600_000`。`lastRunAt` を DB 文字列（ローカル）として
 /// 解釈し、`now - lastRun >= interval` なら due。`lastRunAt` 不在（未実行）は常に due（Node `lastRun=0`）。
-fn is_due(state: &UserBackupState, now: DateTime<Local>) -> bool {
+fn is_due(state: &UserBackupState, now: &ZonedDateTime) -> bool {
     if !state.enabled {
         return false;
     }
@@ -128,7 +130,7 @@ fn is_due(state: &UserBackupState, now: DateTime<Local>) -> bool {
         state.interval_hours
     }
     .max(MIN_INTERVAL_HOURS);
-    let interval = chrono::Duration::hours(hours);
+    let interval = SignedDuration::from_hours(hours);
 
     let Some(last_run_raw) = state.last_run_at.as_deref().filter(|s| !s.is_empty()) else {
         return true; // 未実行（lastRun=0）は常に due。
@@ -137,16 +139,15 @@ fn is_due(state: &UserBackupState, now: DateTime<Local>) -> bool {
         // 解釈不能な last_run は「未実行」とみなし due（Node は NaN の減算＝due 側に倒れる）。
         return true;
     };
-    now - last_run >= interval
+    now.duration_since(&last_run) >= interval
 }
 
 /// DB 文字列（`'YYYY-MM-DD HH:MM:SS'` または `'...T...'`）をローカル日時に解釈する。
-fn parse_local_datetime(raw: &str) -> Option<DateTime<Local>> {
-    use chrono::TimeZone;
+fn parse_local_datetime(raw: &str) -> Option<ZonedDateTime> {
     // Node は `new Date(lastRunAt.replace(" ", "T"))`。空白/T の両方を許容する。
     let normalized = raw.replace(' ', "T");
-    let naive = chrono::NaiveDateTime::parse_from_str(&normalized, "%Y-%m-%dT%H:%M:%S").ok()?;
-    Local.from_local_datetime(&naive).single()
+    let naive = DateTime::strptime("%Y-%m-%dT%H:%M:%S", &normalized).ok()?;
+    naive.to_zoned_datetime(TimeZone::system()).ok()
 }
 
 /// 全ユーザーのバックアップ設定を横断で読む（Node `listAllUserIds` + `getUserBackupConfig` を 1 クエリに）。
@@ -193,7 +194,6 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::{Arc, Mutex};
 
-    use chrono::TimeZone;
     use yuuka_web::Db;
 
     use super::*;
@@ -201,10 +201,10 @@ mod tests {
 
     static SEQ: AtomicU64 = AtomicU64::new(0);
 
-    fn at(y: i32, mo: u32, d: u32, h: u32, mi: u32) -> DateTime<Local> {
-        Local
-            .with_ymd_and_hms(y, mo, d, h, mi, 0)
-            .single()
+    fn at(y: i16, mo: i8, d: i8, h: i8, mi: i8) -> ZonedDateTime {
+        jiff::civil::date(y, mo, d)
+            .at(h, mi, 0, 0)
+            .to_zoned_datetime(TimeZone::system())
             .expect("valid local time")
     }
 
@@ -219,61 +219,61 @@ mod tests {
 
     #[test]
     fn disabled_is_never_due() {
-        assert!(!is_due(&state(false, 24, None), at(2026, 7, 8, 12, 0)));
+        assert!(!is_due(&state(false, 24, None), &at(2026, 7, 8, 12, 0)));
     }
 
     #[test]
     fn never_run_is_due() {
         // last_run 不在（未実行）は常に due。
-        assert!(is_due(&state(true, 24, None), at(2026, 7, 8, 12, 0)));
-        assert!(is_due(&state(true, 24, Some("")), at(2026, 7, 8, 12, 0)));
+        assert!(is_due(&state(true, 24, None), &at(2026, 7, 8, 12, 0)));
+        assert!(is_due(&state(true, 24, Some("")), &at(2026, 7, 8, 12, 0)));
     }
 
     #[test]
     fn due_when_interval_elapsed() {
         // 24h 間隔・前回 24h+ 前 → due。
         let now = at(2026, 7, 8, 12, 0);
-        assert!(is_due(&state(true, 24, Some("2026-07-07 11:00:00")), now));
+        assert!(is_due(&state(true, 24, Some("2026-07-07 11:00:00")), &now));
     }
 
     #[test]
     fn not_due_within_interval() {
         // 24h 間隔・前回 1h 前 → まだ due でない。
         let now = at(2026, 7, 8, 12, 0);
-        assert!(!is_due(&state(true, 24, Some("2026-07-08 11:00:00")), now));
+        assert!(!is_due(&state(true, 24, Some("2026-07-08 11:00:00")), &now));
     }
 
     #[test]
     fn interval_zero_defaults_to_24h() {
         // interval=0 → 24h 既定（Node `intervalHours || 24`）。前回 12h 前はまだ due でない。
         let now = at(2026, 7, 8, 12, 0);
-        assert!(!is_due(&state(true, 0, Some("2026-07-08 00:00:00")), now));
+        assert!(!is_due(&state(true, 0, Some("2026-07-08 00:00:00")), &now));
         // 25h 前なら due。
-        assert!(is_due(&state(true, 0, Some("2026-07-07 11:00:00")), now));
+        assert!(is_due(&state(true, 0, Some("2026-07-07 11:00:00")), &now));
     }
 
     #[test]
     fn min_interval_one_hour() {
         // interval=1（下限）・前回 1h ちょうど前 → due（>=）。
         let now = at(2026, 7, 8, 12, 0);
-        assert!(is_due(&state(true, 1, Some("2026-07-08 11:00:00")), now));
+        assert!(is_due(&state(true, 1, Some("2026-07-08 11:00:00")), &now));
         // 30 分前 → まだ due でない。
-        assert!(!is_due(&state(true, 1, Some("2026-07-08 11:30:00")), now));
+        assert!(!is_due(&state(true, 1, Some("2026-07-08 11:30:00")), &now));
     }
 
     #[test]
     fn iso_t_separator_is_parsed() {
         // `T` 区切りの last_run（Node は replace(" ","T") で正規化）も解釈できる。
         let now = at(2026, 7, 8, 12, 0);
-        assert!(is_due(&state(true, 1, Some("2026-07-08T10:00:00")), now));
-        assert!(!is_due(&state(true, 24, Some("2026-07-08T10:00:00")), now));
+        assert!(is_due(&state(true, 1, Some("2026-07-08T10:00:00")), &now));
+        assert!(!is_due(&state(true, 24, Some("2026-07-08T10:00:00")), &now));
     }
 
     #[test]
     fn garbage_last_run_is_treated_as_due() {
         assert!(is_due(
             &state(true, 24, Some("not-a-date")),
-            at(2026, 7, 8, 12, 0)
+            &at(2026, 7, 8, 12, 0)
         ));
     }
 
@@ -346,7 +346,7 @@ mod tests {
         });
         let ctx = ctx_with_backup(db, runner.clone());
 
-        process_due_backups(&ctx, now).await.expect("scan ok");
+        process_due_backups(&ctx, &now).await.expect("scan ok");
 
         let mut ran = runner.ran.lock().unwrap().clone();
         ran.sort();
@@ -364,7 +364,7 @@ mod tests {
         });
         let ctx = ctx_with_backup(db, runner.clone());
 
-        process_due_backups(&ctx, now)
+        process_due_backups(&ctx, &now)
             .await
             .expect("scan ok despite failures");
         assert_eq!(runner.ran.lock().unwrap().len(), 2);

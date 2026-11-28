@@ -23,6 +23,10 @@ yanked = "deny"
 # ignore する（advisories クリーン必須方針の唯一の例外・ユーザー承認済み）。
 ignore = [
     "RUSTSEC-2026-0192", # ttf-parser unmaintained（ab_glyph 経由・sendChart のラベル描画）
+    # 逸脱#4（2026-11-26・ユーザー承認・同日更新）: chrono は全バージョン unmaintained 指定（脆弱性ではない）。
+    # 第一者コードは jiff へ移行済みで直接依存は無い。残るのは rmcp（OAuth 2.1・auth feature）→ oauth2 5.0
+    # （最新版でも chrono 必須）経由の推移依存のみのため、oauth2 が chrono を外すまで ignore する。
+    "RUSTSEC-2026-0543", # chrono unmaintained（oauth2 経由の推移依存のみ）
 ]
 
 [licenses]

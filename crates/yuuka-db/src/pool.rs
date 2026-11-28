@@ -1,6 +1,6 @@
-//! コネクション open（PRAGMA 明示）と read pool（内製・rusqlite 0.40 直用）。
+//! コネクション open（PRAGMA 明示）と read pool（内製・rusqlite 直用）。
 //!
-//! read pool は deadpool-sqlite が rusqlite 0.40 未対応（^0.38 頭打ち・links 衝突）のため
+//! read pool は deadpool-sqlite が rusqlite の最新系に追随しない（libsqlite3-sys の links 衝突）ため
 //! Phase 0 は内製する: `tokio::sync::Semaphore` で同時借用数を上限管理し、コネクションを
 //! freelist で再利用、同期クエリは `spawn_blocking` でブロッキングプールへ逃がす。
 
