@@ -164,7 +164,7 @@ impl LoginRejection {
     #[must_use]
     pub fn message(&self) -> &'static str {
         match self {
-            Self::Conflict(message) => *message,
+            Self::Conflict(message) => message,
             Self::RegistrationClosed => {
                 "新規登録は受け付けていません。管理者に問い合わせてください。"
             }
