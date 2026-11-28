@@ -726,7 +726,7 @@ mod tests {
     fn seed_owner_bot(path: &std::path::Path, user: &str, bot: &str) {
         let conn = raw(path);
         conn.execute(
-            "INSERT OR IGNORE INTO users (discord_id, username, salt) \
+            "INSERT OR IGNORE INTO users (id, username, salt) \
              VALUES (?1, ?1, 's')",
             rusqlite::params![user],
         )
@@ -831,7 +831,7 @@ mod tests {
         // 共有相手 friend と、owner 所有(7)・friend 所有(8)・システム(9) の MCP サーバー。
         let conn = raw(&path);
         conn.execute(
-            "INSERT OR IGNORE INTO users (discord_id, username, salt) \
+            "INSERT OR IGNORE INTO users (id, username, salt) \
              VALUES ('friend', 'friend', 's')",
             [],
         )

@@ -17,6 +17,7 @@ mod device_auth;
 mod session;
 
 pub mod audit;
+pub mod invite;
 pub mod oidc;
 pub mod routes;
 pub mod token;

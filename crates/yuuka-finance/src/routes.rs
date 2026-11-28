@@ -139,7 +139,7 @@ async fn upload_receipt(
     // Node: additionalText || undefined（空文字は None）。
     let additional = body.additional_text.as_deref().filter(|s| !s.is_empty());
     match parser
-        .parse_receipt(&bot_id, &user.0.discord_id, &image, &mime, additional)
+        .parse_receipt(&bot_id, &user.0.user_id, &image, &mime, additional)
         .await
     {
         Ok(response) => (

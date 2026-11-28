@@ -73,8 +73,8 @@ HOST: "127.0.0.1"
 # ==============================================================================
 # 本人認証は OIDC プロバイダーだけで行います。Yuuka はパスワードを持ちません。
 # OIDC_ISSUER を省略すると標準の sk-account (https://account.sk-9.net) を使います。
-# 別の OIDC プロバイダーを使う場合は OIDC_ISSUER を指定してください。Yuuka は利用者を
-# Discord ID で識別するため、ID トークンの OIDC_DISCORD_ID_CLAIM に Discord ID が必要です。
+# 別の OIDC プロバイダーを使う場合は OIDC_ISSUER を指定してください。Yuuka は利用者を ID トークンの
+# sub で識別します。OIDC_DISCORD_ID_CLAIM に Discord ID があれば、ログイン時に Discord と連携します（任意）。
 #
 # プロバイダーには次を登録します（BASE_URL が https://example.com の場合）。
 #   redirect_uri:           https://example.com/api/auth/oidc/callback
@@ -92,6 +92,12 @@ OIDC_CLIENT_SECRET: ""
 # 初回ログイン時に Admin として作成する Discord ID（未設定なら全員 User。管理者の初回ログイン前に指定）
 # ADMIN_DISCORD_IDS:
 #   - "123456789012345678"
+# Discord を使わない管理者は OIDC の sub か、確認済みのメールアドレスで指定できます（カンマ区切り）
+# ADMIN_OIDC_SUBJECTS: ""
+# ADMIN_EMAILS: ""
+# 初めてログインした人を登録するか（invite: 管理画面で発行した招待リンクを持つ人だけ / open: 誰でも /
+# closed: 既存の利用者だけ）。上の ADMIN_* で指定した管理者は、どの方式でも登録できます。
+# REGISTRATION_MODE: "invite"
 
 # ==============================================================================
 # Google OAuth2 システム共通設定 (System-wide Google OAuth)

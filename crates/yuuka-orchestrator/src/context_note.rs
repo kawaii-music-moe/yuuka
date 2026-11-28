@@ -71,9 +71,9 @@ mod tests {
         let (uid, bid, content) = (uid.to_owned(), bid.to_owned(), content.to_owned());
         db.writer
             .transaction(move |tx| {
-                // context_notes.user_id は users(discord_id) への FK（ON DELETE CASCADE）。先に user を用意する。
+                // context_notes.user_id は users(id) への FK（ON DELETE CASCADE）。先に user を用意する。
                 tx.execute(
-                    "INSERT OR IGNORE INTO users (discord_id, username, salt) \
+                    "INSERT OR IGNORE INTO users (id, username, salt) \
                      VALUES (?1, ?1, 'x')",
                     params![uid],
                 )

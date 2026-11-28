@@ -553,7 +553,7 @@ fn export_user_data(src: &Connection, dest: &Connection, user_id: &str) -> rusql
     }
 
     // 2) 本人分の行を INSERT（`SELECT *` の列順を保つ）。
-    copy_rows(src, dest, "users", "discord_id", user_id)?;
+    copy_rows(src, dest, "users", "id", user_id)?;
     for (table, where_col) in USER_SCOPED_TABLES.iter().chain(USER_KEYED_TABLES) {
         copy_rows(src, dest, table, where_col, user_id)?;
     }
@@ -839,7 +839,7 @@ pub async fn read_backup_config(db: &Db, user_id: &str) -> Result<Option<BackupC
             conn.query_row(
                 "SELECT backup_enabled, backup_interval_hours, backup_generations, \
                         backup_folder_id, backup_last_run_at \
-                 FROM users WHERE discord_id = ?1",
+                 FROM users WHERE id = ?1",
                 [user_id],
                 |r| {
                     Ok(BackupConfig {
@@ -867,7 +867,7 @@ pub async fn touch_backup_last_run(db: &Db, user_id: &str) -> Result<(), DbError
         .execute(move |conn| {
             conn.execute(
                 "UPDATE users SET backup_last_run_at = datetime('now','localtime'), \
-                        updated_at = datetime('now','localtime') WHERE discord_id = ?1",
+                        updated_at = datetime('now','localtime') WHERE id = ?1",
                 [user_id],
             )
             .map_err(map_sqlite)?;
@@ -897,7 +897,7 @@ mod tests {
     fn source_db() -> Connection {
         let conn = Connection::open_in_memory().expect("mem db");
         conn.execute_batch(
-            "CREATE TABLE users (discord_id TEXT PRIMARY KEY, username TEXT);\
+            "CREATE TABLE users (id TEXT PRIMARY KEY, username TEXT);\
              CREATE TABLE todos (id INTEGER PRIMARY KEY, user_id TEXT, title TEXT);\
              CREATE TABLE message_logs (id INTEGER PRIMARY KEY, user_id TEXT, content TEXT);\
              CREATE TABLE personas (id INTEGER PRIMARY KEY, owner_id TEXT, name TEXT);\
@@ -908,7 +908,7 @@ mod tests {
         .expect("ddl");
         // 2 ユーザー分を入れる。
         conn.execute_batch(
-            "INSERT INTO users (discord_id, username) VALUES ('alice','A'),('bob','B');\
+            "INSERT INTO users (id, username) VALUES ('alice','A'),('bob','B');\
              INSERT INTO todos (user_id, title) VALUES ('alice','買い物'),('alice','掃除'),('bob','他人');\
              INSERT INTO message_logs (user_id, content) VALUES ('alice','hi'),('bob','bye');\
              INSERT INTO personas (owner_id, name) VALUES ('alice','秘書'),('bob','執事');\
@@ -1057,17 +1057,17 @@ mod tests {
     fn source_db_with_foreign_keys() -> Connection {
         let conn = Connection::open_in_memory().expect("mem db");
         conn.execute_batch(
-            "CREATE TABLE users (discord_id TEXT PRIMARY KEY, username TEXT NOT NULL);\
+            "CREATE TABLE users (id TEXT PRIMARY KEY, username TEXT NOT NULL);\
              CREATE TABLE bots (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, name TEXT NOT NULL,\
-                FOREIGN KEY (user_id) REFERENCES users(discord_id) ON DELETE CASCADE);\
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE);\
              CREATE TABLE bot_active_personas (user_id TEXT NOT NULL, bot_id TEXT NOT NULL,\
                 PRIMARY KEY (user_id, bot_id),\
-                FOREIGN KEY (user_id) REFERENCES users(discord_id) ON DELETE CASCADE,\
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,\
                 FOREIGN KEY (bot_id) REFERENCES bots(id) ON DELETE CASCADE);",
         )
         .expect("ddl");
         conn.execute_batch(
-            "INSERT INTO users (discord_id, username) VALUES ('alice','A');\
+            "INSERT INTO users (id, username) VALUES ('alice','A');\
              INSERT INTO bots (id, user_id, name) VALUES ('b1','alice','MyBot');\
              INSERT INTO bot_active_personas (user_id, bot_id) VALUES ('alice','b1');",
         )
@@ -1268,7 +1268,7 @@ mod tests {
         Connection::open(&path).unwrap();
         let db = yuuka_web::Db::open(&path).unwrap();
         db.writer.transaction(|tx| {
-            tx.execute_batch("INSERT INTO users(discord_id,username,salt) VALUES('u','U','x'),('other','O','x');
+            tx.execute_batch("INSERT INTO users(id,username,salt) VALUES('u','U','x'),('other','O','x');
                 INSERT INTO bots(id,user_id,name) VALUES('b','u','B'),('foreign','other','F');
                 INSERT INTO timeline_records(id,user_id,bot_id,date,type,media_path,media_type) VALUES
                 (1,'u','b','2026-10-20','media','current.png','photo'),

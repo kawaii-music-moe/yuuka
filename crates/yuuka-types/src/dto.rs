@@ -30,7 +30,10 @@ pub enum Role {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "generated/")]
 pub struct SessionUser {
-    pub discord_id: String,
+    // 利用者 ID（`users.id`・不透明な文字列）。送受信の名前は、配布済みのデスクトップクライアントと
+    // Redis に残るセッション値に合わせて `discordId` のまま据え置く（docs/design/optional_discord.md §4.3）。
+    #[serde(rename = "discordId")]
+    pub user_id: String,
     pub username: String,
     pub role: Role,
 }
