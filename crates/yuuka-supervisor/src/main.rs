@@ -465,12 +465,20 @@ async fn run() -> Result<(), String> {
             cfg.desktop_token_ttl_days,
         ));
 
-    let auth_runtime = Arc::new(AuthRuntime::new(
-        sessions,
-        cfg.session_ttl_days,
-        cfg.admin_discord_ids.clone(),
-        oidc,
-    ));
+    let auth_runtime = Arc::new(
+        AuthRuntime::new(
+            sessions,
+            cfg.session_ttl_days,
+            cfg.admin_discord_ids.clone(),
+            oidc,
+        )
+        .with_login_policy(yuuka_auth::users::LoginPolicy {
+            admin_discord_ids: cfg.admin_discord_ids.clone(),
+            admin_subjects: cfg.admin_oidc_subjects.clone(),
+            admin_emails: cfg.admin_emails.clone(),
+            registration: cfg.registration_mode,
+        }),
+    );
     let auth_routes = yuuka_auth::routes(auth_runtime);
 
     // 5) 静的配信元（dist/public があれば SPA を載せる）。

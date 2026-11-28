@@ -299,7 +299,7 @@ mod tests {
         async fn session_user(&self, token: &str) -> Result<Option<SessionUser>, AuthError> {
             Ok(match token {
                 "good" => Some(SessionUser {
-                    discord_id: "u".to_owned(),
+                    user_id: "u".to_owned(),
                     username: "u".to_owned(),
                     role: Role::User,
                 }),
@@ -323,7 +323,7 @@ mod tests {
         let db = Db::open(&path).expect("open db");
         let conn = rusqlite::Connection::open(&path).expect("seed user conn");
         conn.execute(
-            "INSERT OR IGNORE INTO users (discord_id, username, salt) VALUES ('u', 'u', 'x')",
+            "INSERT OR IGNORE INTO users (id, username, salt) VALUES ('u', 'u', 'x')",
             [],
         )
         .expect("seed user");

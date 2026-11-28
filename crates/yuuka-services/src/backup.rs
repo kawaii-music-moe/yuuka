@@ -166,7 +166,7 @@ async fn list_backup_states(
         .read(move |conn| {
             let mut stmt = conn
                 .prepare(
-                    "SELECT discord_id, backup_enabled, backup_interval_hours, backup_last_run_at \
+                    "SELECT id, backup_enabled, backup_interval_hours, backup_last_run_at \
                      FROM users WHERE backup_enabled = 1 ORDER BY created_at ASC",
                 )
                 .map_err(map_sqlite)?;
@@ -314,7 +314,7 @@ mod tests {
                 .execute(move |conn| {
                     conn.execute(
                         "INSERT INTO users \
-                         (discord_id, username, salt, backup_enabled, \
+                         (id, username, salt, backup_enabled, \
                           backup_interval_hours, backup_last_run_at) \
                          VALUES (?1, ?1, 'x', ?2, ?3, ?4)",
                         rusqlite::params![uid, enabled, interval, last_run],

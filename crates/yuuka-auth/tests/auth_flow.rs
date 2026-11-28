@@ -23,8 +23,10 @@ use ring::signature::{EcdsaKeyPair, KeyPair, ECDSA_P256_SHA256_FIXED_SIGNING};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use tower::ServiceExt;
+use yuuka_auth::users::LoginPolicy;
 use yuuka_auth::{AuthRuntime, CompositeAuth, OidcClient, SessionStore};
 use yuuka_core::config::OidcSettings;
+use yuuka_core::RegistrationMode;
 use yuuka_types::{Role, SessionUser};
 use yuuka_web::{framework_routes, AppState, Db, WebConfig};
 
@@ -338,13 +340,27 @@ fn oidc_client(issuer: &str) -> Arc<OidcClient> {
 }
 
 fn build_app(oidc: Option<Arc<OidcClient>>, admin_ids: Vec<String>, config: WebConfig) -> TestApp {
+    let policy = LoginPolicy {
+        admin_discord_ids: admin_ids.clone(),
+        ..LoginPolicy::default()
+    };
+    build_app_with_policy(oidc, admin_ids, policy, config)
+}
+
+fn build_app_with_policy(
+    oidc: Option<Arc<OidcClient>>,
+    admin_ids: Vec<String>,
+    policy: LoginPolicy,
+    config: WebConfig,
+) -> TestApp {
     let file = tempfile::NamedTempFile::new().expect("temp db");
     let db = Db::open(file.path()).expect("open db");
     let sessions = SessionStore::in_memory();
     let auth =
         Arc::new(CompositeAuth::new(db.clone(), sessions.clone(), 7).with_oidc(oidc.clone()));
     let state = AppState::new(auth, config, db);
-    let runtime = Arc::new(AuthRuntime::new(sessions.clone(), 7, admin_ids, oidc));
+    let runtime =
+        Arc::new(AuthRuntime::new(sessions.clone(), 7, admin_ids, oidc).with_login_policy(policy));
     TestApp {
         router: framework_routes()
             .merge(yuuka_auth::routes(runtime))
@@ -477,8 +493,19 @@ fn clears_state_cookie(response: &axum::response::Response) -> bool {
 fn user_row(path: &PathBuf, discord_id: &str) -> Option<(Option<String>, String, String)> {
     let conn = rusqlite::Connection::open(path).expect("open");
     conn.query_row(
-        "SELECT sk_account_id, username, role FROM users WHERE discord_id = ?1",
+        "SELECT sk_account_id, username, role FROM users WHERE id = ?1",
         [discord_id],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+    )
+    .ok()
+}
+
+/// OIDC の `sub` で引いた `(id, discord_id, role)`。
+fn user_by_subject(path: &PathBuf, sub: &str) -> Option<(String, Option<String>, String)> {
+    let conn = rusqlite::Connection::open(path).expect("open");
+    conn.query_row(
+        "SELECT id, discord_id, role FROM users WHERE sk_account_id = ?1",
+        [sub],
         |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
     )
     .ok()
@@ -487,8 +514,8 @@ fn user_row(path: &PathBuf, discord_id: &str) -> Option<(Option<String>, String,
 fn seed_user(path: &PathBuf, discord_id: &str, role: &str, sk_account_id: Option<&str>) {
     let conn = rusqlite::Connection::open(path).expect("open");
     conn.execute(
-        "INSERT INTO users (discord_id, username, salt, role, sk_account_id) \
-         VALUES (?1, 'old-name', '00ff', ?2, ?3)",
+        "INSERT INTO users (id, discord_id, username, salt, role, sk_account_id) \
+         VALUES (?1, ?1, 'old-name', '00ff', ?2, ?3)",
         rusqlite::params![discord_id, role, sk_account_id],
     )
     .expect("seed user");
@@ -801,17 +828,112 @@ async fn callback_rejects_id_token_with_another_nonce() {
 }
 
 #[tokio::test]
-async fn callback_rejects_account_without_discord_id() {
+async fn callback_creates_user_without_discord_id_with_uuid_v7() {
     let provider = start_provider().await;
     let t = app_with(&provider, Vec::new());
-    let response = login(
+    let session = login_session(
         &t,
         &provider,
         json!({ "sub": "acc-x", "name": "No Discord" }),
     )
     .await;
-    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(logged_in(&t, &session).await, StatusCode::OK);
+
+    let (id, discord, role) = user_by_subject(&t.db_path, "acc-x").expect("user created");
+    assert_eq!(id.len(), 36, "{id}");
+    assert_eq!(id.chars().nth(14), Some('7'), "UUIDv7: {id}");
+    assert_eq!(discord, None, "Discord 未連携");
+    assert_eq!(role, "user");
+
+    // 二回目も同じ利用者になる。
+    login_session(
+        &t,
+        &provider,
+        json!({ "sub": "acc-x", "name": "No Discord" }),
+    )
+    .await;
+    assert_eq!(user_by_subject(&t.db_path, "acc-x").expect("user").0, id);
+}
+
+#[tokio::test]
+async fn callback_links_discord_later_and_rejects_conflicts_without_merging() {
+    let provider = start_provider().await;
+    let t = app_with(&provider, Vec::new());
+    login_session(&t, &provider, json!({ "sub": "acc-a", "name": "A" })).await;
+    let (id, _, _) = user_by_subject(&t.db_path, "acc-a").expect("user");
+
+    // 後から Discord ID 付きでログインすると、同じ利用者のまま連携される。
+    login_session(&t, &provider, account("acc-a", "700", "A")).await;
+    let (same, discord, _) = user_by_subject(&t.db_path, "acc-a").expect("user");
+    assert_eq!(same, id);
+    assert_eq!(discord.as_deref(), Some("700"));
+
+    // 同じ Discord ID の別アカウントは統合せずに断る。
+    let response = login(&t, &provider, account("acc-b", "700", "B")).await;
+    assert_eq!(response.status(), StatusCode::CONFLICT);
     assert!(!has_session_cookie(&response));
+    assert!(user_by_subject(&t.db_path, "acc-b").is_none());
+
+    // 連携済みと違う Discord ID が来たら断る。
+    let response = login(&t, &provider, account("acc-a", "701", "A")).await;
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        user_by_subject(&t.db_path, "acc-a")
+            .expect("user")
+            .1
+            .as_deref(),
+        Some("700")
+    );
+}
+
+#[tokio::test]
+async fn closed_registration_lets_only_existing_users_in() {
+    let provider = start_provider().await;
+    let t = build_app_with_policy(
+        Some(oidc_client(&provider.issuer)),
+        Vec::new(),
+        LoginPolicy {
+            registration: RegistrationMode::Closed,
+            ..LoginPolicy::default()
+        },
+        WebConfig::default(),
+    );
+    seed_user(&t.db_path, "800", "user", Some("acc-old"));
+
+    login_session(&t, &provider, account("acc-old", "800", "Old")).await;
+    let response = login(&t, &provider, json!({ "sub": "acc-new", "name": "New" })).await;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert!(!has_session_cookie(&response));
+    assert!(user_by_subject(&t.db_path, "acc-new").is_none());
+}
+
+#[tokio::test]
+async fn admin_can_be_named_by_oidc_subject_without_discord() {
+    let provider = start_provider().await;
+    let t = build_app_with_policy(
+        Some(oidc_client(&provider.issuer)),
+        Vec::new(),
+        LoginPolicy {
+            admin_subjects: vec!["acc-admin".to_owned()],
+            ..LoginPolicy::default()
+        },
+        WebConfig::default(),
+    );
+    login_session(
+        &t,
+        &provider,
+        json!({ "sub": "acc-admin", "name": "Admin" }),
+    )
+    .await;
+    login_session(&t, &provider, json!({ "sub": "acc-user", "name": "User" })).await;
+    assert_eq!(
+        user_by_subject(&t.db_path, "acc-admin").expect("admin").2,
+        "admin"
+    );
+    assert_eq!(
+        user_by_subject(&t.db_path, "acc-user").expect("user").2,
+        "user"
+    );
 }
 
 #[tokio::test]
@@ -1025,7 +1147,7 @@ async fn sessions_issued_before_oidc_are_no_longer_accepted() {
         .sessions
         .create(
             &SessionUser {
-                discord_id: "100".to_owned(),
+                user_id: "100".to_owned(),
                 username: "Alice".to_owned(),
                 role: Role::User,
             },

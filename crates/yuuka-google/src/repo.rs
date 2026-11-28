@@ -375,7 +375,7 @@ pub async fn set_user_calendars(
     db.writer
         .transaction(move |tx| {
             tx.execute(
-                "UPDATE users SET google_calendars = ?1, updated_at = datetime('now','localtime') WHERE discord_id = ?2",
+                "UPDATE users SET google_calendars = ?1, updated_at = datetime('now','localtime') WHERE id = ?2",
                 params![json, user_id],
             )
             .map_err(map_sqlite)?;
@@ -596,7 +596,7 @@ mod tests {
         db.writer
             .transaction(|tx| {
                 tx.execute_batch(
-                    "INSERT INTO users (discord_id, username, salt) VALUES \
+                    "INSERT INTO users (id, username, salt) VALUES \
                        ('u1', 'u1', 'x'), ('u2', 'u2', 'x');
                      INSERT INTO bots (id, user_id, name) VALUES \
                        ('plain', 'u1', 'P'), ('none', 'u1', 'N'), ('mine', 'u1', 'M'), ('others', 'u2', 'O');

@@ -43,7 +43,7 @@ fn fresh_db() -> (Db, std::path::PathBuf) {
     let db = Db::open(&path).expect("open db");
     let conn = rusqlite::Connection::open(&path).expect("open seed");
     conn.execute_batch(
-        "INSERT INTO users (discord_id, username, salt, role) \
+        "INSERT INTO users (id, username, salt, role) \
             VALUES ('u1', 'u1', '00', 'user'), ('u2', 'u2', '00', 'user');
          INSERT INTO bots (id, user_id, name) VALUES \
             ('mybot', 'u1', 'Mine'), ('otherbot', 'u2', 'Not shared'), \
@@ -61,7 +61,7 @@ struct FakeAuth;
 impl AuthBackend for FakeAuth {
     async fn session_user(&self, token: &str) -> Result<Option<SessionUser>, AuthError> {
         Ok((token == ME || token == OTHER).then(|| SessionUser {
-            discord_id: token.to_owned(),
+            user_id: token.to_owned(),
             username: token.to_owned(),
             role: Role::User,
         }))

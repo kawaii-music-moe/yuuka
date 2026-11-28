@@ -725,7 +725,7 @@ mod provider_tests {
     fn seed_user(path: &PathBuf, discord_id: &str) {
         raw(path)
             .execute(
-                "INSERT OR IGNORE INTO users (discord_id, username, salt, role) \
+                "INSERT OR IGNORE INTO users (id, username, salt, role) \
                  VALUES (?1, ?1, 'deadbeef', 'user')",
                 params![discord_id],
             )

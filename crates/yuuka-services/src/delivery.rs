@@ -108,7 +108,7 @@ mod tests {
         let conn = rusqlite::Connection::open(&path).expect("seed conn");
         conn.execute_batch(
             r#"PRAGMA foreign_keys = OFF;
-             INSERT INTO users (discord_id, username, salt) VALUES ('a', 'a', ''), ('b', 'b', '');
+             INSERT INTO users (id, username, salt) VALUES ('a', 'a', ''), ('b', 'b', '');
              INSERT INTO periodic_reports
                (id, user_id, bot_id, name, enabled, schedule_cron, target_type, target_id, sections)
                VALUES (1, 'a', 'bot1', 'お知らせ', 0, '0 7 * * *', 'channel', 'chan-a1', '["topics"]'),

@@ -89,7 +89,7 @@ pub async fn list_all_users(db: &Db) -> Result<Vec<AdminUserView>, DbError> {
         .read(move |conn| {
             let mut stmt = conn
                 .prepare(
-                    "SELECT discord_id, username, role, created_at, updated_at \
+                    "SELECT id, username, role, created_at, updated_at \
                      FROM users ORDER BY created_at ASC",
                 )
                 .map_err(map_sqlite)?;
@@ -129,7 +129,7 @@ pub async fn update_user_role(db: &Db, discord_id: &str, role: &str) -> Result<b
             let n = tx
                 .execute(
                     "UPDATE users SET role = ?1, updated_at = datetime('now', 'localtime') \
-                     WHERE discord_id = ?2",
+                     WHERE id = ?2",
                     params![role, discord_id],
                 )
                 .map_err(map_sqlite)?;
@@ -147,10 +147,7 @@ pub async fn delete_user(db: &Db, discord_id: &str) -> Result<bool, DbError> {
     db.writer
         .transaction(move |tx| {
             let n = tx
-                .execute(
-                    "DELETE FROM users WHERE discord_id = ?1",
-                    params![discord_id],
-                )
+                .execute("DELETE FROM users WHERE id = ?1", params![discord_id])
                 .map_err(map_sqlite)?;
             Ok(n > 0)
         })
@@ -256,7 +253,7 @@ pub async fn list_all_bots(db: &Db) -> Result<Vec<AdminBotView>, DbError> {
                             b.discord_username, b.discord_avatar_url, b.suspended, \
                             (b.discord_token_encrypted IS NOT NULL) AS has_custom_token, \
                             b.created_at, b.updated_at \
-                     FROM bots b LEFT JOIN users u ON u.discord_id = b.user_id \
+                     FROM bots b LEFT JOIN users u ON u.id = b.user_id \
                      ORDER BY b.created_at ASC",
                 )
                 .map_err(map_sqlite)?;
@@ -410,7 +407,7 @@ mod tests {
     fn seed_user(path: &PathBuf, discord_id: &str, role: &str) {
         raw(path)
             .execute(
-                "INSERT INTO users (discord_id, username, salt, role) \
+                "INSERT INTO users (id, username, salt, role) \
                  VALUES (?1, ?1, '00', ?2)",
                 params![discord_id, role],
             )

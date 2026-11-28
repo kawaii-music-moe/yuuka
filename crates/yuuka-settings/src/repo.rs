@@ -1,6 +1,6 @@
 //! settings データアクセス（Node `userRepo` の設定系セッターのパリティ）。
 //!
-//! ユーザー本人の行のみを更新する（`WHERE discord_id = ?`）。`salt` 列は**絶対に変更しない**（ユーザー鍵導出＝保存済み資格情報の復号に使うため）。
+//! ユーザー本人の行のみを更新する（`WHERE id = ?`）。`salt` 列は**絶対に変更しない**（ユーザー鍵導出＝保存済み資格情報の復号に使うため）。
 
 use rusqlite::types::Value;
 use rusqlite::{params, params_from_iter, ErrorCode, OptionalExtension};
@@ -17,11 +17,9 @@ pub async fn is_admin(db: &Db, discord_id: &str) -> Result<bool, DbError> {
     db.read
         .read(move |conn| {
             let role: Option<String> = conn
-                .query_row(
-                    "SELECT role FROM users WHERE discord_id = ?1",
-                    params![id],
-                    |r| r.get::<_, String>(0),
-                )
+                .query_row("SELECT role FROM users WHERE id = ?1", params![id], |r| {
+                    r.get::<_, String>(0)
+                })
                 .optional()
                 .map_err(map_sqlite)?;
             Ok(role.as_deref() == Some("admin"))
@@ -247,7 +245,7 @@ pub async fn status_snapshot(
                     "SELECT username, gemini_model, gemini_api_key_encrypted, backup_enabled, \
                      backup_folder_id, backup_interval_hours, backup_generations, backup_last_run_at, \
                      rich_reply_enabled, remind_default_minutes, notify_target_type, notify_target_id \
-                     FROM users WHERE discord_id = ?1",
+                     FROM users WHERE id = ?1",
                     params![user_id],
                     |r| {
                         Ok((
@@ -386,7 +384,7 @@ pub async fn user_preferences(db: &Db, discord_id: &str) -> Result<UserPreferenc
                     "SELECT rich_reply_enabled, remind_default_minutes, notify_target_type, \
                      notify_target_id, timezone, backup_enabled, backup_folder_id, \
                      backup_interval_hours, backup_generations, backup_last_run_at \
-                     FROM users WHERE discord_id = ?1",
+                     FROM users WHERE id = ?1",
                     params![discord_id],
                     |r| {
                         Ok(UserPreferences {
@@ -424,7 +422,7 @@ pub async fn update_username(db: &Db, discord_id: &str, username: &str) -> Resul
         .transaction(move |tx| {
             match tx.execute(
                 "UPDATE users SET username = ?1, updated_at = datetime('now', 'localtime') \
-                 WHERE discord_id = ?2",
+                 WHERE id = ?2",
                 params![username, discord_id],
             ) {
                 Ok(n) => Ok(n > 0),
@@ -463,10 +461,7 @@ pub async fn delete_user(db: &Db, discord_id: &str) -> Result<bool, DbError> {
     db.writer
         .transaction(move |tx| {
             let n = tx
-                .execute(
-                    "DELETE FROM users WHERE discord_id = ?1",
-                    params![discord_id],
-                )
+                .execute("DELETE FROM users WHERE id = ?1", params![discord_id])
                 .map_err(map_sqlite)?;
             Ok(n > 0)
         })
@@ -511,7 +506,7 @@ pub async fn get_gemini_enc(
             let mut stmt = conn
                 .prepare(
                     "SELECT gemini_api_key_encrypted, gemini_api_key_iv, gemini_api_key_tag \
-                     FROM users WHERE discord_id = ?1",
+                     FROM users WHERE id = ?1",
                 )
                 .map_err(map_sqlite)?;
             let mut rows = stmt
@@ -544,7 +539,7 @@ pub async fn set_gemini(
             tx.execute(
                 "UPDATE users SET gemini_api_key_encrypted = ?1, gemini_api_key_iv = ?2, \
                  gemini_api_key_tag = ?3, gemini_model = ?4, updated_at = datetime('now', 'localtime') \
-                 WHERE discord_id = ?5",
+                 WHERE id = ?5",
                 params![encrypted, iv, tag, model, discord_id],
             )
             .map_err(map_sqlite)?;
@@ -589,7 +584,7 @@ pub async fn update_user_settings(
         return Ok(());
     }
     let sql = format!(
-        "UPDATE users SET {}, updated_at = datetime('now', 'localtime') WHERE discord_id = ?",
+        "UPDATE users SET {}, updated_at = datetime('now', 'localtime') WHERE id = ?",
         sets.join(", ")
     );
     vals.push(Value::Text(discord_id.to_owned()));
@@ -634,7 +629,7 @@ pub async fn update_backup(
         vals.push(Value::Text(f));
     }
     let sql = format!(
-        "UPDATE users SET {}, updated_at = datetime('now', 'localtime') WHERE discord_id = ?",
+        "UPDATE users SET {}, updated_at = datetime('now', 'localtime') WHERE id = ?",
         sets.join(", ")
     );
     vals.push(Value::Text(discord_id.to_owned()));
@@ -678,7 +673,7 @@ mod tests {
     fn seed_user(path: &PathBuf, discord_id: &str, role: &str) {
         raw(path)
             .execute(
-                "INSERT INTO users (discord_id, username, salt, role) \
+                "INSERT INTO users (id, username, salt, role) \
                  VALUES (?1, ?1, 'deadbeef', ?2)",
                 params![discord_id, role],
             )
@@ -686,14 +681,14 @@ mod tests {
     }
 
     fn col(path: &PathBuf, id: &str, column: &str) -> Option<String> {
-        let sql = format!("SELECT {column} FROM users WHERE discord_id = ?1");
+        let sql = format!("SELECT {column} FROM users WHERE id = ?1");
         raw(path)
             .query_row(&sql, params![id], |r| r.get::<_, Option<String>>(0))
             .expect("read col")
     }
 
     fn col_i(path: &PathBuf, id: &str, column: &str) -> Option<i64> {
-        let sql = format!("SELECT {column} FROM users WHERE discord_id = ?1");
+        let sql = format!("SELECT {column} FROM users WHERE id = ?1");
         raw(path)
             .query_row(&sql, params![id], |r| r.get::<_, Option<i64>>(0))
             .expect("read col_i")

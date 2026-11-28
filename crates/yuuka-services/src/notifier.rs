@@ -152,7 +152,7 @@ mod tests {
             .execute(move |conn| {
                 conn.execute(
                     "INSERT INTO users \
-                       (discord_id, username, salt, notify_target_type, notify_target_id) \
+                       (id, username, salt, notify_target_type, notify_target_id) \
                      VALUES (?1, ?1, '', ?2, ?3)",
                     rusqlite::params![user, kind, id],
                 )
