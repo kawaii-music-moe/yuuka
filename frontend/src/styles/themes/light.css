@@ -1,0 +1,197 @@
+/* ライトテーマ（Material Design 2 Light）: トークン + ハードコード値の上書き。
+   ★ コンポーネント定義より前に読み込むこと（理由は styles.css 冒頭のコメント参照）。 */
+
+/* ==============================================================================
+   LIGHT THEME TOKENS (Material Design 2 Light)
+   ============================================================================== */
+/* :root に限定: テーマ切替ボタン自身も data-theme を持つため、
+   非限定セレクタだとボタン内のテキストトークンが上書きされ文字が黒くなる */
+:root[data-theme="light"] {
+	--bg-primary: #fafafa;
+	--bg-secondary: #fafafa;
+	--bg-sidebar: #f5f5f5;
+	--bg-body: #fafafa;
+
+	--surface-0dp: #ffffff;
+	--surface-1dp: #f5f5f5;
+	--surface-2dp: #eeeeee;
+	--surface-3dp: #e8e8e8;
+	--surface-4dp: #e3e3e3;
+	--surface-6dp: #dcdcdc;
+	--surface-8dp: #d8d8d8;
+	--surface-12dp: #d3d3d3;
+	--surface-16dp: #cfcfcf;
+	--surface-24dp: #cacaca;
+
+	--color-primary: #6200ee;
+	--color-primary-variant: #3700b3;
+	--color-secondary: #018786;
+	--color-error: #b00020;
+
+	--color-on-primary: #ffffff;
+	--color-on-secondary: #ffffff;
+	--color-on-error: #ffffff;
+
+	--text-high: rgba(0, 0, 0, 0.87);
+	--text-medium: rgba(0, 0, 0, 0.6);
+	--text-disabled: rgba(0, 0, 0, 0.38);
+
+	--card-matte: transparent;
+	--card-matte-hover: rgba(0, 0, 0, 0.04);
+	--border-matte: rgba(0, 0, 0, 0.12);
+	--border-divider: rgba(0, 0, 0, 0.12);
+	--border-focus: var(--color-primary);
+	--field-focus-tint: #000;
+
+	--color-white: rgba(0, 0, 0, 0.87);
+	--color-zinc-light: rgba(0, 0, 0, 0.6);
+	--color-zinc-muted: rgba(0, 0, 0, 0.38);
+	--color-green: #388e3c;
+	--color-red: var(--color-error);
+
+	--text-primary: rgba(0, 0, 0, 0.87);
+	--text-secondary: rgba(0, 0, 0, 0.6);
+
+	--discord-blurple: var(--color-primary);
+	--discord-blurple-hover: #7722ff;
+	--discord-blurple-active: #4a00c4;
+	--discord-grey-secondary: var(--surface-4dp);
+	--discord-grey-secondary-hover: var(--surface-8dp);
+}
+
+/* Light theme component overrides for hardcoded dark values */
+[data-theme="light"] ::-webkit-scrollbar-track {
+	background: var(--bg-primary);
+}
+[data-theme="light"] ::-webkit-scrollbar-thumb {
+	background: #d4d4d8;
+}
+[data-theme="light"] ::-webkit-scrollbar-thumb:hover {
+	background: #a1a1aa;
+}
+
+[data-theme="light"] .checkbox-custom {
+	border-color: rgba(0, 0, 0, 0.38);
+}
+
+[data-theme="light"] .badge-normal {
+	background-color: #e4e4e7;
+	color: rgba(0, 0, 0, 0.6);
+	border-color: #d4d4d8;
+}
+
+[data-theme="light"] .spinner {
+	border-color: rgba(0, 0, 0, 0.1);
+	border-top-color: rgba(0, 0, 0, 0.87);
+}
+
+[data-theme="light"] .btn-primary:hover {
+	background-color: #7722ff;
+}
+[data-theme="light"] .btn-primary:active {
+	background-color: var(--color-primary-variant);
+}
+[data-theme="light"] .btn-secondary:hover {
+	background-color: rgba(98, 0, 238, 0.08);
+}
+[data-theme="light"] .btn-filter:hover {
+	background-color: rgba(98, 0, 238, 0.08);
+}
+[data-theme="light"] .btn-filter.active {
+	background-color: var(--color-primary);
+	border-color: var(--color-primary);
+	color: #ffffff;
+}
+[data-theme="light"] .btn-icon:hover {
+	background-color: rgba(0, 0, 0, 0.04);
+}
+
+[data-theme="light"] .menu-item:hover {
+	background-color: rgba(0, 0, 0, 0.04);
+}
+[data-theme="light"] .menu-item.active {
+	color: var(--color-primary);
+	background-color: rgba(98, 0, 238, 0.12);
+}
+
+[data-theme="light"] .stat-card-badge-trend.positive {
+	color: var(--color-primary);
+	border-color: rgba(98, 0, 238, 0.3);
+}
+
+[data-theme="light"] #trend-area-path {
+	fill: rgba(98, 0, 238, 0.08) !important;
+}
+[data-theme="light"] #donut-segment {
+	stroke: var(--color-secondary) !important;
+}
+[data-theme="light"] #trend-line-path {
+	stroke: var(--color-primary) !important;
+}
+
+[data-theme="light"] .urgent-item:hover {
+	color: var(--color-primary);
+}
+[data-theme="light"] .bot-item-card:hover {
+	border-color: var(--color-primary);
+}
+[data-theme="light"] .bot-item-card.default-bot {
+	border-color: rgba(98, 0, 238, 0.3);
+}
+[data-theme="light"] .bot-item-card {
+	background: var(--surface-1dp);
+}
+[data-theme="light"] .sidebar {
+	box-shadow: none;
+}
+
+[data-theme="light"] .modal {
+	background-color: rgba(0, 0, 0, 0.5);
+}
+
+/* ハードコードされた白系ホバーはライト背景では見えないため置き換え */
+[data-theme="light"] .expense-table tr:hover td {
+	background-color: rgba(0, 0, 0, 0.03);
+}
+[data-theme="light"] .sidebar-back-button:hover {
+	background-color: rgba(0, 0, 0, 0.05);
+}
+[data-theme="light"] .btn-trash:hover,
+[data-theme="light"] .btn-credential-delete:hover {
+	background-color: rgba(0, 0, 0, 0.04);
+}
+[data-theme="light"] .admin-btn-action:hover {
+	background-color: rgba(0, 0, 0, 0.06);
+}
+
+/* モーダル（components/modal.css） */
+[data-theme="light"] .modal-content {
+	background-color: var(--surface-0dp);
+	box-shadow: 0 10px 25px rgba(0, 0, 0, 0.12);
+}
+
+/* ステータスバッジ（components/badges.css） */
+[data-theme="light"] .status-badge.status-pending,
+[data-theme="light"] .status-badge.status-delivery-received {
+	background-color: rgba(180, 130, 0, 0.1);
+	color: #9a6700;
+}
+
+[data-theme="light"] .status-badge.status-sent,
+[data-theme="light"] .status-badge.status-delivery-notified {
+	background-color: rgba(34, 134, 58, 0.1);
+	color: #1a7f37;
+}
+
+[data-theme="light"] .status-badge.status-delivery-failed {
+	background-color: rgba(180, 35, 24, 0.08);
+	color: #b42318;
+}
+
+/* ホーム（views/home.css） */
+[data-theme="light"] .home-stat-card {
+	background: var(--surface-1dp);
+}
+[data-theme="light"] .home-dashboard {
+	background: transparent;
+}

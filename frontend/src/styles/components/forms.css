@@ -1,0 +1,195 @@
+/* フォーム部品（入力・折りたたみセクション）。 */
+
+/* ==============================================================================
+   FORM CONTROLS & INPUTS (Discord Styling)
+   ============================================================================== */
+.form-group {
+	margin-bottom: 20px;
+	text-align: left;
+}
+
+.form-group label {
+	display: block;
+	font-size: 0.72rem;
+	color: var(--text-secondary);
+	margin-bottom: 8px;
+	font-weight: 700;
+	text-transform: uppercase;
+	letter-spacing: 0.05em;
+}
+
+/* 折りたたみセクション（<details class="collapsible-group">）。
+   <summary> は .form-group label と同じ見た目にし、左にシェブロンを付ける。 */
+.collapsible-group > summary {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	cursor: pointer;
+	user-select: none;
+	list-style: none; /* Firefox のデフォルト三角を消す */
+	font-size: 0.72rem;
+	color: var(--text-secondary);
+	font-weight: 700;
+	text-transform: uppercase;
+	letter-spacing: 0.05em;
+	margin-bottom: 8px;
+}
+.collapsible-group > summary::-webkit-details-marker {
+	display: none; /* WebKit/Blink のデフォルト三角を消す */
+}
+.collapsible-group > summary::before {
+	content: "▸";
+	display: inline-block;
+	font-size: 0.85rem;
+	line-height: 1;
+	transition: transform 0.18s ease;
+}
+.collapsible-group[open] > summary::before {
+	transform: rotate(90deg);
+}
+.collapsible-group > summary:hover {
+	color: var(--text-primary);
+}
+
+/* Discord連携タブ（.discord-tab）配下のみ、注釈サイズ（0.72〜0.75rem）で描かれていた
+   登録行の「名前」を本文サイズへ底上げする（IDは注釈サイズのmonoのまま）。
+   他タブと共有のクラス自体は変えず、スコープ付き上書きに留める。 */
+.discord-tab .row-label {
+	font-size: 0.9rem;
+	color: var(--text-primary);
+}
+/* ギルド選択と、チャンネル・メンバー・ロールの入力を 1 つの枠（.joined-field）に並べる。 */
+.discord-tab .joined-field {
+	flex: 1;
+}
+.discord-tab .joined-field .guild-select {
+	flex-shrink: 0;
+	max-width: 40%;
+}
+/* 各セクション（discord/*Section.svelte）の本文: 追加行 + 登録済みの行の一覧。 */
+.discord-tab .section-body {
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+	margin-top: 12px;
+}
+.discord-tab .add-row {
+	display: flex;
+	gap: 12px;
+	flex-wrap: wrap;
+}
+.discord-tab .row-list {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	margin-top: 8px;
+}
+.discord-tab .list-row {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 10px;
+}
+.discord-tab .mono {
+	font-family: var(--font-family-mono);
+}
+.discord-tab .row-label .mono {
+	font-size: 0.8rem;
+	color: var(--color-zinc-muted);
+}
+
+/* Base input, select, textarea styling
+   外枠は通常時なし（透明の 1px で場所だけ取る）。フォーカス時に 1px の枠を出し、背景を少し浮かせる。 */
+input[type="text"],
+input[type="password"],
+input[type="number"],
+input[type="url"],
+input[type="email"],
+input[type="search"],
+input[type="tel"],
+input[type="date"],
+input[type="time"],
+input[type="datetime-local"],
+input[type="month"],
+select,
+textarea {
+	padding: 12px;
+	background-color: var(--field-bg);
+	border: 1px solid transparent;
+	border-radius: 4px;
+	outline: none;
+	box-shadow: none;
+	font-size: 0.95rem;
+	color: var(--text-high);
+	transition:
+		border-color 0.15s ease,
+		background-color 0.15s ease;
+}
+
+input[type="text"]:focus,
+input[type="password"]:focus,
+input[type="number"]:focus,
+input[type="url"]:focus,
+input[type="email"]:focus,
+input[type="search"]:focus,
+input[type="tel"]:focus,
+input[type="date"]:focus,
+input[type="time"]:focus,
+input[type="datetime-local"]:focus,
+input[type="month"]:focus,
+select:focus,
+textarea:focus {
+	border-color: var(--border-focus);
+	background-color: var(--field-bg-focus);
+	box-shadow: none;
+}
+
+/* 数値欄のブラウザ標準の増減ボタン（▲▼）を出さない（Chrome / Safari / Firefox） */
+input[type="number"] {
+	appearance: textfield;
+	-moz-appearance: textfield;
+}
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button {
+	-webkit-appearance: none;
+	margin: 0;
+}
+
+/* 日付・時刻の欄は文字では打たせず、押すとピッカーを開く（lib/datePicker.ts） */
+input[type="date"],
+input[type="time"],
+input[type="datetime-local"],
+input[type="month"] {
+	cursor: pointer;
+}
+input[type="date"]::-webkit-datetime-edit,
+input[type="time"]::-webkit-datetime-edit,
+input[type="datetime-local"]::-webkit-datetime-edit,
+input[type="month"]::-webkit-datetime-edit {
+	cursor: pointer;
+}
+
+.form-group input,
+.form-group select,
+.form-group textarea {
+	width: 100%;
+}
+
+.form-row {
+	display: grid;
+	/* 置かれた場所の幅が狭い時は自動で1カラムに落ちる（狭いカラム内で入力欄が極小化するのを防ぐ） */
+	grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+	gap: 16px;
+}
+
+.form-group textarea {
+	resize: vertical;
+	min-height: 100px;
+}
+
+.field-sub {
+	display: block;
+	font-size: 0.75rem;
+	color: var(--color-zinc-muted);
+	margin-top: 6px;
+}

@@ -1,0 +1,52 @@
+/* 共通 @keyframes（tab-view / spinner / ステータスドット等から参照）。 */
+
+/* ==============================================================================
+   DYNAMIC ANIMATION KEYFRAMES
+   ============================================================================== */
+@keyframes tab-fade-in {
+	from {
+		opacity: 0;
+		transform: translateY(4px);
+	}
+	to {
+		opacity: 1;
+		transform: translateY(0);
+	}
+}
+
+@keyframes item-fade-in {
+	from {
+		opacity: 0;
+		transform: translateX(-4px);
+	}
+	to {
+		opacity: 1;
+		transform: translateX(0);
+	}
+}
+
+@keyframes logo-float {
+	0%,
+	100% {
+		transform: translateY(0);
+	}
+	50% {
+		transform: translateY(-4px);
+	}
+}
+
+@keyframes spin {
+	to {
+		transform: rotate(360deg);
+	}
+}
+
+@keyframes pulse-dot {
+	0%,
+	100% {
+		opacity: 1;
+	}
+	50% {
+		opacity: 0.5;
+	}
+}

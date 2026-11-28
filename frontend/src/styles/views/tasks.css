@@ -1,0 +1,339 @@
+/* タスク / 予定: フィルタ・リストカード・チェックボックス・進捗バー・サブタスク。 */
+
+/* ==============================================================================
+   2. TASKS & SCHEDULES LIST CARDS & FILTERS
+   ============================================================================== */
+.view-actions-card {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	margin-bottom: 24px;
+	padding: 12px 0;
+	background-color: transparent;
+	border: none;
+	border-bottom: 1px solid var(--border-divider);
+	border-radius: 0;
+}
+
+.filters-group {
+	display: flex;
+	gap: 8px;
+	align-items: center;
+}
+
+.label-text {
+	font-size: 0.8rem;
+	color: var(--text-secondary);
+	margin-right: 4px;
+}
+
+.btn-filter {
+	background-color: transparent;
+	border: 1px solid var(--border-divider);
+	color: var(--text-medium);
+	padding: 6px 14px;
+	border-radius: 4px;
+	font-size: 0.8rem;
+	cursor: pointer;
+	font-weight: 600;
+	transition: var(--transition-smooth);
+}
+
+.btn-filter:hover {
+	color: var(--text-high);
+	border-color: var(--color-primary);
+	background-color: rgba(187, 134, 252, 0.08);
+}
+
+.btn-filter.active {
+	background-color: var(--color-primary);
+	border-color: var(--color-primary);
+	color: var(--color-on-primary);
+	font-weight: 700;
+}
+
+/* Lists grid containers */
+.list-container {
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+}
+
+.card-item {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	gap: 16px;
+	animation: item-fade-in 0.3s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+	background-color: transparent;
+	border: none;
+	border-bottom: 1px solid var(--border-divider);
+	border-radius: 6px;
+	padding: 16px 12px;
+	margin: 0 -12px;
+	min-width: 0;
+	overflow: hidden;
+}
+
+.card-content-left {
+	display: flex;
+	align-items: flex-start;
+	gap: 14px;
+	min-width: 0;
+	flex: 1 1 auto;
+}
+
+/* チェックボックスは全て統一の自作スタイル（テーマ連動・描画チェックマーク）。
+   静的な native checkbox と動的生成の .checkbox-custom の両方に適用する。 */
+input[type="checkbox"],
+.checkbox-custom {
+	appearance: none;
+	-webkit-appearance: none;
+	width: 18px;
+	height: 18px;
+	margin: 0;
+	border: 2px solid var(--text-secondary);
+	border-radius: 5px;
+	background-color: transparent;
+	outline: none;
+	cursor: pointer;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	flex-shrink: 0;
+	vertical-align: middle;
+	transition:
+		background-color 0.15s ease,
+		border-color 0.15s ease,
+		box-shadow 0.15s ease;
+}
+
+input[type="checkbox"]:hover,
+.checkbox-custom:hover {
+	border-color: var(--color-primary);
+}
+
+input[type="checkbox"]:focus-visible,
+.checkbox-custom:focus-visible {
+	box-shadow: 0 0 0 3px
+		color-mix(in srgb, var(--color-primary) 35%, transparent);
+}
+
+input[type="checkbox"]:checked,
+.checkbox-custom:checked {
+	background-color: var(--color-primary);
+	border-color: var(--color-primary);
+}
+
+/* ✓ をボックス描画（回転させた枠線）で表現。グリフより精緻に見える */
+input[type="checkbox"]:checked::after,
+.checkbox-custom:checked::after {
+	content: "";
+	width: 5px;
+	height: 9px;
+	margin-top: -1px;
+	border: solid #ffffff;
+	border-width: 0 2px 2px 0;
+	transform: rotate(45deg);
+}
+
+input[type="checkbox"]:disabled,
+.checkbox-custom:disabled {
+	opacity: 0.5;
+	cursor: not-allowed;
+}
+
+.card-text {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	min-width: 0;
+	flex: 1 1 auto;
+	overflow-wrap: anywhere;
+}
+
+.card-title {
+	font-size: 0.95rem;
+	font-weight: 700;
+}
+
+.card-desc {
+	font-size: 0.8rem;
+	color: var(--text-secondary);
+	line-height: 1.4;
+}
+
+.card-meta-row {
+	display: flex;
+	gap: 10px;
+	align-items: center;
+	margin-top: 4px;
+}
+
+.meta-item {
+	font-size: 0.7rem;
+	color: var(--color-zinc-muted);
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	font-family: var(--font-family-mono);
+}
+
+.card-actions-right {
+	display: flex;
+	gap: 6px;
+}
+
+.btn-trash {
+	background-color: transparent;
+	border: 1px solid var(--border-matte);
+	color: var(--text-secondary);
+	width: 32px;
+	height: 32px;
+	border-radius: var(--radius);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	cursor: pointer;
+	transition: var(--transition-smooth);
+}
+
+.btn-trash:hover {
+	background-color: rgba(255, 255, 255, 0.04);
+	border-color: var(--color-red);
+	color: var(--color-red);
+}
+
+/* Checked state */
+.card-item.done .card-title {
+	text-decoration: line-through;
+	color: var(--color-zinc-muted);
+}
+
+.card-item.done {
+	opacity: 0.55;
+}
+
+/* ─── タスク進捗管理（v12: 進捗バー・サブタスク・ガント） ───────────────── */
+
+/* 進捗バー（一覧カード内） */
+.task-progress-bar {
+	position: relative;
+	width: 100%;
+	height: 6px;
+	margin-top: 8px;
+	background-color: var(--surface-6dp);
+	border-radius: var(--radius);
+	overflow: hidden;
+}
+.task-progress-fill {
+	height: 100%;
+	background-color: var(--color-primary);
+	border-radius: var(--radius);
+	transition: width 0.3s ease;
+}
+.task-progress-text {
+	font-family: var(--font-family-mono);
+	font-size: 0.7rem;
+	color: var(--color-zinc-muted);
+	margin-left: 6px;
+}
+
+/* タスクカードのアクションボタン群 */
+.task-card-buttons {
+	display: flex;
+	gap: 4px;
+	align-items: center;
+	flex-wrap: wrap;
+}
+.btn-mini {
+	display: inline-flex;
+	align-items: center;
+	gap: 2px;
+	font-size: 0.72rem;
+	padding: 3px 8px;
+	border-radius: var(--radius);
+	border: 1px solid var(--border-divider);
+	background: transparent;
+	color: var(--color-zinc-muted);
+	cursor: pointer;
+	transition: all 0.15s ease;
+}
+.btn-mini:hover {
+	color: var(--color-primary);
+	border-color: var(--color-primary);
+}
+.btn-mini .material-symbols-outlined {
+	font-size: 0.95rem;
+}
+
+/* サブタスクの入れ子表示 */
+.subtask-toggle {
+	background: none;
+	border: none;
+	color: var(--color-zinc-muted);
+	cursor: pointer;
+	font-size: 0.78rem;
+	padding: 2px 0;
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+}
+.subtask-toggle .material-symbols-outlined {
+	font-size: 1rem;
+	transition: transform 0.15s ease;
+}
+.subtask-list {
+	margin-top: 8px;
+	padding-left: 14px;
+	border-left: 2px solid var(--border-divider);
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+.subtask-row {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	font-size: 0.85rem;
+	padding: 4px 0;
+}
+.subtask-row.done .subtask-title {
+	text-decoration: line-through;
+	opacity: 0.6;
+}
+.btn-icon-sm {
+	background: transparent;
+	border: 1px solid var(--border-matte);
+	color: var(--color-zinc-muted);
+	width: 22px;
+	height: 22px;
+	border-radius: var(--radius);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	cursor: pointer;
+	transition: var(--transition-smooth);
+	flex-shrink: 0;
+}
+.btn-icon-sm:hover {
+	border-color: var(--color-primary);
+	color: var(--color-primary);
+}
+.btn-icon-sm .material-symbols-outlined {
+	font-size: 0.9rem;
+}
+.subtask-title {
+	flex: 1;
+}
+.subtask-due {
+	font-family: var(--font-family-mono);
+	font-size: 0.7rem;
+	color: var(--color-zinc-muted);
+}
+
+/* ガントチャート領域 */
+#tasks-gantt-scroll {
+	width: 100%;
+	min-height: 200px;
+}

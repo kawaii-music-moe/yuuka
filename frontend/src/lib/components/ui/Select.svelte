@@ -10,7 +10,7 @@ export interface SelectOption<T extends string = string> {
 <script lang="ts" generics="T extends string">
 // ブラウザ標準の <select> の代わりに使うプルダウン。見た目は Discord 設定の候補リスト
 // （OptionCombobox）に合わせた独自実装で、ブラウザ標準の白い候補表示を出さない。
-// 単独で置くと通常の入力欄と同じ見た目、枠つき入力（.joined-field）の中では枠・背景なし（styles.css）。
+// 単独で置くと通常の入力欄と同じ見た目、枠つき入力（.joined-field）の中では枠・背景なし（styles/components/settings-common.css）。
 import type { Snippet } from "svelte";
 import { portal } from "$lib/actions/portal";
 

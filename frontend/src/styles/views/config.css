@@ -1,0 +1,82 @@
+/* 設定タブ: 設定項目グリッド・警告ボックス・認証情報の削除ボタン。 */
+
+/* ==============================================================================
+   5. CONFIG TAB GRID LAYOUT
+   ============================================================================== */
+.config-items-grid {
+	display: grid;
+	grid-template-columns: 1fr 1fr;
+	gap: 16px;
+	margin-top: 10px;
+}
+
+.config-item-box {
+	padding: 14px 0;
+	border-bottom: 1px dashed var(--border-matte);
+}
+
+.config-item-label {
+	font-size: 0.7rem;
+	color: var(--color-zinc-muted);
+	margin-bottom: 4px;
+	font-weight: 700;
+}
+
+.config-item-value {
+	font-family: var(--font-family-mono);
+	font-size: 0.8rem;
+	font-weight: 500;
+	word-break: break-all;
+}
+
+/* Warnings */
+.alert-box {
+	border-left: 3px solid var(--color-zinc-muted);
+	background-color: var(--bg-primary);
+	margin-top: 24px;
+}
+
+.alert-header {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin-bottom: 6px;
+}
+
+.alert-icon {
+	font-size: 1rem;
+}
+
+.alert-header h4 {
+	font-size: 0.85rem;
+	font-weight: bold;
+	color: var(--color-white);
+}
+
+.alert-box p {
+	font-size: 0.75rem;
+	color: var(--text-secondary);
+	line-height: 1.4;
+}
+
+/* AI Credentials Action Styles */
+.btn-credential-delete {
+	background-color: transparent;
+	border: 1px solid var(--border-matte);
+	color: var(--text-secondary);
+	padding: 4px 10px;
+	border-radius: var(--radius);
+	font-size: 0.75rem;
+	cursor: pointer;
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	white-space: nowrap;
+	transition: var(--transition-smooth);
+}
+
+.btn-credential-delete:hover {
+	background-color: rgba(255, 255, 255, 0.04);
+	border-color: var(--color-red);
+	color: var(--color-red);
+}
