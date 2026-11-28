@@ -7,7 +7,7 @@
 use std::sync::Arc;
 
 use secrecy::{ExposeSecret, SecretString};
-use yuuka_core::{BotId, GuildId, UserId};
+use yuuka_core::{BotId, DiscordUserId, GuildId, UserId};
 use yuuka_crypto::SystemCrypto;
 use yuuka_discord::{
     BotDirectory, DecidedRequest, DmMessageRef, MemberDecision, MembershipService, RateExceeded,
@@ -401,4 +401,56 @@ async fn rate_limiter_denies_after_user_minute_limit() {
 
     // 別ユーザーは独立カウント（影響を受けない）。
     assert!(rl.consume(&bot, &g1, &UserId::new("mem2")).await.allowed);
+}
+
+#[tokio::test]
+async fn directory_maps_discord_users_through_users_discord_id() {
+    let (db, path) = fresh_db();
+    // 旧来の利用者（id = Discord ID・連携済み）、後から連携した UUID の利用者、連携を解除した旧来の利用者。
+    conn(&path)
+        .execute_batch(
+            "INSERT INTO users (id, discord_id, username, salt) VALUES ('100', '100', 'old', '00');
+             INSERT INTO users (id, discord_id, username, salt)
+               VALUES ('0190f5c2-7a3b-7c1d-8e9f-0123456789ab', '200', 'new', '00');
+             INSERT INTO users (id, discord_id, username, salt) VALUES ('300', NULL, 'unlinked', '00');
+             INSERT INTO users (id, discord_id, username, salt)
+               VALUES ('0190f5c2-0000-7000-8000-000000000000', NULL, 'web', '00');",
+        )
+        .unwrap();
+    let dir = DbBotDirectory::new(db, None);
+    let user = |d: &str| DiscordUserId::new(d);
+
+    assert_eq!(dir.user_for_discord(&user("100")).await.as_str(), "100");
+    assert_eq!(
+        dir.user_for_discord(&user("200")).await.as_str(),
+        "0190f5c2-7a3b-7c1d-8e9f-0123456789ab"
+    );
+    // 解除済みの旧来の利用者には結び付けない。
+    assert_eq!(
+        dir.user_for_discord(&user("300")).await.as_str(),
+        "discord:300"
+    );
+    // 未登録の Discord ユーザーは Discord ID のまま。
+    assert_eq!(dir.user_for_discord(&user("999")).await.as_str(), "999");
+
+    let discord_of = |u: &str| UserId::new(u);
+    assert_eq!(
+        dir.discord_for_user(&discord_of("0190f5c2-7a3b-7c1d-8e9f-0123456789ab"))
+            .await
+            .map(|d| d.as_str().to_owned()),
+        Some("200".to_owned())
+    );
+    assert_eq!(dir.discord_for_user(&discord_of("300")).await, None);
+    assert_eq!(
+        dir.discord_for_user(&discord_of("0190f5c2-0000-7000-8000-000000000000"))
+            .await,
+        None
+    );
+    assert_eq!(
+        dir.discord_for_user(&discord_of("999"))
+            .await
+            .map(|d| d.as_str().to_owned()),
+        Some("999".to_owned())
+    );
+    let _ = std::fs::remove_file(&path);
 }

@@ -33,6 +33,7 @@ import NotificationsCard from "../routes/config/NotificationsCard.svelte";
 import UserSettingsCard from "../routes/config/UserSettingsCard.svelte";
 import HelpTip from "../routes/delivery/HelpTip.svelte";
 import AccountDevices from "./account/AccountDevices.svelte";
+import DiscordLinkCard from "./account/DiscordLinkCard.svelte";
 import ManagementOverlayShell from "./ManagementOverlayShell.svelte";
 
 // ── Gemini 設定 ──
@@ -213,6 +214,7 @@ async function downloadPackage(e: SubmitEvent): Promise<void> {
 							{/each}
 						</div>
 					</div>
+					<DiscordLinkCard />
 				{/if}
 
 				<!-- 時刻と通知（旧 Bot基本設定 > アシスタント設定） -->

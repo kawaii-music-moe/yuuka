@@ -455,10 +455,9 @@ pub async fn respond_deferred(
 
 /// invoker（操作ユーザー）の UserId を取り出す（`interaction.author_id()`）。
 #[must_use]
-pub fn invoker_id(interaction: &Interaction) -> Option<UserId> {
-    interaction
-        .author_id()
-        .map(crate::identity::user_from_twilight)
+pub async fn invoker_id(directory: &dyn BotDirectory, interaction: &Interaction) -> Option<UserId> {
+    let id = interaction.author_id()?;
+    Some(crate::identity::user_from_twilight(directory, id).await)
 }
 
 #[cfg(test)]

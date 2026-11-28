@@ -77,6 +77,11 @@ pub struct Config {
     pub admin_emails: Vec<String>,
     /// 初めてログインした人を利用者として登録するか（`REGISTRATION_MODE`・既定 `invite`）。
     pub registration_mode: RegistrationMode,
+    /// Discord の後付け連携に使う OAuth2 アプリのクライアント ID（`DISCORD_OAUTH_CLIENT_ID`・任意）。
+    /// シークレットと両方そろったときだけ、アカウント画面から Discord を連携できる（§5）。
+    pub discord_oauth_client_id: Option<String>,
+    /// 同クライアントシークレット（`DISCORD_OAUTH_CLIENT_SECRET`）。
+    pub discord_oauth_client_secret: Option<SecretString>,
     /// デスクトップ `/ws/chat` の 1 メッセージ添付上限（MB・`DESKTOP_MAX_UPLOAD_MB`・既定 20・
     /// Node `config.desktopMaxUploadMb`）。
     pub desktop_max_upload_mb: u32,
@@ -163,6 +168,10 @@ impl Config {
                 "REGISTRATION_MODE",
                 &get("REGISTRATION_MODE").unwrap_or_else(|| "invite".to_owned()),
             )?,
+            discord_oauth_client_id: non_empty(get("DISCORD_OAUTH_CLIENT_ID"))
+                .map(|v| v.trim().to_owned()),
+            discord_oauth_client_secret: non_empty(get("DISCORD_OAUTH_CLIENT_SECRET"))
+                .map(SecretString::from),
             desktop_max_upload_mb: parse_field(
                 "DESKTOP_MAX_UPLOAD_MB",
                 &get("DESKTOP_MAX_UPLOAD_MB").unwrap_or_else(|| "20".to_owned()),

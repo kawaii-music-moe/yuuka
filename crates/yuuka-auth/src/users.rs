@@ -195,8 +195,8 @@ const DISCORD_MISMATCH: &str =
 ///    行など）を一度だけ引き受ける。
 /// 3. それでも無ければ、`REGISTRATION_MODE` が許すときだけ新しく作る（`invite` は招待コードが要る。
 ///    `ADMIN_*` で明示した管理者は、どの方式でも登録できる）。利用者 ID は、Discord ID が
-///    あればそれと同じ値、無ければ UUIDv7。Discord 側の境界（yuuka-discord の `identity`）が
-///    `users.discord_id` を引くようになるまでは、連携済みの利用者は `id = discord_id` に保つ（§8-6）。
+///    あればそれと同じ値、無ければ UUIDv7。Bot のメンバー一覧など Discord ID で持つ表と食い違わない
+///    よう、ログイン時点で Discord ID が分かる利用者は `id = discord_id` にそろえる。
 ///
 /// Discord アカウントの衝突は統合せずに断る。表示名は毎回プロバイダーの値で更新する。
 ///
@@ -326,6 +326,119 @@ pub async fn upsert_from_oidc(
                 crate::invite::mark_used(tx, &code, &user_id)?;
             }
             Ok(Ok(LoginUser { user_id, role }))
+        })
+        .await
+}
+
+/// 利用者の Discord 連携の状態（`users.discord_id`）。利用者がいなければ `Ok(None)`。
+///
+/// # Errors
+/// 読み取り失敗時 [`DbError`]。
+pub async fn discord_link_of(db: &Db, user_id: &str) -> Result<Option<Option<String>>, DbError> {
+    let id = user_id.to_owned();
+    db.read
+        .read(move |conn| {
+            conn.query_row(
+                "SELECT discord_id FROM users WHERE id = ?1",
+                params![id],
+                |r| r.get::<_, Option<String>>(0),
+            )
+            .optional()
+            .map_err(map_sqlite)
+        })
+        .await
+}
+
+/// 利用者に Discord を後から連携する（§5）。別の利用者に連携済みの Discord アカウントや、別の Discord
+/// アカウントに連携済みの利用者は、統合せずに断る（§9）。同じ組み合わせなら何もしない。
+///
+/// # Errors
+/// DB 失敗時 [`DbError`]。断るときは `Ok(Err(LoginRejection::Conflict))`。
+pub async fn link_discord(
+    db: &Db,
+    user_id: &str,
+    discord_id: &str,
+) -> Result<Result<(), LoginRejection>, DbError> {
+    let (user_id, discord_id) = (user_id.to_owned(), discord_id.to_owned());
+    db.writer
+        .transaction(move |tx| {
+            let current: Option<Option<String>> = tx
+                .query_row(
+                    "SELECT discord_id FROM users WHERE id = ?1",
+                    params![user_id],
+                    |r| r.get(0),
+                )
+                .optional()
+                .map_err(map_sqlite)?;
+            match current {
+                None => return Err(DbError::Operation("利用者が見つかりません".to_owned())),
+                Some(Some(have)) if have == discord_id => return Ok(Ok(())),
+                Some(Some(_)) => return Ok(Err(LoginRejection::Conflict(DISCORD_MISMATCH))),
+                Some(None) => {}
+            }
+            let taken: bool = tx
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM users WHERE discord_id = ?1 AND id != ?2)",
+                    params![discord_id, user_id],
+                    |r| r.get(0),
+                )
+                .map_err(map_sqlite)?;
+            if taken {
+                return Ok(Err(LoginRejection::Conflict(DISCORD_TAKEN)));
+            }
+            tx.execute(
+                "UPDATE users SET discord_id = ?1, discord_linked_at = datetime('now','localtime'), \
+                 updated_at = datetime('now','localtime') WHERE id = ?2",
+                params![discord_id, user_id],
+            )
+            .map_err(map_sqlite)?;
+            Ok(Ok(()))
+        })
+        .await
+}
+
+/// Discord 連携を解除した結果。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnlinkOutcome {
+    /// 解除した（通知先が Discord だった場合は Web に切り替えた）。
+    Unlinked,
+    /// もともと連携していない。
+    NotLinked,
+    /// OIDC の紐付けが無く、解除するとログインできなくなるので断った（§9）。
+    NoOtherLogin,
+}
+
+/// Discord 連携を解除する。条件は OIDC の紐付け（`sk_account_id`）があることだけ（§9）。
+/// 通知先が DM・チャンネルなら、届かなくなるので Web の受信箱へ切り替える。
+///
+/// # Errors
+/// DB 失敗時 [`DbError`]。
+pub async fn unlink_discord(db: &Db, user_id: &str) -> Result<UnlinkOutcome, DbError> {
+    let user_id = user_id.to_owned();
+    db.writer
+        .transaction(move |tx| {
+            let row: Option<(Option<String>, Option<String>)> = tx
+                .query_row(
+                    "SELECT discord_id, sk_account_id FROM users WHERE id = ?1",
+                    params![user_id],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .optional()
+                .map_err(map_sqlite)?;
+            match row {
+                None | Some((None, _)) => return Ok(UnlinkOutcome::NotLinked),
+                Some((Some(_), None)) => return Ok(UnlinkOutcome::NoOtherLogin),
+                Some((Some(_), Some(_))) => {}
+            }
+            tx.execute(
+                "UPDATE users SET discord_id = NULL, discord_linked_at = NULL, \
+                 notify_target_type = CASE WHEN notify_target_type IN ('dm', 'channel') THEN 'web' \
+                                           ELSE notify_target_type END, \
+                 updated_at = datetime('now','localtime') WHERE id = ?1",
+                params![user_id],
+            )
+            .map_err(map_sqlite)?;
+            Ok(UnlinkOutcome::Unlinked)
         })
         .await
 }

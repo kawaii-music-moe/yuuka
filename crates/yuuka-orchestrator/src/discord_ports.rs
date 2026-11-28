@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use rusqlite::{params, OptionalExtension};
 use secrecy::SecretString;
-use yuuka_core::{BotId, DbError, GuildId, UserId};
+use yuuka_core::{BotId, DbError, DiscordUserId, GuildId, UserId};
 use yuuka_crypto::SystemCrypto;
 use yuuka_db::map_sqlite;
 use yuuka_discord::{
@@ -122,6 +122,75 @@ impl BotDirectory for DbBotDirectory {
             bot_repo::is_registered_user(&self.db, user_id.as_str()).await,
             "is_registered_user",
         )
+    }
+
+    async fn user_for_discord(&self, discord: &DiscordUserId) -> UserId {
+        let raw = discord.as_str().to_owned();
+        let found = self
+            .db
+            .read
+            .read(move |conn| {
+                let linked: Option<String> = conn
+                    .query_row(
+                        "SELECT id FROM users WHERE discord_id = ?1",
+                        params![raw],
+                        |r| r.get(0),
+                    )
+                    .optional()
+                    .map_err(map_sqlite)?;
+                if let Some(id) = linked {
+                    return Ok(id);
+                }
+                // Discord 連携を解除した利用者の ID が Discord ID と同じ（旧来の利用者）なら、その利用者に
+                // 結び付けない。未登録の Discord ユーザーとして、利用者 ID と衝突しない値にする。
+                let unlinked_user: bool = conn
+                    .query_row(
+                        "SELECT EXISTS(SELECT 1 FROM users WHERE id = ?1)",
+                        params![raw],
+                        |r| r.get(0),
+                    )
+                    .map_err(map_sqlite)?;
+                Ok(if unlinked_user {
+                    format!("discord:{raw}")
+                } else {
+                    raw
+                })
+            })
+            .await;
+        match found {
+            Ok(id) => UserId::new(id),
+            Err(e) => {
+                tracing::warn!(error = %e, "Discord ユーザーの引き当てに失敗（Discord ID のまま扱う）");
+                UserId::new(discord.as_str())
+            }
+        }
+    }
+
+    async fn discord_for_user(&self, user_id: &UserId) -> Option<DiscordUserId> {
+        let uid = user_id.as_str().to_owned();
+        let found = self
+            .db
+            .read
+            .read(move |conn| {
+                conn.query_row(
+                    "SELECT discord_id FROM users WHERE id = ?1",
+                    params![uid],
+                    |r| r.get::<_, Option<String>>(0),
+                )
+                .optional()
+                .map_err(map_sqlite)
+            })
+            .await;
+        match found {
+            // 利用者の行がある：連携している Discord ID（未連携なら None）。
+            Ok(Some(linked)) => linked.map(DiscordUserId::new),
+            // 利用者の行が無い（未登録の Discord ユーザー宛ての DM など）：ID をそのまま Discord ID とみなす。
+            Ok(None) => Some(DiscordUserId::new(user_id.as_str())),
+            Err(e) => {
+                tracing::warn!(error = %e, "利用者の Discord ID を引けない");
+                None
+            }
+        }
     }
 
     async fn is_bot_member(&self, bot_id: &BotId, guild_id: &GuildId, user_id: &UserId) -> bool {

@@ -145,7 +145,7 @@ Discord Bot（`yuuka-discord`）を起動しない構成も正式にサポート
 3. **セッションと DTO**: `SessionUser.discord_id` を `user_id` に改名する（Rust 側のみ。送受信の名前は `discordId` のまま・§4.3）。フロントエンドとクライアントは変えない。
 4. **OIDC の claim を任意にする**: 4a（§4.1・§4.2、`REGISTRATION_MODE` の `open` / `closed`、`ADMIN_OIDC_SUBJECTS` / `ADMIN_EMAILS`。Discord claim の無い ID トークンでログインできることを `auth_flow.rs` でテストする）と、4b（招待コードと `REGISTRATION_MODE=invite`。ここで既定を `invite` に切り替える）に分ける。4a の時点では、Discord ID 付きの新規利用者は `id = discord_id` のまま作る（Discord 境界の変換が DB を引くようになる §8-6 まで）。UUIDv7 は Discord の無い新規利用者に使う。 4b では、招待コード（`invite_codes`・V40）、管理者用 API（`/api/admin/invites`）と管理画面、ログイン開始の `?invite=` を足し、既定を `invite` にする。`ADMIN_*` で指定した管理者は、最初の招待を発行できるよう、どの方式でも登録できる。
 5. **Web 通知**: `web_notifications`（V41）と、通知先 `web`（`users.notify_target_type`・リマインドの `target_type`）。通知先が `web` の利用者への通知は、送信先の指定にかかわらず受信箱へ保存する（Discord ID が無いと DM もチャンネルも送れないため）。Discord 未連携の新規利用者の既定は `web`。読み出し・既読は `GET /api/notifications`・`POST /api/notifications/read`、画面は「時刻と通知」の通知一覧。既存の利用者（通知先 `dm`/`channel`）の挙動は変えない。WS でのリアルタイム配信は後続。
-6. **Discord 連携（後付け）**: OAuth2 による連携・解除 API と、アカウント画面。
+6. **Discord 連携（後付け）**: Discord OAuth2（`identify`）による連携・解除 API（`/api/me/discord*`）とアカウント画面のカード。あわせて、Discord 側の境界（`yuuka-discord` の `identity`）を `BotDirectory::user_for_discord` / `discord_for_user` 経由にし、本番実装（`DbBotDirectory`）は `users.discord_id` を引く。連携を解除した旧来の利用者（`id` = 旧 Discord ID）は、その Discord アカウントからの操作を未登録の Discord ユーザー（`discord:{id}`）として扱い、利用者に結び付けない。解除すると通知先 `dm` / `channel` は `web` に切り替える。
 7. **Discord なし構成の仕上げ**: `DISCORD_ENABLED`、Discord 前提画面の案内、setup.md・deployment.md、#234 のクローズ。
 
 1〜3 は機械的な置き換えが中心で差分は大きいが、挙動は変わらない。4 以降で初めて、利用者から見える変化が出る。

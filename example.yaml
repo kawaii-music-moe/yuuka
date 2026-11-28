@@ -98,6 +98,11 @@ OIDC_CLIENT_SECRET: ""
 # 初めてログインした人を登録するか（invite: 管理画面で発行した招待リンクを持つ人だけ / open: 誰でも /
 # closed: 既存の利用者だけ）。上の ADMIN_* で指定した管理者は、どの方式でも登録できます。
 # REGISTRATION_MODE: "invite"
+# Discord の後付け連携（アカウント画面の「Discord 連携」）。Discord Developer Portal の OAuth2 で
+# Redirect に {BASE_URL}/api/me/discord/link/callback を登録し、クライアント ID とシークレットを設定します。
+# 未設定なら連携ボタンは出ません（ID トークンの Discord ID による自動連携は動きます）。
+# DISCORD_OAUTH_CLIENT_ID: ""
+# DISCORD_OAUTH_CLIENT_SECRET: ""
 
 # ==============================================================================
 # Google OAuth2 システム共通設定 (System-wide Google OAuth)

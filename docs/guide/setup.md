@@ -51,6 +51,7 @@ cp example.yaml config.yaml
 - **`ADMIN_DISCORD_IDS`**: 初回ログイン時に Admin として作成する Discord ユーザー ID（未設定なら全員 User。初回ログイン前に管理者の ID を指定）。
 - **`ADMIN_OIDC_SUBJECTS`** / **`ADMIN_EMAILS`**: Discord を使わない管理者を、OIDC の `sub` か確認済みのメールアドレス（`email_verified` が true のときだけ照合）で指定する。`ADMIN_DISCORD_IDS` と合わせて、どれかに当たる新規利用者が管理者になる。
 - **`REGISTRATION_MODE`**（既定 `invite`）: 初めてログインした人の扱い。`invite` は管理画面「招待コード」で発行した招待リンク（1 回だけ使える）を持つ人だけを登録する。`open` は誰でも登録し、`closed` は既存の利用者だけがログインできる。`ADMIN_DISCORD_IDS` / `ADMIN_OIDC_SUBJECTS` / `ADMIN_EMAILS` で指定した管理者は、どの方式でも登録できる（最初の管理者が招待コードを発行するため）。
+- **`DISCORD_OAUTH_CLIENT_ID`** / **`DISCORD_OAUTH_CLIENT_SECRET`**（任意）: アカウント画面から Discord を後から連携するための OAuth2 アプリ。Discord Developer Portal の OAuth2 で Redirect に `{BASE_URL}/api/me/discord/link/callback` を登録する。同じ Discord アカウントを別の利用者に連携することはできない（統合はしない）。連携の解除は、OIDC でログインできる利用者ならいつでもでき、解除すると通知先は Web の通知一覧に切り替わる。
 
 ### 環境変数（機密設定）
 

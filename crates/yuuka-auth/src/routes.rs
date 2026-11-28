@@ -30,6 +30,7 @@ use yuuka_web::{AdminUser, ApiError, AppState, AuthenticatedUser};
 
 use yuuka_core::RegistrationMode;
 
+use crate::discord_link::DiscordLinkClient;
 use crate::oidc::{LoginError, LogoutTarget, OidcClient};
 use crate::users::{LoginIdentity, LoginPolicy};
 use crate::{users, SessionStore};
@@ -46,6 +47,8 @@ pub struct AuthRuntime {
     oidc: Option<Arc<OidcClient>>,
     /// ログイン開始時に受け取った招待コード（ログインの `state` → コード・受け取った時刻）。
     pending_invites: Mutex<HashMap<String, (String, Instant)>>,
+    /// Discord の後付け連携（`DISCORD_OAUTH_CLIENT_*` 未設定なら None）。
+    discord_link: Option<Arc<DiscordLinkClient>>,
 }
 
 /// 保留できる招待コードの上限（OIDC の保留ログインと同じ考え方で、溢れたら古いものから捨てる）。
@@ -72,7 +75,15 @@ impl AuthRuntime {
             },
             oidc,
             pending_invites: Mutex::new(HashMap::new()),
+            discord_link: None,
         }
+    }
+
+    /// Discord の後付け連携を有効にする（§5）。
+    #[must_use]
+    pub fn with_discord_link(mut self, link: Option<DiscordLinkClient>) -> Self {
+        self.discord_link = link.map(Arc::new);
+        self
     }
 
     /// 初期 admin の指定と新規登録の扱いを差し替える。
@@ -136,6 +147,10 @@ pub fn routes(runtime: Arc<AuthRuntime>) -> Router<AppState> {
         .route("/api/users", get(users_route))
         .route("/api/admin/invites", get(list_invites).post(create_invite))
         .route("/api/admin/invites/delete", post(delete_invite))
+        .route("/api/me/discord", get(discord_status))
+        .route("/api/me/discord/link/start", get(discord_link_start))
+        .route("/api/me/discord/link/callback", get(discord_link_callback))
+        .route("/api/me/discord/unlink", post(discord_unlink))
         .layer(Extension(runtime))
 }
 
@@ -380,6 +395,126 @@ fn redirect(location: &str) -> Response {
         response.headers_mut().insert(LOCATION, value);
     }
     response
+}
+
+// ─── Discord の後付け連携（§5） ─────────────────────────────────────────────────
+
+/// 連携後に戻すアカウント画面（`?discord=linked|conflict|cancelled|error|unavailable`）。
+const ACCOUNT_PAGE: &str = "/admin/account/profile";
+
+fn account_redirect(result: &str) -> Response {
+    redirect(&format!("{ACCOUNT_PAGE}?discord={result}"))
+}
+
+/// `GET /api/me/discord`：連携の状態。`available` は連携ボタンを出せるか（OAuth2 が設定済みか）。
+async fn discord_status(
+    user: AuthenticatedUser,
+    State(state): State<AppState>,
+    Extension(rt): Extension<Arc<AuthRuntime>>,
+) -> Response {
+    match users::discord_link_of(&state.db, &user.0.user_id).await {
+        Ok(Some(discord_id)) => Json(json!({
+            "success": true,
+            "linked": discord_id.is_some(),
+            "discordId": discord_id,
+            "available": rt.discord_link.is_some(),
+        }))
+        .into_response(),
+        Ok(None) => error(StatusCode::NOT_FOUND, "ユーザーが見つかりません。"),
+        Err(e) => ApiError::from(e).into_response(),
+    }
+}
+
+/// `GET /api/me/discord/link/start`：Discord の認可画面へ送る。
+async fn discord_link_start(
+    user: AuthenticatedUser,
+    Extension(rt): Extension<Arc<AuthRuntime>>,
+) -> Response {
+    let Some(link) = &rt.discord_link else {
+        return error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Discord 連携が設定されていません。",
+        );
+    };
+    match link.start(&user.0.user_id) {
+        Ok(url) => redirect(&url),
+        Err(e) => {
+            tracing::error!(error = ?e, "Discord 連携を開始できない");
+            error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Discord 連携を開始できません。",
+            )
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct LinkCallbackQuery {
+    code: Option<String>,
+    state: Option<String>,
+}
+
+/// `GET /api/me/discord/link/callback`：code を交換して連携し、アカウント画面へ戻す。
+async fn discord_link_callback(
+    user: AuthenticatedUser,
+    State(state): State<AppState>,
+    Extension(rt): Extension<Arc<AuthRuntime>>,
+    Query(query): Query<LinkCallbackQuery>,
+) -> Response {
+    let Some(link) = &rt.discord_link else {
+        return account_redirect("unavailable");
+    };
+    let (Some(code), Some(link_state)) = (query.code.filter(|c| !c.is_empty()), query.state) else {
+        return account_redirect("cancelled");
+    };
+    let discord_id = match link.finish(&user.0.user_id, &link_state, &code).await {
+        Ok(id) => id,
+        Err(e) => {
+            tracing::warn!(error = ?e, "Discord 連携を確かめられない");
+            return account_redirect("error");
+        }
+    };
+    match users::link_discord(&state.db, &user.0.user_id, &discord_id).await {
+        Ok(Ok(())) => {
+            crate::audit::add_audit_log(
+                &state.db,
+                &user.0.user_id,
+                "discord.link",
+                Some(&discord_id),
+                None,
+            )
+            .await;
+            account_redirect("linked")
+        }
+        Ok(Err(rejection)) => {
+            tracing::warn!(reason = ?rejection, "Discord 連携を断った（統合はしない）");
+            account_redirect("conflict")
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "Discord 連携を保存できない");
+            account_redirect("error")
+        }
+    }
+}
+
+/// `POST /api/me/discord/unlink`：連携を解除する（OIDC の紐付けがあるときだけ・§9）。
+async fn discord_unlink(user: AuthenticatedUser, State(state): State<AppState>) -> Response {
+    match users::unlink_discord(&state.db, &user.0.user_id).await {
+        Ok(users::UnlinkOutcome::Unlinked) => {
+            crate::audit::add_audit_log(&state.db, &user.0.user_id, "discord.unlink", None, None)
+                .await;
+            Json(json!({ "success": true, "message": "Discord の連携を解除しました。" }))
+                .into_response()
+        }
+        Ok(users::UnlinkOutcome::NotLinked) => {
+            error(StatusCode::BAD_REQUEST, "Discord は連携していません。")
+        }
+        Ok(users::UnlinkOutcome::NoOtherLogin) => error(
+            StatusCode::CONFLICT,
+            "ほかにログインする手段が無いため、Discord の連携を解除できません。",
+        ),
+        Err(e) => ApiError::from(e).into_response(),
+    }
 }
 
 // ─── 招待コード（管理者のみ・§4.1） ───────────────────────────────────────────────

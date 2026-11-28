@@ -456,6 +456,13 @@ async fn run() -> Result<(), String> {
             synapse_engine.clone(),
         ));
 
+    // Discord の後付け連携（DISCORD_OAUTH_CLIENT_ID / _SECRET がそろったときだけ・§5）。戻り先は公開 URL。
+    let discord_link = yuuka_auth::discord_link::DiscordLinkClient::new(
+        cfg.discord_oauth_client_id.as_deref(),
+        cfg.discord_oauth_client_secret.as_ref(),
+        &public_base,
+    );
+
     // デバイスフロー（RFC 8628）ルータ。device_code の一時状態はインメモリ store（web 再起動を跨ぐよう
     // main で 1 度だけ生成し注入）。承認 URL ベースは公開 URL（3.5 の public_base）。
     let device_auth_routes =
@@ -477,7 +484,8 @@ async fn run() -> Result<(), String> {
             admin_subjects: cfg.admin_oidc_subjects.clone(),
             admin_emails: cfg.admin_emails.clone(),
             registration: cfg.registration_mode,
-        }),
+        })
+        .with_discord_link(discord_link),
     );
     let auth_routes = yuuka_auth::routes(auth_runtime);
 

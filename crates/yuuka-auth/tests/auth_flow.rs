@@ -13,6 +13,7 @@ use axum::http::{
     header::{AUTHORIZATION, CONTENT_TYPE, COOKIE, LOCATION, SET_COOKIE},
     HeaderMap, Request, StatusCode,
 };
+use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::Json;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
@@ -23,6 +24,7 @@ use ring::signature::{EcdsaKeyPair, KeyPair, ECDSA_P256_SHA256_FIXED_SIGNING};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use tower::ServiceExt;
+use yuuka_auth::discord_link::DiscordLinkClient;
 use yuuka_auth::users::LoginPolicy;
 use yuuka_auth::{AuthRuntime, CompositeAuth, OidcClient, SessionStore};
 use yuuka_core::config::OidcSettings;
@@ -354,14 +356,27 @@ fn build_app_with_policy(
     policy: LoginPolicy,
     config: WebConfig,
 ) -> TestApp {
+    build_app_full(oidc, admin_ids, policy, config, None)
+}
+
+fn build_app_full(
+    oidc: Option<Arc<OidcClient>>,
+    admin_ids: Vec<String>,
+    policy: LoginPolicy,
+    config: WebConfig,
+    discord_link: Option<DiscordLinkClient>,
+) -> TestApp {
     let file = tempfile::NamedTempFile::new().expect("temp db");
     let db = Db::open(file.path()).expect("open db");
     let sessions = SessionStore::in_memory();
     let auth =
         Arc::new(CompositeAuth::new(db.clone(), sessions.clone(), 7).with_oidc(oidc.clone()));
     let state = AppState::new(auth, config, db);
-    let runtime =
-        Arc::new(AuthRuntime::new(sessions.clone(), 7, admin_ids, oidc).with_login_policy(policy));
+    let runtime = Arc::new(
+        AuthRuntime::new(sessions.clone(), 7, admin_ids, oidc)
+            .with_login_policy(policy)
+            .with_discord_link(discord_link),
+    );
     TestApp {
         router: framework_routes()
             .merge(yuuka_auth::routes(runtime))
@@ -1129,6 +1144,165 @@ async fn named_admin_registers_without_invite_and_can_issue_invites() {
     )
     .await;
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Discord の後付け連携（§5）
+// ---------------------------------------------------------------------------------------------
+
+/// Discord の token・users/@me を返す偽サーバー。`/users/@me` が返す ID は `discord_id` で差し替える。
+async fn start_fake_discord() -> (String, Arc<Mutex<String>>) {
+    let discord_id = Arc::new(Mutex::new("555".to_owned()));
+    let id = discord_id.clone();
+    let router = axum::Router::new()
+        .route(
+            "/oauth2/token",
+            post(|| async {
+                Json(json!({ "access_token": "discord-token", "token_type": "Bearer" }))
+            }),
+        )
+        .route(
+            "/users/@me",
+            get(move |headers: HeaderMap| {
+                let id = id.clone();
+                async move {
+                    let authorized = headers.get(AUTHORIZATION).and_then(|v| v.to_str().ok())
+                        == Some("Bearer discord-token");
+                    if !authorized {
+                        return (StatusCode::UNAUTHORIZED, Json(json!({}))).into_response();
+                    }
+                    let value = id.lock().expect("lock").clone();
+                    Json(json!({ "id": value, "username": "someone" })).into_response()
+                }
+            }),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let base = format!("http://{}", listener.local_addr().expect("addr"));
+    tokio::spawn(async move {
+        axum::serve(listener, router).await.expect("serve");
+    });
+    (base, discord_id)
+}
+
+fn link_app(provider: &Provider, discord_api: &str) -> TestApp {
+    let link = DiscordLinkClient::new(
+        Some("discord-client"),
+        Some(&"discord-secret".to_owned().into()),
+        PUBLIC_BASE,
+    )
+    .expect("link client")
+    .with_api_base(discord_api);
+    build_app_full(
+        Some(oidc_client(&provider.issuer)),
+        Vec::new(),
+        LoginPolicy {
+            registration: RegistrationMode::Open,
+            ..LoginPolicy::default()
+        },
+        WebConfig::default(),
+        Some(link),
+    )
+}
+
+/// 連携を始めて Discord から戻り、戻り先（アカウント画面）の URL を返す。
+async fn link_discord(t: &TestApp, session: &str) -> String {
+    let response = get_with(&t.router, "/api/me/discord/link/start", Some(session)).await;
+    assert_eq!(response.status(), StatusCode::FOUND);
+    let authorize = reqwest::Url::parse(&location(&response)).expect("authorize url");
+    assert_eq!(authorize.host_str(), Some("discord.com"));
+    let q: HashMap<String, String> = authorize.query_pairs().into_owned().collect();
+    assert_eq!(q["scope"], "identify");
+    assert_eq!(
+        q["redirect_uri"],
+        format!("{PUBLIC_BASE}/api/me/discord/link/callback")
+    );
+    let callback = format!(
+        "/api/me/discord/link/callback?code=discord-code&state={}",
+        q["state"]
+    );
+    let response = get_with(&t.router, &callback, Some(session)).await;
+    assert_eq!(response.status(), StatusCode::FOUND);
+    location(&response)
+}
+
+#[tokio::test]
+async fn discord_can_be_linked_later_without_merging_and_unlinked() {
+    let provider = start_provider().await;
+    let (discord_api, discord_id) = start_fake_discord().await;
+    let t = link_app(&provider, &discord_api);
+    let alice = login_session(&t, &provider, json!({ "sub": "acc-a", "name": "A" })).await;
+
+    let status = json_body(get_with(&t.router, "/api/me/discord", Some(&alice)).await).await;
+    assert_eq!(status["linked"], false);
+    assert_eq!(status["available"], true);
+
+    assert_eq!(
+        link_discord(&t, &alice).await,
+        "/admin/account/profile?discord=linked"
+    );
+    let (_, linked, _) = user_by_subject(&t.db_path, "acc-a").expect("alice");
+    assert_eq!(linked.as_deref(), Some("555"));
+    let status = json_body(get_with(&t.router, "/api/me/discord", Some(&alice)).await).await;
+    assert_eq!(status["linked"], true);
+    assert_eq!(status["discordId"], "555");
+
+    // 同じ Discord アカウントを別の利用者に連携しようとしても、統合せずに断る。
+    let bob = login_session(&t, &provider, json!({ "sub": "acc-b", "name": "B" })).await;
+    assert_eq!(
+        link_discord(&t, &bob).await,
+        "/admin/account/profile?discord=conflict"
+    );
+    assert_eq!(user_by_subject(&t.db_path, "acc-b").expect("bob").1, None);
+
+    // 別の利用者が発行した state では連携できない。
+    let start = get_with(&t.router, "/api/me/discord/link/start", Some(&alice)).await;
+    let state: String = reqwest::Url::parse(&location(&start))
+        .expect("url")
+        .query_pairs()
+        .find(|(k, _)| k == "state")
+        .expect("state")
+        .1
+        .into_owned();
+    *discord_id.lock().expect("lock") = "777".to_owned();
+    let response = get_with(
+        &t.router,
+        &format!("/api/me/discord/link/callback?code=c&state={state}"),
+        Some(&bob),
+    )
+    .await;
+    assert_eq!(location(&response), "/admin/account/profile?discord=error");
+    assert_eq!(user_by_subject(&t.db_path, "acc-b").expect("bob").1, None);
+
+    // 解除すると、通知先は Web の受信箱に切り替わる。
+    let response = post_json_with(&t.router, "/api/me/discord/unlink", &alice, json!({})).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(user_by_subject(&t.db_path, "acc-a").expect("alice").1, None);
+    let conn = rusqlite::Connection::open(&t.db_path).expect("open");
+    let notify: String = conn
+        .query_row(
+            "SELECT notify_target_type FROM users WHERE sk_account_id = 'acc-a'",
+            [],
+            |r| r.get(0),
+        )
+        .expect("notify");
+    assert_eq!(notify, "web");
+    let response = post_json_with(&t.router, "/api/me/discord/unlink", &alice, json!({})).await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn discord_link_is_unavailable_without_oauth_settings() {
+    let provider = start_provider().await;
+    let t = app_with(&provider, Vec::new());
+    let session = login_session(&t, &provider, account("acc-1", "100", "Alice")).await;
+    let status = json_body(get_with(&t.router, "/api/me/discord", Some(&session)).await).await;
+    assert_eq!(status["linked"], true);
+    assert_eq!(status["discordId"], "100");
+    assert_eq!(status["available"], false);
+    let response = get_with(&t.router, "/api/me/discord/link/start", Some(&session)).await;
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
 }
 
 #[tokio::test]

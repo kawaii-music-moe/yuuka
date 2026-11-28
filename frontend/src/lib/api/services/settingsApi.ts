@@ -39,6 +39,18 @@ export const settingsApi = {
 	updateUserSettings: (body: Record<string, unknown>) =>
 		api.post<ApiResponse>("/api/settings/user", body, USER),
 
+	/** GET /api/me/discord — Discord 連携の状態（available: 連携ボタンを出せるか） */
+	discordLink: () =>
+		api.get<
+			ApiResponse & {
+				linked: boolean;
+				discordId: string | null;
+				available: boolean;
+			}
+		>("/api/me/discord", USER),
+	/** POST /api/me/discord/unlink — Discord 連携の解除 */
+	unlinkDiscord: () =>
+		api.post<ApiResponse>("/api/me/discord/unlink", {}, USER),
 	/** GET /api/notifications — Web の受信箱（新しい順）と未読数 */
 	notifications: (limit = 50) =>
 		api.get<
