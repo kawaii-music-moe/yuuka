@@ -6,7 +6,11 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Discord ユーザーID（データ分離の必須キー）。
+/// Yuuka の利用者 ID（`users` の主キー・データ分離の必須キー）。
+///
+/// 中身は不透明な文字列として扱い、形式に意味を持たせない。現時点では Discord ユーザー ID と同じ値だが、
+/// Discord 連携の任意化（`docs/design/optional_discord.md` §3.2）で Discord と切り離す。Discord へ
+/// 渡すときは [`DiscordUserId`] へ変換する（変換は yuuka-discord の `identity` に集める）。
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct UserId(String);
 
@@ -23,6 +27,31 @@ impl UserId {
 }
 
 impl std::fmt::Display for UserId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// Discord のユーザー ID（snowflake）。
+///
+/// Discord API とやり取りする境界だけで使う。Yuuka の利用者を指すときは [`UserId`] を使い、
+/// 両者を取り違えないよう別の型にしている（`docs/design/optional_discord.md` §3.2）。
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct DiscordUserId(String);
+
+impl DiscordUserId {
+    #[must_use]
+    pub fn new(id: impl Into<String>) -> Self {
+        Self(id.into())
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for DiscordUserId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.0)
     }
