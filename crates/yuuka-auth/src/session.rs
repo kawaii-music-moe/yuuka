@@ -455,7 +455,7 @@ mod tests {
         // 発行トークンを sha256hex 化して get で解決できる（発行↔検証のキー整合）。
         let hash = crate::sha256_hex(&token);
         let got = store.get(&hash, 3600).await.expect("no backend err");
-        assert_eq!(got.map(|u| u.id), Some("123".to_owned()));
+        assert_eq!(got.map(|u| u.discord_id), Some("123".to_owned()));
     }
 
     #[tokio::test]
