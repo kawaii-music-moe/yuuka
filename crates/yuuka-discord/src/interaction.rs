@@ -458,7 +458,7 @@ pub async fn respond_deferred(
 pub fn invoker_id(interaction: &Interaction) -> Option<UserId> {
     interaction
         .author_id()
-        .map(|id| UserId::new(id.get().to_string()))
+        .map(crate::identity::user_from_twilight)
 }
 
 #[cfg(test)]

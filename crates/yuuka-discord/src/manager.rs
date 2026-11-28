@@ -300,7 +300,7 @@ impl DiscordMessenger {
                 }
             }
             DeliverTarget::Dm => {
-                let uid = user_id.as_str().parse::<Id<UserMarker>>().ok()?;
+                let uid = crate::identity::twilight_of(user_id)?;
                 Self::open_dm(client, uid).await
             }
         }
@@ -318,7 +318,7 @@ impl DiscordMessenger {
         channel_id: Id<ChannelMarker>,
         user_id: &UserId,
     ) -> bool {
-        let Ok(uid) = user_id.as_str().parse::<Id<UserMarker>>() else {
+        let Some(uid) = crate::identity::twilight_of(user_id) else {
             return false;
         };
         let Some(channel) = Self::fetch_channel(client, channel_id).await else {
@@ -396,7 +396,7 @@ impl DiscordMessenger {
             return None;
         };
         let client = &client;
-        let uid = user_id.parse::<Id<UserMarker>>().ok()?;
+        let uid = crate::identity::twilight_of(&UserId::new(user_id))?;
         let channel_id = Self::open_dm(client, uid).await?;
         let comps = to_twilight_components(components);
         let message_id =

@@ -27,7 +27,7 @@ pub use error::{
     AppError, AuthError, ConfigError, DbError, DiscordError, Fatality, GeminiError, IpcError,
     PluginError, RepoError, Retryability, ToolError, ValidationError, WebError,
 };
-pub use ids::{BotId, GuildId, UserId};
+pub use ids::{BotId, DiscordUserId, GuildId, UserId};
 pub use metrics::MetricsSink;
 pub use scope::{CronScan, CrossUserAccess, ScopedRepo, UserScope};
 pub use tool::{

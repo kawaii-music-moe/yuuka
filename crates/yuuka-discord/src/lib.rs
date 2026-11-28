@@ -19,6 +19,7 @@
 pub mod ports;
 
 mod idempotent;
+mod identity;
 pub mod interaction;
 mod live;
 mod manager;

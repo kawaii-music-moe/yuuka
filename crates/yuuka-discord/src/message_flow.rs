@@ -216,7 +216,7 @@ fn default_secretary_record() -> BotRecord {
 // ─── 汎用モード（アシスタント）フロー ─────────────────────────────────────────
 
 async fn assistant_flow(deps: &FlowDeps, rt: &RuntimeBot, bot: &BotRecord, message: Message) {
-    let author = UserId::new(message.author.id.get().to_string());
+    let author = crate::identity::user_from_twilight(message.author.id);
     let is_dm = message.guild_id.is_none();
 
     // DM は owner のみ応答（owner 以外は黙殺・§4.3.2）。
@@ -480,7 +480,7 @@ async fn dispatch_assistant(
 // ─── 秘書フロー ────────────────────────────────────────────────────────────────
 
 async fn secretary_flow(deps: &FlowDeps, rt: &RuntimeBot, bot: &BotRecord, message: Message) {
-    let author = UserId::new(message.author.id.get().to_string());
+    let author = crate::identity::user_from_twilight(message.author.id);
 
     // 独自秘書 Bot は owner か共有ユーザーのみ応答（system_default はこのチェック無し）。
     let is_custom = rt.bot_id.as_str() != BotId::SYSTEM_DEFAULT;
