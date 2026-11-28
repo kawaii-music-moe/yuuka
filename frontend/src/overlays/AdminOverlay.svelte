@@ -30,6 +30,7 @@ import { currentUser } from "$lib/stores/session";
 import { pushToast, toastError } from "$lib/stores/toast";
 import AuditModal from "./admin/AuditModal.svelte";
 import { maskDiscordId } from "./admin/adminUtils";
+import InviteSection from "./admin/InviteSection.svelte";
 import RoleBadge from "./admin/RoleBadge.svelte";
 import ManagementOverlayShell from "./ManagementOverlayShell.svelte";
 
@@ -453,6 +454,10 @@ function botStatus(bot: AdminBotView): { label: string; tone: string } {
 				</tbody>
 			</table>
 		</div>
+	{/if}
+
+	{#if section === "invites"}
+		<InviteSection />
 	{/if}
 
 	<!-- Bot Moderation -->

@@ -643,7 +643,7 @@ fn opt(s: &str) -> Option<String> {
 pub async fn is_registered_user(db: &Db, user_id: &str) -> Result<bool, DbError> {
     exists(
         db,
-        "SELECT 1 FROM users WHERE discord_id = ?1 LIMIT 1",
+        "SELECT 1 FROM users WHERE id = ?1 LIMIT 1",
         user_id.to_owned(),
     )
     .await
@@ -656,7 +656,7 @@ pub async fn is_registered_user(db: &Db, user_id: &str) -> Result<bool, DbError>
 pub async fn is_admin(db: &Db, user_id: &str) -> Result<bool, DbError> {
     exists(
         db,
-        "SELECT 1 FROM users WHERE discord_id = ?1 AND role = 'admin' LIMIT 1",
+        "SELECT 1 FROM users WHERE id = ?1 AND role = 'admin' LIMIT 1",
         user_id.to_owned(),
     )
     .await
@@ -1654,7 +1654,7 @@ pub async fn decide_member_request(
             // owner or admin のみ。
             let is_admin = tx
                 .query_row(
-                    "SELECT 1 FROM users WHERE discord_id = ?1 AND role = 'admin' LIMIT 1",
+                    "SELECT 1 FROM users WHERE id = ?1 AND role = 'admin' LIMIT 1",
                     params![actor],
                     |_| Ok(()),
                 )
@@ -2057,7 +2057,7 @@ pub async fn get_username(db: &Db, discord_id: &str) -> Result<Option<String>, D
     db.read
         .read(move |conn| {
             conn.query_row(
-                "SELECT username FROM users WHERE discord_id = ?1",
+                "SELECT username FROM users WHERE id = ?1",
                 params![uid],
                 |r| r.get::<_, String>(0),
             )
@@ -2312,7 +2312,7 @@ mod crud_tests {
             let conn = rusqlite::Connection::open(&path).expect("seed conn");
             for uid in ["owner", "sharee", "stranger"] {
                 conn.execute(
-                    "INSERT OR IGNORE INTO users (discord_id, username, salt) \
+                    "INSERT OR IGNORE INTO users (id, username, salt) \
                      VALUES (?1, ?1, 'x')",
                     params![uid],
                 )

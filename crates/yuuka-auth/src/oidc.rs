@@ -80,11 +80,14 @@ impl From<Unavailable> for LoginError {
 /// ID トークンから取り出した利用者。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OidcIdentity {
-    /// `sub`（`users.sk_account_id` に入れる）。
+    /// `sub`（`users.sk_account_id` に入れる）。Yuuka の利用者を特定する。
     pub subject: String,
-    /// Discord ID（`OIDC_DISCORD_ID_CLAIM`）。Yuuka の利用者を特定する。
-    pub discord_id: String,
-    /// 表示名（`name` → `preferred_username` → Discord ID）。
+    /// Discord ID（`OIDC_DISCORD_ID_CLAIM`・任意）。あればログイン時に Discord 連携する。
+    /// 数字でない値は無いものとして扱う。
+    pub discord_id: Option<String>,
+    /// 確認済みのメールアドレス（`email_verified` が true のときの `email`）。`ADMIN_EMAILS` の照合に使う。
+    pub email: Option<String>,
+    /// 表示名（`name` → `preferred_username` → Discord ID → メール → 「ユーザー」）。
     pub display_name: String,
 }
 
@@ -295,8 +298,8 @@ impl OidcClient {
             return Err(LoginError::Rejected(RETRY));
         }
         let identity = self.identity(&claims).ok_or_else(|| {
-            tracing::warn!(claim = %self.discord_id_claim, "ID トークンに Discord ID がない");
-            LoginError::Rejected("このアカウントには Discord ID がありません。")
+            tracing::warn!("ID トークンに sub がない");
+            LoginError::Rejected(RETRY)
         })?;
         let link = OidcLink {
             sub: identity.subject.clone(),
@@ -460,21 +463,29 @@ impl OidcClient {
                 .map(str::to_owned)
         };
         let subject = text("sub")?;
-        // Discord ID は数字の文字列（数値で返すプロバイダーもあるので受け付ける）。
-        let discord_id = match claims.get(&self.discord_id_claim)? {
-            Value::String(s) => s.trim().to_owned(),
-            Value::Number(n) => n.to_string(),
-            _ => return None,
-        };
-        if discord_id.is_empty() || !discord_id.bytes().all(|b| b.is_ascii_digit()) {
-            return None;
+        // Discord ID は数字の文字列（数値で返すプロバイダーもあるので受け付ける）。任意。
+        let discord_id = match claims.get(&self.discord_id_claim) {
+            Some(Value::String(s)) => Some(s.trim().to_owned()),
+            Some(Value::Number(n)) => Some(n.to_string()),
+            _ => None,
         }
+        .filter(|id| !id.is_empty() && id.bytes().all(|b| b.is_ascii_digit()));
+        // 真偽値か "true" の文字列で返すプロバイダーがある。
+        let email_verified = match claims.get("email_verified") {
+            Some(Value::Bool(b)) => *b,
+            Some(Value::String(s)) => s.eq_ignore_ascii_case("true"),
+            _ => false,
+        };
+        let email = text("email").filter(|_| email_verified);
         let display_name = text("name")
             .or_else(|| text("preferred_username"))
-            .unwrap_or_else(|| discord_id.clone());
+            .or_else(|| discord_id.clone())
+            .or_else(|| email.clone())
+            .unwrap_or_else(|| "ユーザー".to_owned());
         Some(OidcIdentity {
             subject,
             discord_id,
+            email,
             display_name,
         })
     }
@@ -751,7 +762,7 @@ mod tests {
     }
 
     #[test]
-    fn identity_requires_a_numeric_discord_id() {
+    fn identity_requires_sub_and_treats_discord_id_as_optional() {
         let c = client(None);
         let ok = c
             .identity(&json!({ "sub": "acc-1", "discord_id": "100", "name": "Alice" }))
@@ -760,20 +771,47 @@ mod tests {
             ok,
             OidcIdentity {
                 subject: "acc-1".to_owned(),
-                discord_id: "100".to_owned(),
+                discord_id: Some("100".to_owned()),
+                email: None,
                 display_name: "Alice".to_owned(),
             }
         );
         let numeric = c
             .identity(&json!({ "sub": "acc-2", "discord_id": 200, "preferred_username": "bob" }))
             .expect("numeric id");
-        assert_eq!(numeric.discord_id, "200");
+        assert_eq!(numeric.discord_id.as_deref(), Some("200"));
         assert_eq!(numeric.display_name, "bob");
-        assert!(c.identity(&json!({ "sub": "acc-3" })).is_none());
-        assert!(c
+        // Discord ID が無い・数字でないアカウントもログインできる（連携しないだけ）。
+        let plain = c.identity(&json!({ "sub": "acc-3" })).expect("no discord");
+        assert_eq!(plain.discord_id, None);
+        assert_eq!(plain.display_name, "ユーザー");
+        let bad = c
             .identity(&json!({ "sub": "acc-4", "discord_id": "12a" }))
-            .is_none());
+            .expect("bad discord");
+        assert_eq!(bad.discord_id, None);
         assert!(c.identity(&json!({ "discord_id": "100" })).is_none());
+    }
+
+    #[test]
+    fn identity_uses_email_only_when_verified() {
+        let c = client(None);
+        let verified = c
+            .identity(&json!({ "sub": "s", "email": "a@example.com", "email_verified": true }))
+            .expect("verified");
+        assert_eq!(verified.email.as_deref(), Some("a@example.com"));
+        assert_eq!(verified.display_name, "a@example.com");
+        let as_text = c
+            .identity(&json!({ "sub": "s", "email": "a@example.com", "email_verified": "true" }))
+            .expect("verified text");
+        assert_eq!(as_text.email.as_deref(), Some("a@example.com"));
+        let unverified = c
+            .identity(&json!({ "sub": "s", "email": "a@example.com", "email_verified": false }))
+            .expect("unverified");
+        assert_eq!(unverified.email, None);
+        let missing = c
+            .identity(&json!({ "sub": "s", "email": "a@example.com" }))
+            .expect("missing flag");
+        assert_eq!(missing.email, None);
     }
 
     #[test]

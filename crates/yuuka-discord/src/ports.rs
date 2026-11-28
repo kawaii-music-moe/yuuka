@@ -19,7 +19,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use yuuka_core::{BotId, GuildId, UserId};
+use yuuka_core::{BotId, DiscordUserId, GuildId, UserId};
 
 // ─── 共通 DTO ────────────────────────────────────────────────────────────────
 
@@ -345,6 +345,20 @@ pub trait BotDirectory: Send + Sync {
 
     /// Web 登録済みユーザーか（現行 `isRegisteredUser`）。秘書経路は登録ユーザーのみ応答。
     async fn is_registered_user(&self, user_id: &UserId) -> bool;
+
+    /// Discord ユーザーを Yuuka の利用者 ID に直す（docs/design/optional_discord.md §3.2）。
+    ///
+    /// 連携している利用者がいればその ID。いなければ、未登録の Discord ユーザーとして扱える値を返す
+    /// （既定は Discord ID をそのまま使う。利用申請・メンバー判定は Discord ID で行うため）。
+    async fn user_for_discord(&self, discord: &DiscordUserId) -> UserId {
+        crate::identity::identity_user(discord)
+    }
+
+    /// 利用者が連携している Discord ユーザー。未連携なら `None`（DM・チャンネルへは送れない）。
+    /// 既定は利用者 ID をそのまま Discord ID とみなす。
+    async fn discord_for_user(&self, user_id: &UserId) -> Option<DiscordUserId> {
+        crate::identity::identity_discord(user_id)
+    }
 
     /// 利用メンバーか（現行 `isBotMember`。owner は呼び出し側で暗黙メンバー扱い）。
     async fn is_bot_member(&self, bot_id: &BotId, guild_id: &GuildId, user_id: &UserId) -> bool;

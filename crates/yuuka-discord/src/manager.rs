@@ -285,7 +285,7 @@ impl DiscordMessenger {
     /// 投稿できるか（閲覧＋送信権限）を検証し、不可/検証失敗なら `None`（呼び出し側が DM へフォールバック）。
     async fn resolve_channel(
         client: &Client,
-        user_id: &UserId,
+        discord: Option<Id<UserMarker>>,
         target: &DeliverTarget,
     ) -> Option<Id<ChannelMarker>> {
         match target {
@@ -293,16 +293,13 @@ impl DiscordMessenger {
                 let channel_id = id.parse::<Id<ChannelMarker>>().ok()?;
                 // 現行 notifier.ts の第三者チャンネル露出ガード: 共有/デフォルト Bot を踏み台に、
                 // 対象ユーザーが見られないチャンネルへその人のデータを流し込むのを防ぐ。
-                if Self::user_can_post_in_channel(client, channel_id, user_id).await {
+                if Self::user_can_post_in_channel(client, channel_id, discord).await {
                     Some(channel_id)
                 } else {
                     None
                 }
             }
-            DeliverTarget::Dm => {
-                let uid = crate::identity::twilight_of(user_id)?;
-                Self::open_dm(client, uid).await
-            }
+            DeliverTarget::Dm => Self::open_dm(client, discord?).await,
         }
     }
 
@@ -316,9 +313,9 @@ impl DiscordMessenger {
     async fn user_can_post_in_channel(
         client: &Client,
         channel_id: Id<ChannelMarker>,
-        user_id: &UserId,
+        discord: Option<Id<UserMarker>>,
     ) -> bool {
-        let Some(uid) = crate::identity::twilight_of(user_id) else {
+        let Some(uid) = discord else {
             return false;
         };
         let Some(channel) = Self::fetch_channel(client, channel_id).await else {
@@ -396,7 +393,8 @@ impl DiscordMessenger {
             return None;
         };
         let client = &client;
-        let uid = crate::identity::twilight_of(&UserId::new(user_id))?;
+        let uid =
+            crate::identity::twilight_of(self.directory.as_ref(), &UserId::new(user_id)).await?;
         let channel_id = Self::open_dm(client, uid).await?;
         let comps = to_twilight_components(components);
         let message_id =
@@ -560,12 +558,14 @@ impl Notifier for DiscordMessenger {
         };
         // Channel 宛が解決不能（不明チャンネル / 対象ユーザーが閲覧不可）なら DM へフォールバックする
         // （Node `sendToUser` notifier.ts:130-142・cron 経路は deliver_final を通らないため本メソッドで担保）。
-        let channel_id = match Self::resolve_channel(&client, user_id, &target).await {
+        // 利用者の Discord ID（未連携なら None で、DM もチャンネルも送れない）。
+        let discord = crate::identity::twilight_of(self.directory.as_ref(), user_id).await;
+        let channel_id = match Self::resolve_channel(&client, discord, &target).await {
             Some(cid) => cid,
             None => match &target {
                 DeliverTarget::Channel(_) => {
                     let Some(dm) =
-                        Self::resolve_channel(&client, user_id, &DeliverTarget::Dm).await
+                        Self::resolve_channel(&client, discord, &DeliverTarget::Dm).await
                     else {
                         return false;
                     };
@@ -576,7 +576,6 @@ impl Notifier for DiscordMessenger {
             },
         };
         // notifier はフレッシュ送信（reply_to なし）。分割・添付は send_channel_reply に委譲。
-        let _ = &self.directory; // 将来 botId 無し経路（listBotsForUser）で使用。
         send_channel_reply(&client, channel_id, None, &reply).await
     }
 }

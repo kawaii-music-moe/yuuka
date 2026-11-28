@@ -14,6 +14,8 @@ let richReply = $state(true);
 let remindDefault = $state(10);
 let notifyType = $state<"dm" | "channel">("dm");
 let notifyId = $state("");
+// Discord を使わず、通知を Web の受信箱（下の「通知一覧」）で受け取る。
+let webOnly = $state(false);
 
 onMount(async () => {
 	try {
@@ -22,6 +24,7 @@ onMount(async () => {
 		remindDefault = c.remindDefaultMinutes ?? 10;
 		notifyType = c.notifyTarget?.type === "channel" ? "channel" : "dm";
 		notifyId = c.notifyTarget?.id ?? "";
+		webOnly = c.notifyTarget?.type === "web";
 		loaded = true;
 	} catch (err) {
 		toastError(err, "設定を読み込めませんでした。");
@@ -33,7 +36,7 @@ async function submit(e: SubmitEvent) {
 	const payload: Record<string, unknown> = {
 		richReplyEnabled: richReply,
 		remindDefaultMinutes: Number(remindDefault) || 0,
-		notifyTargetType: notifyType,
+		notifyTargetType: webOnly ? "web" : notifyType,
 		notifyTargetId: notifyId.trim(),
 	};
 	try {
@@ -60,12 +63,18 @@ async function submit(e: SubmitEvent) {
 		</div>
 		<div class="form-group">
 			<label for="user-notify-type">通知先</label>
-			<TargetField
-				id="user-notify-type"
-				idInputId="user-notify-id"
-				bind:type={notifyType}
-				bind:targetId={notifyId}
-			/>
+			<div class="checkbox-inline">
+				<input type="checkbox" id="user-notify-web" bind:checked={webOnly} />
+				<label for="user-notify-web">Web の通知一覧で受け取る（Discord に送らない）</label>
+			</div>
+			{#if !webOnly}
+				<TargetField
+					id="user-notify-type"
+					idInputId="user-notify-id"
+					bind:type={notifyType}
+					bind:targetId={notifyId}
+				/>
+			{/if}
 		</div>
 		<div class="form-group checkbox-inline">
 			<input type="checkbox" id="user-rich-reply" bind:checked={richReply} />

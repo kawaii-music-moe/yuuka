@@ -164,7 +164,7 @@ mod tests {
     impl AuthBackend for FakeAuth {
         async fn session_user(&self, token: &str) -> Result<Option<SessionUser>, AuthError> {
             Ok((token == "good").then(|| SessionUser {
-                discord_id: "u".to_owned(),
+                user_id: "u".to_owned(),
                 username: "u".to_owned(),
                 role: Role::User,
             }))
@@ -201,7 +201,7 @@ mod tests {
         {
             let conn = rusqlite::Connection::open(&path).expect("open users");
             conn.execute(
-                "INSERT OR REPLACE INTO users (discord_id, username, salt, role) \
+                "INSERT OR REPLACE INTO users (id, username, salt, role) \
                  VALUES ('u', 'u', '00', 'user')",
                 [],
             )

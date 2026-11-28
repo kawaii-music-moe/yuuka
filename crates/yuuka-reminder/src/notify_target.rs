@@ -16,18 +16,21 @@ pub enum UserNotifyTarget {
     Dm,
     /// 既定のチャンネル ID。
     Channel(String),
+    /// Web の受信箱（Discord を使わない利用者・docs/design/optional_discord.md §6.1）。
+    Web,
 }
 
 /// 既定送信先を同じ接続（トランザクション内を含む）で読む。
 ///
-/// `channel` かつ ID が空でなければチャンネル、それ以外は DM（現行 `getUserNotifyTarget` と同じ）。
+/// `channel` かつ ID が空でなければチャンネル、`web` なら Web の受信箱、それ以外は DM（現行
+/// `getUserNotifyTarget` と同じ）。
 ///
 /// # Errors
 /// クエリ失敗時 [`DbError`]。
 pub(crate) fn query(conn: &Connection, user_id: &str) -> Result<UserNotifyTarget, DbError> {
     let row: Option<(String, Option<String>)> = conn
         .query_row(
-            "SELECT notify_target_type, notify_target_id FROM users WHERE discord_id = ?1",
+            "SELECT notify_target_type, notify_target_id FROM users WHERE id = ?1",
             params![user_id],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
@@ -37,6 +40,7 @@ pub(crate) fn query(conn: &Connection, user_id: &str) -> Result<UserNotifyTarget
         Some((kind, Some(id))) if kind == "channel" && !id.is_empty() => {
             UserNotifyTarget::Channel(id)
         }
+        Some((kind, _)) if kind == "web" => UserNotifyTarget::Web,
         _ => UserNotifyTarget::Dm,
     })
 }
@@ -58,14 +62,15 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(
             "CREATE TABLE users (
-                discord_id TEXT PRIMARY KEY,
+                id TEXT PRIMARY KEY,
                 notify_target_type TEXT NOT NULL DEFAULT 'dm',
                 notify_target_id TEXT
             );
             INSERT INTO users VALUES ('dm_user', 'dm', NULL);
             INSERT INTO users VALUES ('chan_user', 'channel', '111');
             INSERT INTO users VALUES ('chan_no_id', 'channel', NULL);
-            INSERT INTO users VALUES ('chan_empty', 'channel', '');",
+            INSERT INTO users VALUES ('chan_empty', 'channel', '');
+            INSERT INTO users VALUES ('web_user', 'web', NULL);",
         )
         .unwrap();
         conn
@@ -85,5 +90,10 @@ mod tests {
         for user in ["dm_user", "chan_no_id", "chan_empty", "nobody"] {
             assert_eq!(query(&conn, user).unwrap(), UserNotifyTarget::Dm, "{user}");
         }
+    }
+
+    #[test]
+    fn web_is_web() {
+        assert_eq!(query(&conn(), "web_user").unwrap(), UserNotifyTarget::Web);
     }
 }

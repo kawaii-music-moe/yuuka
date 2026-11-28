@@ -23,6 +23,8 @@ pub enum NotifyTarget {
     Dm,
     /// 明示チャンネル ID。
     Channel(String),
+    /// Web の受信箱（`web_notifications`）。Discord へは送らない（docs/design/optional_discord.md §6.1）。
+    Web,
 }
 
 /// 1 通の通知（現行 `NotifyPayload` の text / embeds 経路）。
@@ -120,20 +122,26 @@ impl DefaultTargetNotifier {
 #[async_trait]
 impl Notifier for DefaultTargetNotifier {
     async fn send(&self, mut notification: Notification) -> bool {
+        let setting = user_notify_target(&self.db, notification.user_id.as_str()).await;
+        // 通知先を Web にしている利用者（Discord 未連携の既定）には、送信先の指定にかかわらず受信箱へ届ける。
+        // Discord の DM・チャンネルはその利用者の Discord ID が無いと送れないため。
+        if notification.target == NotifyTarget::Web || matches!(setting, Ok(UserNotifyTarget::Web))
+        {
+            return crate::inbox::store(&self.db, &notification).await;
+        }
         if notification.target == NotifyTarget::Default {
-            notification.target =
-                match user_notify_target(&self.db, notification.user_id.as_str()).await {
-                    Ok(UserNotifyTarget::Channel(id)) => NotifyTarget::Channel(id),
-                    Ok(UserNotifyTarget::Dm) => NotifyTarget::Dm,
-                    Err(e) => {
-                        tracing::warn!(
-                            user_id = %notification.user_id,
-                            error = %e,
-                            "既定送信先を取得できないため DM へフォールバック"
-                        );
-                        NotifyTarget::Dm
-                    }
-                };
+            notification.target = match setting {
+                Ok(UserNotifyTarget::Channel(id)) => NotifyTarget::Channel(id),
+                Ok(UserNotifyTarget::Dm | UserNotifyTarget::Web) => NotifyTarget::Dm,
+                Err(e) => {
+                    tracing::warn!(
+                        user_id = %notification.user_id,
+                        error = %e,
+                        "既定送信先を取得できないため DM へフォールバック"
+                    );
+                    NotifyTarget::Dm
+                }
+            };
         }
         self.inner.send(notification).await
     }
@@ -152,7 +160,7 @@ mod tests {
             .execute(move |conn| {
                 conn.execute(
                     "INSERT INTO users \
-                       (discord_id, username, salt, notify_target_type, notify_target_id) \
+                       (id, username, salt, notify_target_type, notify_target_id) \
                      VALUES (?1, ?1, '', ?2, ?3)",
                     rusqlite::params![user, kind, id],
                 )
@@ -196,6 +204,43 @@ mod tests {
             resolved_target(db, NotifyTarget::Default, "nobody").await,
             NotifyTarget::Dm
         );
+    }
+
+    #[tokio::test]
+    async fn web_users_get_notifications_in_the_inbox_instead_of_discord() {
+        let (db, _dir) = seeded_db("");
+        insert_user(&db, "web", "web", None).await;
+        let rec = Arc::new(RecordingNotifier::new(true));
+        let notifier = DefaultTargetNotifier::new(db.clone(), rec.clone());
+        for target in [
+            NotifyTarget::Default,
+            NotifyTarget::Dm,
+            NotifyTarget::Channel("c".to_owned()),
+        ] {
+            let n = Notification::text(UserId::new("web"), BotId::new("system_default"), "届いた")
+                .with_target(target);
+            assert!(notifier.send(n).await);
+        }
+        assert_eq!(rec.count(), 0, "Discord へは送らない");
+        let stored: Vec<String> = db
+            .read
+            .read(|conn| {
+                let mut stmt = conn
+                    .prepare("SELECT content FROM web_notifications WHERE user_id = 'web'")
+                    .map_err(map_sqlite)?;
+                let rows = stmt.query_map([], |r| r.get(0)).map_err(map_sqlite)?;
+                rows.collect::<Result<Vec<_>, _>>().map_err(map_sqlite)
+            })
+            .await
+            .unwrap();
+        assert_eq!(stored, vec!["届いた".to_owned(); 3]);
+
+        // 明示の Web 宛ては、通知先が DM の利用者でも受信箱へ。
+        insert_user(&db, "dm", "dm", None).await;
+        let n = Notification::text(UserId::new("dm"), BotId::new("system_default"), "web")
+            .with_target(NotifyTarget::Web);
+        assert!(notifier.send(n).await);
+        assert_eq!(rec.count(), 0);
     }
 
     #[tokio::test]

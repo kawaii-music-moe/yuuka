@@ -125,9 +125,11 @@ impl<'a> ReminderRepo<'a> {
                 let (target_type, target_id) = match input.target_type.as_deref() {
                     Some("channel") => ("channel", input.target_id),
                     Some("dm") => ("dm", input.target_id),
+                    Some("web") => ("web", None),
                     _ => match crate::notify_target::query(tx, &uid)? {
                         UserNotifyTarget::Channel(id) => ("channel", input.target_id.or(Some(id))),
                         UserNotifyTarget::Dm => ("dm", input.target_id),
+                        UserNotifyTarget::Web => ("web", None),
                     },
                 };
                 tx.execute(

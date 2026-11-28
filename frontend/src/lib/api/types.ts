@@ -518,6 +518,30 @@ export type AdminBotAttributeSettingsResponse = ApiResponse<{
 // Admin のペルソナ管理一覧は GET /api/personas/marketplace（personaApi.marketplace）を
 // 流用し、非公開化・削除のみ adminApi を叩く。専用の一覧型は設けない（PublicPersonaView 再利用）。
 export type AdminStatsResponse = ApiResponse<{ stats: AdminStats }>;
+/** Web の受信箱の 1 件（GET /api/notifications）。 */
+export interface WebNotificationView {
+	id: number;
+	botId: string | null;
+	content: string;
+	createdAt: string;
+	readAt: string | null;
+}
+/** 招待コード（GET /api/admin/invites）。日時はサーバーのローカル時刻の文字列。 */
+export interface AdminInviteView {
+	code: string;
+	note: string | null;
+	createdBy: string | null;
+	createdAt: string;
+	expiresAt: string | null;
+	usedBy: string | null;
+	usedAt: string | null;
+}
+export type AdminInvitesResponse = ApiResponse<{
+	invites: AdminInviteView[];
+}>;
+export type AdminInviteCreateResponse = ApiResponse<{
+	invite: AdminInviteView;
+}>;
 export type AdminUsersResponse = ApiResponse<{ users: AdminUserView[] }>;
 export type AdminBotsResponse = ApiResponse<{ bots: AdminBotView[] }>;
 export type AdminAuditLogsResponse = ApiResponse<{

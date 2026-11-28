@@ -8,6 +8,7 @@ import type {
 	DiscordSettingsResponse,
 	GoogleOAuthUrlResponse,
 	StatusResponse,
+	WebNotificationView,
 } from "../types";
 
 const USER = { scope: "user" } as const;
@@ -37,6 +38,27 @@ export const settingsApi = {
 	/** POST /api/settings/user — ユーザー設定（リマインド既定・通知先等） */
 	updateUserSettings: (body: Record<string, unknown>) =>
 		api.post<ApiResponse>("/api/settings/user", body, USER),
+
+	/** GET /api/me/discord — Discord 連携の状態（available: 連携ボタンを出せるか） */
+	discordLink: () =>
+		api.get<
+			ApiResponse & {
+				linked: boolean;
+				discordId: string | null;
+				available: boolean;
+			}
+		>("/api/me/discord", USER),
+	/** POST /api/me/discord/unlink — Discord 連携の解除 */
+	unlinkDiscord: () =>
+		api.post<ApiResponse>("/api/me/discord/unlink", {}, USER),
+	/** GET /api/notifications — Web の受信箱（新しい順）と未読数 */
+	notifications: (limit = 50) =>
+		api.get<
+			ApiResponse & { notifications: WebNotificationView[]; unread: number }
+		>(`/api/notifications?limit=${limit}`, USER),
+	/** POST /api/notifications/read — 既読にする（ids 省略ですべて） */
+	markNotificationsRead: (ids?: number[]) =>
+		api.post<ApiResponse>("/api/notifications/read", ids ? { ids } : {}, USER),
 
 	/** POST /api/settings/gemini — Gemini API キー/モデル設定 */
 	getGemini: () =>

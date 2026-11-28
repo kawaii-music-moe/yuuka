@@ -11,8 +11,10 @@
 //! プロバイダーでログアウトすると `POST /api/auth/oidc/backchannel-logout` に logout_token が届くので、
 //! 同じプロバイダーのセッション（`sid`）から作った Yuuka のセッションを消す。
 
+use std::collections::HashMap;
 use std::convert::Infallible;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use axum::extract::{Extension, Form, FromRequestParts, Query, State};
 use axum::http::header::{CACHE_CONTROL, LOCATION, SET_COOKIE};
@@ -24,9 +26,13 @@ use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::json;
 use yuuka_types::SessionUser;
-use yuuka_web::{ApiError, AppState, AuthenticatedUser};
+use yuuka_web::{AdminUser, ApiError, AppState, AuthenticatedUser};
 
+use yuuka_core::RegistrationMode;
+
+use crate::discord_link::DiscordLinkClient;
 use crate::oidc::{LoginError, LogoutTarget, OidcClient};
+use crate::users::{LoginIdentity, LoginPolicy};
 use crate::{users, SessionStore};
 
 const COOKIE_HOST: &str = "__Host-yuuka-session";
@@ -37,12 +43,22 @@ const STATE_COOKIE_DEV: &str = "yuuka-oidc-state";
 pub struct AuthRuntime {
     sessions: SessionStore,
     session_ttl_secs: u64,
-    admin_discord_ids: Vec<String>,
+    policy: LoginPolicy,
     oidc: Option<Arc<OidcClient>>,
+    /// ログイン開始時に受け取った招待コード（ログインの `state` → コード・受け取った時刻）。
+    pending_invites: Mutex<HashMap<String, (String, Instant)>>,
+    /// Discord の後付け連携（`DISCORD_OAUTH_CLIENT_*` 未設定なら None）。
+    discord_link: Option<Arc<DiscordLinkClient>>,
 }
+
+/// 保留できる招待コードの上限（OIDC の保留ログインと同じ考え方で、溢れたら古いものから捨てる）。
+const MAX_PENDING_INVITES: usize = 1024;
 
 impl AuthRuntime {
     /// `oidc` が `None`（`OIDC_CLIENT_SECRET` 未設定）ならログインできない。
+    ///
+    /// 初期 admin は `admin_discord_ids` だけで決まる。`ADMIN_OIDC_SUBJECTS`・`ADMIN_EMAILS`・
+    /// `REGISTRATION_MODE` も使うときは [`Self::with_login_policy`] で差し替える。
     #[must_use]
     pub fn new(
         sessions: SessionStore,
@@ -50,15 +66,71 @@ impl AuthRuntime {
         admin_discord_ids: Vec<String>,
         oidc: Option<Arc<OidcClient>>,
     ) -> Self {
-        if admin_discord_ids.is_empty() {
-            tracing::warn!("ADMIN_DISCORD_IDS が未設定です。新規利用者に管理者権限は付与されません。初回ログイン前に管理者の Discord ID を設定してください。");
-        }
         Self {
             sessions,
             session_ttl_secs: u64::from(session_ttl_days) * 24 * 60 * 60,
-            admin_discord_ids,
+            policy: LoginPolicy {
+                admin_discord_ids,
+                ..LoginPolicy::default()
+            },
             oidc,
+            pending_invites: Mutex::new(HashMap::new()),
+            discord_link: None,
         }
+    }
+
+    /// Discord の後付け連携を有効にする（§5）。
+    #[must_use]
+    pub fn with_discord_link(mut self, link: Option<DiscordLinkClient>) -> Self {
+        self.discord_link = link.map(Arc::new);
+        self
+    }
+
+    /// 初期 admin の指定と新規登録の扱いを差し替える。
+    #[must_use]
+    pub fn with_login_policy(mut self, policy: LoginPolicy) -> Self {
+        if !policy.has_admin() {
+            tracing::warn!("ADMIN_DISCORD_IDS・ADMIN_OIDC_SUBJECTS・ADMIN_EMAILS がどれも未設定です。新規利用者に管理者権限は付与されません。初回ログイン前に管理者を指定してください。");
+        }
+        match policy.registration {
+            RegistrationMode::Closed => {
+                tracing::info!("REGISTRATION_MODE=closed: 既存の利用者だけがログインできます。");
+            }
+            RegistrationMode::Invite => {
+                tracing::info!("REGISTRATION_MODE=invite: 新規登録には招待コードが要ります（管理画面で発行）。");
+            }
+            RegistrationMode::Open => {}
+        }
+        self.policy = policy;
+        self
+    }
+
+    fn remember_invite(&self, login_state: &str, code: String) {
+        let mut pending = self
+            .pending_invites
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let now = Instant::now();
+        pending.retain(|_, (_, at)| now.duration_since(*at) < crate::oidc::LOGIN_TTL);
+        if pending.len() >= MAX_PENDING_INVITES {
+            if let Some(oldest) = pending
+                .iter()
+                .min_by_key(|(_, (_, at))| *at)
+                .map(|(k, _)| k.clone())
+            {
+                pending.remove(&oldest);
+            }
+        }
+        pending.insert(login_state.to_owned(), (code, now));
+    }
+
+    fn take_invite(&self, login_state: &str) -> Option<String> {
+        self.pending_invites
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(login_state)
+            .filter(|(_, at)| at.elapsed() < crate::oidc::LOGIN_TTL)
+            .map(|(code, _)| code)
     }
 }
 
@@ -73,6 +145,12 @@ pub fn routes(runtime: Arc<AuthRuntime>) -> Router<AppState> {
         )
         .route("/api/logout", post(logout))
         .route("/api/users", get(users_route))
+        .route("/api/admin/invites", get(list_invites).post(create_invite))
+        .route("/api/admin/invites/delete", post(delete_invite))
+        .route("/api/me/discord", get(discord_status))
+        .route("/api/me/discord/link/start", get(discord_link_start))
+        .route("/api/me/discord/link/callback", get(discord_link_callback))
+        .route("/api/me/discord/unlink", post(discord_unlink))
         .layer(Extension(runtime))
 }
 
@@ -86,9 +164,16 @@ async fn provider(Extension(rt): Extension<Arc<AuthRuntime>>) -> Response {
     .into_response()
 }
 
+#[derive(Deserialize)]
+struct StartQuery {
+    /// 招待コード（`REGISTRATION_MODE=invite` で初めてログインする人が、招待リンクから持ってくる）。
+    invite: Option<String>,
+}
+
 async fn start(
     State(state): State<AppState>,
     Extension(rt): Extension<Arc<AuthRuntime>>,
+    Query(query): Query<StartQuery>,
 ) -> Response {
     let Some(oidc) = &rt.oidc else {
         return error(
@@ -103,6 +188,9 @@ async fn start(
             return error(StatusCode::BAD_GATEWAY, "ログイン先に接続できません。");
         }
     };
+    if let Some(code) = query.invite.as_deref().and_then(crate::invite::normalize) {
+        rt.remember_invite(&login_state, code);
+    }
     let mut response = redirect(&authorize_url);
     let max_age = i64::try_from(crate::oidc::LOGIN_TTL.as_secs()).unwrap_or(i64::MAX);
     response.headers_mut().insert(
@@ -180,22 +268,32 @@ async fn exchange_and_login(
     };
     let identity = outcome.identity;
 
-    let role = match users::upsert_from_sk_account(
-        &state.db,
-        &identity.subject,
-        &identity.discord_id,
-        &identity.display_name,
-        &rt.admin_discord_ids,
-    )
-    .await
-    {
-        Ok(role) => role,
-        Err(e) => return ApiError::from(e).into_response(),
-    };
-    let user = SessionUser {
+    let login = LoginIdentity {
+        subject: identity.subject,
         discord_id: identity.discord_id,
+        email: identity.email,
         username: identity.display_name,
-        role,
+    };
+    let invite = rt.take_invite(&login_state);
+    let found =
+        match users::upsert_from_oidc(&state.db, &login, &rt.policy, invite.as_deref()).await {
+            Ok(Ok(found)) => found,
+            Ok(Err(rejection)) => {
+                tracing::warn!(reason = ?rejection, "OIDC ログインを断った");
+                let status = match rejection {
+                    users::LoginRejection::Conflict(_) => StatusCode::CONFLICT,
+                    users::LoginRejection::RegistrationClosed
+                    | users::LoginRejection::InviteRequired
+                    | users::LoginRejection::InviteInvalid => StatusCode::FORBIDDEN,
+                };
+                return error(status, rejection.message());
+            }
+            Err(e) => return ApiError::from(e).into_response(),
+        };
+    let user = SessionUser {
+        user_id: found.user_id,
+        username: login.username,
+        role: found.role,
     };
     let token = match rt.sessions.create(&user, rt.session_ttl_secs).await {
         Ok(token) => token,
@@ -240,9 +338,9 @@ async fn backchannel_logout(
                 StatusCode::OK
             }
             Some(LogoutTarget::Subject(sub)) => {
-                match users::discord_id_by_sk_account(&state.db, &sub).await {
-                    Ok(Some(discord_id)) => {
-                        rt.sessions.destroy_all_for_user(&discord_id).await;
+                match users::user_id_by_subject(&state.db, &sub).await {
+                    Ok(Some(user_id)) => {
+                        rt.sessions.destroy_all_for_user(&user_id).await;
                         StatusCode::OK
                     }
                     Ok(None) => StatusCode::OK,
@@ -280,7 +378,7 @@ async fn logout(
 }
 
 async fn users_route(user: AuthenticatedUser, State(state): State<AppState>) -> Response {
-    match users::get_user_by_discord_id(&state.db, &user.0.discord_id).await {
+    match users::get_user_by_discord_id(&state.db, &user.0.user_id).await {
         Ok(Some(found)) => Json(json!({
             "success": true,
             "user": { "discordId": found.discord_id, "username": found.username, "role": found.role }
@@ -297,6 +395,194 @@ fn redirect(location: &str) -> Response {
         response.headers_mut().insert(LOCATION, value);
     }
     response
+}
+
+// ─── Discord の後付け連携（§5） ─────────────────────────────────────────────────
+
+/// 連携後に戻すアカウント画面（`?discord=linked|conflict|cancelled|error|unavailable`）。
+const ACCOUNT_PAGE: &str = "/admin/account/profile";
+
+fn account_redirect(result: &str) -> Response {
+    redirect(&format!("{ACCOUNT_PAGE}?discord={result}"))
+}
+
+/// `GET /api/me/discord`：連携の状態。`available` は連携ボタンを出せるか（OAuth2 が設定済みか）。
+async fn discord_status(
+    user: AuthenticatedUser,
+    State(state): State<AppState>,
+    Extension(rt): Extension<Arc<AuthRuntime>>,
+) -> Response {
+    match users::discord_link_of(&state.db, &user.0.user_id).await {
+        Ok(Some(discord_id)) => Json(json!({
+            "success": true,
+            "linked": discord_id.is_some(),
+            "discordId": discord_id,
+            "available": rt.discord_link.is_some(),
+        }))
+        .into_response(),
+        Ok(None) => error(StatusCode::NOT_FOUND, "ユーザーが見つかりません。"),
+        Err(e) => ApiError::from(e).into_response(),
+    }
+}
+
+/// `GET /api/me/discord/link/start`：Discord の認可画面へ送る。
+async fn discord_link_start(
+    user: AuthenticatedUser,
+    Extension(rt): Extension<Arc<AuthRuntime>>,
+) -> Response {
+    let Some(link) = &rt.discord_link else {
+        return error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Discord 連携が設定されていません。",
+        );
+    };
+    match link.start(&user.0.user_id) {
+        Ok(url) => redirect(&url),
+        Err(e) => {
+            tracing::error!(error = ?e, "Discord 連携を開始できない");
+            error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Discord 連携を開始できません。",
+            )
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct LinkCallbackQuery {
+    code: Option<String>,
+    state: Option<String>,
+}
+
+/// `GET /api/me/discord/link/callback`：code を交換して連携し、アカウント画面へ戻す。
+async fn discord_link_callback(
+    user: AuthenticatedUser,
+    State(state): State<AppState>,
+    Extension(rt): Extension<Arc<AuthRuntime>>,
+    Query(query): Query<LinkCallbackQuery>,
+) -> Response {
+    let Some(link) = &rt.discord_link else {
+        return account_redirect("unavailable");
+    };
+    let (Some(code), Some(link_state)) = (query.code.filter(|c| !c.is_empty()), query.state) else {
+        return account_redirect("cancelled");
+    };
+    let discord_id = match link.finish(&user.0.user_id, &link_state, &code).await {
+        Ok(id) => id,
+        Err(e) => {
+            tracing::warn!(error = ?e, "Discord 連携を確かめられない");
+            return account_redirect("error");
+        }
+    };
+    match users::link_discord(&state.db, &user.0.user_id, &discord_id).await {
+        Ok(Ok(())) => {
+            crate::audit::add_audit_log(
+                &state.db,
+                &user.0.user_id,
+                "discord.link",
+                Some(&discord_id),
+                None,
+            )
+            .await;
+            account_redirect("linked")
+        }
+        Ok(Err(rejection)) => {
+            tracing::warn!(reason = ?rejection, "Discord 連携を断った（統合はしない）");
+            account_redirect("conflict")
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "Discord 連携を保存できない");
+            account_redirect("error")
+        }
+    }
+}
+
+/// `POST /api/me/discord/unlink`：連携を解除する（OIDC の紐付けがあるときだけ・§9）。
+async fn discord_unlink(user: AuthenticatedUser, State(state): State<AppState>) -> Response {
+    match users::unlink_discord(&state.db, &user.0.user_id).await {
+        Ok(users::UnlinkOutcome::Unlinked) => {
+            crate::audit::add_audit_log(&state.db, &user.0.user_id, "discord.unlink", None, None)
+                .await;
+            Json(json!({ "success": true, "message": "Discord の連携を解除しました。" }))
+                .into_response()
+        }
+        Ok(users::UnlinkOutcome::NotLinked) => {
+            error(StatusCode::BAD_REQUEST, "Discord は連携していません。")
+        }
+        Ok(users::UnlinkOutcome::NoOtherLogin) => error(
+            StatusCode::CONFLICT,
+            "ほかにログインする手段が無いため、Discord の連携を解除できません。",
+        ),
+        Err(e) => ApiError::from(e).into_response(),
+    }
+}
+
+// ─── 招待コード（管理者のみ・§4.1） ───────────────────────────────────────────────
+
+/// `GET /api/admin/invites`：招待コードの一覧。
+async fn list_invites(_admin: AdminUser, State(state): State<AppState>) -> Response {
+    match crate::invite::list(&state.db).await {
+        Ok(invites) => Json(json!({ "success": true, "invites": invites })).into_response(),
+        Err(e) => ApiError::from(e).into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CreateInviteBody {
+    note: Option<String>,
+    expires_in_days: Option<u32>,
+}
+
+/// `POST /api/admin/invites`：招待コードを発行する。
+async fn create_invite(
+    admin: AdminUser,
+    State(state): State<AppState>,
+    Json(body): Json<CreateInviteBody>,
+) -> Response {
+    match crate::invite::create(&state.db, &admin.0.user_id, body.note, body.expires_in_days).await
+    {
+        Ok(invite) => {
+            crate::audit::add_audit_log(
+                &state.db,
+                &admin.0.user_id,
+                "admin.invite_create",
+                Some(&invite.code),
+                None,
+            )
+            .await;
+            Json(json!({ "success": true, "invite": invite })).into_response()
+        }
+        Err(e) => ApiError::from(e).into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+struct DeleteInviteBody {
+    code: String,
+}
+
+/// `POST /api/admin/invites/delete`：招待コードを削除する。
+async fn delete_invite(
+    admin: AdminUser,
+    State(state): State<AppState>,
+    Json(body): Json<DeleteInviteBody>,
+) -> Response {
+    match crate::invite::delete(&state.db, &body.code).await {
+        Ok(true) => {
+            crate::audit::add_audit_log(
+                &state.db,
+                &admin.0.user_id,
+                "admin.invite_delete",
+                Some(&body.code),
+                None,
+            )
+            .await;
+            Json(json!({ "success": true })).into_response()
+        }
+        Ok(false) => error(StatusCode::NOT_FOUND, "招待コードが見つかりません。"),
+        Err(e) => ApiError::from(e).into_response(),
+    }
 }
 
 fn error(status: StatusCode, message: &str) -> Response {

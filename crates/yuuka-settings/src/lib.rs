@@ -28,6 +28,7 @@ use yuuka_web::AppState;
 mod discord;
 mod dto;
 mod google;
+mod notifications;
 mod package;
 mod repo;
 mod routes;
@@ -97,6 +98,8 @@ pub fn routes(runtime: Arc<SettingsRuntime>) -> Router<AppState> {
             "/api/settings/backup",
             get(routes::backup_get).post(routes::backup),
         )
+        .route("/api/notifications", get(notifications::list))
+        .route("/api/notifications/read", post(notifications::mark_read))
         .route("/api/status", get(status::status))
         .route(
             "/api/settings/discord",
