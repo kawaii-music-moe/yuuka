@@ -556,7 +556,7 @@ async fn run() -> Result<(), String> {
     } else {
         drop(runners);
         tracing::info!(
-            "Rust Discord ゲートウェイは無効（既定・Node が gateway を所有）。有効化は YUUKA_RUST_DISCORD=1（Node bot 停止後）"
+            "Discord ゲートウェイは無効です（既定）。Discord を使わない構成ならこのままで動きます（Web・PWA・デスクトップと Web の通知一覧）。Discord の Bot を動かすには YUUKA_RUST_DISCORD=1 を設定してください"
         );
     }
 

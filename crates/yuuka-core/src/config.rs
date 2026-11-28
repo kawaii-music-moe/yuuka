@@ -350,7 +350,8 @@ pub struct OidcSettings {
     pub client_id: String,
     /// クライアントシークレット（`OIDC_CLIENT_SECRET`・`client_secret_basic`）。未設定ならログインできない。
     pub client_secret: Option<SecretString>,
-    /// 要求する scope（`OIDC_SCOPE`・既定 `openid profile discord`）。
+    /// 要求する scope（`OIDC_SCOPE`・既定は標準の sk-account なら `openid profile discord`、それ以外は
+    /// `openid profile email`）。
     pub scope: String,
     /// Discord ID を入れた claim の名前（`OIDC_DISCORD_ID_CLAIM`・既定 `discord_id`・claim は任意）。
     pub discord_id_claim: String,
@@ -376,7 +377,15 @@ impl OidcSettings {
             internal_url: get("OIDC_INTERNAL_URL").map(|v| v.trim_end_matches('/').to_owned()),
             client_id: get("OIDC_CLIENT_ID").unwrap_or_else(|| "yuuka".to_owned()),
             client_secret: get("OIDC_CLIENT_SECRET").map(SecretString::from),
-            scope: get("OIDC_SCOPE").unwrap_or_else(|| "openid profile discord".to_owned()),
+            // `discord` scope は標準の sk-account 専用。ほかのプロバイダーは知らない scope を断るので、
+            // 既定は `openid profile email`（確認済みメールは ADMIN_EMAILS の照合に使う・#234）。
+            scope: get("OIDC_SCOPE").unwrap_or_else(|| {
+                if issuer == DEFAULT_OIDC_ISSUER {
+                    "openid profile discord".to_owned()
+                } else {
+                    "openid profile email".to_owned()
+                }
+            }),
             discord_id_claim: get("OIDC_DISCORD_ID_CLAIM")
                 .unwrap_or_else(|| "discord_id".to_owned()),
             label,
@@ -592,6 +601,13 @@ mod tests {
         assert_eq!(cfg.host.to_string(), "127.0.0.1");
         assert_eq!(cfg.session_ttl_days, 7);
         assert_eq!(cfg.redis_url, "redis://127.0.0.1:6379");
+    }
+
+    #[test]
+    fn other_providers_default_to_a_scope_without_discord() {
+        let f = write_yaml("OIDC_ISSUER: \"https://accounts.google.com\"\n");
+        let oidc = Config::load_and_validate(f.path()).expect("load").oidc;
+        assert_eq!(oidc.scope, "openid profile email");
     }
 
     #[test]

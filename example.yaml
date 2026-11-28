@@ -85,7 +85,8 @@ HOST: "127.0.0.1"
 OIDC_CLIENT_ID: "yuuka"
 # クライアントシークレット（未設定だとログインできません）
 OIDC_CLIENT_SECRET: ""
-# OIDC_SCOPE: "openid profile discord"
+# 要求する scope（省略時は標準の sk-account なら "openid profile discord"、それ以外は "openid profile email"）
+# OIDC_SCOPE: "openid profile email"
 # OIDC_DISCORD_ID_CLAIM: "discord_id"
 # ログインボタンの表示名（省略時は標準なら "sk-9 Account"、それ以外は issuer のホスト名）
 # OIDC_LABEL: "sk-9 Account"

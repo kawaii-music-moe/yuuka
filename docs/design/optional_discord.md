@@ -1,6 +1,6 @@
 # Discord 連携の任意化 設計方針
 
-- ステータス: 方針確定（2026-11-28・§9）。実装は §8 の順に進める
+- ステータス: 実装済み（2026-11-28・§8 の各段階を PR #278〜#285 で実装。§9 は決定事項）
 - 作成日: 2026-11-28
 - 関連: [#234](https://github.com/kawaii-music-moe/yuuka/issues/234)（sk-account 以外の OIDC でログインできない）、`docs/design/bundled_login.md`（提案のみで閉じた同梱ログイン案）
 - 主な対象: `crates/yuuka-db/migrations/V17__baseline.sql`（`users`）、`crates/yuuka-auth/src/{oidc.rs,users.rs,routes.rs,session.rs}`、`crates/yuuka-types/src/dto.rs`（`SessionUser`）、`crates/yuuka-services/src/notifier.rs`、`crates/yuuka-reminder/src/notify_target.rs`、`crates/yuuka-discord`、`frontend/src/lib/stores/session.ts`
@@ -123,7 +123,7 @@ CREATE UNIQUE INDEX idx_users_oidc ON users(oidc_issuer, oidc_sub) WHERE oidc_su
 | Discord 上で発生した入力（メッセージ・スラッシュコマンド） | `users.discord_id` から `UserId` を引く。引けない Discord ユーザーは、現行の「未登録ユーザー」と同じ扱い |
 | Web クライアント・デスクトップ・MCP・Webhook | 影響なし（`UserId` で動く） |
 
-Discord Bot（`yuuka-discord`）を起動しない構成も正式にサポートする。現在すでに `NullNotifier` で縮退しているので、それを設定（`DISCORD_ENABLED=false`、または Bot トークン未設定）で明示的に選べるようにし、起動ログで案内する。
+Discord Bot（`yuuka-discord`）を起動しない構成も正式にサポートする。ゲートウェイは既存の `YUUKA_RUST_DISCORD`（既定は無効）で切り替え、Bot トークンを登録しなければ REST 送信も起きない。起動ログで案内する（§8-7）。
 
 ### 6.3 フロントエンド・クライアント
 
@@ -146,7 +146,7 @@ Discord Bot（`yuuka-discord`）を起動しない構成も正式にサポート
 4. **OIDC の claim を任意にする**: 4a（§4.1・§4.2、`REGISTRATION_MODE` の `open` / `closed`、`ADMIN_OIDC_SUBJECTS` / `ADMIN_EMAILS`。Discord claim の無い ID トークンでログインできることを `auth_flow.rs` でテストする）と、4b（招待コードと `REGISTRATION_MODE=invite`。ここで既定を `invite` に切り替える）に分ける。4a の時点では、Discord ID 付きの新規利用者は `id = discord_id` のまま作る（Discord 境界の変換が DB を引くようになる §8-6 まで）。UUIDv7 は Discord の無い新規利用者に使う。 4b では、招待コード（`invite_codes`・V40）、管理者用 API（`/api/admin/invites`）と管理画面、ログイン開始の `?invite=` を足し、既定を `invite` にする。`ADMIN_*` で指定した管理者は、最初の招待を発行できるよう、どの方式でも登録できる。
 5. **Web 通知**: `web_notifications`（V41）と、通知先 `web`（`users.notify_target_type`・リマインドの `target_type`）。通知先が `web` の利用者への通知は、送信先の指定にかかわらず受信箱へ保存する（Discord ID が無いと DM もチャンネルも送れないため）。Discord 未連携の新規利用者の既定は `web`。読み出し・既読は `GET /api/notifications`・`POST /api/notifications/read`、画面は「時刻と通知」の通知一覧。既存の利用者（通知先 `dm`/`channel`）の挙動は変えない。WS でのリアルタイム配信は後続。
 6. **Discord 連携（後付け）**: Discord OAuth2（`identify`）による連携・解除 API（`/api/me/discord*`）とアカウント画面のカード。あわせて、Discord 側の境界（`yuuka-discord` の `identity`）を `BotDirectory::user_for_discord` / `discord_for_user` 経由にし、本番実装（`DbBotDirectory`）は `users.discord_id` を引く。連携を解除した旧来の利用者（`id` = 旧 Discord ID）は、その Discord アカウントからの操作を未登録の Discord ユーザー（`discord:{id}`）として扱い、利用者に結び付けない。解除すると通知先 `dm` / `channel` は `web` に切り替える。
-7. **Discord なし構成の仕上げ**: `DISCORD_ENABLED`、Discord 前提画面の案内、setup.md・deployment.md、#234 のクローズ。
+7. **Discord なし構成の仕上げ**: Discord ゲートウェイは既存の `YUUKA_RUST_DISCORD`（既定は無効）で切り替えられるので、新しい設定（`DISCORD_ENABLED`）は足さない。起動ログの案内、Discord 前提の画面（Bot › Discord）での連携の案内、`OIDC_SCOPE` の既定を標準以外のプロバイダーでは `openid profile email` にする変更（`discord` scope を知らないプロバイダーに断られないように）、`docs/guide/setup.md` の「Discord を使わずに立てる（最小構成）」と `deployment.md` の追記。#234 を閉じる。
 
 1〜3 は機械的な置き換えが中心で差分は大きいが、挙動は変わらない。4 以降で初めて、利用者から見える変化が出る。
 
