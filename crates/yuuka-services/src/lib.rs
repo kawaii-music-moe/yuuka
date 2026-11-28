@@ -34,6 +34,7 @@ pub mod turn;
 mod birthday;
 mod clipboard;
 mod delivery;
+mod inbox;
 mod payment_recurrence;
 mod periodic_report;
 mod planned_payment;

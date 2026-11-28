@@ -72,6 +72,8 @@ pub(crate) async fn status(
 
     let notify_target = if snap.notify_target_type == "channel" && snap.notify_target_id.is_some() {
         json!({ "type": "channel", "id": snap.notify_target_id })
+    } else if snap.notify_target_type == "web" {
+        json!({ "type": "web" })
     } else {
         json!({ "type": "dm" })
     };

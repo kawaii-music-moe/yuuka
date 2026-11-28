@@ -132,10 +132,11 @@ pub(crate) async fn user_settings(
             patch.remind_minutes = Some(coerced.max(0.0).floor().max(0.0) as i64);
         }
         if let Some(v) = obj.get("notifyTargetType") {
-            patch.notify_type = if v.as_str() == Some("channel") {
-                Some("channel")
-            } else {
-                Some("dm")
+            patch.notify_type = match v.as_str() {
+                Some("channel") => Some("channel"),
+                // Web の受信箱（Discord を使わない利用者・docs/design/optional_discord.md §6.1）。
+                Some("web") => Some("web"),
+                _ => Some("dm"),
             };
         }
         if let Some(v) = obj.get("notifyTargetId") {
@@ -303,7 +304,7 @@ async fn reissue_cookie(
     Ok(build_session_cookie(state.config.https, &token, max_age))
 }
 
-fn json_ok(body: Value) -> Response {
+pub(crate) fn json_ok(body: Value) -> Response {
     (StatusCode::OK, Json(body)).into_response()
 }
 

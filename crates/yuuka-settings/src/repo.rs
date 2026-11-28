@@ -327,7 +327,7 @@ pub(crate) struct UserSettingsPatch {
     pub rich_reply: Option<bool>,
     /// リマインド既定（分・0 下限は呼び出し側で処理済み）。
     pub remind_minutes: Option<i64>,
-    /// 通知先種別（`"dm"`/`"channel"`・呼び出し側で正規化済み）。
+    /// 通知先種別（`"dm"`/`"channel"`/`"web"`・呼び出し側で正規化済み）。
     pub notify_type: Option<&'static str>,
     /// 通知先 ID（`Some(None)` は明示 NULL・`Some(Some(v))` は値・`None` は列を触らない）。
     pub notify_id: Option<Option<String>>,

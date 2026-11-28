@@ -315,8 +315,10 @@ pub async fn upsert_from_oidc(
             let role = if is_admin { Role::Admin } else { Role::User };
             let user_id = discord_id.clone().unwrap_or(new_id);
             tx.execute(
-                "INSERT INTO users (id, discord_id, discord_linked_at, username, salt, role, sk_account_id) \
-                 VALUES (?1, ?2, CASE WHEN ?2 IS NULL THEN NULL ELSE datetime('now','localtime') END, ?3, ?4, ?5, ?6)",
+                // Discord 未連携の利用者は、通知を Web の受信箱へ届ける（§6.1）。
+                "INSERT INTO users (id, discord_id, discord_linked_at, notify_target_type, username, salt, role, sk_account_id) \
+                 VALUES (?1, ?2, CASE WHEN ?2 IS NULL THEN NULL ELSE datetime('now','localtime') END, \
+                         CASE WHEN ?2 IS NULL THEN 'web' ELSE 'dm' END, ?3, ?4, ?5, ?6)",
                 params![user_id, discord_id, username, salt, role_text(role), subject],
             )
             .map_err(map_sqlite)?;

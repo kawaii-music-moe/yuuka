@@ -109,6 +109,9 @@ async fn advance_after_send(
 /// リマインドの送信先を解決する（現行 `resolveTarget`）。
 /// 保存済みの `dm` は DM。登録時にユーザー既定送信先を保存済みのため、ここでは既定送信先を見ない。
 fn resolve_target(reminder: &DueReminder) -> NotifyTarget {
+    if reminder.target_type.as_deref() == Some("web") {
+        return NotifyTarget::Web;
+    }
     if reminder.target_type.as_deref() == Some("channel") {
         match reminder.target_id.as_deref() {
             Some(id) if !id.is_empty() => NotifyTarget::Channel(id.to_owned()),
