@@ -80,7 +80,7 @@ pub async fn verify(
     }
 
     Ok(Some(SessionUser {
-        user_id: user_id,
+        user_id,
         username,
         role: parse_role(&role),
     }))
