@@ -51,7 +51,7 @@ struct FakeAuth;
 impl AuthBackend for FakeAuth {
     async fn session_user(&self, token: &str) -> Result<Option<SessionUser>, AuthError> {
         Ok([ALICE, BOB, GHOST].contains(&token).then(|| SessionUser {
-            discord_id: token.to_owned(),
+            user_id: token.to_owned(),
             username: token.to_owned(),
             role: Role::User,
         }))

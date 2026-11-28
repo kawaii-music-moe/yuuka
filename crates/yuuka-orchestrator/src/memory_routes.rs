@@ -103,7 +103,7 @@ mod tests {
 
     fn auth(uid: &str) -> Arc<FakeAuth> {
         Arc::new(FakeAuth(SessionUser {
-            discord_id: uid.to_owned(),
+            user_id: uid.to_owned(),
             username: uid.to_owned(),
             role: Role::User,
         }))

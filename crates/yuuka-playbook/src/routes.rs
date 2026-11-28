@@ -122,10 +122,7 @@ async fn list_schedules(
     user: AuthenticatedUser,
     State(db): State<Db>,
 ) -> Result<Json<Envelope<ScheduleListData>>, ApiError> {
-    let scope = UserScope::new(
-        UserId::new(user.0.discord_id.clone()),
-        BotId::system_default(),
-    );
+    let scope = UserScope::new(UserId::new(user.0.user_id.clone()), BotId::system_default());
     let schedules = PlaybookRepo::new(&db).list_schedules(&scope).await?;
     Ok(Json(Envelope::ok(ScheduleListData { schedules })))
 }

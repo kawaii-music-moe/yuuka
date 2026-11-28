@@ -1025,7 +1025,7 @@ async fn sessions_issued_before_oidc_are_no_longer_accepted() {
         .sessions
         .create(
             &SessionUser {
-                discord_id: "100".to_owned(),
+                user_id: "100".to_owned(),
                 username: "Alice".to_owned(),
                 role: Role::User,
             },

@@ -43,15 +43,9 @@ pub(crate) async fn default_bot_token(
     let enc = crypto
         .encrypt_text(token)
         .map_err(|_| ApiError(WebError::Internal))?;
-    repo::upsert_default_bot_token(&db, &admin.0.discord_id, &enc).await?;
-    yuuka_auth::audit::add_audit_log(
-        &db,
-        &admin.0.discord_id,
-        "admin.default_bot_token",
-        None,
-        None,
-    )
-    .await;
+    repo::upsert_default_bot_token(&db, &admin.0.user_id, &enc).await?;
+    yuuka_auth::audit::add_audit_log(&db, &admin.0.user_id, "admin.default_bot_token", None, None)
+        .await;
     // 2. デフォルト Bot 再起動（runtime シーム）。
     rt.bots.restart_default(token).await;
     Ok(ok_message("デフォルトBotのトークンを更新しました。"))
@@ -124,7 +118,7 @@ pub(crate) async fn users_role(
     State(db): State<Db>,
     Json(body): Json<RoleInput>,
 ) -> Result<Response, ApiError> {
-    let admin_id = admin.0.discord_id.as_str();
+    let admin_id = admin.0.user_id.as_str();
     let target = body.target_user_id.as_deref().unwrap_or_default();
     let role = body.role.as_deref().unwrap_or_default();
 
@@ -162,7 +156,7 @@ pub(crate) async fn users_delete(
     State(db): State<Db>,
     Json(body): Json<TargetUserInput>,
 ) -> Result<Response, ApiError> {
-    let admin_id = admin.0.discord_id.as_str();
+    let admin_id = admin.0.user_id.as_str();
     let target = body.target_user_id.as_deref().unwrap_or_default();
     if target.is_empty() {
         return Ok(bad_request("targetUserId が必要です。"));
@@ -233,7 +227,7 @@ pub(crate) async fn bots_suspend(
     }
     yuuka_auth::audit::add_audit_log(
         &db,
-        &admin.0.discord_id,
+        &admin.0.user_id,
         "admin.bot_suspend",
         Some(bot_id),
         None,
@@ -258,7 +252,7 @@ pub(crate) async fn bots_unsuspend(
     }
     yuuka_auth::audit::add_audit_log(
         &db,
-        &admin.0.discord_id,
+        &admin.0.user_id,
         "admin.bot_unsuspend",
         Some(bot_id),
         None,

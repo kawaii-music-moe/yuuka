@@ -1364,7 +1364,7 @@ async fn chat_attachment(
     let Ok(id) = id.parse::<i64>() else {
         return Err(ClientApiError::not_found("Not found"));
     };
-    let uid = user.0.discord_id.as_str();
+    let uid = user.0.user_id.as_str();
     let Some(att) = message_log::get_pwa_attachment_for_user(&db, id, uid).await? else {
         return Err(ClientApiError::not_found("Not found"));
     };

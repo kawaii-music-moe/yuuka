@@ -80,7 +80,7 @@ pub async fn verify(
     }
 
     Ok(Some(SessionUser {
-        discord_id: user_id,
+        user_id: user_id,
         username,
         role: parse_role(&role),
     }))
@@ -240,7 +240,7 @@ mod tests {
             .await
             .unwrap()
             .expect("user");
-        assert_eq!(user.discord_id, "123");
+        assert_eq!(user.user_id, "123");
         assert_eq!(user.username, "alice");
         assert_eq!(user.role, Role::Admin);
     }

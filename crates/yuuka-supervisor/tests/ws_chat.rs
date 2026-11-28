@@ -39,7 +39,7 @@ impl AuthBackend for FakeAuth {
     }
     async fn desktop_user(&self, t: &str) -> Result<Option<SessionUser>, AuthError> {
         Ok((t == "good").then(|| SessionUser {
-            discord_id: "u1".to_owned(),
+            user_id: "u1".to_owned(),
             username: "yuu".to_owned(),
             role: Role::User,
         }))
@@ -53,14 +53,14 @@ struct CookieAndBearerAuth;
 impl AuthBackend for CookieAndBearerAuth {
     async fn session_user(&self, t: &str) -> Result<Option<SessionUser>, AuthError> {
         Ok((t == "sess-ok").then(|| SessionUser {
-            discord_id: "u1".to_owned(),
+            user_id: "u1".to_owned(),
             username: "yuu".to_owned(),
             role: Role::User,
         }))
     }
     async fn desktop_user(&self, t: &str) -> Result<Option<SessionUser>, AuthError> {
         Ok((t == "good").then(|| SessionUser {
-            discord_id: "u1".to_owned(),
+            user_id: "u1".to_owned(),
             username: "yuu".to_owned(),
             role: Role::User,
         }))

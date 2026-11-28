@@ -30,7 +30,7 @@ async fn list_devices(
     State(db): State<Db>,
     headers: HeaderMap,
 ) -> Response {
-    let user_id = user.0.discord_id;
+    let user_id = user.0.user_id;
     // Bearer 認証時のみ「現在の端末」を判定できる（Cookie 経路では None）。
     let current_hash = bearer_token(&headers).map(|t| sha256_hex(&t));
     let tokens = match desktop::list_for_user(&db, &user_id).await {
@@ -61,7 +61,7 @@ async fn revoke_device(
     State(db): State<Db>,
     Json(body): Json<Value>,
 ) -> Response {
-    let user_id = user.0.discord_id;
+    let user_id = user.0.user_id;
     let Some(id) = parse_device_id(body.get("id")) else {
         return status_json(StatusCode::BAD_REQUEST, "端末IDが不正です。");
     };
@@ -141,7 +141,7 @@ mod tests {
     impl AuthBackend for FakeAuth {
         async fn session_user(&self, token: &str) -> Result<Option<SessionUser>, AuthError> {
             Ok((token == "good").then(|| SessionUser {
-                discord_id: "u".to_owned(),
+                user_id: "u".to_owned(),
                 username: "u".to_owned(),
                 role: Role::User,
             }))
@@ -149,7 +149,7 @@ mod tests {
         async fn desktop_user(&self, token: &str) -> Result<Option<SessionUser>, AuthError> {
             // Bearer 経路: "tok-a" のみ本人。
             Ok((token == "tok-a").then(|| SessionUser {
-                discord_id: "u".to_owned(),
+                user_id: "u".to_owned(),
                 username: "u".to_owned(),
                 role: Role::User,
             }))

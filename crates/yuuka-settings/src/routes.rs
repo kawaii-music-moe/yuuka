@@ -39,7 +39,7 @@ pub(crate) async fn profile(
     if username.is_empty() {
         return Ok(bad_request("有効なユーザーネームを指定してください。"));
     }
-    if !repo::update_username(&state.db, &user.0.discord_id, username).await? {
+    if !repo::update_username(&state.db, &user.0.user_id, username).await? {
         return Ok(bad_request(
             "プロファイルの更新に失敗しました。同じ名前が既に使われている可能性があります。",
         ));
@@ -49,7 +49,7 @@ pub(crate) async fn profile(
         rt.sessions.destroy(&token).await;
     }
     let su = SessionUser {
-        discord_id: user.0.discord_id.clone(),
+        user_id: user.0.user_id.clone(),
         username: username.to_owned(),
         role: user.0.role,
     };
@@ -67,7 +67,7 @@ pub(crate) async fn delete_account(
     Extension(rt): Extension<Arc<SettingsRuntime>>,
     State(state): State<AppState>,
 ) -> Result<Response, ApiError> {
-    let Some(u) = yuuka_auth::users::get_user_by_discord_id(&state.db, &user.0.discord_id).await?
+    let Some(u) = yuuka_auth::users::get_user_by_discord_id(&state.db, &user.0.user_id).await?
     else {
         return Ok(not_found("アカウントが見つかりません。"));
     };
@@ -78,16 +78,16 @@ pub(crate) async fn delete_account(
         ));
     }
     // 所有する起動中の独自 Bot を停止（system_default は対象外・runtime シーム）。
-    for bot_id in repo::bot_ids_owned_by(&state.db, &user.0.discord_id).await? {
+    for bot_id in repo::bot_ids_owned_by(&state.db, &user.0.user_id).await? {
         rt.bots.stop(&bot_id).await;
     }
-    if !repo::delete_user(&state.db, &user.0.discord_id).await? {
+    if !repo::delete_user(&state.db, &user.0.user_id).await? {
         return Ok(not_found("アカウントが見つかりません。"));
     }
-    rt.sessions.destroy_all_for_user(&user.0.discord_id).await;
+    rt.sessions.destroy_all_for_user(&user.0.user_id).await;
     yuuka_auth::audit::add_audit_log(
         &state.db,
-        &user.0.discord_id,
+        &user.0.user_id,
         "auth.account_delete",
         None,
         None,
@@ -105,7 +105,7 @@ pub(crate) async fn user_settings_get(
     user: AuthenticatedUser,
     State(state): State<AppState>,
 ) -> Result<Response, ApiError> {
-    let p = repo::user_preferences(&state.db, &user.0.discord_id).await?;
+    let p = repo::user_preferences(&state.db, &user.0.user_id).await?;
     Ok(json_ok(json!({
         "success": true,
         "richReplyEnabled": p.rich_reply_enabled,
@@ -151,7 +151,7 @@ pub(crate) async fn user_settings(
             }
         }
     }
-    repo::update_user_settings(&state.db, &user.0.discord_id, patch).await?;
+    repo::update_user_settings(&state.db, &user.0.user_id, patch).await?;
     Ok(ok_message("ユーザー設定を更新しました。"))
 }
 
@@ -162,7 +162,7 @@ pub(crate) async fn gemini_get(
     State(state): State<AppState>,
 ) -> Result<Response, ApiError> {
     use rusqlite::OptionalExtension;
-    let uid = user.0.discord_id;
+    let uid = user.0.user_id;
     // API キーは本体を返さず、登録済みか（hasApiKey）だけを返す。
     let (model, has_api_key) = state
         .db
@@ -226,11 +226,11 @@ pub(crate) async fn gemini(
         (encrypted, iv, tag) = (Some(enc.encrypted), Some(enc.iv), Some(enc.auth_tag));
     } else {
         // マスク or 空 → 既存のキーを維持する（3 列をそのまま書き戻す）。
-        (encrypted, iv, tag) = repo::get_gemini_enc(&state.db, &user.0.discord_id)
+        (encrypted, iv, tag) = repo::get_gemini_enc(&state.db, &user.0.user_id)
             .await?
             .unwrap_or((None, None, None));
     }
-    repo::set_gemini(&state.db, &user.0.discord_id, encrypted, iv, tag, model).await?;
+    repo::set_gemini(&state.db, &user.0.user_id, encrypted, iv, tag, model).await?;
     Ok(ok_message("Gemini 設定を更新しました。"))
 }
 
@@ -242,7 +242,7 @@ pub(crate) async fn backup_get(
     user: AuthenticatedUser,
     State(state): State<AppState>,
 ) -> Result<Response, ApiError> {
-    let p = repo::user_preferences(&state.db, &user.0.discord_id).await?;
+    let p = repo::user_preferences(&state.db, &user.0.user_id).await?;
     Ok(json_ok(json!({
         "success": true,
         "enabled": p.backup_enabled,
@@ -276,7 +276,7 @@ pub(crate) async fn backup(
     let generations = js_number_or(body.generations.as_ref(), 7.0);
     repo::update_backup(
         &state.db,
-        &user.0.discord_id,
+        &user.0.user_id,
         enabled,
         interval,
         generations,

@@ -20,7 +20,7 @@ use crate::state::AppState;
 /// Node の `{ success:true, user, privacyPolicyUrl, termsUrl }` に一致（`Envelope<MeData>`）。
 /// 未認証は extractor が 401、DB 障害は `ApiError`（BUSY=502 / その他 500）へ写像する。
 pub async fn me(user: AuthenticatedUser, State(state): State<AppState>) -> Response {
-    let discord_id = user.0.discord_id.clone();
+    let discord_id = user.0.user_id.clone();
 
     // Node は毎回 users を引き直す（セッション JSON のスナップショットを信頼しない）。
     let lookup_id = discord_id.clone();
@@ -56,7 +56,7 @@ pub async fn me(user: AuthenticatedUser, State(state): State<AppState>) -> Respo
     Json(Envelope::ok(MeData {
         // DB 最新値で返す（role は DB 権威・Node の `user.role || "user"` 相当）。
         user: SessionUser {
-            discord_id,
+            user_id: discord_id,
             username,
             role: parse_role(&role),
         },

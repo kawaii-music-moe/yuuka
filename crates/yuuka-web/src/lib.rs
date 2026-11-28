@@ -244,7 +244,7 @@ mod tests {
 
     fn session_user(role: Role) -> SessionUser {
         SessionUser {
-            discord_id: "123".to_owned(),
+            user_id: "123".to_owned(),
             username: "yuu".to_owned(),
             role,
         }

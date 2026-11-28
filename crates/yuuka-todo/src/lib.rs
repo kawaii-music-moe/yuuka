@@ -360,7 +360,7 @@ mod tests {
     async fn app_with_db() -> (axum::Router, Db) {
         let auth = Arc::new(FakeAuth {
             user: SessionUser {
-                discord_id: "u".to_owned(),
+                user_id: "u".to_owned(),
                 username: "u".to_owned(),
                 role: Role::User,
             },
@@ -522,7 +522,7 @@ mod tests {
     async fn route_rejects_missing_system_and_foreign_bot() {
         let auth = Arc::new(FakeAuth {
             user: SessionUser {
-                discord_id: "u".to_owned(),
+                user_id: "u".to_owned(),
                 username: "u".to_owned(),
                 role: Role::User,
             },

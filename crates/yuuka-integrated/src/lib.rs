@@ -173,7 +173,7 @@ mod tests {
     fn app_for(db: Db, user: &str) -> axum::Router {
         let auth = Arc::new(FakeAuth {
             user: SessionUser {
-                discord_id: user.to_owned(),
+                user_id: user.to_owned(),
                 username: user.to_owned(),
                 role: Role::User,
             },

@@ -67,7 +67,7 @@ async fn list_shares(
     State(db): State<Db>,
     Query(q): Query<BotIdQuery>,
 ) -> Response {
-    let uid = user.0.discord_id;
+    let uid = user.0.user_id;
     let Some(bot_id) = q.bot_id.filter(|s| !s.is_empty()) else {
         return bad_request("botId が必要です。");
     };
@@ -113,7 +113,7 @@ async fn invite(
     Extension(dm): Extension<Arc<dyn ShareInviteDm>>,
     Json(body): Json<Value>,
 ) -> Response {
-    let uid = user.0.discord_id;
+    let uid = user.0.user_id;
     let bot_id = str_field(&body, "botId");
     let target = str_field(&body, "targetUserId");
     if bot_id.is_empty() || target.is_empty() {
@@ -201,7 +201,7 @@ async fn revoke(
     State(db): State<Db>,
     Json(body): Json<Value>,
 ) -> Response {
-    let uid = user.0.discord_id;
+    let uid = user.0.user_id;
     let bot_id = str_field(&body, "botId");
     let target = str_field(&body, "targetUserId");
     if bot_id.is_empty() || target.is_empty() {
@@ -296,7 +296,7 @@ mod tests {
         async fn session_user(&self, token: &str) -> Result<Option<SessionUser>, AuthError> {
             let known = ["owner", "target", "admin", "other"];
             Ok(known.contains(&token).then(|| SessionUser {
-                discord_id: token.to_owned(),
+                user_id: token.to_owned(),
                 username: format!("{token}_name"),
                 role: if token == "admin" {
                     Role::Admin

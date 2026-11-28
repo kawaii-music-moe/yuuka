@@ -97,7 +97,7 @@ pub(crate) async fn list(
     Extension(rt): Extension<Arc<McpRuntime>>,
     State(state): State<AppState>,
 ) -> Result<Response, ApiError> {
-    let uid = &user.0.discord_id;
+    let uid = &user.0.user_id;
     let admin = repo::is_admin(&state.db, uid).await?;
     let own = repo::list_servers_for_owner(&state.db, uid).await?;
     let system = repo::list_system_servers(&state.db).await?;
@@ -176,7 +176,7 @@ pub(crate) async fn add(
     }
     // Node の SSRF assertSafeOutboundUrl は外部シーム（本 crate では未検証・実クライアント側で行う）。
     // ここでは Node のもう 1 つの入口検証（system かつ非 admin）を先に効かせる。
-    let admin = repo::is_admin(&state.db, &user.0.discord_id).await?;
+    let admin = repo::is_admin(&state.db, &user.0.user_id).await?;
     if is_system && !admin {
         return Ok(err_json(
             StatusCode::FORBIDDEN,
@@ -202,7 +202,7 @@ pub(crate) async fn add(
     let owner = if is_system {
         None
     } else {
-        Some(user.0.discord_id.clone())
+        Some(user.0.user_id.clone())
     };
     let server = repo::add_server(
         &state.db,
@@ -217,7 +217,7 @@ pub(crate) async fn add(
     if is_system {
         yuuka_auth::audit::add_audit_log(
             &state.db,
-            &user.0.discord_id,
+            &user.0.user_id,
             "admin.mcp_add",
             Some(&name),
             Some(&endpoint_url),
@@ -266,9 +266,9 @@ pub(crate) async fn refresh(
             "MCPサーバーが見つかりません。",
         ));
     };
-    let admin = repo::is_admin(&state.db, &user.0.discord_id).await?;
+    let admin = repo::is_admin(&state.db, &user.0.user_id).await?;
     let server = repo::get_server_by_id(&state.db, id).await?;
-    let Some(server) = server.filter(|s| repo::can_manage(s, &user.0.discord_id, admin)) else {
+    let Some(server) = server.filter(|s| repo::can_manage(s, &user.0.user_id, admin)) else {
         return Ok(err_json(
             StatusCode::NOT_FOUND,
             "MCPサーバーが見つかりません。",
@@ -315,9 +315,9 @@ pub(crate) async fn toggle(
     };
     // Node `ctx.body.enabled === true`（真偽値 true のみ enabled）。
     let enabled = body.get("enabled") == Some(&Value::Bool(true));
-    let admin = repo::is_admin(&state.db, &user.0.discord_id).await?;
+    let admin = repo::is_admin(&state.db, &user.0.user_id).await?;
     let server = repo::get_server_by_id(&state.db, id).await?;
-    let Some(_server) = server.filter(|s| repo::can_manage(s, &user.0.discord_id, admin)) else {
+    let Some(_server) = server.filter(|s| repo::can_manage(s, &user.0.user_id, admin)) else {
         return Ok(err_json(
             StatusCode::NOT_FOUND,
             "MCPサーバーが見つかりません。",
@@ -351,16 +351,16 @@ pub(crate) async fn delete(
         return Ok(err_json(StatusCode::BAD_REQUEST, "id は必須です。"));
     };
     // 削除前に行を引いておく（system 登録なら監査に name が要る・Node と同順）。
-    let admin = repo::is_admin(&state.db, &user.0.discord_id).await?;
+    let admin = repo::is_admin(&state.db, &user.0.user_id).await?;
     let server = repo::get_server_by_id(&state.db, id).await?;
-    let ok = repo::delete_server(&state.db, id, &user.0.discord_id, admin).await?;
+    let ok = repo::delete_server(&state.db, id, &user.0.user_id, admin).await?;
     if ok {
         rt.client.forget(id).await;
         if let Some(s) = &server {
             if s.user_id.is_none() {
                 yuuka_auth::audit::add_audit_log(
                     &state.db,
-                    &user.0.discord_id,
+                    &user.0.user_id,
                     "admin.mcp_delete",
                     Some(&s.name),
                     None,
@@ -392,9 +392,9 @@ async fn resolve_manageable(
     let Some(id) = id_str.trim().parse::<i64>().ok() else {
         return Ok(None);
     };
-    let admin = repo::is_admin(&state.db, &user.0.discord_id).await?;
+    let admin = repo::is_admin(&state.db, &user.0.user_id).await?;
     let server = repo::get_server_by_id(&state.db, id).await?;
-    Ok(server.filter(|s| repo::can_manage(s, &user.0.discord_id, admin)))
+    Ok(server.filter(|s| repo::can_manage(s, &user.0.user_id, admin)))
 }
 
 fn not_found() -> Response {
@@ -436,7 +436,7 @@ pub(crate) async fn oauth_start(
     let client_id = Some(trimmed_string(body.get("clientId"))).filter(|s| !s.is_empty());
     let client_secret = Some(trimmed_string(body.get("clientSecret"))).filter(|s| !s.is_empty());
     let start = AuthorizationStart {
-        user_id: user.0.discord_id.clone(),
+        user_id: user.0.user_id.clone(),
         redirect_uri: format!("{origin}{}", oauth::CALLBACK_PATH),
         // Client ID Metadata Document は HTTPS で公開しているときだけ使える（SEP-991）。
         client_metadata_url: origin
@@ -490,7 +490,7 @@ pub(crate) async fn oauth_callback(
         code: code.clone(),
         state: csrf_state.clone(),
         issuer: q.get("iss").cloned(),
-        user_id: user.0.discord_id.clone(),
+        user_id: user.0.user_id.clone(),
     };
     let server_id = match rt.client.complete_authorization(callback).await {
         Ok(id) => id,
@@ -832,7 +832,7 @@ mod tests {
                     _ => None,
                 };
                 Ok(user.map(|(id, role)| SessionUser {
-                    discord_id: id.to_owned(),
+                    user_id: id.to_owned(),
                     username: id.to_owned(),
                     role,
                 }))

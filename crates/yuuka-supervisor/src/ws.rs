@@ -107,7 +107,7 @@ async fn ws_upgrade(
             return (StatusCode::FORBIDDEN, "forbidden").into_response();
         }
         Some(b) => b,
-        None => match list_bot_infos(&state.db, user.0.discord_id.as_str())
+        None => match list_bot_infos(&state.db, user.0.user_id.as_str())
             .await
             .into_iter()
             .next()
@@ -116,7 +116,7 @@ async fn ws_upgrade(
             None => return (StatusCode::FORBIDDEN, "no bot").into_response(),
         },
     };
-    match has_bot_access(&state.db, user.0.discord_id.as_str(), &bot_id).await {
+    match has_bot_access(&state.db, user.0.user_id.as_str(), &bot_id).await {
         Ok(true) => {}
         Ok(false) => return (StatusCode::FORBIDDEN, "forbidden").into_response(),
         Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, "internal").into_response(),
@@ -257,7 +257,7 @@ async fn handle_socket(
     });
 
     // ready: 束縛 Bot・アクセス可能 Bot 一覧・添付上限を最初に配布する。
-    let bots = list_bot_infos(&db, user.discord_id.as_str()).await;
+    let bots = list_bot_infos(&db, user.user_id.as_str()).await;
     let bound = bots
         .iter()
         .find(|b| b.id == bot_id)
@@ -403,7 +403,7 @@ async fn handle_text(
             }
         }
         ClientFrame::Reset => {
-            if let Err(e) = engine.reset_context(user.discord_id.as_str(), bot_id).await {
+            if let Err(e) = engine.reset_context(user.user_id.as_str(), bot_id).await {
                 tracing::warn!(error = %e, "ws reset のコンテキストクリアに失敗");
             }
         }
@@ -441,7 +441,7 @@ async fn process_msg(
 ) {
     let tx = &output.tx;
     // Gemini キー事前チェック（Node は processMessage 前に error/no_gemini_key を返す）。
-    if !engine.user_has_gemini_key(user.discord_id.as_str()).await {
+    if !engine.user_has_gemini_key(user.user_id.as_str()).await {
         let _ = tx.send(json_msg(&err_frame(
             "no_gemini_key",
             "Gemini APIキーが未設定です。管理画面から設定してください。",
@@ -459,7 +459,7 @@ async fn process_msg(
     };
     let status = status_sink(tx.clone());
     let bot = yuuka_core::BotId::new(bot_id.to_owned());
-    let uid = yuuka_core::UserId::new(user.discord_id.clone());
+    let uid = yuuka_core::UserId::new(user.user_id.clone());
 
     let delivery = Arc::new(WsDelivery {
         output: output.clone(),
@@ -699,7 +699,7 @@ async fn process_interaction(
             action,
             id,
             extra,
-            &yuuka_core::UserId::new(user.discord_id.clone()),
+            &yuuka_core::UserId::new(user.user_id.clone()),
             Some(user.username.clone()),
             None,
         )
@@ -907,7 +907,7 @@ mod tests {
     #[test]
     fn ready_frame_shape_matches_desktop_contract() {
         let user = SessionUser {
-            discord_id: "u1".to_owned(),
+            user_id: "u1".to_owned(),
             username: "yuu".to_owned(),
             role: Role::User,
         };

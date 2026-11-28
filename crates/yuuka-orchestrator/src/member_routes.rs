@@ -82,7 +82,7 @@ async fn submit(
     Extension(dm): Extension<Arc<dyn MemberDmSender>>,
     Json(body): Json<Value>,
 ) -> Response {
-    let applicant = user.0.discord_id;
+    let applicant = user.0.user_id;
     let bot_id = body.get("botId").and_then(Value::as_str).unwrap_or("");
     let guild_id = body
         .get("guildId")
@@ -159,7 +159,7 @@ async fn submit(
 // ─── GET /api/bots/member-requests/mine（自分の申請） ────────────────────────
 
 async fn list_mine(user: AuthenticatedUser, State(db): State<Db>) -> Response {
-    let uid = user.0.discord_id;
+    let uid = user.0.user_id;
     let requests = match bot_repo::list_member_requests_by_user(&db, &uid).await {
         Ok(r) => r,
         Err(_) => return server_error(),
@@ -188,7 +188,7 @@ async fn list_for_owner(
     State(db): State<Db>,
     Query(q): Query<OwnerListQuery>,
 ) -> Response {
-    let uid = user.0.discord_id;
+    let uid = user.0.user_id;
     let status = match q.status.as_deref() {
         Some(s @ ("pending" | "approved" | "rejected")) => Some(s.to_owned()),
         _ => None,
@@ -249,7 +249,7 @@ async fn decide(
     Path(id_str): Path<String>,
     Json(body): Json<Value>,
 ) -> Response {
-    let actor = user.0.discord_id;
+    let actor = user.0.user_id;
     let Some(id) = parse_int(&id_str) else {
         return status_json(StatusCode::BAD_REQUEST, "申請IDが不正です。");
     };
@@ -381,7 +381,7 @@ mod tests {
         async fn session_user(&self, token: &str) -> Result<Option<SessionUser>, AuthError> {
             let known = ["u", "owner", "admin", "other"];
             Ok(known.contains(&token).then(|| SessionUser {
-                discord_id: token.to_owned(),
+                user_id: token.to_owned(),
                 username: token.to_owned(),
                 role: if token == "admin" {
                     Role::Admin

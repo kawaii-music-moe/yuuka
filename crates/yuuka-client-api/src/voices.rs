@@ -140,7 +140,7 @@ async fn list(
     user: AuthenticatedUser,
     State(db): State<Db>,
 ) -> Result<Json<Vec<VoiceView>>, ClientApiError> {
-    let uid = user.0.discord_id.clone();
+    let uid = user.0.user_id.clone();
     let voices = db
         .read
         .read(move |conn| {
@@ -162,7 +162,7 @@ async fn create(
     Json(input): Json<VoiceCreateInput>,
 ) -> Result<Response, ClientApiError> {
     let voice = validate(input)?;
-    let uid = user.0.discord_id.clone();
+    let uid = user.0.user_id.clone();
     let inserted = db
         .writer
         .transaction(move |tx| {
@@ -245,7 +245,7 @@ async fn update(
         .as_deref()
         .map(|c| trimmed(c, CAPTION_MAX_CHARS, "話し方の指定"))
         .transpose()?;
-    let uid = user.0.discord_id.clone();
+    let uid = user.0.user_id.clone();
     let updated = db
         .writer
         .transaction(move |tx| {
@@ -280,7 +280,7 @@ async fn remove(
     Path(id): Path<String>,
 ) -> Result<StatusCode, ClientApiError> {
     let id = parse_id(&id)?;
-    let uid = user.0.discord_id.clone();
+    let uid = user.0.user_id.clone();
     let deleted = db
         .writer
         .execute(move |conn| {
@@ -303,7 +303,7 @@ async fn state(
     Path(id): Path<String>,
 ) -> Result<Response, ClientApiError> {
     let id = parse_id(&id)?;
-    let uid = user.0.discord_id.clone();
+    let uid = user.0.user_id.clone();
     let bytes: Option<Vec<u8>> = db
         .read
         .read(move |conn| {

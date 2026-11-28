@@ -158,7 +158,7 @@ async fn list(
         Err(e) => return e.into_response(),
     };
     let endpoints =
-        match repo::list_endpoints(&state.db, &user.0.discord_id, scope.bot_id().as_str()).await {
+        match repo::list_endpoints(&state.db, &user.0.user_id, scope.bot_id().as_str()).await {
             Ok(e) => e,
             Err(_) => return server_error(),
         };
@@ -215,17 +215,13 @@ async fn create(
         create_todo: bool_field(&body, "createTodo"),
         create_reminder: bool_field(&body, "createReminder"),
     };
-    let endpoint = match repo::create_endpoint(
-        &state.db,
-        &user.0.discord_id,
-        scope.bot_id().as_str(),
-        input,
-    )
-    .await
-    {
-        Ok(e) => e,
-        Err(_) => return server_error(),
-    };
+    let endpoint =
+        match repo::create_endpoint(&state.db, &user.0.user_id, scope.bot_id().as_str(), input)
+            .await
+        {
+            Ok(e) => e,
+            Err(_) => return server_error(),
+        };
     let base = state.config.base_url.as_deref();
     (
         StatusCode::OK,
@@ -288,7 +284,7 @@ async fn update(
         enabled: body.get("enabled").map(|_| bool_field(&body, "enabled")),
     };
 
-    let ok = match repo::update_endpoint(&state.db, &user.0.discord_id, id, patch).await {
+    let ok = match repo::update_endpoint(&state.db, &user.0.user_id, id, patch).await {
         Ok(v) => v,
         Err(_) => return server_error(),
     };
@@ -296,7 +292,7 @@ async fn update(
     let mut payload = serde_json::Map::new();
     payload.insert("success".to_owned(), json!(ok));
     if ok {
-        if let Ok(Some(fresh)) = repo::get_endpoint(&state.db, &user.0.discord_id, id).await {
+        if let Ok(Some(fresh)) = repo::get_endpoint(&state.db, &user.0.user_id, id).await {
             payload.insert("endpoint".to_owned(), endpoint_view(&fresh, base));
         }
     }
@@ -321,7 +317,7 @@ async fn delete(
     let Some(id) = int_field(&body, "id") else {
         return bad_request("id は必須です。");
     };
-    let ok = match repo::delete_endpoint(&state.db, &user.0.discord_id, id).await {
+    let ok = match repo::delete_endpoint(&state.db, &user.0.user_id, id).await {
         Ok(v) => v,
         Err(_) => return server_error(),
     };
@@ -358,7 +354,7 @@ async fn deliveries(
     };
     let list = match repo::list_deliveries(
         &state.db,
-        &user.0.discord_id,
+        &user.0.user_id,
         scope.bot_id().as_str(),
         endpoint_id,
         50,
@@ -508,7 +504,7 @@ mod tests {
     impl AuthBackend for FakeAuth {
         async fn session_user(&self, token: &str) -> Result<Option<SessionUser>, AuthError> {
             Ok((token == "good").then(|| SessionUser {
-                discord_id: "u".to_owned(),
+                user_id: "u".to_owned(),
                 username: "u".to_owned(),
                 role: Role::User,
             }))
