@@ -101,7 +101,9 @@ const SECRET_COLUMNS: &[(&str, &[&str])] = &[
 /// 既存ユーザー（新環境で登録済み）に旧環境から引き継がない列。セットアップで入れ直した値
 /// （表示名・認証・権限・モデル）と行の識別子。
 const USER_KEEP_COLUMNS: &[&str] = &[
+    "id",
     "discord_id",
+    "discord_linked_at",
     "username",
     "sk_account_id",
     "salt",
@@ -306,11 +308,14 @@ fn preflight(source: &Connection, tx: &Transaction<'_>, owner: &str) -> Result<(
                 e => Err(sql(e)),
             })
     };
-    let user_sql = "SELECT 1 FROM users WHERE discord_id = ?1";
-    if !exists(source, user_sql, owner)? {
+    let source_user_sql = format!(
+        "SELECT 1 FROM users WHERE {} = ?1",
+        user_key_column(source)?
+    );
+    if !exists(source, &source_user_sql, owner)? {
         return Err(format!("旧スナップショットにユーザー {owner} がいません。"));
     }
-    if !exists(tx, user_sql, owner)? {
+    if !exists(tx, "SELECT 1 FROM users WHERE id = ?1", owner)? {
         return Err(format!(
             "新 DB にユーザー {owner} がいません。初期セットアップで同じ Discord ID の管理者を登録してください。"
         ));
@@ -393,11 +398,18 @@ fn import_users(
     let columns = common_columns(source, tx, "users")?;
     let secrets = secret_columns("users");
     let rows = read_rows(source, "users", &columns)?;
-    let existing: HashSet<String> = query_strings(tx, "SELECT discord_id FROM users")?
+    let existing: HashSet<String> = query_strings(tx, "SELECT id FROM users")?
         .into_iter()
         .collect();
     let tally = report.tables.entry("users".to_owned()).or_default();
-    let id_index = index_of(&columns, "discord_id")?;
+    // V39 より前のスナップショットは主キーが discord_id。新環境では同じ値を id と discord_id の両方に入れる。
+    let source_key = user_key_column(source)?;
+    let legacy = source_key == LEGACY_USER_KEY;
+    let id_index = index_of(&columns, source_key)?;
+    let mut insert_columns = columns.clone();
+    if legacy {
+        insert_columns.push("id".to_owned());
+    }
     for mut row in rows {
         let id = as_text(row.get(id_index)).unwrap_or_default();
         tally.secrets_cleared += clear_secrets(&columns, &mut row, secrets);
@@ -418,15 +430,15 @@ fn import_users(
             let mut values: Vec<Value> = updates.into_iter().map(|(_, v)| v).collect();
             values.push(Value::Text(id));
             tx.execute(
-                &format!(
-                    "UPDATE users SET {set} WHERE discord_id = ?{}",
-                    values.len()
-                ),
+                &format!("UPDATE users SET {set} WHERE id = ?{}", values.len()),
                 params_from_iter(values),
             )
             .map_err(|e| format!("users の更新に失敗: {e}"))?;
         } else {
-            insert_row(tx, "users", &columns, row)?;
+            if legacy {
+                row.push(Value::Text(id));
+            }
+            insert_row(tx, "users", &insert_columns, row)?;
         }
         tally.copied += 1;
     }
@@ -631,6 +643,18 @@ fn read_rows(
         })
         .map_err(sql)?;
     rows.collect::<Result<Vec<_>, _>>().map_err(sql)
+}
+
+/// V39 より前の `users` の主キー列名。
+const LEGACY_USER_KEY: &str = "discord_id";
+
+/// `users` の主キー列名。V39 以降は `id`、それより前のスナップショットは `discord_id`。
+fn user_key_column(conn: &Connection) -> Result<&'static str, String> {
+    if column_names(conn, "users")?.iter().any(|c| c == "id") {
+        Ok("id")
+    } else {
+        Ok(LEGACY_USER_KEY)
+    }
 }
 
 /// 両方の DB にある列（旧環境の列順）。スキーマが変わっても共通の列だけ移す。

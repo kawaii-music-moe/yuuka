@@ -193,7 +193,7 @@ async fn exchange_and_login(
         Err(e) => return ApiError::from(e).into_response(),
     };
     let user = SessionUser {
-        discord_id: identity.discord_id,
+        user_id: identity.discord_id,
         username: identity.display_name,
         role,
     };
@@ -280,7 +280,7 @@ async fn logout(
 }
 
 async fn users_route(user: AuthenticatedUser, State(state): State<AppState>) -> Response {
-    match users::get_user_by_discord_id(&state.db, &user.0.discord_id).await {
+    match users::get_user_by_discord_id(&state.db, &user.0.user_id).await {
         Ok(Some(found)) => Json(json!({
             "success": true,
             "user": { "discordId": found.discord_id, "username": found.username, "role": found.role }

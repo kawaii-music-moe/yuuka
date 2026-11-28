@@ -97,7 +97,7 @@ async fn list_bots(
     Extension(rt): Extension<Arc<dyn BotViewRuntime>>,
     Extension(ViewCrypto(crypto)): Extension<ViewCrypto>,
 ) -> Response {
-    let bots = match bot_repo::list_bots_for_user(&db, &user.0.discord_id).await {
+    let bots = match bot_repo::list_bots_for_user(&db, &user.0.user_id).await {
         Ok(b) => b,
         Err(_) => return server_error(),
     };
@@ -125,7 +125,7 @@ async fn create_bot(
     Extension(ViewCrypto(crypto)): Extension<ViewCrypto>,
     Json(body): Json<Value>,
 ) -> Response {
-    let uid = user.0.discord_id;
+    let uid = user.0.user_id;
     let name = str_field(&body, "name");
     if name.is_empty() {
         return bad_request("Botの名前は必須です。");
@@ -199,7 +199,7 @@ async fn delete_bot(
     Query(q): Query<DeleteBotQuery>,
     body: Option<Json<Value>>,
 ) -> Response {
-    let uid = user.0.discord_id;
+    let uid = user.0.user_id;
     // botId は body 優先・無ければ query（Content-Type 無しの DELETE を 415 にしない）。
     let bot_id = body
         .map(|Json(b)| str_field(&b, "botId"))
@@ -242,7 +242,7 @@ async fn update_profile(
     Extension(live): Extension<Arc<dyn DiscordLive>>,
     Json(body): Json<Value>,
 ) -> Response {
-    let uid = user.0.discord_id;
+    let uid = user.0.user_id;
     let bot_id = str_field(&body, "botId");
     if bot_id.is_empty() {
         return bad_request("botId が必要です。");
@@ -329,7 +329,7 @@ async fn sync_discord(
     Extension(live): Extension<Arc<dyn DiscordLive>>,
     Json(body): Json<Value>,
 ) -> Response {
-    let uid = user.0.discord_id;
+    let uid = user.0.user_id;
     let bot_id = str_field(&body, "botId");
     if bot_id.is_empty() {
         return bad_request("botId が必要です。");
@@ -537,7 +537,7 @@ mod tests {
         async fn session_user(&self, token: &str) -> Result<Option<SessionUser>, AuthError> {
             let known = ["owner", "other"];
             Ok(known.contains(&token).then(|| SessionUser {
-                discord_id: token.to_owned(),
+                user_id: token.to_owned(),
                 username: token.to_owned(),
                 role: Role::User,
             }))
@@ -563,7 +563,7 @@ mod tests {
             let conn = rusqlite::Connection::open(&path).expect("seed conn");
             for uid in ["owner", "other"] {
                 conn.execute(
-                    "INSERT OR IGNORE INTO users (discord_id, username, salt) \
+                    "INSERT OR IGNORE INTO users (id, username, salt) \
                      VALUES (?1, ?1, 'x')",
                     rusqlite::params![uid],
                 )

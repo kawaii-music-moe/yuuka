@@ -159,7 +159,7 @@ mod tests {
     ) -> axum::Router {
         let auth = Arc::new(FakeAuth {
             user: SessionUser {
-                discord_id: "u".to_owned(),
+                user_id: "u".to_owned(),
                 username: "u".to_owned(),
                 role: Role::User,
             },
@@ -378,7 +378,7 @@ mod tests {
         {
             let conn = rusqlite::Connection::open(&path).unwrap();
             conn.execute(
-                "INSERT OR IGNORE INTO users (discord_id, username, salt) \
+                "INSERT OR IGNORE INTO users (id, username, salt) \
                  VALUES ('u','u',?1)",
                 params![salt],
             )

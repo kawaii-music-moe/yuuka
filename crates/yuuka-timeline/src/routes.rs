@@ -277,13 +277,13 @@ async fn media_serve(
         return not_found();
     };
     let Ok(Some((bot_id, stored))) = TimelineRepo::new(&state.db)
-        .owned_media(&user.0.discord_id, &filename)
+        .owned_media(&user.0.user_id, &filename)
         .await
     else {
         return not_found();
     };
     if bot_id == yuuka_core::BotId::SYSTEM_DEFAULT
-        || !yuuka_web::has_bot_access(&state.db, &user.0.discord_id, &bot_id)
+        || !yuuka_web::has_bot_access(&state.db, &user.0.user_id, &bot_id)
             .await
             .unwrap_or(false)
     {

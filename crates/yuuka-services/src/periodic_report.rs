@@ -165,7 +165,7 @@ mod tests {
         db.writer
             .execute(move |conn| {
                 conn.execute(
-                    "INSERT INTO users (discord_id, username, salt) VALUES ('u', 'u', 'x')",
+                    "INSERT INTO users (id, username, salt) VALUES ('u', 'u', 'x')",
                     [],
                 )
                 .map_err(map_sqlite)?;

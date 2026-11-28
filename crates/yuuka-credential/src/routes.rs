@@ -139,7 +139,7 @@ async fn register(
         return Err(ApiError(WebError::Validation(msg)));
     }
 
-    let user_id = user.0.discord_id.clone();
+    let user_id = user.0.user_id.clone();
     let repo = CredentialRepo::new(&db);
     // ユーザー鍵導出ソルト（未登録ユーザーはパスワードマネージャを利用できない・Node `requireUserSalt`）。
     let Some(salt) = repo.user_salt(&user_id).await? else {

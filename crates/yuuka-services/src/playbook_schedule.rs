@@ -243,7 +243,7 @@ mod tests {
         let db = Db::open(&path).expect("open db");
         let conn = rusqlite::Connection::open(&path).expect("seed conn");
         conn.execute(
-            "INSERT INTO users (discord_id, username, salt) VALUES ('u','u','x')",
+            "INSERT INTO users (id, username, salt) VALUES ('u','u','x')",
             [],
         )
         .unwrap();

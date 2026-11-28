@@ -477,7 +477,7 @@ fn clears_state_cookie(response: &axum::response::Response) -> bool {
 fn user_row(path: &PathBuf, discord_id: &str) -> Option<(Option<String>, String, String)> {
     let conn = rusqlite::Connection::open(path).expect("open");
     conn.query_row(
-        "SELECT sk_account_id, username, role FROM users WHERE discord_id = ?1",
+        "SELECT sk_account_id, username, role FROM users WHERE id = ?1",
         [discord_id],
         |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
     )
@@ -487,7 +487,7 @@ fn user_row(path: &PathBuf, discord_id: &str) -> Option<(Option<String>, String,
 fn seed_user(path: &PathBuf, discord_id: &str, role: &str, sk_account_id: Option<&str>) {
     let conn = rusqlite::Connection::open(path).expect("open");
     conn.execute(
-        "INSERT INTO users (discord_id, username, salt, role, sk_account_id) \
+        "INSERT INTO users (id, username, salt, role, sk_account_id) \
          VALUES (?1, 'old-name', '00ff', ?2, ?3)",
         rusqlite::params![discord_id, role, sk_account_id],
     )
@@ -1025,7 +1025,7 @@ async fn sessions_issued_before_oidc_are_no_longer_accepted() {
         .sessions
         .create(
             &SessionUser {
-                discord_id: "100".to_owned(),
+                user_id: "100".to_owned(),
                 username: "Alice".to_owned(),
                 role: Role::User,
             },

@@ -114,11 +114,11 @@ pub async fn resolve_scope(
         .map(str::trim)
         .filter(|b| !b.is_empty() && *b != BotId::SYSTEM_DEFAULT)
         .ok_or(ScopeError::BotRequired)?;
-    let owner = bot_owner_if_accessible(db, user.discord_id.as_str(), requested)
+    let owner = bot_owner_if_accessible(db, user.user_id.as_str(), requested)
         .await?
         .ok_or(ScopeError::BotNotFound)?;
     Ok(UserScope::with_owner(
-        UserId::new(user.discord_id.clone()),
+        UserId::new(user.user_id.clone()),
         BotId::new(requested),
         UserId::new(owner),
     ))
@@ -159,7 +159,7 @@ mod tests {
 
     fn user(id: &str) -> SessionUser {
         SessionUser {
-            discord_id: id.to_owned(),
+            user_id: id.to_owned(),
             username: id.to_owned(),
             role: Role::User,
         }

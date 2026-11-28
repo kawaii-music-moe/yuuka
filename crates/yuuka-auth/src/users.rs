@@ -52,7 +52,7 @@ pub async fn get_user_by_discord_id(
     db.read
         .read(move |conn| {
             conn.query_row(
-                "SELECT discord_id, username, role FROM users WHERE discord_id = ?1",
+                "SELECT id, username, role FROM users WHERE id = ?1",
                 params![id],
                 |r| {
                     Ok(AuthUser {
@@ -80,7 +80,7 @@ pub async fn discord_id_by_sk_account(
     db.read
         .read(move |conn| {
             conn.query_row(
-                "SELECT discord_id FROM users WHERE sk_account_id = ?1",
+                "SELECT id FROM users WHERE sk_account_id = ?1",
                 params![id],
                 |r| r.get(0),
             )
@@ -119,7 +119,7 @@ pub async fn upsert_from_sk_account(
         .transaction(move |tx| {
             let linked: Option<(String, String)> = tx
                 .query_row(
-                    "SELECT discord_id, role FROM users WHERE sk_account_id = ?1",
+                    "SELECT id, role FROM users WHERE sk_account_id = ?1",
                     params![sk_account_id],
                     |r| Ok((r.get(0)?, r.get(1)?)),
                 )
@@ -132,7 +132,7 @@ pub async fn upsert_from_sk_account(
                     ));
                 }
                 tx.execute(
-                    "UPDATE users SET username = ?1, updated_at = datetime('now','localtime') WHERE discord_id = ?2",
+                    "UPDATE users SET username = ?1, updated_at = datetime('now','localtime') WHERE id = ?2",
                     params![username, discord_id],
                 )
                 .map_err(map_sqlite)?;
@@ -141,7 +141,7 @@ pub async fn upsert_from_sk_account(
 
             let existing: Option<(String, Option<String>)> = tx
                 .query_row(
-                    "SELECT role, sk_account_id FROM users WHERE discord_id = ?1",
+                    "SELECT role, sk_account_id FROM users WHERE id = ?1",
                     params![discord_id],
                     |r| Ok((r.get(0)?, r.get(1)?)),
                 )
@@ -155,7 +155,7 @@ pub async fn upsert_from_sk_account(
                     ));
                 }
                 tx.execute(
-                    "UPDATE users SET sk_account_id = ?1, username = ?2, updated_at = datetime('now','localtime') WHERE discord_id = ?3",
+                    "UPDATE users SET sk_account_id = ?1, username = ?2, updated_at = datetime('now','localtime') WHERE id = ?3",
                     params![sk_account_id, username, discord_id],
                 )
                 .map_err(map_sqlite)?;
@@ -168,7 +168,10 @@ pub async fn upsert_from_sk_account(
                 Role::User
             };
             tx.execute(
-                "INSERT INTO users (discord_id, username, salt, role, sk_account_id) VALUES (?1, ?2, ?3, ?4, ?5)",
+                // 利用者 ID は今のところ Discord ID と同じ値にし、Discord 連携済みとして記録する
+                // （docs/design/optional_discord.md §8-2。新規 ID の UUIDv7 化は §8-4 で行う）。
+                "INSERT INTO users (id, discord_id, username, salt, role, sk_account_id) \
+                 VALUES (?1, ?1, ?2, ?3, ?4, ?5)",
                 params![discord_id, username, salt, role_text(role), sk_account_id],
             )
             .map_err(map_sqlite)?;
