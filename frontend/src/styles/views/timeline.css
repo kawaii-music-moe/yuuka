@@ -1,0 +1,202 @@
+/* デイリータイムライン。 */
+
+/* ─── デイリータイムライン ──────────────────────────────────────────────────── */
+.tl-header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	flex-wrap: wrap;
+	gap: 12px;
+	padding: 12px 16px;
+	margin-bottom: 12px;
+}
+.tl-date-nav {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+.tl-date-label {
+	font-size: 1.05rem;
+	font-weight: 600;
+	min-width: 160px;
+	text-align: center;
+}
+.tl-header-actions {
+	display: flex;
+	gap: 8px;
+}
+.tl-body {
+	display: grid;
+	grid-template-columns: 1fr 1fr;
+	gap: 12px;
+}
+@media (max-width: 700px) {
+	.tl-body {
+		grid-template-columns: 1fr;
+	}
+}
+.tl-col {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+.tl-col-header {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	font-size: 0.8rem;
+	font-weight: 600;
+	text-transform: uppercase;
+	letter-spacing: 0.06em;
+	color: var(--color-zinc-muted);
+	padding: 0 4px 4px;
+	border-bottom: 1px solid var(--border-divider);
+}
+.tl-col-header .material-symbols-outlined {
+	font-size: 1rem;
+}
+.tl-list {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+
+/* 計画ブロックカード */
+.tl-plan-card {
+	background: var(--bg-card);
+	border: 1px solid var(--border-divider);
+	border-left: 3px solid var(--color-primary);
+	border-radius: var(--radius);
+	padding: 10px 12px;
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	position: relative;
+}
+.tl-plan-card[data-type="transit"] {
+	border-left-color: var(--color-amber, #f59e0b);
+}
+.tl-plan-card[data-type="task"] {
+	border-left-color: var(--color-green, #22c55e);
+}
+.tl-plan-card[data-type="free"] {
+	border-left-color: var(--color-zinc-muted);
+}
+.tl-plan-card[data-type="event"] {
+	border-left-color: var(--color-primary);
+}
+
+.tl-plan-time {
+	font-family: var(--font-family-mono);
+	font-size: 0.72rem;
+	color: var(--color-zinc-muted);
+}
+.tl-plan-title {
+	font-size: 0.9rem;
+	font-weight: 500;
+}
+.tl-plan-sub {
+	font-size: 0.78rem;
+	color: var(--color-zinc-muted);
+}
+.tl-plan-actions {
+	position: absolute;
+	top: 8px;
+	right: 8px;
+	display: flex;
+	gap: 4px;
+	opacity: 0;
+	transition: opacity 0.15s;
+}
+.tl-plan-card:hover .tl-plan-actions {
+	opacity: 1;
+}
+
+/* 記録カード */
+.tl-record-card {
+	background: var(--bg-card);
+	border: 1px solid var(--border-divider);
+	border-left: 3px solid var(--border-divider);
+	border-radius: var(--radius);
+	padding: 10px 12px;
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	position: relative;
+}
+.tl-record-card[data-type="expense"] {
+	border-left-color: var(--color-green, #22c55e);
+}
+.tl-record-card[data-type="task_done"] {
+	border-left-color: var(--color-primary);
+}
+.tl-record-card[data-type="media"] {
+	border-left-color: var(--color-amber, #f59e0b);
+}
+.tl-record-card[data-type="location"] {
+	border-left-color: var(--color-zinc-muted);
+}
+
+.tl-record-time {
+	font-family: var(--font-family-mono);
+	font-size: 0.72rem;
+	color: var(--color-zinc-muted);
+}
+.tl-record-title {
+	font-size: 0.88rem;
+	font-weight: 500;
+}
+.tl-record-content {
+	font-size: 0.82rem;
+	color: var(--text-secondary);
+	white-space: pre-wrap;
+}
+.tl-record-media {
+	max-width: 100%;
+	max-height: 200px;
+	border-radius: 4px;
+	object-fit: cover;
+	margin-top: 4px;
+}
+.tl-record-actions {
+	position: absolute;
+	top: 8px;
+	right: 8px;
+	opacity: 0;
+	transition: opacity 0.15s;
+}
+.tl-record-card:hover .tl-record-actions {
+	opacity: 1;
+}
+
+/* タイプ選択ピル */
+.tl-type-pills {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	margin-bottom: 4px;
+}
+.tl-type-pill {
+	padding: 4px 12px;
+	border-radius: 999px;
+	border: 1px solid var(--border-matte);
+	background: transparent;
+	color: var(--text-secondary);
+	font-size: 0.8rem;
+	cursor: pointer;
+	transition: all 0.15s;
+}
+.tl-type-pill.active,
+.tl-type-pill:hover {
+	border-color: var(--color-primary);
+	color: var(--color-primary);
+	background: rgba(var(--color-primary-rgb, 99, 102, 241), 0.08);
+}
+
+/* 空状態 */
+.tl-empty {
+	font-size: 0.83rem;
+	color: var(--color-zinc-muted);
+	text-align: center;
+	padding: 24px 0;
+}

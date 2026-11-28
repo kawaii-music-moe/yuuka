@@ -1,0 +1,112 @@
+/* モーダルダイアログ。 */
+
+/* ==============================================================================
+   POPUP MODAL DIALOGS (Highly Interactive Overlays)
+   ============================================================================== */
+.modal {
+	position: fixed;
+	top: 0;
+	left: 0;
+	width: 100vw;
+	height: 100vh;
+	background-color: rgba(9, 9, 11, 0.7);
+	backdrop-filter: blur(4px);
+	-webkit-backdrop-filter: blur(4px);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	/* .overlay (z-index: 9999) の上に重なる必要がある（Bot選択画面から開くモーダル等） */
+	z-index: 10000;
+	opacity: 0;
+	pointer-events: none;
+	transition: var(--transition-smooth);
+}
+
+.modal.active {
+	opacity: 1;
+	pointer-events: auto;
+}
+
+.modal-content {
+	width: 100%;
+	max-width: 460px;
+	max-height: 90vh;
+	overflow-y: auto;
+	transform: translateY(12px);
+	transition: var(--transition-smooth);
+	border: 1px solid var(--border-matte);
+	background-color: var(--surface-2dp);
+	padding: 24px;
+	border-radius: var(--radius);
+	box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
+}
+
+.wide-modal {
+	/* MCP管理ダッシュボード等の埋め込みコンテンツ（内部 .container は760px幅想定）が窮屈に
+     ならないよう余裕を持たせる。狭幅ビューでは 94vw で端に貼り付かないよう余白を確保
+     （≤768px は下のメディアクエリで 100% に上書きされる）。 */
+	max-width: min(820px, 94vw);
+}
+
+.modal.active .modal-content {
+	transform: translateY(0);
+}
+
+.modal-header {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	margin-bottom: 20px;
+	border-bottom: 1px solid var(--border-matte);
+	padding-bottom: 12px;
+}
+
+.modal-header h3 {
+	font-size: 1.05rem;
+	font-weight: 800;
+}
+
+.btn-close {
+	background: transparent;
+	border: none;
+	font-size: 1.4rem;
+	cursor: pointer;
+	color: var(--color-zinc-muted);
+	line-height: 1;
+}
+
+.btn-close:hover {
+	color: var(--color-white);
+}
+
+/* Receipt AI result layout */
+.receipt-result-body {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+	margin-bottom: 20px;
+}
+
+.receipt-result-icon {
+	font-size: 2.5rem;
+	text-align: center;
+}
+
+.receipt-ai-comment {
+	background-color: var(--bg-primary);
+	border: 1px solid var(--border-matte);
+	padding: 16px;
+	border-radius: 10px;
+	font-size: 0.8rem;
+	line-height: 1.5;
+	white-space: pre-wrap;
+	max-height: 300px;
+	overflow-y: auto;
+}
+
+.modal-footer {
+	display: flex;
+	justify-content: flex-end;
+	border-top: 1px solid var(--border-matte);
+	padding-top: 12px;
+}

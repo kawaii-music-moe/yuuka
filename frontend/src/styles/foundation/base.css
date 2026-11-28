@@ -1,0 +1,194 @@
+/* リセット・要素既定値・アイコン（Material Symbols）・スクロールバー・共通ユーティリティ。 */
+
+/* Base Styles & Resets */
+* {
+	box-sizing: border-box;
+	margin: 0;
+	padding: 0;
+}
+
+.theme-no-transition * {
+	transition: none !important;
+}
+
+body {
+	background-color: var(--bg-secondary);
+	color: var(--text-primary);
+	font-family: var(--font-family-sans);
+	min-height: 100vh;
+	overflow-x: hidden;
+	transition:
+		background-color 0.2s ease-in-out,
+		color 0.2s ease-in-out;
+}
+
+/* Bot設定の各ページ（設定ハブ配下）。カードの縦間隔は gap に集約する。 */
+.settings-page {
+	display: flex;
+	flex-direction: column;
+	gap: 16px;
+}
+.settings-page .config-card {
+	margin-top: 0 !important;
+}
+/* 読み込み中・権限が無いときの 1 行の案内 */
+.settings-page-note {
+	padding: 24px 0;
+	color: var(--text-secondary);
+}
+
+/* ==============================================================================
+   GOOGLE MATERIAL SYMBOLS FORMATTING (Ultra-Sleek shadcn Outline Style)
+   ============================================================================== */
+.material-symbols-outlined {
+	font-variation-settings:
+		"FILL" 0,
+		"wght" 300, /* Lightweight outlines matching shadcn aesthetic */
+		"GRAD" 0,
+		"opsz" 24;
+	vertical-align: middle;
+	line-height: 1;
+	user-select: none;
+}
+
+.menu-icon-symbol {
+	font-size: 1.25rem !important;
+}
+
+/* Header buttons & icons formatting */
+.icon-button-left {
+	margin-right: 8px;
+	font-size: 1.15rem !important;
+}
+
+.icon-small {
+	font-size: 1.15rem !important;
+}
+
+.icon-display-large {
+	font-size: 2.8rem !important;
+	color: var(--color-white);
+}
+
+.dropzone-icon-symbol {
+	font-size: 2.5rem !important;
+	color: var(--color-zinc-muted);
+	margin-bottom: 8px;
+}
+
+.modal-icon-symbol {
+	font-size: 2.5rem !important;
+	color: var(--color-white);
+	margin-bottom: 8px;
+}
+
+.trend-icon-symbol {
+	font-size: 0.8rem !important;
+	vertical-align: middle;
+}
+
+.source-icon {
+	font-size: 0.85rem !important;
+	vertical-align: middle;
+	margin-right: 4px;
+}
+
+.list-card-icon {
+	font-size: 1.5rem !important;
+	color: var(--color-zinc-muted);
+}
+
+.meta-icon {
+	font-size: 0.9rem !important;
+	vertical-align: middle;
+	margin-right: 4px;
+	color: var(--color-zinc-muted);
+}
+
+.header-icon-symbol {
+	font-size: 1.35rem !important;
+	vertical-align: middle;
+	margin-right: 8px;
+	color: var(--color-white);
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+	font-weight: 700;
+	letter-spacing: -0.02em;
+	color: var(--color-white);
+}
+
+a {
+	text-decoration: none;
+	color: inherit;
+}
+
+button,
+input,
+select,
+textarea {
+	font-family: inherit;
+	color: inherit;
+}
+
+.hidden {
+	display: none !important;
+}
+
+/* Custom Minimalist Scrollbar */
+::-webkit-scrollbar {
+	width: 5px;
+	height: 5px;
+}
+::-webkit-scrollbar-track {
+	background: var(--bg-primary);
+}
+::-webkit-scrollbar-thumb {
+	background: #27272a;
+	border-radius: var(--radius);
+}
+::-webkit-scrollbar-thumb:hover {
+	background: #3f3f46;
+}
+
+/* Common Card Utility */
+.card {
+	background-color: transparent;
+	border: none;
+	border-bottom: 1px solid var(--border-divider);
+	border-radius: 0;
+	padding: 24px 0;
+	transition: var(--transition-smooth);
+	min-width: 0;
+	overflow-wrap: break-word;
+	word-break: break-word;
+}
+
+.hover-lift:hover {
+	background-color: var(--card-matte-hover);
+	border-color: transparent;
+}
+
+/* 各タブの最後のセクション（カード）は下ボーダー不要 */
+.tab-view > .card:last-child,
+.tab-view > .full-width-urgent-row:last-child {
+	border-bottom: none;
+}
+
+/* Tab Views management
+   ★旧 vanilla の「全タブを DOM に並べ .active 付与で切替」前提だった
+     `display:none` / `.tab-view.active` は撤去（不具合修正）。
+     Svelte 版は BotShell が現在タブの 1 コンポーネントだけをマウントし、
+     どこも .active を付けないため、旧規則が残ると全タブが常時非表示になる
+     （BotConfig だけ scoped .config-tab{display:flex} が偶然上書きして見えていた）。 */
+.tab-view {
+	/* fill-mode forwards は使わない: 最終フレームの transform が恒久残留すると
+	   position:fixed 子孫（モーダル等）の包含ブロックがこの要素になってしまう。
+	   終了状態は自然状態（opacity:1 / transform:none）と同一なので見た目は変わらない。 */
+	animation: tab-fade-in 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}

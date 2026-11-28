@@ -9,7 +9,7 @@
 // - 個別（/<base>/<key>）: パンくず（<title> › <セクション名>）+ 適用範囲バッジ + children(key)。
 // 見出しは BotShell と同じ .top-header / .header-title / .breadcrumb-link で揃える。
 // セクション定義は $lib/managementSections が単一情報源。
-// styles.css の #id 別規則（#integrated-overlay / #admin-overlay）が効くよう id は props で受ける。
+// styles/components/overlay.css の #id 別規則（#integrated-overlay / #admin-overlay）が効くよう id は props で受ける。
 // ─────────────────────────────────────────────────────────────────────────
 import type { Snippet } from "svelte";
 import { Icon, ScopeBadge } from "$lib/components/ui";
@@ -79,7 +79,7 @@ let sidebarOpen = $state(false);
 			</header>
 
 			{#if current}
-				<!-- .management-overlay-body > section の表示規則（styles.css）を流用 -->
+				<!-- .management-overlay-body > section の表示規則（styles/components/overlay.css）を流用 -->
 				<div class="management-overlay-body">
 					{@render children(current.key)}
 				</div>

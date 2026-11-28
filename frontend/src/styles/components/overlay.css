@@ -1,0 +1,357 @@
+/* 全画面オーバーレイ（ログイン / 使い方ガイド / 全体管理）とログインフォーム。 */
+
+/* ==============================================================================
+   OVERLAY & LOGIN WINDOW (Sleek Matte HUD)
+   ============================================================================== */
+.overlay {
+	position: fixed;
+	top: 0;
+	left: 0;
+	width: 100vw;
+	height: 100vh;
+	background-color: var(--bg-secondary);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	z-index: 9999;
+	opacity: 0;
+	pointer-events: none;
+	transition: var(--transition-smooth);
+	overflow-y: auto;
+	padding: 20px;
+}
+
+.overlay.active {
+	opacity: 1;
+	pointer-events: auto;
+}
+
+.login-card {
+	background-color: transparent;
+	border: none;
+	box-shadow: none;
+	width: 100%;
+	max-width: 440px;
+	padding: 24px;
+	border-radius: 0;
+	text-align: center;
+	transform: scale(0.98);
+	transition: var(--transition-smooth);
+}
+
+.overlay.active .login-card {
+	transform: scale(1);
+}
+
+/* Usage Guide Overlay Card Styles */
+.usage-card {
+	background-color: transparent;
+	border: none;
+	box-shadow: none;
+	width: 100%;
+	max-width: 680px;
+	padding: 24px;
+	border-radius: 0;
+	transform: scale(0.98);
+	transition: var(--transition-smooth);
+}
+
+.overlay.active .usage-card {
+	transform: scale(1);
+}
+
+/* ── 全体管理オーバーレイ（Bot統合管理 / 管理者用設定）。Bot選択画面から開く独立フルスクリーンページ ── */
+.management-overlay-card {
+	width: min(1100px, 96vw);
+	max-height: 94vh;
+	display: flex;
+	flex-direction: column;
+	background-color: var(--surface-1dp);
+	border: 1px solid var(--border-matte);
+	border-radius: var(--radius);
+	box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
+	overflow: hidden;
+	transform: scale(0.98);
+	transition: var(--transition-smooth);
+}
+.overlay.active .management-overlay-card {
+	transform: scale(1);
+}
+.management-overlay-header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	padding: 16px 24px;
+	border-bottom: 1px solid var(--border-divider);
+	flex-shrink: 0;
+}
+.management-overlay-header h1 {
+	font-size: 1.35rem;
+	margin: 0;
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+.management-overlay-body {
+	padding: 20px 24px;
+	overflow-y: auto;
+	flex: 1 1 auto;
+}
+/* オーバーレイ内に移したセクションは常に表示（.tab-view の表示制御から外す） */
+.management-overlay-body > section {
+	display: block;
+}
+@media (max-width: 768px) {
+	/* スマホでは統合管理／管理者設定を画面全体で覆う。
+     汎用 .overlay { padding: 20px } を ID 詳細度で打ち消し、端の隙間と横スクロールをなくす。 */
+	#integrated-overlay,
+	#admin-overlay {
+		padding: 0;
+	}
+	.management-overlay-card {
+		width: 100vw;
+		height: 100vh;
+		/* biome-ignore lint/suspicious/noDuplicateProperties: 100vh above is an
+		   intentional fallback for browsers without dvh support; this overrides it
+		   where supported. */
+		height: 100dvh;
+		max-height: 100dvh;
+		border-radius: 0;
+		border: 0;
+	}
+	.management-overlay-header {
+		padding: 12px 14px;
+	}
+	.management-overlay-body {
+		padding: 14px 12px;
+	}
+}
+
+/* ── Bot行の ⋮ オーバーフローメニュー（統合管理ページ） ── */
+.int-action-menu {
+	display: none;
+	position: absolute;
+	right: 0;
+	top: calc(100% + 4px);
+	z-index: 50;
+	min-width: 190px;
+	background-color: var(--surface-2dp);
+	border: 1px solid var(--border-matte);
+	border-radius: 8px;
+	box-shadow: 0 8px 22px rgba(0, 0, 0, 0.45);
+	padding: 4px;
+}
+.int-action-menu.open {
+	display: block;
+}
+.int-menu-item {
+	display: block;
+	width: 100%;
+	text-align: left;
+	padding: 9px 12px;
+	background: none;
+	border: 0;
+	border-radius: 6px;
+	color: var(--text-high);
+	cursor: pointer;
+	font-size: 0.83rem;
+}
+.int-menu-item:hover:not(:disabled) {
+	background-color: var(--surface-1dp);
+}
+.int-menu-item:disabled {
+	opacity: 0.4;
+	cursor: not-allowed;
+}
+.int-menu-danger {
+	color: #f87171;
+}
+/* ⋮ トグルは枠なしのテキストボタン（主ボタンと高さを揃える） */
+.int-menu-toggle {
+	background: none;
+	border: 0;
+	color: var(--text-secondary);
+	cursor: pointer;
+	font-size: 1.2rem;
+	line-height: 1;
+	padding: 4px 6px;
+	border-radius: 6px;
+	display: inline-flex;
+	align-items: center;
+	transition:
+		background-color 0.15s ease,
+		color 0.15s ease;
+}
+.int-menu-toggle:hover {
+	color: var(--text-high);
+	background-color: var(--surface-1dp);
+}
+
+.usage-content {
+	max-height: 60vh;
+	overflow-y: auto;
+	margin-top: 16px;
+	text-align: left;
+	background-color: var(--surface-1dp);
+	border: 1px solid var(--border-matte);
+	border-radius: 4px;
+	/* padding-right stays smaller than the shorthand to leave room for the
+	   scrollbar from overflow-y: auto above; declare the shorthand first so it
+	   doesn't blow away this longhand override (was previously a no-op). */
+	padding: 20px;
+	padding-right: 12px;
+}
+
+/* Custom Scrollbar for usage content to match the theme */
+.usage-content::-webkit-scrollbar {
+	width: 6px;
+}
+.usage-content::-webkit-scrollbar-track {
+	background: transparent;
+}
+.usage-content::-webkit-scrollbar-thumb {
+	background: var(--border-matte);
+	border-radius: 3px;
+}
+.usage-content::-webkit-scrollbar-thumb:hover {
+	background: var(--text-disabled);
+}
+
+.usage-section {
+	margin-bottom: 24px;
+}
+
+.usage-section:last-child {
+	margin-bottom: 0;
+}
+
+.usage-section h3 {
+	font-size: 1.05rem;
+	font-weight: 700;
+	color: var(--color-primary);
+	margin-bottom: 10px;
+	border-left: 3px solid var(--color-primary);
+	padding-left: 8px;
+}
+
+.usage-section p {
+	font-size: 0.88rem;
+	color: var(--text-medium);
+	line-height: 1.6;
+	margin-bottom: 8px;
+}
+
+.usage-section ul {
+	padding-left: 20px;
+	margin-bottom: 8px;
+}
+
+.usage-section li {
+	font-size: 0.88rem;
+	color: var(--text-medium);
+	line-height: 1.6;
+	margin-bottom: 6px;
+}
+
+.usage-section li strong {
+	color: var(--text-high);
+}
+
+.usage-section code {
+	background-color: var(--surface-2dp);
+	padding: 2px 6px;
+	border-radius: 3px;
+	font-family: var(--font-family-mono);
+	font-size: 0.8rem;
+	color: var(--color-secondary);
+}
+
+.logo-icon {
+	font-size: 3rem;
+	margin-bottom: 16px;
+}
+
+.login-avatar-img {
+	width: 80px;
+	height: 80px;
+	object-fit: cover;
+	border-radius: 50%;
+	margin-bottom: 12px;
+}
+
+.login-header h1 {
+	font-size: 1.6rem;
+	font-weight: 800;
+	color: var(--color-white);
+	margin-bottom: 8px;
+	letter-spacing: 0.02em;
+}
+
+.login-header p {
+	color: var(--text-secondary);
+	font-size: 0.85rem;
+	margin-bottom: 24px;
+}
+
+/* ==============================================================================
+   NEW MULTI-USER TABBED LOGIN & PROFILE CONTROLS
+   ============================================================================== */
+.login-tabs {
+	display: flex;
+	margin-bottom: 24px;
+	border-bottom: 1px solid var(--border-matte);
+}
+
+.login-tab-btn {
+	flex: 1;
+	padding: 10px;
+	background: transparent;
+	border: none;
+	color: var(--text-secondary);
+	font-weight: 600;
+	cursor: pointer;
+	transition: var(--transition-smooth);
+	border-bottom: 2px solid transparent;
+}
+
+.login-tab-btn:hover {
+	color: var(--color-white);
+}
+
+.login-tab-btn.active {
+	color: var(--color-white);
+	border-bottom-color: var(--color-white);
+}
+
+.login-tab-pane {
+	display: none;
+}
+
+.login-tab-pane.active {
+	display: block;
+}
+
+.login-divider {
+	display: flex;
+	align-items: center;
+	text-align: center;
+	margin: 16px 0;
+	color: var(--color-zinc-muted);
+	font-size: 0.75rem;
+}
+
+.login-divider::before,
+.login-divider::after {
+	content: "";
+	flex: 1;
+	border-bottom: 1px solid var(--border-matte);
+}
+
+.login-divider:not(:empty)::before {
+	margin-right: 0.5em;
+}
+
+.login-divider:not(:empty)::after {
+	margin-left: 0.5em;
+}
