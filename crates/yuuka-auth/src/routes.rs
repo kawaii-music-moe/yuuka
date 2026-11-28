@@ -26,7 +26,10 @@ use serde_json::json;
 use yuuka_types::SessionUser;
 use yuuka_web::{ApiError, AppState, AuthenticatedUser};
 
+use yuuka_core::RegistrationMode;
+
 use crate::oidc::{LoginError, LogoutTarget, OidcClient};
+use crate::users::{LoginIdentity, LoginPolicy};
 use crate::{users, SessionStore};
 
 const COOKIE_HOST: &str = "__Host-yuuka-session";
@@ -37,12 +40,15 @@ const STATE_COOKIE_DEV: &str = "yuuka-oidc-state";
 pub struct AuthRuntime {
     sessions: SessionStore,
     session_ttl_secs: u64,
-    admin_discord_ids: Vec<String>,
+    policy: LoginPolicy,
     oidc: Option<Arc<OidcClient>>,
 }
 
 impl AuthRuntime {
     /// `oidc` が `None`（`OIDC_CLIENT_SECRET` 未設定）ならログインできない。
+    ///
+    /// 初期 admin は `admin_discord_ids` だけで決まる。`ADMIN_OIDC_SUBJECTS`・`ADMIN_EMAILS`・
+    /// `REGISTRATION_MODE` も使うときは [`Self::with_login_policy`] で差し替える。
     #[must_use]
     pub fn new(
         sessions: SessionStore,
@@ -50,15 +56,28 @@ impl AuthRuntime {
         admin_discord_ids: Vec<String>,
         oidc: Option<Arc<OidcClient>>,
     ) -> Self {
-        if admin_discord_ids.is_empty() {
-            tracing::warn!("ADMIN_DISCORD_IDS が未設定です。新規利用者に管理者権限は付与されません。初回ログイン前に管理者の Discord ID を設定してください。");
-        }
         Self {
             sessions,
             session_ttl_secs: u64::from(session_ttl_days) * 24 * 60 * 60,
-            admin_discord_ids,
+            policy: LoginPolicy {
+                admin_discord_ids,
+                ..LoginPolicy::default()
+            },
             oidc,
         }
+    }
+
+    /// 初期 admin の指定と新規登録の扱いを差し替える。
+    #[must_use]
+    pub fn with_login_policy(mut self, policy: LoginPolicy) -> Self {
+        if !policy.has_admin() {
+            tracing::warn!("ADMIN_DISCORD_IDS・ADMIN_OIDC_SUBJECTS・ADMIN_EMAILS がどれも未設定です。新規利用者に管理者権限は付与されません。初回ログイン前に管理者を指定してください。");
+        }
+        if policy.registration == RegistrationMode::Closed {
+            tracing::info!("REGISTRATION_MODE=closed: 既存の利用者だけがログインできます。");
+        }
+        self.policy = policy;
+        self
     }
 }
 
@@ -180,22 +199,28 @@ async fn exchange_and_login(
     };
     let identity = outcome.identity;
 
-    let role = match users::upsert_from_sk_account(
-        &state.db,
-        &identity.subject,
-        &identity.discord_id,
-        &identity.display_name,
-        &rt.admin_discord_ids,
-    )
-    .await
-    {
-        Ok(role) => role,
+    let login = LoginIdentity {
+        subject: identity.subject,
+        discord_id: identity.discord_id,
+        email: identity.email,
+        username: identity.display_name,
+    };
+    let found = match users::upsert_from_oidc(&state.db, &login, &rt.policy).await {
+        Ok(Ok(found)) => found,
+        Ok(Err(rejection)) => {
+            tracing::warn!(reason = ?rejection, "OIDC ログインを断った");
+            let status = match rejection {
+                users::LoginRejection::Conflict(_) => StatusCode::CONFLICT,
+                users::LoginRejection::RegistrationClosed => StatusCode::FORBIDDEN,
+            };
+            return error(status, rejection.message());
+        }
         Err(e) => return ApiError::from(e).into_response(),
     };
     let user = SessionUser {
-        user_id: identity.discord_id,
-        username: identity.display_name,
-        role,
+        user_id: found.user_id,
+        username: login.username,
+        role: found.role,
     };
     let token = match rt.sessions.create(&user, rt.session_ttl_secs).await {
         Ok(token) => token,
@@ -240,9 +265,9 @@ async fn backchannel_logout(
                 StatusCode::OK
             }
             Some(LogoutTarget::Subject(sub)) => {
-                match users::discord_id_by_sk_account(&state.db, &sub).await {
-                    Ok(Some(discord_id)) => {
-                        rt.sessions.destroy_all_for_user(&discord_id).await;
+                match users::user_id_by_subject(&state.db, &sub).await {
+                    Ok(Some(user_id)) => {
+                        rt.sessions.destroy_all_for_user(&user_id).await;
                         StatusCode::OK
                     }
                     Ok(None) => StatusCode::OK,

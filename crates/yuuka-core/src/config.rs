@@ -69,6 +69,14 @@ pub struct Config {
     /// 初期 admin に昇格する Discord ユーザー ID（`ADMIN_DISCORD_IDS`・任意・Node `config.adminDiscordIds`）。
     /// `createUser` はこのリストに含まれる ID のみを admin ロールで作成する。
     pub admin_discord_ids: Vec<String>,
+    /// 初期 admin に昇格する OIDC の `sub`（`ADMIN_OIDC_SUBJECTS`・任意）。Discord を持たない
+    /// 管理者を指定するのに使う（docs/design/optional_discord.md §4.2）。
+    pub admin_oidc_subjects: Vec<String>,
+    /// 初期 admin に昇格するメールアドレス（`ADMIN_EMAILS`・任意）。ID トークンの
+    /// `email_verified` が true のときだけ照合する。大文字小文字は区別しない。
+    pub admin_emails: Vec<String>,
+    /// 初めてログインした人を利用者として登録するか（`REGISTRATION_MODE`・既定 `open`）。
+    pub registration_mode: RegistrationMode,
     /// デスクトップ `/ws/chat` の 1 メッセージ添付上限（MB・`DESKTOP_MAX_UPLOAD_MB`・既定 20・
     /// Node `config.desktopMaxUploadMb`）。
     pub desktop_max_upload_mb: u32,
@@ -149,6 +157,12 @@ impl Config {
             encryption_secret_new: non_empty(get("YUUKA_ENCRYPTION_SECRET_NEW"))
                 .map(SecretString::from),
             admin_discord_ids: parse_string_list(get("ADMIN_DISCORD_IDS").as_deref()),
+            admin_oidc_subjects: parse_string_list(get("ADMIN_OIDC_SUBJECTS").as_deref()),
+            admin_emails: parse_string_list(get("ADMIN_EMAILS").as_deref()),
+            registration_mode: parse_field(
+                "REGISTRATION_MODE",
+                &get("REGISTRATION_MODE").unwrap_or_else(|| "open".to_owned()),
+            )?,
             desktop_max_upload_mb: parse_field(
                 "DESKTOP_MAX_UPLOAD_MB",
                 &get("DESKTOP_MAX_UPLOAD_MB").unwrap_or_else(|| "20".to_owned()),
@@ -314,8 +328,8 @@ const DEFAULT_OIDC_LABEL: &str = "sk-9 Account";
 ///
 /// 本人認証は OIDC プロバイダーだけが担い、Yuuka はパスワードもパスキーも持たない。
 /// `OIDC_ISSUER` を省略すると標準の sk-account を使い、指定すれば任意の OIDC プロバイダーに替えられる。
-/// Yuuka は利用者を Discord ID で識別するので、プロバイダーは ID トークンの
-/// `OIDC_DISCORD_ID_CLAIM`（既定 `discord_id`）に Discord ID を入れる必要がある。
+/// Yuuka は利用者を ID トークンの `sub` で識別する。`OIDC_DISCORD_ID_CLAIM`（既定 `discord_id`）に
+/// Discord ID があれば、ログイン時に Discord と連携する（任意）。
 #[derive(Debug, Clone)]
 pub struct OidcSettings {
     /// issuer（`OIDC_ISSUER`・末尾の `/` は除く）。ブラウザはここの認可エンドポイントへ送る。
@@ -329,7 +343,7 @@ pub struct OidcSettings {
     pub client_secret: Option<SecretString>,
     /// 要求する scope（`OIDC_SCOPE`・既定 `openid profile discord`）。
     pub scope: String,
-    /// Discord ID を入れた claim の名前（`OIDC_DISCORD_ID_CLAIM`・既定 `discord_id`）。
+    /// Discord ID を入れた claim の名前（`OIDC_DISCORD_ID_CLAIM`・既定 `discord_id`・claim は任意）。
     pub discord_id_claim: String,
     /// ログインボタンに出す名前（`OIDC_LABEL`）。既定は標準なら `sk-9 Account`、それ以外は issuer のホスト名。
     pub label: String,
@@ -459,6 +473,31 @@ fn parse_field<T: std::str::FromStr>(field: &'static str, raw: &str) -> Result<T
         })
 }
 
+/// 初めてログインした人の扱い（`REGISTRATION_MODE`）。
+///
+/// 既存の利用者（OIDC の `sub` か Discord ID で引き当たる人）は、どの値でもログインできる。
+/// 招待コード（`invite`）は docs/design/optional_discord.md §4.1 の次の段階で足す。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RegistrationMode {
+    /// 誰でも登録できる（プロバイダー側で利用者を絞る前提）。
+    #[default]
+    Open,
+    /// 新規登録を受け付けない。
+    Closed,
+}
+
+impl std::str::FromStr for RegistrationMode {
+    type Err = ();
+
+    fn from_str(raw: &str) -> Result<Self, Self::Err> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "open" => Ok(Self::Open),
+            "closed" => Ok(Self::Closed),
+            _ => Err(()),
+        }
+    }
+}
+
 /// カンマ区切りの文字列リストをパースする（`getSettingArray` 相当：split(',')→trim→空除去）。
 ///
 /// YAML 配列は `yaml_string` が事前にカンマ結合するため、env のカンマ区切りと同一経路で処理できる。
@@ -492,7 +531,7 @@ fn parse_ip_list(field: &'static str, raw: Option<&str>) -> Result<Vec<IpAddr>, 
 
 #[cfg(test)]
 mod tests {
-    use super::Config;
+    use super::{Config, RegistrationMode};
     use std::io::Write;
 
     fn write_yaml(body: &str) -> tempfile::NamedTempFile {
@@ -541,6 +580,32 @@ mod tests {
         assert_eq!(cfg.host.to_string(), "127.0.0.1");
         assert_eq!(cfg.session_ttl_days, 7);
         assert_eq!(cfg.redis_url, "redis://127.0.0.1:6379");
+    }
+
+    #[test]
+    fn login_policy_defaults_to_open_and_reads_admin_lists() {
+        let defaults =
+            Config::load_and_validate(std::path::Path::new("/no/such/yuuka-config.yaml"))
+                .expect("defaults");
+        assert_eq!(defaults.registration_mode, RegistrationMode::Open);
+        assert!(defaults.admin_oidc_subjects.is_empty());
+        assert!(defaults.admin_emails.is_empty());
+
+        let f = write_yaml(
+            "REGISTRATION_MODE: \"Closed\"\n\
+             ADMIN_OIDC_SUBJECTS: \"sub-1, sub-2\"\n\
+             ADMIN_EMAILS: \"owner@example.com\"\n",
+        );
+        let cfg = Config::load_and_validate(f.path()).expect("load");
+        assert_eq!(cfg.registration_mode, RegistrationMode::Closed);
+        assert_eq!(
+            cfg.admin_oidc_subjects,
+            vec!["sub-1".to_owned(), "sub-2".to_owned()]
+        );
+        assert_eq!(cfg.admin_emails, vec!["owner@example.com".to_owned()]);
+
+        let bad = write_yaml("REGISTRATION_MODE: \"sometimes\"\n");
+        assert!(Config::load_and_validate(bad.path()).is_err());
     }
 
     #[test]
