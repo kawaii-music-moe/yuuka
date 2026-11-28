@@ -1,0 +1,72 @@
+/* デザイントークン（既定 = ダークテーマ）。ライトの値は themes/ 配下で上書き。 */
+
+/* Base Design System Matte Dark Tokens - Discord Developer Portal Theme */
+:root {
+	--bg-primary: #121212; /* Material 2 Dark Base */
+	--bg-secondary: #121212;
+	--bg-sidebar: #1d1d1d; /* 1dp elevation */
+	--bg-body: #121212; /* 0dp elevation */
+
+	/* Material 2 Elevation Surface Colors */
+	--surface-0dp: #121212;
+	--surface-1dp: #1d1d1d;
+	--surface-2dp: #212121;
+	--surface-3dp: #242424;
+	--surface-4dp: #272727;
+	--surface-6dp: #2c2c2c;
+	--surface-8dp: #2d2d2d;
+	--surface-12dp: #323232;
+	--surface-16dp: #353535;
+	--surface-24dp: #383838;
+
+	/* Material Dark Theme Colors */
+	--color-primary: #bb86fc; /* desaturated purple */
+	--color-primary-variant: #3700b3;
+	--color-secondary: #03dac6; /* desaturated teal */
+	--color-error: #cf6679; /* Material Dark error */
+
+	--color-on-primary: #000000;
+	--color-on-secondary: #000000;
+	--color-on-error: #000000;
+
+	/* Material Text Emphases */
+	--text-high: rgba(255, 255, 255, 0.87);
+	--text-medium: rgba(255, 255, 255, 0.6);
+	--text-disabled: rgba(255, 255, 255, 0.38);
+
+	--card-matte: transparent;
+	--card-matte-hover: rgba(255, 255, 255, 0.04);
+	--border-matte: rgba(255, 255, 255, 0.12);
+	--border-divider: rgba(255, 255, 255, 0.12);
+	--border-focus: var(--color-primary);
+	--radius: 4px;
+	/* 入力欄の背景。フォーカス時は、ダークでは白・ライトでは黒を 4% 混ぜて周りから浮かせる */
+	--field-bg: var(--surface-1dp);
+	--field-focus-tint: #fff;
+	--field-bg-focus: color-mix(
+		in srgb,
+		var(--field-bg),
+		var(--field-focus-tint) 4%
+	);
+
+	--color-white: rgba(255, 255, 255, 0.87);
+	--color-zinc-light: rgba(255, 255, 255, 0.6);
+	--color-zinc-muted: rgba(255, 255, 255, 0.38);
+	--color-green: #81c784; /* desaturated green */
+	--color-red: var(--color-error);
+
+	--text-primary: rgba(255, 255, 255, 0.87);
+	--text-secondary: rgba(255, 255, 255, 0.6);
+
+	--discord-blurple: var(--color-primary);
+	--discord-blurple-hover: #cda3ff;
+	--discord-blurple-active: #a370e2;
+	--discord-grey-secondary: var(--surface-4dp);
+	--discord-grey-secondary-hover: var(--surface-8dp);
+
+	--transition-smooth: all 0.15s ease-in-out;
+	--font-family-sans:
+		"Roboto", "Zen Kaku Gothic New", -apple-system, BlinkMacSystemFont,
+		"Segoe UI", sans-serif;
+	--font-family-mono: "JetBrains Mono", Consolas, monospace;
+}

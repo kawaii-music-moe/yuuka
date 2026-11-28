@@ -1,0 +1,342 @@
+/* 管理者ページ: KPI・セクション・テーブル・バッジ・操作ボタン。 */
+
+/* ==============================================================================
+   6. ADMIN VIEW STYLES (Master Management Page)
+   ============================================================================= */
+
+/* Admin KPI Row (no-card flat stats) */
+.admin-kpi-row {
+	display: flex;
+	align-items: stretch;
+	border-bottom: 1px solid var(--border-divider);
+	margin-bottom: 8px;
+}
+
+.admin-kpi {
+	flex: 1;
+	padding: 20px 0;
+	padding-right: 24px;
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+
+.admin-kpi-sep {
+	width: 1px;
+	background-color: var(--border-divider);
+	margin: 16px 24px 16px 0;
+	flex-shrink: 0;
+}
+
+.admin-kpi-value {
+	font-size: 2rem;
+	font-weight: 800;
+	font-family: var(--font-family-mono);
+	color: var(--color-white);
+	line-height: 1;
+}
+
+.admin-kpi-label {
+	font-size: 0.68rem;
+	font-weight: 600;
+	color: var(--color-zinc-muted);
+	text-transform: uppercase;
+	letter-spacing: 0.06em;
+}
+
+/* Admin Section (replaces config-card for admin tab) */
+.admin-section {
+	padding: 28px 0;
+	border-bottom: 1px solid var(--border-divider);
+}
+
+/* details 化したセクション：summary をクリック行に。閉時は下余白を詰める */
+summary.admin-section-header {
+	cursor: pointer;
+	user-select: none;
+	list-style: none; /* Firefox の三角を消す */
+}
+summary.admin-section-header::-webkit-details-marker {
+	display: none; /* WebKit/Blink の三角を消す */
+}
+details.admin-section[open] > summary.admin-section-header {
+	margin-bottom: 12px;
+}
+
+.admin-section-header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	margin-bottom: 0;
+}
+
+/* タイトル左のシェブロン（開閉で回転） */
+.admin-section-title::before {
+	content: "▸";
+	display: inline-block;
+	font-size: 0.85rem;
+	line-height: 1;
+	color: var(--color-zinc-muted);
+	transition: transform 0.18s ease;
+}
+details.admin-section[open] > summary > .admin-section-title::before {
+	transform: rotate(90deg);
+}
+
+/* 個別設定ページの見出し。バッジはタイトルの反対側へ寄せる。 */
+.column-header.badge-right {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex-wrap: wrap;
+}
+.column-header.badge-right > .badge,
+.column-header.badge-right > .scope-badge {
+	margin-left: auto;
+}
+/* 適用範囲バッジの後ろに続くバッジは、右端で隣に並べる */
+.column-header.badge-right > .scope-badge ~ .badge {
+	margin-left: 0;
+}
+.column-header.badge-right > h3 {
+	margin: 0;
+}
+/* 追加ボタンをヘッダ右端（タイトルの反対側）へ寄せるバリアント */
+.column-header.action-right {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	flex-wrap: wrap;
+}
+.column-header.action-right > .btn {
+	margin-left: auto;
+}
+.column-header.action-right > h3 {
+	margin: 0;
+}
+
+.admin-section-title {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	font-size: 0.8rem;
+	font-weight: 700;
+	color: var(--color-white);
+	letter-spacing: 0.05em;
+	text-transform: uppercase;
+}
+
+.admin-section-title .material-symbols-outlined {
+	font-size: 1.1rem !important;
+	color: var(--color-zinc-muted);
+}
+
+/* Admin Stats Grid (legacy, kept for compatibility) */
+.admin-stats-grid {
+	display: grid;
+	grid-template-columns: repeat(4, 1fr);
+	gap: 20px;
+	margin-bottom: 8px;
+}
+
+.admin-stat-card {
+	display: flex;
+	align-items: center;
+	gap: 16px;
+	padding: 16px 20px 16px 0;
+	background-color: transparent;
+	border: none;
+	border-right: 1px solid var(--border-divider);
+	border-radius: 0;
+}
+
+.admin-stat-icon {
+	width: 44px;
+	height: 44px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	border-radius: 8px;
+	background-color: rgba(255, 255, 255, 0.06);
+	border: 1px solid var(--border-matte);
+	flex-shrink: 0;
+}
+
+.admin-stat-icon .material-symbols-outlined {
+	font-size: 1.3rem;
+	color: var(--color-zinc-muted);
+}
+
+.admin-stat-info {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+}
+
+.admin-stat-label {
+	font-size: 0.7rem;
+	font-weight: 600;
+	color: var(--color-zinc-muted);
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+}
+
+.admin-stat-value {
+	font-size: 1.5rem;
+	font-weight: 800;
+	font-family: var(--font-family-mono);
+	color: var(--color-white);
+	line-height: 1;
+}
+
+/* Admin Table Styles */
+.admin-table-th {
+	text-align: left;
+	padding: 10px;
+	font-weight: 600;
+	font-size: 0.75rem;
+	color: var(--color-zinc-muted);
+	text-transform: uppercase;
+	letter-spacing: 0.05em;
+}
+
+.admin-table-td {
+	padding: 12px 10px;
+	font-size: 0.85rem;
+	border-bottom: 1px solid var(--border-matte);
+	vertical-align: middle;
+}
+
+/* Role Badge Styles */
+.admin-role-badge {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	padding: 3px 10px;
+	border-radius: 50px;
+	font-size: 0.7rem;
+	font-weight: 700;
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+}
+
+.admin-role-badge.role-admin {
+	background-color: rgba(234, 179, 8, 0.15);
+	border: 1px solid rgba(234, 179, 8, 0.4);
+	color: #facc15;
+}
+
+.admin-role-badge.role-user {
+	background-color: rgba(161, 161, 170, 0.1);
+	border: 1px solid rgba(161, 161, 170, 0.3);
+	color: var(--color-zinc-muted);
+}
+
+/* Bot Status Badge */
+.admin-status-badge {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	padding: 3px 10px;
+	border-radius: 50px;
+	font-size: 0.7rem;
+	font-weight: 700;
+	letter-spacing: 0.04em;
+}
+
+.admin-status-badge.status-active {
+	background-color: rgba(34, 197, 94, 0.15);
+	border: 1px solid rgba(34, 197, 94, 0.4);
+	color: #22c55e;
+}
+
+.admin-status-badge.status-suspended {
+	background-color: rgba(239, 68, 68, 0.15);
+	border: 1px solid rgba(239, 68, 68, 0.4);
+	color: #ef4444;
+}
+
+.admin-status-badge.status-default {
+	background-color: rgba(59, 130, 246, 0.12);
+	border: 1px solid rgba(59, 130, 246, 0.3);
+	color: #60a5fa;
+}
+
+/* Admin Action Buttons */
+.admin-action-group {
+	display: inline-flex;
+	align-items: center;
+	justify-content: flex-end;
+	gap: 6px;
+	flex-wrap: wrap;
+}
+
+.admin-btn-action {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	padding: 5px 12px;
+	border-radius: var(--radius);
+	font-size: 0.75rem;
+	font-weight: 600;
+	cursor: pointer;
+	border: 1px solid var(--border-matte);
+	background-color: transparent;
+	color: var(--text-secondary);
+	transition: var(--transition-smooth);
+}
+
+.admin-btn-action:hover {
+	background-color: rgba(255, 255, 255, 0.06);
+	border-color: var(--border-focus);
+	color: var(--color-white);
+}
+
+.admin-btn-action.btn-danger {
+	border-color: rgba(239, 68, 68, 0.4);
+	color: #ef4444;
+}
+
+.admin-btn-action.btn-danger:hover {
+	background-color: rgba(239, 68, 68, 0.12);
+	border-color: rgba(239, 68, 68, 0.7);
+}
+
+.admin-btn-action.btn-success {
+	border-color: rgba(34, 197, 94, 0.4);
+	color: #22c55e;
+}
+
+.admin-btn-action.btn-success:hover {
+	background-color: rgba(34, 197, 94, 0.12);
+	border-color: rgba(34, 197, 94, 0.7);
+}
+
+.admin-btn-action.btn-promote {
+	border-color: rgba(234, 179, 8, 0.4);
+	color: #facc15;
+}
+
+.admin-btn-action.btn-promote:hover {
+	background-color: rgba(234, 179, 8, 0.12);
+	border-color: rgba(234, 179, 8, 0.7);
+}
+
+/* Discord ID masking style */
+.admin-discord-id {
+	font-family: var(--font-family-mono);
+	font-size: 0.8rem;
+	color: var(--text-secondary);
+}
+
+@media (max-width: 900px) {
+	.admin-stats-grid {
+		grid-template-columns: repeat(2, 1fr);
+	}
+}
+
+@media (max-width: 600px) {
+	.admin-stats-grid {
+		grid-template-columns: 1fr;
+	}
+}

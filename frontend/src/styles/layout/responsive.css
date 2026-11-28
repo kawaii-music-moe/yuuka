@@ -1,0 +1,355 @@
+/* 共通ブレークポイント（タブレット / スマホ / 小型スマホ）。
+   ★ 位置依存: ここより前のファイルを上書きし、ここより後のファイルには上書きされる。 */
+
+/* ==============================================================================
+   RESPONSIVE SMARTPHONE UI (Adaptive Layouts)
+   ============================================================================= */
+
+/* Tablet adjustments (between 768 and 1024) */
+@media (max-width: 1024px) and (min-width: 769px) {
+	.main-content {
+		padding: 28px 24px;
+	}
+
+	.stats-grid {
+		grid-template-columns: repeat(3, 1fr);
+		gap: 16px;
+	}
+
+	.dashboard-columns,
+	.expense-actions-columns {
+		grid-template-columns: 1fr;
+		gap: 20px;
+	}
+
+	.stat-card {
+		padding: 18px 0;
+	}
+}
+
+@media (max-width: 768px) {
+	/* Sidebar: 左から出るドロワー（ヘッダのハンバーガーで開閉）。
+	   中身（戻るボタン/Botブランディング/縦メニュー）は PC と同一構成のまま、
+	   位置だけ off-canvas 化する。開閉は BotShell が .open を付与。 */
+	.sidebar {
+		position: fixed;
+		top: 0;
+		bottom: 0;
+		left: 0;
+		width: min(300px, 82vw);
+		height: 100dvh;
+		z-index: 1600;
+		transform: translateX(-100%);
+		transition: transform 0.25s ease;
+	}
+
+	.sidebar.open {
+		transform: translateX(0);
+		box-shadow: 8px 0 32px rgba(0, 0, 0, 0.55);
+	}
+
+	/* ドロワー背面オーバーレイ（BotShell が開時のみ描画。タップで閉じる） */
+	.sidebar-backdrop {
+		position: fixed;
+		inset: 0;
+		background: rgba(0, 0, 0, 0.5);
+		border: none;
+		padding: 0;
+		z-index: 1500;
+	}
+
+	/* Main Workspace adjustments */
+	.main-content {
+		padding: 18px 14px 28px;
+		height: auto;
+		min-height: 100vh;
+	}
+
+	/* ハンバーガー（ドロワー開閉）をタイトル左に表示 */
+	.menu-toggle {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		flex-shrink: 0;
+		background: none;
+		border: none;
+		cursor: pointer;
+		color: var(--text-primary);
+		padding: 2px;
+	}
+
+	/* 1行ヘッダー: ハンバーガー+タイトル左・アイコン操作右（縦積みをやめ上部占有を最小化） */
+	.top-header {
+		flex-wrap: nowrap;
+		gap: 8px;
+		margin-bottom: 14px;
+		border-bottom: 1px solid var(--border-matte);
+		padding-bottom: 10px;
+	}
+
+	.header-title {
+		min-width: 0;
+		flex: 1 1 auto;
+	}
+
+	.header-title h2 {
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+
+	.profile-switch {
+		flex: 1 1 auto;
+		min-width: 0;
+		justify-content: space-between;
+		padding: 6px 10px;
+		gap: 6px;
+	}
+
+	.user-select-dropdown {
+		min-width: 0;
+		max-width: 100%;
+		flex: 1 1 0;
+	}
+
+	/* Layout Grids Stacking to 1 Column */
+	.stats-grid {
+		grid-template-columns: 1fr;
+		gap: 16px;
+	}
+
+	.stat-card {
+		min-height: 130px;
+		border-right: none !important;
+		border-bottom: 1px solid var(--border-divider) !important;
+		padding: 16px 0 !important;
+	}
+	.stat-card:last-child {
+		border-bottom: none !important;
+	}
+
+	.dashboard-columns,
+	.expense-actions-columns {
+		grid-template-columns: 1fr;
+		gap: 20px;
+	}
+
+	.expense-hud-grid {
+		grid-template-columns: 1fr;
+		gap: 16px;
+		border-bottom: none !important;
+		padding-bottom: 0 !important;
+	}
+
+	.col-span-2 {
+		grid-column: span 1;
+	}
+
+	.hud-card {
+		border-right: none !important;
+		border-bottom: 1px solid var(--border-divider) !important;
+		padding: 16px 0 !important;
+	}
+	.hud-card:last-child {
+		border-bottom: none !important;
+	}
+
+	.config-items-grid {
+		grid-template-columns: 1fr;
+	}
+
+	.welcome-card {
+		flex-direction: column;
+		align-items: center;
+		text-align: center;
+		gap: 14px;
+		padding: 16px 0;
+	}
+
+	.speech-bubble-container {
+		width: 100%;
+		min-width: 0;
+	}
+
+	.speech-bubble::before {
+		display: none; /* Hide side arrow of speech bubble */
+	}
+
+	.pie-chart-wrapper {
+		width: 110px;
+		height: 110px;
+	}
+
+	.chart-container-flex {
+		flex-direction: column;
+		gap: 16px;
+		padding: 10px 0;
+	}
+
+	/* Table responsiveness and clean details */
+	.expense-table th:nth-child(3),
+	.expense-table td:nth-child(3),
+	.expense-table th:nth-child(4),
+	.expense-table td:nth-child(4) {
+		display: none; /* Hide Description & Source on small mobile devices to prevent overflow */
+	}
+
+	.expense-table th,
+	.expense-table td {
+		padding: 10px 8px;
+		font-size: 0.75rem;
+	}
+
+	/* Card paddings tightened (フラットデザインのため縦のみ詰める) */
+	.card {
+		padding: 16px 0;
+	}
+
+	/* Header title scaling */
+	.header-title h2 {
+		font-size: 1.3rem;
+	}
+
+	.column-header h3 {
+		font-size: 0.95rem;
+		line-height: 1.35;
+		word-break: break-word;
+	}
+
+	/* Stat values shrink slightly */
+	.stat-card .stat-value {
+		font-size: 1.7rem;
+	}
+
+	.hud-card h2 {
+		font-size: 1.7rem;
+	}
+
+	/* View actions card may overflow with many filter buttons */
+	.view-actions-card {
+		flex-direction: column;
+		align-items: stretch;
+		gap: 12px;
+		padding: 14px 0;
+	}
+
+	.filters-group {
+		flex-wrap: wrap;
+	}
+
+	/* Card item content stack to prevent action button overflow */
+	.card-item {
+		flex-direction: column;
+		align-items: stretch;
+		gap: 12px;
+		padding: 14px 0;
+	}
+
+	.card-actions-right {
+		justify-content: flex-end;
+	}
+
+	/* Form row to single column to prevent narrow inputs */
+	.form-row {
+		grid-template-columns: 1fr;
+		gap: 0;
+	}
+
+	/* Sub-details under chart wrap nicely */
+	.chart-sub-details {
+		grid-template-columns: 1fr;
+		gap: 8px;
+	}
+
+	/* モバイル: モーダルを全画面化（外周の余白を無くし画面を覆う。余白は極力少なめ） */
+	.modal {
+		padding: 0;
+	}
+
+	.modal-content {
+		max-width: 100%;
+		width: 100%;
+		height: 100vh;
+		/* biome-ignore lint/suspicious/noDuplicateProperties: 100vh above is an
+		   intentional fallback for browsers without dvh support; this overrides it
+		   where supported. */
+		height: 100dvh;
+		max-height: 100vh;
+		max-height: 100dvh;
+		padding: 12px;
+		border: 0;
+		border-radius: 0;
+	}
+
+	.wide-modal {
+		max-width: 100%;
+	}
+
+	/* MCP管理ダッシュボードは全画面モーダル内をiframeで縦いっぱいに埋める */
+	#modal-mcp-dashboard .modal-content {
+		display: flex;
+		flex-direction: column;
+	}
+
+	#mcp-dashboard-container {
+		flex: 1 1 auto;
+		min-height: 0 !important; /* index.html のインライン min-height:70vh を上書き */
+		border-radius: 0;
+	}
+
+	#mcp-dashboard-container > iframe {
+		height: 100% !important; /* app.js のインライン height:75vh を上書き */
+	}
+
+	/* Theme options - allow wrapping & full width */
+	.theme-option {
+		flex: 1 1 130px;
+	}
+}
+
+@media (max-width: 420px) {
+	.main-content {
+		padding: 16px 12px 24px 12px;
+	}
+
+	.card {
+		padding: 14px 0;
+	}
+
+	.header-title h2 {
+		font-size: 1.2rem;
+	}
+
+	.stat-card .stat-value {
+		font-size: 1.5rem;
+	}
+
+	.stat-card-badge-trend {
+		top: 14px;
+		right: 14px;
+		font-size: 0.6rem;
+	}
+
+	.welcome-card {
+		padding: 14px 0;
+	}
+
+	.column-header h3 {
+		font-size: 0.88rem;
+	}
+}
+
+/* 360px 以下: さらに詰める（サイドバーはドロワーのため縮小規則は不要） */
+@media (max-width: 360px) {
+	.main-content {
+		padding: 14px 10px 20px 10px;
+	}
+
+	.login-card {
+		padding: 28px 20px;
+	}
+
+	.header-title h2 {
+		font-size: 1.1rem;
+	}
+}
