@@ -78,7 +78,7 @@ impl GeminiFactory for UnusedFactory {
 fn seed_user(path: &std::path::Path, discord_id: &str) {
     let conn = rusqlite::Connection::open(path).expect("open seed");
     conn.execute(
-        "INSERT INTO users (discord_id, username, salt, role) VALUES (?1, ?1, '00', 'user')",
+        "INSERT INTO users (id, username, salt, role) VALUES (?1, ?1, '00', 'user')",
         rusqlite::params![discord_id],
     )
     .expect("seed user");

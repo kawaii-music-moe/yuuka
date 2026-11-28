@@ -251,7 +251,7 @@ mod tests {
         rusqlite::Connection::open(&path).unwrap();
         let db = Db::open(&path).unwrap();
         let conn = rusqlite::Connection::open(path).unwrap();
-        conn.execute_batch("INSERT INTO users (discord_id, username, salt, sk_account_id) VALUES ('u', 'u', 's', 'acc-u'), ('other', 'other', 's', 'acc-other');").unwrap();
+        conn.execute_batch("INSERT INTO users (id, username, salt, sk_account_id) VALUES ('u', 'u', 's', 'acc-u'), ('other', 'other', 's', 'acc-other');").unwrap();
         (db, dir)
     }
     fn scope(user: &str, bot: &str) -> UserScope {

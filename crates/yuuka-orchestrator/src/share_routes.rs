@@ -331,7 +331,7 @@ mod tests {
                 ("other", "user"),
             ] {
                 conn.execute(
-                    "INSERT OR IGNORE INTO users (discord_id, username, salt, role) \
+                    "INSERT OR IGNORE INTO users (id, username, salt, role) \
                      VALUES (?1, ?1 || '_name', 'x', ?2)",
                     rusqlite::params![uid, role],
                 )

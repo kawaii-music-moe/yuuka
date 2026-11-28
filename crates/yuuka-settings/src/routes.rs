@@ -171,7 +171,7 @@ pub(crate) async fn gemini_get(
             conn.query_row(
                 "SELECT gemini_model, \
                  COALESCE(gemini_api_key_encrypted, '') != '' \
-                 FROM users WHERE discord_id = ?1",
+                 FROM users WHERE id = ?1",
                 rusqlite::params![uid],
                 |r| Ok((r.get::<_, Option<String>>(0)?, r.get::<_, bool>(1)?)),
             )

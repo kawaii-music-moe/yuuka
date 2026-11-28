@@ -28,7 +28,7 @@ pub struct EncryptedColumnSpec {
 pub const ENCRYPTED_COLUMNS: &[EncryptedColumnSpec] = &[
     EncryptedColumnSpec {
         table: "users",
-        key_columns: &["discord_id"],
+        key_columns: &["id"],
         columns: [
             "gemini_api_key_encrypted",
             "gemini_api_key_iv",
@@ -38,7 +38,7 @@ pub const ENCRYPTED_COLUMNS: &[EncryptedColumnSpec] = &[
     },
     EncryptedColumnSpec {
         table: "users",
-        key_columns: &["discord_id"],
+        key_columns: &["id"],
         columns: [
             "google_refresh_token_encrypted",
             "google_refresh_token_iv",
@@ -114,7 +114,7 @@ pub fn rotate_secret_key(
     // ユーザーソルト一覧（discord_id → salt）。ユーザー鍵スコープの再暗号化に使う。
     let mut user_salts: HashMap<String, String> = HashMap::new();
     if table_exists(&tx, "users")? {
-        let mut stmt = tx.prepare("SELECT discord_id, salt FROM users")?;
+        let mut stmt = tx.prepare("SELECT id, salt FROM users")?;
         let mapped = stmt.query_map([], |r| {
             Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?))
         })?;
@@ -255,7 +255,7 @@ mod tests {
     fn setup_db() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(
-            "CREATE TABLE users (discord_id TEXT PRIMARY KEY, salt TEXT,
+            "CREATE TABLE users (id TEXT PRIMARY KEY, salt TEXT,
                 gemini_api_key_encrypted TEXT, gemini_api_key_iv TEXT, gemini_api_key_tag TEXT,
                 google_refresh_token_encrypted TEXT, google_refresh_token_iv TEXT, google_refresh_token_tag TEXT);
              CREATE TABLE credentials (user_id TEXT, service_name TEXT,
@@ -280,7 +280,7 @@ mod tests {
 
         let mut conn = setup_db();
         conn.execute(
-            "INSERT INTO users (discord_id, salt, gemini_api_key_encrypted, gemini_api_key_iv, gemini_api_key_tag)
+            "INSERT INTO users (id, salt, gemini_api_key_encrypted, gemini_api_key_iv, gemini_api_key_tag)
              VALUES ('u1', ?1, ?2, ?3, ?4)",
             rusqlite::params![salt, gem.encrypted, gem.iv, gem.auth_tag],
         )
@@ -299,7 +299,7 @@ mod tests {
         // 旧鍵ではもう復号できない。
         let (e, i, t): (String, String, String) = conn
             .query_row(
-                "SELECT gemini_api_key_encrypted, gemini_api_key_iv, gemini_api_key_tag FROM users WHERE discord_id='u1'",
+                "SELECT gemini_api_key_encrypted, gemini_api_key_iv, gemini_api_key_tag FROM users WHERE id='u1'",
                 [],
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )

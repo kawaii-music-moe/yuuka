@@ -29,7 +29,7 @@ pub async fn me(user: AuthenticatedUser, State(state): State<AppState>) -> Respo
         .read
         .read(move |conn| {
             conn.query_row(
-                "SELECT username, role FROM users WHERE discord_id = ?1",
+                "SELECT username, role FROM users WHERE id = ?1",
                 params![lookup_id],
                 |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
             )

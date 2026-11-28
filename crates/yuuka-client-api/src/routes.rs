@@ -1445,7 +1445,7 @@ mod tests {
         let enc = crypto.encrypt_text("fake-gemini-key").expect("encrypt");
         let conn = rusqlite::Connection::open(path).expect("open seed");
         conn.execute(
-            "INSERT INTO users (discord_id, username, salt, role, \
+            "INSERT INTO users (id, username, salt, role, \
              gemini_api_key_encrypted, gemini_api_key_iv, gemini_api_key_tag, gemini_model) \
              VALUES (?1, 'yuu', '00', 'user', ?2, ?3, ?4, 'gemini-3.1-flash-lite')",
             rusqlite::params![discord_id, enc.encrypted, enc.iv, enc.auth_tag],

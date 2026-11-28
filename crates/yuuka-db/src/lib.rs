@@ -309,7 +309,7 @@ mod tests {
         writer
             .transaction(|tx| {
                 tx.execute(
-                    "INSERT INTO users(discord_id, username, salt) \
+                    "INSERT INTO users(id, username, salt) \
                      VALUES ('u1', 'alice', 'salt')",
                     [],
                 )
@@ -320,12 +320,8 @@ mod tests {
             .unwrap();
         let username: String = pool
             .read(|c| {
-                c.query_row(
-                    "SELECT username FROM users WHERE discord_id='u1'",
-                    [],
-                    |r| r.get(0),
-                )
-                .map_err(map_sqlite)
+                c.query_row("SELECT username FROM users WHERE id='u1'", [], |r| r.get(0))
+                    .map_err(map_sqlite)
             })
             .await
             .unwrap();

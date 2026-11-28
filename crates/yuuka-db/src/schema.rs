@@ -223,7 +223,7 @@ mod tests {
         run_migrations(&mut conn).unwrap();
 
         let users: Vec<String> = conn
-            .prepare("SELECT discord_id FROM users ORDER BY discord_id")
+            .prepare("SELECT id FROM users ORDER BY id")
             .unwrap()
             .query_map([], |r| r.get(0))
             .unwrap()
@@ -409,5 +409,80 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM briefing_configs", [], |r| r.get(0))
             .unwrap();
         assert_eq!(old, 4);
+    }
+
+    #[test]
+    fn v39_renames_user_key_and_keeps_references() {
+        // V38 まで進めた DB（V27 は外部キーを切って流す）に利用者と所有データを入れてから V39 を流す。
+        let mut conn = v26();
+        conn.execute_batch("PRAGMA foreign_keys=OFF;").unwrap();
+        embedded::migrations::runner()
+            .set_target(refinery::Target::Version(27))
+            .run(&mut conn)
+            .unwrap();
+        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+        embedded::migrations::runner()
+            .set_target(refinery::Target::Version(38))
+            .run(&mut conn)
+            .unwrap();
+        conn.execute_batch(
+            "INSERT INTO users (discord_id, username, salt, sk_account_id) VALUES
+               ('100', 'alice', 's', 'acc-1'), ('200', 'bob', 's', 'acc-2');
+             INSERT INTO bots (id, user_id, name) VALUES ('b1', '100', 'bot');
+             INSERT INTO todos (user_id, bot_id, title) VALUES ('100', 'b1', 'todo');",
+        )
+        .unwrap();
+
+        run_migrations(&mut conn).unwrap();
+
+        // 既存利用者は id = 旧 Discord ID のまま、Discord 連携済みとして残る。
+        let users: Vec<(String, Option<String>, bool)> = conn
+            .prepare("SELECT id, discord_id, discord_linked_at IS NOT NULL FROM users ORDER BY id")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(
+            users,
+            vec![
+                ("100".to_owned(), Some("100".to_owned()), true),
+                ("200".to_owned(), Some("200".to_owned()), true),
+            ]
+        );
+        let fk_violations: i64 = conn
+            .query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(fk_violations, 0);
+
+        // 参照側の外部キーは users(id) を指す（存在しない利用者は拒否・削除は CASCADE）。
+        assert!(conn
+            .execute(
+                "INSERT INTO bots (id, user_id, name) VALUES ('ghost', 'nobody', 'x')",
+                []
+            )
+            .is_err());
+        // Discord ID の一意制約（NULL は何件あってもよい）。
+        assert!(conn
+            .execute(
+                "INSERT INTO users (id, discord_id, username, salt) VALUES ('u3', '100', 'dup', 's')",
+                []
+            )
+            .is_err());
+        conn.execute_batch(
+            "INSERT INTO users (id, username, salt) VALUES ('u4', 'web-only', 's'), ('u5', 'web-only2', 's');",
+        )
+        .unwrap();
+        // V29 のトリガー（OLD.discord_id → OLD.id）も含め、利用者の削除で所有データが消える。
+        conn.execute("DELETE FROM users WHERE id = '100'", [])
+            .unwrap();
+        for table in ["bots", "todos"] {
+            let count: i64 = conn
+                .query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(count, 0, "CASCADE: {table}");
+        }
     }
 }
