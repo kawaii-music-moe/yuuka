@@ -35,6 +35,7 @@ import {
 import { fetchBotAttr } from "./config/currentBot";
 import DiscordTokenCard from "./config/DiscordTokenCard.svelte";
 import ChannelsSection from "./discord/ChannelsSection.svelte";
+import DiscordLinkHint from "./discord/DiscordLinkHint.svelte";
 import GuildsSection from "./discord/GuildsSection.svelte";
 import MembersSection from "./discord/MembersSection.svelte";
 import MutedChannelsSection from "./discord/MutedChannelsSection.svelte";
@@ -152,6 +153,7 @@ onDestroy(() => {
 {/snippet}
 
 <section class="tab-view settings-page discord-tab">
+	<DiscordLinkHint />
 	{#if shown === "connection"}
 		{#if showToken}
 			<DiscordTokenCard {botId} onsaved={refreshBot} />

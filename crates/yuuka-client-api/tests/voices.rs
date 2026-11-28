@@ -51,7 +51,7 @@ struct FakeAuth;
 impl AuthBackend for FakeAuth {
     async fn session_user(&self, token: &str) -> Result<Option<SessionUser>, AuthError> {
         Ok([ALICE, BOB, GHOST].contains(&token).then(|| SessionUser {
-            discord_id: token.to_owned(),
+            user_id: token.to_owned(),
             username: token.to_owned(),
             role: Role::User,
         }))
@@ -78,7 +78,7 @@ impl GeminiFactory for UnusedFactory {
 fn seed_user(path: &std::path::Path, discord_id: &str) {
     let conn = rusqlite::Connection::open(path).expect("open seed");
     conn.execute(
-        "INSERT INTO users (discord_id, username, salt, role) VALUES (?1, ?1, '00', 'user')",
+        "INSERT INTO users (id, username, salt, role) VALUES (?1, ?1, '00', 'user')",
         rusqlite::params![discord_id],
     )
     .expect("seed user");

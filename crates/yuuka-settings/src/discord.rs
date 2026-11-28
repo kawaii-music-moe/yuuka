@@ -40,7 +40,7 @@ pub(crate) async fn get_discord(
     State(state): State<AppState>,
     Query(q): Query<BotIdQuery>,
 ) -> Result<Response, ApiError> {
-    let user_id = &user.0.discord_id;
+    let user_id = &user.0.user_id;
     let bot_id = resolve_bot_id(q.bot_id.as_deref());
     let row = repo::get_bot_discord(&state.db, &bot_id).await?;
 
@@ -82,7 +82,7 @@ pub(crate) async fn post_discord(
     State(state): State<AppState>,
     Json(body): Json<DiscordInput>,
 ) -> Result<Response, ApiError> {
-    let user_id = &user.0.discord_id;
+    let user_id = &user.0.user_id;
     // Node: `typeof botId === "string" && botId ? botId : "system_default"`。
     let bot_id = match body.bot_id.as_ref().and_then(Value::as_str) {
         Some(b) if !b.is_empty() => b.to_owned(),

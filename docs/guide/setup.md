@@ -46,9 +46,38 @@ cp example.yaml config.yaml
   - `OIDC_ISSUER`: issuer（省略時は標準の sk-account `https://account.sk-9.net`）。discovery（`/.well-known/openid-configuration`）からエンドポイントを取る。
   - `OIDC_INTERNAL_URL`: サーバーからプロバイダーへ問い合わせる内部 URL（任意。同じマシンで動かすとき）。
   - `OIDC_CLIENT_ID`（既定 `yuuka`）/ `OIDC_CLIENT_SECRET`（必須。未設定だとログインできない）: プロバイダーに登録したクライアント。戻り先は `{BASE_URL}/api/auth/oidc/callback`、Back-Channel Logout の受け口は `/api/auth/oidc/backchannel-logout`。
-  - `OIDC_SCOPE`（既定 `openid profile discord`）/ `OIDC_DISCORD_ID_CLAIM`（既定 `discord_id`）: Yuuka は利用者を Discord ID で識別するので、ID トークンのこの claim に Discord ID が必要。
+  - `OIDC_SCOPE`（既定は標準の sk-account なら `openid profile discord`、それ以外は `openid profile email`）/ `OIDC_DISCORD_ID_CLAIM`（既定 `discord_id`）: Yuuka は利用者を ID トークンの `sub` で識別する。この claim に Discord ID があれば、ログイン時に Discord と連携する（任意。無くてもログインできる）。
   - `OIDC_LABEL`: ログインボタンの表示名（省略時は標準なら `sk-9 Account`、それ以外は issuer のホスト名）。
 - **`ADMIN_DISCORD_IDS`**: 初回ログイン時に Admin として作成する Discord ユーザー ID（未設定なら全員 User。初回ログイン前に管理者の ID を指定）。
+- **`ADMIN_OIDC_SUBJECTS`** / **`ADMIN_EMAILS`**: Discord を使わない管理者を、OIDC の `sub` か確認済みのメールアドレス（`email_verified` が true のときだけ照合）で指定する。`ADMIN_DISCORD_IDS` と合わせて、どれかに当たる新規利用者が管理者になる。
+- **`REGISTRATION_MODE`**（既定 `invite`）: 初めてログインした人の扱い。`invite` は管理画面「招待コード」で発行した招待リンク（1 回だけ使える）を持つ人だけを登録する。`open` は誰でも登録し、`closed` は既存の利用者だけがログインできる。`ADMIN_DISCORD_IDS` / `ADMIN_OIDC_SUBJECTS` / `ADMIN_EMAILS` で指定した管理者は、どの方式でも登録できる（最初の管理者が招待コードを発行するため）。
+- **`DISCORD_OAUTH_CLIENT_ID`** / **`DISCORD_OAUTH_CLIENT_SECRET`**（任意）: アカウント画面から Discord を後から連携するための OAuth2 アプリ。Discord Developer Portal の OAuth2 で Redirect に `{BASE_URL}/api/me/discord/link/callback` を登録する。同じ Discord アカウントを別の利用者に連携することはできない（統合はしない）。連携の解除は、OIDC でログインできる利用者ならいつでもでき、解除すると通知先は Web の通知一覧に切り替わる。
+
+### Discord を使わずに立てる（最小構成）
+
+Discord は任意です。Discord アカウントを持たない人も、Web 管理画面・PWA・デスクトップクライアントで Yuuka を使えます（[設計](../design/optional_discord.md)）。sk-9.net に頼らずに新しいインスタンスを立てる最小の設定は次のとおりです。
+
+1. 好きな OIDC プロバイダー（Google・Keycloak・Authentik など）にクライアントを登録し、戻り先に `{BASE_URL}/api/auth/oidc/callback` を登録する。
+2. `config.yaml` に次を書く（シークレットは環境変数で渡してもよい）。
+
+   ```yaml
+   BASE_URL: "https://yuuka.example.com"
+   OIDC_ISSUER: "https://accounts.google.com"   # 使うプロバイダーの issuer
+   OIDC_CLIENT_ID: "<クライアント ID>"
+   OIDC_CLIENT_SECRET: "<クライアントシークレット>"
+   # 管理者を sub か確認済みメールで指定する（Discord ID は不要）
+   ADMIN_EMAILS: "you@example.com"
+   # 既定は招待制。管理者がログイン後、管理画面「招待コード」から招待リンクを発行する
+   # REGISTRATION_MODE: "invite"
+   ```
+
+3. Discord の Bot は動かさない（`YUUKA_RUST_DISCORD` を設定しない・Bot トークンを登録しない）。
+
+この構成では次のようになります。
+
+- 利用者は ID トークンの `sub` で識別され、Discord ID が無くてもログインできる。
+- 新しく作った利用者の通知先は「Web」になり、リマインドや定期通知は「アカウント › 時刻と通知」の通知一覧に届く。
+- Discord の Bot との会話・DM 通知・Discord 上の利用申請は使えない。あとで Discord を使うときは、Bot を動かし（`YUUKA_RUST_DISCORD=1` とトークン登録）、各自が「アカウント › プロフィール › Discord 連携」から連携する（`DISCORD_OAUTH_CLIENT_ID` / `_SECRET` が必要）。
 
 ### 環境変数（機密設定）
 

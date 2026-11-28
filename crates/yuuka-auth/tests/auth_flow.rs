@@ -13,6 +13,7 @@ use axum::http::{
     header::{AUTHORIZATION, CONTENT_TYPE, COOKIE, LOCATION, SET_COOKIE},
     HeaderMap, Request, StatusCode,
 };
+use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::Json;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
@@ -23,8 +24,11 @@ use ring::signature::{EcdsaKeyPair, KeyPair, ECDSA_P256_SHA256_FIXED_SIGNING};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use tower::ServiceExt;
+use yuuka_auth::discord_link::DiscordLinkClient;
+use yuuka_auth::users::LoginPolicy;
 use yuuka_auth::{AuthRuntime, CompositeAuth, OidcClient, SessionStore};
 use yuuka_core::config::OidcSettings;
+use yuuka_core::RegistrationMode;
 use yuuka_types::{Role, SessionUser};
 use yuuka_web::{framework_routes, AppState, Db, WebConfig};
 
@@ -338,13 +342,41 @@ fn oidc_client(issuer: &str) -> Arc<OidcClient> {
 }
 
 fn build_app(oidc: Option<Arc<OidcClient>>, admin_ids: Vec<String>, config: WebConfig) -> TestApp {
+    let policy = LoginPolicy {
+        admin_discord_ids: admin_ids.clone(),
+        registration: RegistrationMode::Open,
+        ..LoginPolicy::default()
+    };
+    build_app_with_policy(oidc, admin_ids, policy, config)
+}
+
+fn build_app_with_policy(
+    oidc: Option<Arc<OidcClient>>,
+    admin_ids: Vec<String>,
+    policy: LoginPolicy,
+    config: WebConfig,
+) -> TestApp {
+    build_app_full(oidc, admin_ids, policy, config, None)
+}
+
+fn build_app_full(
+    oidc: Option<Arc<OidcClient>>,
+    admin_ids: Vec<String>,
+    policy: LoginPolicy,
+    config: WebConfig,
+    discord_link: Option<DiscordLinkClient>,
+) -> TestApp {
     let file = tempfile::NamedTempFile::new().expect("temp db");
     let db = Db::open(file.path()).expect("open db");
     let sessions = SessionStore::in_memory();
     let auth =
         Arc::new(CompositeAuth::new(db.clone(), sessions.clone(), 7).with_oidc(oidc.clone()));
     let state = AppState::new(auth, config, db);
-    let runtime = Arc::new(AuthRuntime::new(sessions.clone(), 7, admin_ids, oidc));
+    let runtime = Arc::new(
+        AuthRuntime::new(sessions.clone(), 7, admin_ids, oidc)
+            .with_login_policy(policy)
+            .with_discord_link(discord_link),
+    );
     TestApp {
         router: framework_routes()
             .merge(yuuka_auth::routes(runtime))
@@ -417,7 +449,11 @@ fn name_value(cookie: &str) -> String {
 
 /// `start` を通して `(認可 URL, state, ブラウザが返す state Cookie)` を得る。
 async fn begin_login(router: &axum::Router) -> (String, String, String) {
-    let response = get_with(router, "/api/auth/oidc/start", None).await;
+    begin_login_at(router, "/api/auth/oidc/start").await
+}
+
+async fn begin_login_at(router: &axum::Router, start_uri: &str) -> (String, String, String) {
+    let response = get_with(router, start_uri, None).await;
     assert_eq!(response.status(), StatusCode::FOUND);
     let authorize_url = location(&response);
     let state = reqwest::Url::parse(&authorize_url)
@@ -477,8 +513,19 @@ fn clears_state_cookie(response: &axum::response::Response) -> bool {
 fn user_row(path: &PathBuf, discord_id: &str) -> Option<(Option<String>, String, String)> {
     let conn = rusqlite::Connection::open(path).expect("open");
     conn.query_row(
-        "SELECT sk_account_id, username, role FROM users WHERE discord_id = ?1",
+        "SELECT sk_account_id, username, role FROM users WHERE id = ?1",
         [discord_id],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+    )
+    .ok()
+}
+
+/// OIDC の `sub` で引いた `(id, discord_id, role)`。
+fn user_by_subject(path: &PathBuf, sub: &str) -> Option<(String, Option<String>, String)> {
+    let conn = rusqlite::Connection::open(path).expect("open");
+    conn.query_row(
+        "SELECT id, discord_id, role FROM users WHERE sk_account_id = ?1",
+        [sub],
         |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
     )
     .ok()
@@ -487,8 +534,8 @@ fn user_row(path: &PathBuf, discord_id: &str) -> Option<(Option<String>, String,
 fn seed_user(path: &PathBuf, discord_id: &str, role: &str, sk_account_id: Option<&str>) {
     let conn = rusqlite::Connection::open(path).expect("open");
     conn.execute(
-        "INSERT INTO users (discord_id, username, salt, role, sk_account_id) \
-         VALUES (?1, 'old-name', '00ff', ?2, ?3)",
+        "INSERT INTO users (id, discord_id, username, salt, role, sk_account_id) \
+         VALUES (?1, ?1, 'old-name', '00ff', ?2, ?3)",
         rusqlite::params![discord_id, role, sk_account_id],
     )
     .expect("seed user");
@@ -801,17 +848,461 @@ async fn callback_rejects_id_token_with_another_nonce() {
 }
 
 #[tokio::test]
-async fn callback_rejects_account_without_discord_id() {
+async fn callback_creates_user_without_discord_id_with_uuid_v7() {
     let provider = start_provider().await;
     let t = app_with(&provider, Vec::new());
-    let response = login(
+    let session = login_session(
         &t,
         &provider,
         json!({ "sub": "acc-x", "name": "No Discord" }),
     )
     .await;
-    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(logged_in(&t, &session).await, StatusCode::OK);
+
+    let (id, discord, role) = user_by_subject(&t.db_path, "acc-x").expect("user created");
+    assert_eq!(id.len(), 36, "{id}");
+    assert_eq!(id.chars().nth(14), Some('7'), "UUIDv7: {id}");
+    assert_eq!(discord, None, "Discord 未連携");
+    assert_eq!(role, "user");
+
+    // 二回目も同じ利用者になる。
+    login_session(
+        &t,
+        &provider,
+        json!({ "sub": "acc-x", "name": "No Discord" }),
+    )
+    .await;
+    assert_eq!(user_by_subject(&t.db_path, "acc-x").expect("user").0, id);
+}
+
+#[tokio::test]
+async fn callback_links_discord_later_and_rejects_conflicts_without_merging() {
+    let provider = start_provider().await;
+    let t = app_with(&provider, Vec::new());
+    login_session(&t, &provider, json!({ "sub": "acc-a", "name": "A" })).await;
+    let (id, _, _) = user_by_subject(&t.db_path, "acc-a").expect("user");
+
+    // 後から Discord ID 付きでログインすると、同じ利用者のまま連携される。
+    login_session(&t, &provider, account("acc-a", "700", "A")).await;
+    let (same, discord, _) = user_by_subject(&t.db_path, "acc-a").expect("user");
+    assert_eq!(same, id);
+    assert_eq!(discord.as_deref(), Some("700"));
+
+    // 同じ Discord ID の別アカウントは統合せずに断る。
+    let response = login(&t, &provider, account("acc-b", "700", "B")).await;
+    assert_eq!(response.status(), StatusCode::CONFLICT);
     assert!(!has_session_cookie(&response));
+    assert!(user_by_subject(&t.db_path, "acc-b").is_none());
+
+    // 連携済みと違う Discord ID が来たら断る。
+    let response = login(&t, &provider, account("acc-a", "701", "A")).await;
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        user_by_subject(&t.db_path, "acc-a")
+            .expect("user")
+            .1
+            .as_deref(),
+        Some("700")
+    );
+}
+
+#[tokio::test]
+async fn closed_registration_lets_only_existing_users_in() {
+    let provider = start_provider().await;
+    let t = build_app_with_policy(
+        Some(oidc_client(&provider.issuer)),
+        Vec::new(),
+        LoginPolicy {
+            registration: RegistrationMode::Closed,
+            ..LoginPolicy::default()
+        },
+        WebConfig::default(),
+    );
+    seed_user(&t.db_path, "800", "user", Some("acc-old"));
+
+    login_session(&t, &provider, account("acc-old", "800", "Old")).await;
+    let response = login(&t, &provider, json!({ "sub": "acc-new", "name": "New" })).await;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert!(!has_session_cookie(&response));
+    assert!(user_by_subject(&t.db_path, "acc-new").is_none());
+}
+
+#[tokio::test]
+async fn admin_can_be_named_by_oidc_subject_without_discord() {
+    let provider = start_provider().await;
+    let t = build_app_with_policy(
+        Some(oidc_client(&provider.issuer)),
+        Vec::new(),
+        LoginPolicy {
+            admin_subjects: vec!["acc-admin".to_owned()],
+            registration: RegistrationMode::Open,
+            ..LoginPolicy::default()
+        },
+        WebConfig::default(),
+    );
+    login_session(
+        &t,
+        &provider,
+        json!({ "sub": "acc-admin", "name": "Admin" }),
+    )
+    .await;
+    login_session(&t, &provider, json!({ "sub": "acc-user", "name": "User" })).await;
+    assert_eq!(
+        user_by_subject(&t.db_path, "acc-admin").expect("admin").2,
+        "admin"
+    );
+    assert_eq!(
+        user_by_subject(&t.db_path, "acc-user").expect("user").2,
+        "user"
+    );
+}
+
+// ---------------------------------------------------------------------------------------------
+// 招待コード（REGISTRATION_MODE=invite）
+// ---------------------------------------------------------------------------------------------
+
+/// 招待コード付きでログインを始め、callback まで戻ってくる。
+async fn login_with_invite(
+    t: &TestApp,
+    provider: &Provider,
+    account: Value,
+    invite: &str,
+) -> axum::response::Response {
+    let (authorize_url, state, cookie) =
+        begin_login_at(&t.router, &format!("/api/auth/oidc/start?invite={invite}")).await;
+    let code = provider.authorize(&authorize_url, account);
+    get_with(
+        &t.router,
+        &format!("/api/auth/oidc/callback?code={code}&state={state}"),
+        Some(&cookie),
+    )
+    .await
+}
+
+fn invite_app(provider: &Provider, admin_subjects: Vec<String>) -> TestApp {
+    build_app_with_policy(
+        Some(oidc_client(&provider.issuer)),
+        Vec::new(),
+        LoginPolicy {
+            admin_subjects,
+            registration: RegistrationMode::Invite,
+            ..LoginPolicy::default()
+        },
+        WebConfig::default(),
+    )
+}
+
+fn seed_invite(path: &PathBuf, code: &str) {
+    let conn = rusqlite::Connection::open(path).expect("open");
+    conn.execute("INSERT INTO invite_codes (code) VALUES (?1)", [code])
+        .expect("seed invite");
+}
+
+async fn json_body(response: axum::response::Response) -> Value {
+    let bytes = axum::body::to_bytes(response.into_body(), 1 << 20)
+        .await
+        .expect("body");
+    serde_json::from_slice(&bytes).expect("json")
+}
+
+async fn post_json_with(
+    router: &axum::Router,
+    uri: &str,
+    cookie: &str,
+    body: Value,
+) -> axum::response::Response {
+    send(
+        router,
+        Request::builder()
+            .method("POST")
+            .uri(uri)
+            .header(COOKIE, cookie)
+            .header(CONTENT_TYPE, "application/json")
+            .body(Body::from(body.to_string()))
+            .expect("request"),
+    )
+    .await
+}
+
+#[tokio::test]
+async fn invite_mode_requires_a_valid_single_use_code() {
+    let provider = start_provider().await;
+    let t = invite_app(&provider, Vec::new());
+    seed_invite(&t.db_path, "invite-code-0001");
+
+    // コード無し・知らないコードでは登録しない。
+    let response = login(&t, &provider, json!({ "sub": "acc-new", "name": "New" })).await;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let response = login_with_invite(
+        &t,
+        &provider,
+        json!({ "sub": "acc-new", "name": "New" }),
+        "unknown-code-0000",
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert!(user_by_subject(&t.db_path, "acc-new").is_none());
+
+    // 有効なコードで登録でき、2 人目は同じコードを使えない。
+    let response = login_with_invite(
+        &t,
+        &provider,
+        json!({ "sub": "acc-new", "name": "New" }),
+        "invite-code-0001",
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::FOUND);
+    let (id, _, _) = user_by_subject(&t.db_path, "acc-new").expect("registered");
+    let conn = rusqlite::Connection::open(&t.db_path).expect("open");
+    let used_by: Option<String> = conn
+        .query_row(
+            "SELECT used_by FROM invite_codes WHERE code = 'invite-code-0001'",
+            [],
+            |r| r.get(0),
+        )
+        .expect("invite row");
+    assert_eq!(used_by.as_deref(), Some(id.as_str()));
+
+    let response = login_with_invite(
+        &t,
+        &provider,
+        json!({ "sub": "acc-second", "name": "Second" }),
+        "invite-code-0001",
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert!(user_by_subject(&t.db_path, "acc-second").is_none());
+
+    // 登録済みの人はコード無しでログインできる。
+    login_session(&t, &provider, json!({ "sub": "acc-new", "name": "New" })).await;
+}
+
+#[tokio::test]
+async fn named_admin_registers_without_invite_and_can_issue_invites() {
+    let provider = start_provider().await;
+    let t = invite_app(&provider, vec!["acc-admin".to_owned()]);
+    let admin = login_session(
+        &t,
+        &provider,
+        json!({ "sub": "acc-admin", "name": "Admin" }),
+    )
+    .await;
+    assert_eq!(
+        user_by_subject(&t.db_path, "acc-admin").expect("admin").2,
+        "admin"
+    );
+
+    let response = post_json_with(
+        &t.router,
+        "/api/admin/invites",
+        &admin,
+        json!({ "note": "友人", "expiresInDays": 3 }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let created = json_body(response).await;
+    let code = created["invite"]["code"].as_str().expect("code").to_owned();
+    assert_eq!(created["invite"]["note"], "友人");
+    assert!(created["invite"]["expiresAt"].is_string());
+
+    let listed = json_body(get_with(&t.router, "/api/admin/invites", Some(&admin)).await).await;
+    assert_eq!(listed["invites"].as_array().expect("list").len(), 1);
+
+    // 発行したコードで新しい人が登録できる。一般利用者は発行できない。
+    let user = {
+        let response = login_with_invite(
+            &t,
+            &provider,
+            json!({ "sub": "acc-friend", "name": "Friend" }),
+            &code,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::FOUND);
+        name_value(
+            &set_cookies(&response)
+                .into_iter()
+                .find(|c| c.starts_with("yuuka-session="))
+                .expect("session cookie"),
+        )
+    };
+    let response = post_json_with(&t.router, "/api/admin/invites", &user, json!({})).await;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    let response = post_json_with(
+        &t.router,
+        "/api/admin/invites/delete",
+        &admin,
+        json!({ "code": code }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let response = post_json_with(
+        &t.router,
+        "/api/admin/invites/delete",
+        &admin,
+        json!({ "code": code }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Discord の後付け連携（§5）
+// ---------------------------------------------------------------------------------------------
+
+/// Discord の token・users/@me を返す偽サーバー。`/users/@me` が返す ID は `discord_id` で差し替える。
+async fn start_fake_discord() -> (String, Arc<Mutex<String>>) {
+    let discord_id = Arc::new(Mutex::new("555".to_owned()));
+    let id = discord_id.clone();
+    let router = axum::Router::new()
+        .route(
+            "/oauth2/token",
+            post(|| async {
+                Json(json!({ "access_token": "discord-token", "token_type": "Bearer" }))
+            }),
+        )
+        .route(
+            "/users/@me",
+            get(move |headers: HeaderMap| {
+                let id = id.clone();
+                async move {
+                    let authorized = headers.get(AUTHORIZATION).and_then(|v| v.to_str().ok())
+                        == Some("Bearer discord-token");
+                    if !authorized {
+                        return (StatusCode::UNAUTHORIZED, Json(json!({}))).into_response();
+                    }
+                    let value = id.lock().expect("lock").clone();
+                    Json(json!({ "id": value, "username": "someone" })).into_response()
+                }
+            }),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let base = format!("http://{}", listener.local_addr().expect("addr"));
+    tokio::spawn(async move {
+        axum::serve(listener, router).await.expect("serve");
+    });
+    (base, discord_id)
+}
+
+fn link_app(provider: &Provider, discord_api: &str) -> TestApp {
+    let link = DiscordLinkClient::new(
+        Some("discord-client"),
+        Some(&"discord-secret".to_owned().into()),
+        PUBLIC_BASE,
+    )
+    .expect("link client")
+    .with_api_base(discord_api);
+    build_app_full(
+        Some(oidc_client(&provider.issuer)),
+        Vec::new(),
+        LoginPolicy {
+            registration: RegistrationMode::Open,
+            ..LoginPolicy::default()
+        },
+        WebConfig::default(),
+        Some(link),
+    )
+}
+
+/// 連携を始めて Discord から戻り、戻り先（アカウント画面）の URL を返す。
+async fn link_discord(t: &TestApp, session: &str) -> String {
+    let response = get_with(&t.router, "/api/me/discord/link/start", Some(session)).await;
+    assert_eq!(response.status(), StatusCode::FOUND);
+    let authorize = reqwest::Url::parse(&location(&response)).expect("authorize url");
+    assert_eq!(authorize.host_str(), Some("discord.com"));
+    let q: HashMap<String, String> = authorize.query_pairs().into_owned().collect();
+    assert_eq!(q["scope"], "identify");
+    assert_eq!(
+        q["redirect_uri"],
+        format!("{PUBLIC_BASE}/api/me/discord/link/callback")
+    );
+    let callback = format!(
+        "/api/me/discord/link/callback?code=discord-code&state={}",
+        q["state"]
+    );
+    let response = get_with(&t.router, &callback, Some(session)).await;
+    assert_eq!(response.status(), StatusCode::FOUND);
+    location(&response)
+}
+
+#[tokio::test]
+async fn discord_can_be_linked_later_without_merging_and_unlinked() {
+    let provider = start_provider().await;
+    let (discord_api, discord_id) = start_fake_discord().await;
+    let t = link_app(&provider, &discord_api);
+    let alice = login_session(&t, &provider, json!({ "sub": "acc-a", "name": "A" })).await;
+
+    let status = json_body(get_with(&t.router, "/api/me/discord", Some(&alice)).await).await;
+    assert_eq!(status["linked"], false);
+    assert_eq!(status["available"], true);
+
+    assert_eq!(
+        link_discord(&t, &alice).await,
+        "/admin/account/profile?discord=linked"
+    );
+    let (_, linked, _) = user_by_subject(&t.db_path, "acc-a").expect("alice");
+    assert_eq!(linked.as_deref(), Some("555"));
+    let status = json_body(get_with(&t.router, "/api/me/discord", Some(&alice)).await).await;
+    assert_eq!(status["linked"], true);
+    assert_eq!(status["discordId"], "555");
+
+    // 同じ Discord アカウントを別の利用者に連携しようとしても、統合せずに断る。
+    let bob = login_session(&t, &provider, json!({ "sub": "acc-b", "name": "B" })).await;
+    assert_eq!(
+        link_discord(&t, &bob).await,
+        "/admin/account/profile?discord=conflict"
+    );
+    assert_eq!(user_by_subject(&t.db_path, "acc-b").expect("bob").1, None);
+
+    // 別の利用者が発行した state では連携できない。
+    let start = get_with(&t.router, "/api/me/discord/link/start", Some(&alice)).await;
+    let state: String = reqwest::Url::parse(&location(&start))
+        .expect("url")
+        .query_pairs()
+        .find(|(k, _)| k == "state")
+        .expect("state")
+        .1
+        .into_owned();
+    *discord_id.lock().expect("lock") = "777".to_owned();
+    let response = get_with(
+        &t.router,
+        &format!("/api/me/discord/link/callback?code=c&state={state}"),
+        Some(&bob),
+    )
+    .await;
+    assert_eq!(location(&response), "/admin/account/profile?discord=error");
+    assert_eq!(user_by_subject(&t.db_path, "acc-b").expect("bob").1, None);
+
+    // 解除すると、通知先は Web の受信箱に切り替わる。
+    let response = post_json_with(&t.router, "/api/me/discord/unlink", &alice, json!({})).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(user_by_subject(&t.db_path, "acc-a").expect("alice").1, None);
+    let conn = rusqlite::Connection::open(&t.db_path).expect("open");
+    let notify: String = conn
+        .query_row(
+            "SELECT notify_target_type FROM users WHERE sk_account_id = 'acc-a'",
+            [],
+            |r| r.get(0),
+        )
+        .expect("notify");
+    assert_eq!(notify, "web");
+    let response = post_json_with(&t.router, "/api/me/discord/unlink", &alice, json!({})).await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn discord_link_is_unavailable_without_oauth_settings() {
+    let provider = start_provider().await;
+    let t = app_with(&provider, Vec::new());
+    let session = login_session(&t, &provider, account("acc-1", "100", "Alice")).await;
+    let status = json_body(get_with(&t.router, "/api/me/discord", Some(&session)).await).await;
+    assert_eq!(status["linked"], true);
+    assert_eq!(status["discordId"], "100");
+    assert_eq!(status["available"], false);
+    let response = get_with(&t.router, "/api/me/discord/link/start", Some(&session)).await;
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
 }
 
 #[tokio::test]
@@ -1025,7 +1516,7 @@ async fn sessions_issued_before_oidc_are_no_longer_accepted() {
         .sessions
         .create(
             &SessionUser {
-                discord_id: "100".to_owned(),
+                user_id: "100".to_owned(),
                 username: "Alice".to_owned(),
                 role: Role::User,
             },

@@ -17,6 +17,8 @@ mod device_auth;
 mod session;
 
 pub mod audit;
+pub mod discord_link;
+pub mod invite;
 pub mod oidc;
 pub mod routes;
 pub mod token;

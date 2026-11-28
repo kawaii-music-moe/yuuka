@@ -283,7 +283,7 @@ mod tests {
     async fn app() -> axum::Router {
         let auth = Arc::new(FakeAuth {
             user: SessionUser {
-                discord_id: "u".to_owned(),
+                user_id: "u".to_owned(),
                 username: "u".to_owned(),
                 role: Role::User,
             },
@@ -497,7 +497,7 @@ mod tests {
     async fn route_add_and_delete_sync_with_google_like_the_tools() {
         let auth = Arc::new(FakeAuth {
             user: SessionUser {
-                discord_id: "u".to_owned(),
+                user_id: "u".to_owned(),
                 username: "u".to_owned(),
                 role: Role::User,
             },

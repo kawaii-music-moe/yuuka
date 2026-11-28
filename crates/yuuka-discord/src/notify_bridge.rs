@@ -24,7 +24,8 @@ use crate::ports::{
 /// 型写像のみを担い、未解決の `Default` が届いた場合は DM に落とす。
 fn to_deliver_target(target: NotifyTarget) -> DeliverTarget {
     match target {
-        NotifyTarget::Default | NotifyTarget::Dm => DeliverTarget::Dm,
+        // Web 宛ては services の DefaultTargetNotifier が受信箱へ回すので、ここへは来ない（来たら DM）。
+        NotifyTarget::Default | NotifyTarget::Dm | NotifyTarget::Web => DeliverTarget::Dm,
         NotifyTarget::Channel(id) => DeliverTarget::Channel(id),
     }
 }

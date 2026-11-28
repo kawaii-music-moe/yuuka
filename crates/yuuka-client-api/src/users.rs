@@ -45,10 +45,10 @@ pub async fn get_agent_settings(
                  FROM users u \
                  LEFT JOIN user_google_accounts g ON g.id = ( \
                      SELECT id FROM user_google_accounts \
-                     WHERE user_id = u.discord_id \
+                     WHERE user_id = u.id \
                      ORDER BY is_primary DESC, id ASC LIMIT 1 \
                  ) \
-                 WHERE u.discord_id = ?1",
+                 WHERE u.id = ?1",
                 params![id],
                 |r| {
                     let model: Option<String> = r.get(0)?;
@@ -84,7 +84,7 @@ pub async fn set_gemini_model(db: &Db, discord_id: &str, model: &str) -> Result<
             let updated = tx
                 .execute(
                     "UPDATE users SET gemini_model = ?1, updated_at = datetime('now', 'localtime') \
-                     WHERE discord_id = ?2",
+                     WHERE id = ?2",
                     params![model, id],
                 )
                 .map_err(map_sqlite)?;
@@ -111,7 +111,7 @@ mod tests {
         db.writer
             .transaction(move |tx| {
                 tx.execute(
-                    "INSERT INTO users (discord_id, username, salt, gemini_model) \
+                    "INSERT INTO users (id, username, salt, gemini_model) \
                      VALUES (?1, ?1, 'x', ?2)",
                     params![id, model],
                 )
@@ -148,7 +148,7 @@ mod tests {
             .transaction(move |tx| {
                 tx.execute(
                     "UPDATE users SET google_refresh_token_encrypted = 'enc' \
-                     WHERE discord_id = ?1",
+                     WHERE id = ?1",
                     params![id],
                 )
                 .map_err(map_sqlite)?;

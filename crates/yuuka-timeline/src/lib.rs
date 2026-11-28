@@ -81,7 +81,7 @@ mod tests {
             let conn = rusqlite::Connection::open(&path).expect("seed users conn");
             for uid in ["u", "userA", "userB", "other"] {
                 conn.execute(
-                    "INSERT OR IGNORE INTO users (discord_id, username, salt) \
+                    "INSERT OR IGNORE INTO users (id, username, salt) \
                      VALUES (?1, ?1, 'x')",
                     rusqlite::params![uid],
                 )
@@ -356,7 +356,7 @@ mod tests {
     async fn app() -> axum::Router {
         let auth = Arc::new(FakeAuth {
             user: SessionUser {
-                discord_id: "u".to_owned(),
+                user_id: "u".to_owned(),
                 username: "u".to_owned(),
                 role: Role::User,
             },
@@ -463,7 +463,7 @@ mod tests {
         let media_dir = tempfile::tempdir().expect("media tempdir");
         let auth = Arc::new(FakeAuth {
             user: SessionUser {
-                discord_id: "u".to_owned(),
+                user_id: "u".to_owned(),
                 username: "u".to_owned(),
                 role: Role::User,
             },
@@ -1224,7 +1224,7 @@ mod tests {
         let auth = |id: &str| {
             Arc::new(FakeAuth {
                 user: SessionUser {
-                    discord_id: id.to_owned(),
+                    user_id: id.to_owned(),
                     username: id.to_owned(),
                     role: Role::User,
                 },

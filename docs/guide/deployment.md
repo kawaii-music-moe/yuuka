@@ -199,6 +199,8 @@ Gemini API の規約には 18 歳以上という条件、18 歳未満がアク�
 
 ### Discord（アプリ認証と特権 Intent は別）
 
+Discord は任意です。Discord を使わない構成（Bot を動かさない・`YUUKA_RUST_DISCORD` を設定しない）は、[セットアップの最小構成](setup.md#discord-を使わずに立てる最小構成)を参照してください。以下は Discord の Bot を動かす場合の注意です。
+
 Yuuka の Gateway 接続は `MESSAGE_CONTENT` を要求します（`crates/yuuka-discord/src/tenant.rs`）。Developer Portal の Bot 設定でも必要な Intent を有効にしてください。未設定・未承認なら接続が拒否される場合があります。
 
 - **アプリ認証**: 100 サーバーを超えて Bot を導入するには認証が必要です。Developer Portal の App Verification の要件を満たしてください。

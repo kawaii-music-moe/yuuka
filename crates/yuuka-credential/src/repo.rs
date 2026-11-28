@@ -125,7 +125,7 @@ impl<'a> CredentialRepo<'a> {
         self.read
             .read(move |conn| {
                 let mut stmt = conn
-                    .prepare("SELECT salt FROM users WHERE discord_id = ?1")
+                    .prepare("SELECT salt FROM users WHERE id = ?1")
                     .map_err(map_sqlite)?;
                 let mut rows = stmt
                     .query_map(params![uid], |row| row.get::<_, String>(0))

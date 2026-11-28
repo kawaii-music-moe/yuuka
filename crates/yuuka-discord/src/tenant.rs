@@ -383,7 +383,7 @@ async fn handle_interaction_event(
         return;
     }
 
-    let Some(invoker) = invoker_id(&interaction) else {
+    let Some(invoker) = invoker_id(ideps.directory.as_ref(), &interaction).await else {
         return;
     };
 

@@ -113,7 +113,7 @@ mod tests {
     async fn context() -> (ServiceContext, tempfile::TempDir) {
         let (db, dir) = seeded_db("");
         db.writer.execute(|c| {
-            c.execute_batch("INSERT INTO users (discord_id, username, salt, sk_account_id) VALUES ('u','u','s','a'),('other','other','s','b');").map_err(yuuka_db::map_sqlite)?;
+            c.execute_batch("INSERT INTO users (id, username, salt, sk_account_id) VALUES ('u','u','s','a'),('other','other','s','b');").map_err(yuuka_db::map_sqlite)?;
             Ok(())
         }).await.unwrap();
         (ctx_null(db), dir)

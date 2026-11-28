@@ -1,6 +1,6 @@
 # Discord 連携の任意化 設計方針
 
-- ステータス: 方針確定（2026-11-28・§9）。実装は §8 の順に進める
+- ステータス: 実装済み（2026-11-28・§8 の各段階を PR #278〜#285 で実装。§9 は決定事項）
 - 作成日: 2026-11-28
 - 関連: [#234](https://github.com/kawaii-music-moe/yuuka/issues/234)（sk-account 以外の OIDC でログインできない）、`docs/design/bundled_login.md`（提案のみで閉じた同梱ログイン案）
 - 主な対象: `crates/yuuka-db/migrations/V17__baseline.sql`（`users`）、`crates/yuuka-auth/src/{oidc.rs,users.rs,routes.rs,session.rs}`、`crates/yuuka-types/src/dto.rs`（`SessionUser`）、`crates/yuuka-services/src/notifier.rs`、`crates/yuuka-reminder/src/notify_target.rs`、`crates/yuuka-discord`、`frontend/src/lib/stores/session.ts`
@@ -43,9 +43,9 @@ ALTER TABLE users RENAME COLUMN discord_id TO id;
 ALTER TABLE users ADD COLUMN discord_id TEXT;
 UPDATE users SET discord_id = id;               -- 既存ユーザーは全員連携済み
 CREATE UNIQUE INDEX idx_users_discord_id ON users(discord_id) WHERE discord_id IS NOT NULL;
-ALTER TABLE users ADD COLUMN discord_linked_at INTEGER;
+ALTER TABLE users ADD COLUMN discord_linked_at TEXT;
 
--- OIDC の発行元。sk_account_id は oidc_sub に改名し、(issuer, sub) を一意にする
+-- （§8-4 で別のマイグレーションにする）OIDC の発行元。sk_account_id は oidc_sub に改名し、(issuer, sub) を一意にする
 ALTER TABLE users RENAME COLUMN sk_account_id TO oidc_sub;
 ALTER TABLE users ADD COLUMN oidc_issuer TEXT;
 UPDATE users SET oidc_issuer = :current_issuer WHERE oidc_sub IS NOT NULL;   -- 起動時の設定値で埋める（§3.3）
@@ -90,8 +90,9 @@ CREATE UNIQUE INDEX idx_users_oidc ON users(oidc_issuer, oidc_sub) WHERE oidc_su
 
 ### 4.3 セッション
 
-- `SessionUser` を `{ user_id, username, role, discord_id: Option<String> }` にする。
-- Redis の `session:*` の JSON は `userId` を正にし、読み込み時だけ旧 `discordId` も受け付ける（期限切れで自然に消えるまでの互換）。
+- `SessionUser.discord_id` を `user_id`（利用者 ID）に改名する（§8-3）。
+- **送受信の名前は当面 `discordId` のまま据え置く。** Redis に残っているセッション値と、配布済みのデスクトップクライアント（`clients/desktop` の `UserInfo` が `discordId` を必須で読む）を壊さないため。中身は不透明な利用者 ID で、Discord 未連携の利用者では UUID になる。クライアントは識別子として扱うだけなので、これで動く。
+- Discord 連携の状態は、`SessionUser` ではなく `GET /api/me` の `MeData` に `discordLinked`（と連携中の Discord ID）として足す（§8-6）。`userId` への改名は、配布済みクライアントが両方を読めるようになってから別途行う。
 - `desktop_tokens` などの SQLite 側は、すでに `users` を JOIN しているので、列名を直すだけで済む。
 
 ## 5. Discord 連携（後付け）
@@ -122,7 +123,7 @@ CREATE UNIQUE INDEX idx_users_oidc ON users(oidc_issuer, oidc_sub) WHERE oidc_su
 | Discord 上で発生した入力（メッセージ・スラッシュコマンド） | `users.discord_id` から `UserId` を引く。引けない Discord ユーザーは、現行の「未登録ユーザー」と同じ扱い |
 | Web クライアント・デスクトップ・MCP・Webhook | 影響なし（`UserId` で動く） |
 
-Discord Bot（`yuuka-discord`）を起動しない構成も正式にサポートする。現在すでに `NullNotifier` で縮退しているので、それを設定（`DISCORD_ENABLED=false`、または Bot トークン未設定）で明示的に選べるようにし、起動ログで案内する。
+Discord Bot（`yuuka-discord`）を起動しない構成も正式にサポートする。ゲートウェイは既存の `YUUKA_RUST_DISCORD`（既定は無効）で切り替え、Bot トークンを登録しなければ REST 送信も起きない。起動ログで案内する（§8-7）。
 
 ### 6.3 フロントエンド・クライアント
 
@@ -140,12 +141,12 @@ Discord Bot（`yuuka-discord`）を起動しない構成も正式にサポート
 ## 8. 実装ステップ（PR 単位・すべて develop から）
 
 1. **型の分離（挙動は変えない）**: `DiscordUserId` を新設し、Discord 境界での `UserId` → Discord ID の変換を関数 1 つに集める。この時点ではまだ恒等変換。
-2. **DB の改名**: V39 で `id` / `discord_id` / `oidc_issuer` を導入する。SQL 文の `users.discord_id` を `users.id` に置き換え、Discord 境界の変換を `users.discord_id` の参照に切り替える。FK と CASCADE のテストを足す。
-3. **セッションと DTO**: `SessionUser.user_id` と `discord_id: Option`、Redis の互換読み込み、ts-rs の再生成、フロントエンド・クライアントの追随。
-4. **OIDC の claim を任意にする**: §4.1・§4.2、`REGISTRATION_MODE`、`ADMIN_OIDC_SUBJECTS` / `ADMIN_EMAILS`。Discord claim の無い ID トークンでログインできることを `auth_flow.rs` でテストする。
-5. **Web 通知**: `notifications` テーブル、`WebNotifier`、既定の送り先の解決規則、WS 配信、画面の通知一覧。
-6. **Discord 連携（後付け）**: OAuth2 による連携・解除 API と、アカウント画面。
-7. **Discord なし構成の仕上げ**: `DISCORD_ENABLED`、Discord 前提画面の案内、setup.md・deployment.md、#234 のクローズ。
+2. **DB の改名**: V39 で `users.discord_id`（主キー）を `id` に改名し、Discord 連携の列 `discord_id`（NULL 可・一意）と `discord_linked_at` を足す。SQL 文の `users.discord_id` を `users.id` に置き換える。既存利用者と、まだ Discord 必須のままのログインで作る利用者は `id = discord_id` なので、Discord 境界の変換（identity）は恒等のまま据え置き、§8-4 で `users.discord_id` の参照に切り替える。`oidc_issuer` と `sk_account_id` → `oidc_sub` の改名も §8-4 で行う。FK・CASCADE・トリガーの移行テストを足す。
+3. **セッションと DTO**: `SessionUser.discord_id` を `user_id` に改名する（Rust 側のみ。送受信の名前は `discordId` のまま・§4.3）。フロントエンドとクライアントは変えない。
+4. **OIDC の claim を任意にする**: 4a（§4.1・§4.2、`REGISTRATION_MODE` の `open` / `closed`、`ADMIN_OIDC_SUBJECTS` / `ADMIN_EMAILS`。Discord claim の無い ID トークンでログインできることを `auth_flow.rs` でテストする）と、4b（招待コードと `REGISTRATION_MODE=invite`。ここで既定を `invite` に切り替える）に分ける。4a の時点では、Discord ID 付きの新規利用者は `id = discord_id` のまま作る（Discord 境界の変換が DB を引くようになる §8-6 まで）。UUIDv7 は Discord の無い新規利用者に使う。 4b では、招待コード（`invite_codes`・V40）、管理者用 API（`/api/admin/invites`）と管理画面、ログイン開始の `?invite=` を足し、既定を `invite` にする。`ADMIN_*` で指定した管理者は、最初の招待を発行できるよう、どの方式でも登録できる。
+5. **Web 通知**: `web_notifications`（V41）と、通知先 `web`（`users.notify_target_type`・リマインドの `target_type`）。通知先が `web` の利用者への通知は、送信先の指定にかかわらず受信箱へ保存する（Discord ID が無いと DM もチャンネルも送れないため）。Discord 未連携の新規利用者の既定は `web`。読み出し・既読は `GET /api/notifications`・`POST /api/notifications/read`、画面は「時刻と通知」の通知一覧。既存の利用者（通知先 `dm`/`channel`）の挙動は変えない。WS でのリアルタイム配信は後続。
+6. **Discord 連携（後付け）**: Discord OAuth2（`identify`）による連携・解除 API（`/api/me/discord*`）とアカウント画面のカード。あわせて、Discord 側の境界（`yuuka-discord` の `identity`）を `BotDirectory::user_for_discord` / `discord_for_user` 経由にし、本番実装（`DbBotDirectory`）は `users.discord_id` を引く。連携を解除した旧来の利用者（`id` = 旧 Discord ID）は、その Discord アカウントからの操作を未登録の Discord ユーザー（`discord:{id}`）として扱い、利用者に結び付けない。解除すると通知先 `dm` / `channel` は `web` に切り替える。
+7. **Discord なし構成の仕上げ**: Discord ゲートウェイは既存の `YUUKA_RUST_DISCORD`（既定は無効）で切り替えられるので、新しい設定（`DISCORD_ENABLED`）は足さない。起動ログの案内、Discord 前提の画面（Bot › Discord）での連携の案内、`OIDC_SCOPE` の既定を標準以外のプロバイダーでは `openid profile email` にする変更（`discord` scope を知らないプロバイダーに断られないように）、`docs/guide/setup.md` の「Discord を使わずに立てる（最小構成）」と `deployment.md` の追記。#234 を閉じる。
 
 1〜3 は機械的な置き換えが中心で差分は大きいが、挙動は変わらない。4 以降で初めて、利用者から見える変化が出る。
 

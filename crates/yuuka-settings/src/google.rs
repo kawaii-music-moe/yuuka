@@ -74,7 +74,7 @@ pub(crate) async fn oauth_url(
     // CSRF 対策: セッションユーザーに束縛した一回限りの state nonce を発行する。
     let state_nonce = rt
         .oauth_state
-        .create(&user.0.discord_id)
+        .create(&user.0.user_id)
         .map_err(|_| ApiError(yuuka_core::WebError::Internal))?;
     let url = rt.oauth.auth_url(&redirect_uri, &state_nonce);
     Ok(Json(json!({ "success": true, "url": url })).into_response())
@@ -103,7 +103,7 @@ pub(crate) async fn oauth_callback(
     let Some(session) = maybe_user.0 else {
         return redirect(&oauth_landing("oauth=error&msg=unauthorized"));
     };
-    let user_id = session.discord_id;
+    let user_id = session.user_id;
 
     if !rt.oauth.is_configured() {
         return redirect(&oauth_landing("oauth=error&msg=missing_config"));
@@ -204,8 +204,8 @@ pub(crate) async fn calendars(
         ));
     };
     let calendars: Vec<String> = list.iter().map(js_string).collect();
-    yuuka_google::repo::set_user_calendars(&state.db, &user.0.discord_id, &calendars).await?;
-    rt.calendar.invalidate_user(&user.0.discord_id);
+    yuuka_google::repo::set_user_calendars(&state.db, &user.0.user_id, &calendars).await?;
+    rt.calendar.invalidate_user(&user.0.user_id);
     Ok(
         Json(json!({ "success": true, "message": "同期対象カレンダーを更新しました。" }))
             .into_response(),
@@ -219,11 +219,11 @@ pub(crate) async fn backup_trigger(
     State(state): State<AppState>,
     Extension(rt): Extension<Arc<SettingsRuntime>>,
 ) -> Response {
-    match rt.backup.run_backup(&user.0.discord_id).await {
+    match rt.backup.run_backup(&user.0.user_id).await {
         Ok(url) => {
             yuuka_auth::audit::add_audit_log(
                 &state.db,
-                &user.0.discord_id,
+                &user.0.user_id,
                 "backup.manual_run",
                 None,
                 None,

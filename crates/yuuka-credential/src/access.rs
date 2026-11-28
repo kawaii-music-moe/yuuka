@@ -278,7 +278,7 @@ mod tests {
             let conn = rusqlite::Connection::open(&path).expect("seed conn");
             for uid in ["owner", "stranger"] {
                 conn.execute(
-                    "INSERT OR IGNORE INTO users (discord_id, username, salt) \
+                    "INSERT OR IGNORE INTO users (id, username, salt) \
                      VALUES (?1, ?1, 'x')",
                     rusqlite::params![uid],
                 )

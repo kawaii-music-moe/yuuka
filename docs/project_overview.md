@@ -320,7 +320,7 @@ pnpm check              # typecheck:front + lint をまとめて実行
 - **起動失敗**: `YUUKA_ENCRYPTION_SECRET` 未設定/32 文字未満で即終了。鍵を変えると既存の暗号化データは復号不能（ローテは `_NEW` 経由）。
 - **DB が無いと起動失敗**: 新規インスタンスの初回のみ `YUUKA_INIT_DB=1` が必要（§3）。
 - **マイグレーションの書き換え**: 適用済みの `V*.sql` を編集すると、適用済み DB で `refinery` のチェックサム不一致になる。必ず新しい番号で追加する。
-- **Discord ゲートウェイの起動条件**: Rust 側の gateway（Shard poll ループ）は環境変数 `YUUKA_RUST_DISCORD=1` で有効になる（`crates/yuuka-supervisor/src/main.rs`）。未設定だと Bot は接続せず REST 送信のみ機能する。運用の設定は [docs/guide/deployment.md](guide/deployment.md) を参照。
+- **Discord ゲートウェイの起動条件**: Rust 側の gateway（Shard poll ループ）は環境変数 `YUUKA_RUST_DISCORD=1` で有効になる（`crates/yuuka-supervisor/src/main.rs`）。未設定だと Bot は接続せず REST 送信のみ機能する。運用の設定は [docs/guide/deployment.md](guide/deployment.md) を参照。 Discord は任意で、Bot を動かさない構成でも Web・PWA・デスクトップと Web の通知一覧で使える（[セットアップの最小構成](guide/setup.md#discord-を使わずに立てる最小構成)・[設計](design/optional_discord.md)）。
 - **会話の正は SQLite**: Redis はキャッシュ/セッション。`message_logs` は自動削除されない。
 - **MCP 実行前確認**: `requires_confirmation` は DB のフラグのみ。実際の確認はエージェント/ツール呼出層の責務。
 - **Google refresh_token は自動更新されない**: 失効時はカレンダー連携が静かに無効化される。

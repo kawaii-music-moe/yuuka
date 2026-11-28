@@ -123,6 +123,13 @@ export const ADMIN_SECTIONS: ManagementSection[] = [
 		scope: "system",
 	},
 	{
+		key: "invites",
+		label: "招待コード",
+		desc: "招待制の新規登録に使う招待リンクの発行",
+		category: "ユーザーとBot",
+		scope: "system",
+	},
+	{
 		key: "moderation",
 		label: "Bot モデレーション",
 		desc: "全Botの管理・差し押さえ",

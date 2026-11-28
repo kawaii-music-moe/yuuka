@@ -195,4 +195,16 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    #[test]
+    fn session_user_keeps_discord_id_wire_name() {
+        // Redis に残る旧セッション値・配布済みクライアントと同じ `discordId` で読み書きする。
+        let old: SessionUser =
+            serde_json::from_str(r#"{"discordId":"100","username":"a","role":"user"}"#).unwrap();
+        assert_eq!(old.user_id, "100");
+        assert_eq!(old.role, Role::User);
+        let json = serde_json::to_value(&old).unwrap();
+        assert_eq!(json["discordId"], "100");
+        assert!(json.get("userId").is_none());
+    }
 }

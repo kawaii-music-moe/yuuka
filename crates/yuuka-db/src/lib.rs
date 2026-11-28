@@ -220,14 +220,15 @@ mod tests {
             )
             .unwrap();
         assert_eq!(password_col, 0, "V25: users.password_hash 削除");
-        let invite_table: i64 = conn
+        // V25 で旧 invite_codes（Yuuka 独自登録用）を落とし、V40 で招待制ログイン用に作り直した。
+        let invite_used_by: i64 = conn
             .query_row(
-                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='invite_codes'",
+                "SELECT COUNT(*) FROM pragma_table_info('invite_codes') WHERE name='used_by'",
                 [],
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(invite_table, 0, "V25: invite_codes 削除");
+        assert_eq!(invite_used_by, 1, "V40: invite_codes（招待制）を作り直し");
 
         // V26: Webhook エンドポイントが帰属 Bot を持つ。
         let webhook_bot_col: i64 = conn
@@ -309,7 +310,7 @@ mod tests {
         writer
             .transaction(|tx| {
                 tx.execute(
-                    "INSERT INTO users(discord_id, username, salt) \
+                    "INSERT INTO users(id, username, salt) \
                      VALUES ('u1', 'alice', 'salt')",
                     [],
                 )
@@ -320,12 +321,8 @@ mod tests {
             .unwrap();
         let username: String = pool
             .read(|c| {
-                c.query_row(
-                    "SELECT username FROM users WHERE discord_id='u1'",
-                    [],
-                    |r| r.get(0),
-                )
-                .map_err(map_sqlite)
+                c.query_row("SELECT username FROM users WHERE id='u1'", [], |r| r.get(0))
+                    .map_err(map_sqlite)
             })
             .await
             .unwrap();
